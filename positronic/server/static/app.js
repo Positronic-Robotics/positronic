@@ -8,16 +8,17 @@
 //   episode.html  — single episode with Rerun viewer + static data sidebar
 //
 // Templates set window globals before this script's DOMContentLoaded fires:
-//   window.API_ENDPOINT   — override for /api/episodes (grouped.html sets /api/groups/{name})
+//   window.API_ENDPOINT   — override for api/episodes (grouped.html sets api/groups/{name})
 //   window.IS_GROUPED_TABLE — true on grouped.html, changes View link behavior
 //   window.EPISODES_URL   — where View links point on grouped pages
 //   window.VIEW_LABEL     — button text override
+//   window.STATIC_EXPORT  — read the files a static export wrote, not the live API
 //
 // Data flow
 // ---------
 // On DOMContentLoaded, initEpisodesTable() runs:
-//   1. Polls /api/dataset_status until the server finishes loading the dataset
-//   2. Calls loadEpisodes({}) → fetches from API_ENDPOINT (default /api/episodes)
+//   1. Polls api/dataset_status until the server finishes loading the dataset
+//   2. Calls loadEpisodes({}) → fetches from API_ENDPOINT (default api/episodes)
 //      Response shape: { columns, episodes, group_filters?, default_sort? }
 //        columns:  array of {key, label, filter?, renderer?, align?, subtitle?}
 //        episodes: array of [episodeId, [cell0, cell1, ...], groupFilters?]
@@ -68,7 +69,7 @@
 const state = {
   sort: { columnIndex: null, direction: 'desc' },
   filters: {},           // client-side column filters
-  serverFilters: {},     // server-side group filters (sent to /api/episodes)
+  serverFilters: {},     // server-side group filters (sent to api/episodes)
   episodes: [],          // current episode data
   columns: [],           // column definitions from server
   filtersData: {},       // unique values per filterable column
@@ -78,6 +79,33 @@ const state = {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Every link resolves against the <base href> the server rendered, so one export serves from
+// whatever prefix it sits under.
+function appUrl(path) {
+  return new URL(path, document.baseURI).href;
+}
+
+// The file name a static export writes an API response to; `static_export_key` in
+// positronic_server.py builds the same name. Pass no parameters for an endpoint the export writes
+// whole. The filter set {b: '2', a: 'x y'} of the group `leaderboard` names
+// api/groups/leaderboard/a=x%20y&b=2.json.
+function staticExportKey(path, params) {
+  if (!params) return `${path}.json`;
+  const query = Object.keys(params)
+    .filter((key) => params[key])
+    .sort()
+    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join('&');
+  return `${path}/${query || 'all'}.json`;
+}
+
+function apiUrl(path, params) {
+  if (window.STATIC_EXPORT) return appUrl(staticExportKey(path, params));
+  const url = new URL(path, document.baseURI);
+  for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
+  return url.href;
+}
+
 async function fetchJSON(url) {
   const response = await fetch(url);
   if (response.status === 202) return null;  // dataset still loading
@@ -85,18 +113,17 @@ async function fetchJSON(url) {
 }
 
 async function loadDatasetInfo() {
-  const data = await fetchJSON('/api/dataset_info');
+  const data = await fetchJSON(apiUrl('api/dataset_info'));
   if (!data) return;
   document.getElementById('dataset-stats').innerHTML =
     `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
 }
 
 async function loadEpisodes(filters = {}) {
-  const endpoint = new URL(window.API_ENDPOINT || '/api/episodes', window.location.origin);
-  for (const [key, value] of Object.entries(filters)) {
-    endpoint.searchParams.append(key, value);
-  }
-  return fetchJSON(endpoint);
+  // A static export holds one file per filter set of a group table, and one file for the whole
+  // flat table, whose filters then apply in the browser.
+  const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
+  return fetchJSON(apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null));
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +160,7 @@ async function pollUntilLoaded() {
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
-      const status = await fetchJSON('/api/dataset_status');
+      const status = await fetchJSON(apiUrl('api/dataset_status'));
       if (!status || status.loading) return;
       clearInterval(interval);
       statusEl.classList.remove('show');
@@ -149,7 +176,7 @@ async function initEpisodesTable() {
   const loadingEl = container.querySelector('.loading');
 
   // Check if dataset is ready
-  const status = await fetchJSON('/api/dataset_status');
+  const status = await fetchJSON(apiUrl('api/dataset_status'));
   if (!status) return;
 
   if (status.loading) {
@@ -413,10 +440,10 @@ function populateTable(columns) {
     viewLink.className = 'btn btn-primary btn-small';
     if (window.IS_GROUPED_TABLE) {
       const filters = { ...groupFilters, ...state.serverFilters, ...state.filters };
-      const episodesUrl = window.EPISODES_URL || '/';
-      viewLink.href = `${episodesUrl}?${new URLSearchParams(filters).toString()}`;
+      const episodesUrl = window.EPISODES_URL || '.';
+      viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
-      viewLink.href = `/episode/${episodeIndex}`;
+      viewLink.href = appUrl(`episode/${episodeIndex}`);
     }
     viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);

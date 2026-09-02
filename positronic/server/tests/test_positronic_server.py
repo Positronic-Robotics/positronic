@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import re
 import socket
 from collections import namedtuple
 from pathlib import Path
@@ -11,6 +12,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
+from positronic import keys
 from positronic.dataset.episode import META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
@@ -23,6 +25,7 @@ from positronic.server.positronic_server import (
     _served_addresses,
     app,
     app_state,
+    static_export_key,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
@@ -213,3 +216,156 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
     cache_path = rrd_cache(30.0, 640)
     assert not cache_path.exists()
     assert list(cache_path.parent.iterdir()) == []
+
+
+# A URL that starts at the server root, in an attribute or in a script's string.
+_ROOTED_URL = re.compile(r"""["'(`](/[^"'`)\s]*)""")
+
+
+def _server_rooted_urls(html: str, base_href: str) -> list[str]:
+    """Every URL the page pins to the server root, apart from the app-level assets and the base."""
+    return [url for url in _ROOTED_URL.findall(html) if not url.startswith('/static/') and url != base_href]
+
+
+class _StubEpisode:
+    meta = {'path': '/datasets/run-7/episode_3', 'size_mb': 12.5}
+    static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
+
+
+class _StubDataset:
+    def __len__(self) -> int:
+        return 4
+
+    def __getitem__(self, index: int) -> _StubEpisode:
+        if index >= len(self):
+            raise IndexError(index)
+        return _StubEpisode()
+
+
+@pytest.fixture
+def viewer(monkeypatch):
+    monkeypatch.setitem(app_state, 'dataset', _StubDataset())
+    monkeypatch.setitem(app_state, 'loading_state', False)
+    monkeypatch.setitem(app_state, 'root', '/datasets/run-7')
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {})
+    monkeypatch.setitem(app_state, 'group_tables_cfg', {'leaderboard': None})
+    return TestClient(app)
+
+
+_PAGES = ['/', '/episodes', '/groups/leaderboard', '/episode/0']
+
+
+@pytest.mark.parametrize('page', _PAGES)
+def test_a_viewer_at_the_server_root_says_so(viewer, page):
+    body = viewer.get(page).text
+
+    assert '<base href="/" />' in body
+    assert 'window.STATIC_EXPORT' not in body
+
+
+@pytest.mark.parametrize('page', _PAGES)
+def test_a_viewer_under_a_prefix_pins_no_page_link_to_the_server_root(viewer, monkeypatch, page):
+    monkeypatch.setitem(app_state, 'base_href', '/v/tok/')
+
+    body = viewer.get(page).text
+
+    assert '<base href="/v/tok/" />' in body
+    assert _server_rooted_urls(body, '/v/tok/') == []
+
+
+def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'base_href', '/v/tok')
+
+    assert '<base href="/v/tok/" />' in viewer.get('/').text
+
+
+def test_a_static_export_tells_the_page_to_read_the_files_it_wrote(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'static_export', True)
+
+    assert 'window.STATIC_EXPORT = true;' in viewer.get('/').text
+
+
+def test_a_title_stands_in_for_the_dataset_root(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'title', 'Runway rollouts, 29 August')
+
+    for page in ['/', '/episode/0']:
+        body = viewer.get(page).text
+        assert 'Runway rollouts, 29 August' in body
+
+
+def test_the_header_falls_back_to_the_dataset_root(viewer):
+    assert '/datasets/run-7' in viewer.get('/').text
+
+
+def test_an_episode_page_hides_where_the_episode_lives(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'show_paths', False)
+
+    body = viewer.get('/episode/0').text
+
+    assert 'Episode path' not in body
+    assert '/datasets/run-7' not in body
+
+
+def test_an_episode_page_shows_where_the_episode_lives_by_default(viewer):
+    body = viewer.get('/episode/0').text
+
+    assert 'Episode path' in body
+    assert '/datasets/run-7/episode_3' in body
+
+
+def test_the_api_reports_no_dataset_root_when_the_viewer_hides_paths(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'show_paths', False)
+
+    assert viewer.get('/api/dataset_info').json()['root'] == ''
+    assert viewer.get('/api/dataset_status').json()['repo_id'] == ''
+
+
+def test_the_api_reports_the_dataset_root_by_default(viewer):
+    assert viewer.get('/api/dataset_info').json()['root'] == '/datasets/run-7'
+    assert viewer.get('/api/dataset_status').json()['repo_id'] == '/datasets/run-7'
+
+
+def test_a_build_id_carries_the_files_a_browser_caches_for_a_year(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
+
+    body = viewer.get('/episode/0').text
+
+    assert 'build/k3n9/api/episode_rrd/0' in body
+    assert 'build/k3n9/api/episode/0/static/scene' in body
+
+
+def test_without_a_build_id_the_same_files_sit_beside_the_other_api_calls(viewer):
+    body = viewer.get('/episode/0').text
+
+    assert 'api/episode_rrd/0' in body
+    assert 'api/episode/0/static/scene' in body
+    assert 'build/' not in body
+
+
+def test_an_endpoint_the_export_writes_whole_takes_one_file():
+    assert static_export_key('api/episodes') == 'api/episodes.json'
+    assert static_export_key('api/dataset_info') == 'api/dataset_info.json'
+
+
+def test_an_endpoint_the_export_writes_per_filter_set_names_an_empty_set_all():
+    assert static_export_key('api/groups/leaderboard', {}) == 'api/groups/leaderboard/all.json'
+    assert static_export_key('api/groups/leaderboard', {'model': ''}) == 'api/groups/leaderboard/all.json'
+
+
+def test_one_filter_set_reaches_one_file_whatever_order_it_arrives_in():
+    forwards = static_export_key('api/groups/g', {'model': 'pi0', 'task': 'pick a cube'})
+    backwards = static_export_key('api/groups/g', {'task': 'pick a cube', 'model': 'pi0'})
+
+    assert forwards == backwards == 'api/groups/g/model=pi0&task=pick%20a%20cube.json'
+
+
+def test_a_filter_value_that_carries_a_separator_stays_in_one_component():
+    key = static_export_key('api/groups/g', {'task': 'a&b=c/d'})
+
+    assert key == 'api/groups/g/task=a%26b%3Dc%2Fd.json'
+
+
+def test_app_js_asks_for_the_file_name_this_module_writes():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert static_export_key('api/groups/leaderboard', {'b': '2', 'a': 'x y'}) in app_js

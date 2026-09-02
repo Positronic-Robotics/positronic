@@ -8,7 +8,7 @@
 <script>
     window.API_ENDPOINT = "{{ api_endpoint }}";
     window.IS_GROUPED_TABLE = true;
-    window.EPISODES_URL = "{{ episodes_url | default('/') }}";
+    window.EPISODES_URL = "{{ episodes_url | default('.') }}";
 </script>
 {% endblock %}
 
@@ -16,7 +16,7 @@
 <main class="main">
     <header class="page-header">
         <div class="page-kicker">Group Explorer</div>
-        <h1>{{repo_id}}</h1>
+        <h1>{{ title }}</h1>
         <p id="dataset-stats">Loading dataset information...</p>
         <div class="dataset-info">
             <div id="loading-status" class="loading-status">

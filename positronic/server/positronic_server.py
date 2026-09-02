@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -58,6 +59,11 @@ app_state: dict[str, object] = {
     'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
+    'base_href': '/',
+    'title': '',  # empty = the dataset root
+    'show_paths': True,
+    'static_export': False,
+    'build_id': '',
 }
 
 
@@ -129,24 +135,54 @@ async def cache_rerun_assets(request: Request, call_next):
     return response
 
 
-def _get_nav_context() -> dict[str, Any]:
-    """Build navigation context for templates."""
+# What `encodeURIComponent` leaves unescaped, so app.js and this module name one file alike.
+_QUERY_SAFE = "!*'()"
+
+
+def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str:
+    """The file name a static export writes an API response to, and a browser asks for.
+
+    `<path>.json` names an endpoint the export writes whole, and None asks for that form.
+    `<path>/<query>.json` names one the export writes a file per filter set for: the query holds
+    the parameters that carry a value, sorted by key and percent-encoded, and an empty query is
+    named `all`. `app.js` builds the same name.
+    """
+    if params is None:
+        return f'{path}.json'
+    pairs = sorted((key, value) for key, value in params.items() if value)
+    query = '&'.join(f'{quote(k, safe=_QUERY_SAFE)}={quote(v, safe=_QUERY_SAFE)}' for k, v in pairs)
+    return f'{path}/{query or "all"}.json'
+
+
+def _cacheable_api_path(suffix: str) -> str:
+    """`api/<suffix>` under the build id, so a rebuild never reads a file a browser cached."""
+    build_id = str(app_state['build_id'])
+    return f'build/{build_id}/api/{suffix}' if build_id else f'api/{suffix}'
+
+
+def _shown_root() -> str:
+    """The dataset root the pages report; empty when the viewer hides paths."""
+    return str(app_state['root']) if app_state['show_paths'] else ''
+
+
+def _page_context() -> dict[str, Any]:
+    """The template context every page shares."""
     home_page = app_state.get('home_page')
     group_tables = app_state.get('group_tables_cfg', {})
 
     nav_items = []
-    episodes_url = '/episodes' if home_page else '/'
+    episodes_url = 'episodes' if home_page else '.'
 
     # If home_page is set, it goes first
     if home_page and home_page in group_tables:
         label = home_page.replace('_', ' ').title()
-        nav_items.append({'name': home_page, 'url': '/', 'label': label})
+        nav_items.append({'name': home_page, 'url': '.', 'label': label})
 
     # Other group links
     for group_name in group_tables.keys():
         if group_name == home_page:
             continue  # Already added as home
-        url = f'/groups/{group_name}'
+        url = f'groups/{group_name}'
         label = group_name.replace('_', ' ').title()
         nav_items.append({'name': group_name, 'url': url, 'label': label})
 
@@ -155,9 +191,19 @@ def _get_nav_context() -> dict[str, Any]:
         nav_items.append({'name': 'episodes', 'url': episodes_url, 'label': 'Episodes'})
     else:
         # Episodes is home, insert at beginning
-        nav_items.insert(0, {'name': 'episodes', 'url': '/', 'label': 'Episodes'})
+        nav_items.insert(0, {'name': 'episodes', 'url': '.', 'label': 'Episodes'})
 
-    return {'nav_items': nav_items, 'home_page': home_page, 'episodes_url': episodes_url}
+    base_href = str(app_state['base_href'])
+    return {
+        'nav_items': nav_items,
+        'home_page': home_page,
+        'episodes_url': episodes_url,
+        # A base href without a trailing slash loses its last segment when a relative link resolves.
+        'base_href': base_href if base_href.endswith('/') else base_href + '/',
+        'title': str(app_state['title']) if app_state['title'] else _shown_root(),
+        'show_paths': app_state['show_paths'],
+        'static_export': app_state['static_export'],
+    }
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -168,25 +214,16 @@ async def index(request: Request):
         return templates.TemplateResponse(
             request,
             'grouped.html',
-            {
-                'repo_id': app_state['root'],
-                'api_endpoint': f'/api/groups/{home_page}',
-                **_get_nav_context(),
-                'current_page': home_page,
-            },
+            {'api_endpoint': f'api/groups/{home_page}', **_page_context(), 'current_page': home_page},
         )
     # Default: render episodes
-    return templates.TemplateResponse(
-        request, 'index.html', {'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'}
-    )
+    return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
 
 
 @app.get('/episodes', response_class=HTMLResponse)
 async def episodes_view(request: Request):
     """Episodes list view (used when home_page is set to a group)."""
-    return templates.TemplateResponse(
-        request, 'index.html', {'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'}
-    )
+    return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -204,10 +241,12 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
     def _make_serializable(obj, path=''):
-        if isinstance(obj, bytes):
-            return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'bytes'}
-        if isinstance(obj, str) and len(obj) > 1024:
-            return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'text'}
+        if isinstance(obj, bytes) or (isinstance(obj, str) and len(obj) > 1024):
+            return {
+                '__download__': _cacheable_api_path(f'episode/{episode_id}/static/{path}'),
+                'size': len(obj),
+                'type': 'bytes' if isinstance(obj, bytes) else 'text',
+            }
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
@@ -224,10 +263,11 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'rerun_version': rr.__version__,
             'task': episode.static.get(keys.TASK, None),
-            'repo_id': app_state['root'],
+            'rrd_path': _cacheable_api_path(f'episode_rrd/{episode_id}'),
             'episode_path': meta.get('path'),
             'episode_size_mb': size_mb_display,
             'static_data': _make_serializable(episode.static),
+            **_page_context(),
         },
     )
 
@@ -235,8 +275,8 @@ async def episode_viewer(request: Request, episode_id: int):
 @app.get('/api/dataset_info')
 @require_dataset
 async def api_dataset_info():
-    ds = app_state.get('dataset')
-    return {'root': app_state['root'], 'num_episodes': len(ds)}
+    ds = cast(Dataset, app_state['dataset'])
+    return {'root': _shown_root(), 'num_episodes': len(ds)}
 
 
 @dataclass
@@ -434,14 +474,7 @@ async def api_groups(request: Request, suffix: str):  # noqa: C901
 @app.get('/groups/{suffix}', response_class=HTMLResponse)
 async def grouped_view(request: Request, suffix: str):
     return templates.TemplateResponse(
-        request,
-        'grouped.html',
-        {
-            'repo_id': app_state['root'],
-            'api_endpoint': f'/api/groups/{suffix}',
-            **_get_nav_context(),
-            'current_page': suffix,
-        },
+        request, 'grouped.html', {'api_endpoint': f'api/groups/{suffix}', **_page_context(), 'current_page': suffix}
     )
 
 
@@ -450,7 +483,7 @@ async def api_dataset_status():
     return {
         'loading': app_state['loading_state'],
         'loaded': app_state.get('dataset', None) is not None,
-        'repo_id': app_state['root'],
+        'repo_id': _shown_root(),
     }
 
 
@@ -660,6 +693,11 @@ def main(
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
+    base_href: str = '/',
+    title: str = '',
+    show_paths: bool = True,
+    static_export: bool = False,
+    build_id: str = '',
 ):
     """Visualize a Dataset with Rerun.
 
@@ -707,6 +745,11 @@ def main(
                 },
             }
         group_tables: Mapping of group name to GroupTableConfig
+        base_href: Path every page link and API call resolves against
+        title: Header text; the dataset root when empty
+        show_paths: Whether the pages report where the dataset lives
+        static_export: Whether the pages ask for the file names a static export writes
+        build_id: Names one build; the episode RRD and the static-field downloads sit under it
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -722,6 +765,11 @@ def main(
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
+    app_state['base_href'] = base_href
+    app_state['title'] = title
+    app_state['show_paths'] = show_paths
+    app_state['static_export'] = static_export
+    app_state['build_id'] = build_id
 
     if reset_cache and cache_root.exists():
         logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')

@@ -3,6 +3,7 @@
 <head>
     {% block head %}
     <meta charset="utf-8" />
+    <base href="{{ base_href }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title_prefix %}Positronic Server{% endblock %} – {% block title %}{% endblock %}</title>
     <meta
@@ -10,6 +11,7 @@
       content="{% block description %}{% endblock %}"
     />
     <link rel="stylesheet" href="/static/styles.css" />
+    {% if static_export %}<script>window.STATIC_EXPORT = true;</script>{% endif %}
     {% endblock %}
 </head>
 <body>
