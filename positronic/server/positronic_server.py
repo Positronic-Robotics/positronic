@@ -221,9 +221,15 @@ async def episodes_view(request: Request):
 
 
 def _cacheable_api_path(suffix: str) -> str:
-    """`api/<suffix>` under the build id, so a rebuild never reads a file a browser cached."""
+    """`api/<suffix>`, under the build id when the pages read a static export.
+
+    A build id keeps one build's files clear of the ones a browser cached from the build before
+    it. Only an export writes such a file: a live server serves no `build/…` route.
+    """
     build_id = str(app_state['build_id'])
-    return f'build/{build_id}/api/{suffix}' if build_id else f'api/{suffix}'
+    if app_state['static_export'] and build_id:
+        return f'build/{build_id}/api/{suffix}'
+    return f'api/{suffix}'
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -749,7 +755,8 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         static_export: Whether the pages ask for the file names a static export writes
-        build_id: Names one build; the episode RRD and the static-field downloads sit under it
+        build_id: Names one build. With static_export, the episode RRD and the static-field
+            downloads sit under it
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
