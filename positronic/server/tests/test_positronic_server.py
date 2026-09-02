@@ -326,6 +326,7 @@ def test_the_api_reports_the_dataset_root_by_default(viewer):
 
 
 def test_a_build_id_carries_the_files_a_browser_caches_for_a_year(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'static_export', True)
     monkeypatch.setitem(app_state, 'build_id', 'k3n9')
 
     body = viewer.get('/episode/0').text
@@ -340,6 +341,15 @@ def test_without_a_build_id_the_same_files_sit_beside_the_other_api_calls(viewer
     assert 'api/episode_rrd/0' in body
     assert 'api/episode/0/static/scene' in body
     assert 'build/' not in body
+
+
+def test_a_live_viewer_asks_for_the_routes_it_serves_whatever_the_build_id_says(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
+
+    body = viewer.get('/episode/0').text
+
+    assert 'build/' not in body
+    assert viewer.get('/api/episode/0/static/scene').content == b'a mesh'
 
 
 def test_an_endpoint_the_export_writes_whole_takes_one_file():
