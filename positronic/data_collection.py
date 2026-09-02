@@ -251,11 +251,26 @@ class DataCollectionController(pimm.ControlSystem):
         while not ready.done():
             if should_stop.value:
                 return
-            # What the operator asks for in front of a travelling arm is not asked of the arm that comes
-            # back: the press is impatience with this move, and holding it would run the move again.
-            self.session_events.read()
+            self._drop_readings()
             yield pimm.Sleep(0.001)
         ready.result()
+
+    def _drop_readings(self) -> None:
+        """Drop what reached the rig while it travels: those readings are of a rig that has since moved.
+
+        A reading taken before a move says where an arm stood then, and the tick after the move takes what
+        it reads for the present. A follower would meet a leader that has gone, and be sent to the pose the
+        two of them stood at. What the operator asks for in front of a travelling arm goes the same way:
+        the press is impatience with this move, and holding it would run the move again.
+        """
+        for port in (
+            self.session_events,
+            self.controller_positions,
+            self.robot_state,
+            self.leader_joints,
+            self.leader_grip,
+        ):
+            port.read()
 
     def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
         """Redraw the scene and put every arm at a start pose drawn around the nominal joints, yielding
@@ -305,10 +320,12 @@ class DataCollectionController(pimm.ControlSystem):
         held = self.leader_grip.read()
         grip = float(held.data) if held is not None and held.updated else None
         joints = self.leader_joints.read()
-        if joints is None or state is None:
+        # The arms are judged to have met on a reading the leader has just sent. A reading that repeats
+        # says where the leader was when it sent it, and the arm may have been driven somewhere since.
+        if joints is None or state is None or not joints.updated:
             return None, grip
         leader = np.asarray(joints.data, dtype=np.float64)
-        if not follow.met(leader, np.asarray(state.data.q, dtype=np.float64)) or not joints.updated:
+        if not follow.met(leader, np.asarray(state.data.q, dtype=np.float64)):
             return None, grip
         return roboarm.command.JointPosition(leader), grip
 

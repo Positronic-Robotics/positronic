@@ -475,6 +475,27 @@ def test_the_park_key_takes_both_arms_to_rest(world):
         np.testing.assert_array_equal(call.request.positions, PARK_JOINTS)
 
 
+def test_a_reading_taken_before_the_rig_travelled_never_reaches_the_follower(world):
+    """The arms stood together before the move, so what they reported then passes for a meeting. A
+    follower that took it up would leave the leader standing and go back to the pose it was moved from."""
+    rig = build_leader_rig(world)
+    before = np.full(6, 0.5)
+
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_StandingStill(q=before)), 0.01),
+        (lambda: rig.joints.emit(before), 0.01),
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (lambda: rig.joints.emit(before), 0.01),  # both arms report where they stood as they travel
+        (lambda: rig.state.emit(_StandingStill(q=before)), 0.01),
+        (rig.answer_moves, 0.01),
+        (lambda: rig.state.emit(_StandingStill(q=np.zeros(6))), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert not rig.commands.emitted, 'the follower was sent to the pose the arms stood at before the move'
+
+
 def test_the_trigger_of_a_leader_holds_the_follower_grip(world):
     """The grip crosses even before the arms meet: closing the hand is not moving the arm."""
     rig = build_leader_rig(world)
