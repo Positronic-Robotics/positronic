@@ -130,8 +130,8 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
     // URL params: ?t=<seconds_from_start> or ?ts_ns=<absolute_nanoseconds> to seek on load
     window.addEventListener('load', () => {
         const viewerIframe = document.getElementById('viewer-iframe');
-        const rrdUrl = appUrl('{{ rrd_path }}');
-        const viewerUrl = new URL(appUrl('/static/rerun/{{ rerun_version }}/index.html'));
+        const rrdUrl = appUrl({{ rrd_path | tojson }});
+        const viewerUrl = new URL(appUrl({{ viewer_path | tojson }}));
         viewerUrl.searchParams.set('url', rrdUrl);
         viewerUrl.searchParams.set('hide_welcome_screen', '');
         const params = new URLSearchParams(window.location.search);
