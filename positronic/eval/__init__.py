@@ -3,11 +3,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pimm
-from positronic import keys
 from positronic.dataset.serializers import Serializer
+from positronic.eval import keys as eval_keys
+from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {keys.JOINT_SIGNALS: [keys.JOINTS], keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
+ROBOT_STATIC_META = {eval_keys.JOINT_SIGNALS: [JOINTS], eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE]}
 
 
 @dataclass
@@ -52,7 +53,7 @@ class Embodiment:
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
-    # Everything a trial readies before it opens, keyed by ``keys.ARM``, ``keys.SCENE`` and the like. One
+    # Everything a trial readies before it opens, keyed by ``ARM``, ``SCENE`` and the like. One
     # handler serves one caller, so a device backing several command channels appears here once.
     prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
@@ -101,7 +102,7 @@ class Task:
 # [✓] A session reports the model's meta, so a policy holds none.
 # [✓] The episode call carries the session that runs it, so the Harness holds no policy.
 # [✓] The episode call names where it records, so the Harness holds no dataset.
-# [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
+# [✓] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
 # [ ] A task carries its instruction as data, so no trial reads it after the reset.
 # [ ] A sim eval config names a selection, and a spec flag narrows it to one task.
 # [ ] A task names its model, and a routed policy serves the mix.

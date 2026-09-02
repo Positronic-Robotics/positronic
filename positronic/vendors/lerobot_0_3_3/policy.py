@@ -12,9 +12,9 @@ from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Runtime
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
@@ -149,7 +149,9 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     if n_action_steps is not None:
         policy.config.n_action_steps = n_action_steps
 
-    return LerobotPolicy(policy, device, extra_meta={keys.TYPE: 'act', keys.CHECKPOINT_PATH: checkpoint_dir})
+    return LerobotPolicy(
+        policy, device, extra_meta={policy_keys.TYPE: 'act', policy_keys.CHECKPOINT_PATH: checkpoint_dir}
+    )
 
 
 @cfn.config(

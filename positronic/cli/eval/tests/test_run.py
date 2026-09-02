@@ -7,9 +7,11 @@ from typing import cast
 import pytest
 
 import pimm
-from positronic import keys, telemetry, telemetry_keys
+from positronic import telemetry, telemetry_keys
+from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, Session
 from positronic.policy.harness import Rollout
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler
@@ -77,7 +79,7 @@ class _EpisodeStub(pimm.ControlSystem):
 def test_the_driver_asks_for_its_tasks_one_at_a_time():
     """The plan belongs to the driver: it asks for each task in turn, and only once the running episode has
     answered."""
-    tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
@@ -85,6 +87,27 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
         drive_scheduler(world.start([driver, stub]), steps=200)
 
     assert stub.asked == tasks
+
+
+def test_a_spec_carries_only_what_the_eval_binds():
+    """An eval leaves an axis unbound to run every value of it, and the env reads an absent key as that."""
+    assert spec(suite='libero_spatial', task_id=None) == {'suite': 'libero_spatial'}
+    assert spec(task_id=0) == {'task_id': 0}, 'zero is a bound task, not an unbound axis'
+    assert spec(task=None) == {}
+
+
+def test_a_sweep_numbers_its_trials_across_every_task():
+    """Trials of tasks that differ are numbered once over the whole plan."""
+    quick = Task(instruction_source='quick', timeout_sec=1.0)
+    slow = Task(instruction_source='slow', timeout_sec=90.0)
+    pairs = [(quick, {eval_keys.TASK: 'quick'}), (slow, {eval_keys.TASK: 'slow'}), (slow, {eval_keys.TASK: 'slow'})]
+    trials = number_trials(pairs)
+
+    assert [t.timeout_sec for t in trials] == [1.0, 90.0, 90.0]
+    assert [t.meta[eval_keys.TRIAL_INDEX] for t in trials] == [0, 1, 2]
+    assert [t.meta[eval_keys.TRIAL_COUNT] for t in trials] == [3, 3, 3]
+    assert [t.meta[eval_keys.TASK] for t in trials] == ['quick', 'slow', 'slow']
+    assert [t.prepare_args[eval_keys.SCENE] for t in trials] == [params for _, params in pairs]
 
 
 def test_timed_sweep_needs_an_output_dir():

@@ -13,6 +13,7 @@ import pimm
 from positronic import keys
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Task
+from positronic.eval import keys as eval_keys
 from positronic.inference import KeyboardOperator, real
 from positronic.policy import Policy
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
@@ -55,7 +56,7 @@ def _embodiment(simulated: bool = False) -> Embodiment:
         descriptor='stub',
         observations={},
         commands={},
-        prepare_handlers={keys.ARM: devices.arm, keys.GRIPPER: devices.gripper},
+        prepare_handlers={eval_keys.ARM: devices.arm, eval_keys.GRIPPER: devices.gripper},
         static_meta={},
         meta_source=None,
         control_systems=(devices,),
@@ -64,7 +65,7 @@ def _embodiment(simulated: bool = False) -> Embodiment:
 
 
 def _trial(instruction: str = 'stub') -> Callable[[], Task]:
-    prepare_args = {keys.ARM: 'start-pose', keys.GRIPPER: 0.0}
+    prepare_args = {eval_keys.ARM: 'start-pose', eval_keys.GRIPPER: 0.0}
     return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
 
 
@@ -130,7 +131,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
-    assert keys.ENDED_BY_OPERATOR in caplog.text
+    assert eval_keys.ENDED_BY_OPERATOR in caplog.text
     assert policy.closed
 
 

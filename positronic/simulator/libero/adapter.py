@@ -12,7 +12,9 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
+from positronic.simulator.libero import keys as libero_keys
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
@@ -21,6 +23,12 @@ class LiberoAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
+    def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {eval_keys.TASK: r['name'], libero_keys.SUITE: r['suite'], libero_keys.TASK_ID: r['task_id']}
+            for r in records
+        ]
+
     def _reset_token(self, params: dict[str, Any]) -> Any:
         # The whole scene spec rides the trial params: the server caches its env by ``(suite, task_id,
         # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
@@ -28,12 +36,12 @@ class LiberoAdapter(WireCommandAdapter):
         # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
         # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
-            'suite': params[keys.EVAL_SUITE],
-            'task_id': params[keys.EVAL_TASK_ID],
-            'camera_resolution': params[keys.EVAL_CAMERA_RESOLUTION],
-            'control_mode': params[keys.EVAL_CONTROL_MODE],
-            'seed': params.get(keys.EVAL_SEED),
-            'settle_steps': params[keys.EVAL_SETTLE_STEPS],
+            'suite': params[libero_keys.SUITE],
+            'task_id': params[libero_keys.TASK_ID],
+            'camera_resolution': params[libero_keys.CAMERA_RESOLUTION],
+            'control_mode': params[libero_keys.CONTROL_MODE],
+            'seed': params.get(eval_keys.SEED),
+            'settle_steps': params[libero_keys.SETTLE_STEPS],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
@@ -57,4 +65,4 @@ class LiberoAdapter(WireCommandAdapter):
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` is LIBERO's success check rather than a step limit, so reaching it is the success.
-        return {keys.EVAL_SUCCESS: True} if result['done'] else None
+        return {eval_keys.SUCCESS: True} if result['done'] else None

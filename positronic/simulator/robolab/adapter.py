@@ -13,8 +13,10 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm.models import DROID_EE_FRAME
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
+from positronic.simulator.robolab import keys as robolab_keys
 
 
 class RobolabAdapter(WireCommandAdapter):
@@ -23,9 +25,15 @@ class RobolabAdapter(WireCommandAdapter):
         super().__init__(DROID_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
+    def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {eval_keys.TASK: record['name'], robolab_keys.EPISODE_LENGTH: record['episode_length_s']}
+            for record in records
+        ]
+
     def _reset_token(self, params: dict[str, Any]) -> Any:
         # No seed rides the token: RoboLab's eval path has no seed hook, so a recorded seed would only mislead.
-        return {'task': params[keys.EVAL_TASK], 'instruction_type': params[keys.EVAL_INSTRUCTION_TYPE]}
+        return {'task': params[eval_keys.TASK], 'instruction_type': params[robolab_keys.INSTRUCTION_TYPE]}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
@@ -60,4 +68,4 @@ class RobolabAdapter(WireCommandAdapter):
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only
         # when the task's success condition fired, keeping timeouts honest.
-        return {keys.EVAL_SUCCESS: bool(result['success'])} if result['done'] else None
+        return {eval_keys.SUCCESS: bool(result['success'])} if result['done'] else None

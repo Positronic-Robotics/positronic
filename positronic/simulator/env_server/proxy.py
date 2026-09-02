@@ -17,6 +17,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -57,6 +58,31 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
 
+    def _connect(self) -> EnvConnection:
+        """The connection to the env server, started and opened on the first call.
+
+        Deferred so positronic can wire the World before the subprocess spawns. The connection closes before
+        the server (registered last), so a rollout never races the server's teardown.
+        """
+        if self._conn is None:
+            host, port = self._cleanup.enter_context(self._serve)
+            self._conn = EnvConnection(host, port)
+            self._cleanup.callback(self._conn.close)
+        return self._conn
+
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tasks the env has for ``spec``, as the trial params an eval builds its sweep from."""
+        try:
+            params = self._adapter.task_params(self._connect().tasks(spec))
+            if not params:
+                # A sweep of no trials writes nothing and ends at once, which reads as a run that succeeded.
+                raise ValueError(f'the env has no task for {spec!r}')
+            return params
+        except BaseException:
+            # The listing runs before ``run``, so its failure is the only path that closes the server.
+            self._cleanup.close()
+            raise
+
     def reset(self, params: dict[str, Any]) -> None:
         """Re-randomize the env from the trial's params and publish the scene it draws.
 
@@ -64,16 +90,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         model, a full observation payload and a non-terminal ``done``. Stale commands queued while inactive
         are dropped so the first step doesn't apply them.
         """
-        if self._conn is None:
-            # Start the server and connect on the first reset, not at construction, so positronic can wire the
-            # World before the subprocess spawns. The connection closes before the server (registered last), so a
-            # rollout never races the server's teardown.
-            host, port = self._cleanup.enter_context(self._serve)
-            self._conn = EnvConnection(host, port)
-            self._cleanup.callback(self._conn.close)
+        conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = self._conn.reset(self._adapter.reset_token(params))
+        self._frame = conn.reset(self._adapter.reset_token(params))
         self._meta = self._frame['meta']
         self._active = True
         self.robot_meta.emit(self._frame['robot_meta'])
@@ -90,25 +110,19 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
             while not should_stop.value:
-                # The proxy is the eval's sole time-master: it sleeps one control period every turn —
-                # stepping, resetting, or idle between trials alike. Before the first reset the env's
-                # ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
+                # The proxy paces every turn; ``control_dt`` is known only once a reset ran.
                 yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
                 if (call := next(self.env_reset.incoming(), None)) is not None:
                     with pimm.calls.raise_to(call):
                         self.reset(dict(call.request or {}))
                         call.set_result(None)
                 elif self._active:
-                    # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
-                    # observation assembly (shared-memory image allocation + camera copies) inside it, so the
-                    # reduce can split materialisation out of the wire cost.
+                    # The materialize span nests inside the step span, so a reduce can split the two costs.
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
-            # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
-            # ever connected.
             self._cleanup.close()
 
     def _step_env(self) -> dict[str, Any]:
@@ -150,7 +164,7 @@ def remote_franka_embodiment(
         observations=observations,
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
-        prepare_handlers={keys.SCENE: proxy.env_reset},
+        prepare_handlers={eval_keys.SCENE: proxy.env_reset},
         static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),

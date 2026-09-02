@@ -13,6 +13,8 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
+from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
@@ -226,14 +228,14 @@ class Harness(pimm.ControlSystem):
 
     def _build_episode_meta(self) -> dict[str, Any]:
         meta = self._statics()
-        meta[keys.EVAL_UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
-        meta[keys.EVAL_EMBODIMENT] = self._embodiment.descriptor
-        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charges_wall_time
+        meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
+        meta[eval_keys.EMBODIMENT] = self._embodiment.descriptor
+        meta[eval_keys.CHARGE_INFERENCE_TIME] = self._charges_wall_time
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
-            meta[keys.EVAL_TIMEOUT] = self._task.timeout_sec
+            meta[eval_keys.TIMEOUT] = self._task.timeout_sec
         assert self._inference is not None, 'only a live episode has meta'
         for k, v in flatten_dict(self._inference.meta).items():
-            meta[f'{keys.POLICY_META}.{k}'] = v
+            meta[f'{policy_keys.POLICY_META}.{k}'] = v
         meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
         return meta
@@ -337,7 +339,7 @@ class Harness(pimm.ControlSystem):
         # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
         # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
         # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != keys.SCENE})
+        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE})
         # The answer waits until the model is out of this episode's function. An in-process policy is one
         # model across every episode, so the session that the next ask opens must not overtake it. The move
         # back above gives the function that time.
@@ -445,9 +447,9 @@ class Harness(pimm.ControlSystem):
         """
         deadline_ns = self._deadline_ns
         if done is not None and done.data and (deadline_ns is None or done.ts <= deadline_ns):
-            return {**done.data, keys.EVAL_TERMINATED: True}
+            return {**done.data, eval_keys.TERMINATED: True}
         if deadline_ns is not None and clock.now_ns() >= deadline_ns:
-            return {keys.EVAL_TERMINATED: False}
+            return {eval_keys.TERMINATED: False}
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

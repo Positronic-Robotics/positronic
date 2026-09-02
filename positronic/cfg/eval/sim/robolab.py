@@ -1,153 +1,12 @@
-from functools import partial
-
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import number_trials
+from positronic.cfg.eval import number_trials, spec
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
+from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
-
-# The 120 benchmark tasks: name -> (categories, episode_length_s). positronic cannot import robolab (it lives in
-# the Isaac Lab env server), so the table is pinned here against the launcher's commit (7d45d749), generated
-# from robolab/tasks/_metadata/task_metadata.json. The categories are the task's attributes mapped through
-# RoboLab's BENCHMARK_TASK_CATEGORIES (attribute -> visual/relational/procedural); a task can sit on several
-# axes (84/42/34 memberships across the 120 tasks, matching the benchmark's reported splits), and the empty
-# tuple marks the three tasks the metadata leaves untagged — they run only by name or in ``all``.
-_TASKS = {
-    'AnimalsInBinTask': (('visual',), 90),
-    'AppleAndYogurtInBowlTask': (('procedural',), 120),
-    'BBQSauceInBinTask': (('visual',), 90),
-    'BagelsOnPlateTask': (('visual',), 60),
-    'BananaInBowlTask': (('visual',), 50),
-    'BananaOnPlateTask': ((), 40),
-    'BananaThenRubiksCubeTask': (('relational',), 60),
-    'BananasInBinOneMoreTask': (('relational', 'visual'), 60),
-    'BananasInBinThreeTotalTask': (('relational', 'visual'), 60),
-    'BananasInCrateTask': (('relational',), 60),
-    'BananasOutOfBinTask': (('relational', 'visual'), 90),
-    'BigPumpkinInBinTask': (('visual',), 60),
-    'BlackItemsInBinTask': (('procedural', 'visual'), 120),
-    'BlockStackingOrderAgnosticTask': (('procedural',), 90),
-    'BlockStackingSpecifiedOrderTask': (('procedural', 'visual'), 90),
-    'BlocksInBinTask': (('procedural',), 150),
-    'BowlInBinTask': ((), 60),
-    'BowlStackingLeftOnRightTask': (('relational',), 20),
-    'BowlStackingRightOnLeftTask': (('relational',), 20),
-    'ButterAboveRaisinTask': (('relational',), 40),
-    'CannedFoodInBinTask': (('visual',), 60),
-    'ClampInRightBinTask': (('relational', 'visual'), 60),
-    'CleanUpToysTask': (('procedural', 'visual'), 300),
-    'ClearOrganicObjectsTask': (('visual',), 240),
-    'ClutterPlasticTask': (('visual',), 180),
-    'ClutterPumpkinTask': (('visual',), 90),
-    'CoffeePotInBinTask': (('visual',), 60),
-    'CondimentsInBinTask': (('procedural', 'visual'), 180),
-    'CookingClearPlateTask': (('procedural', 'visual'), 180),
-    'CookingPickPastaToolTask': (('relational', 'visual'), 60),
-    'CubesAndBlocksInBinTask': (('procedural', 'relational'), 240),
-    'DishesInBinTask': (('visual',), 180),
-    'ElectronicsInBinTask': (('procedural', 'visual'), 180),
-    'FoodPacking1BoxesTask': (('visual',), 60),
-    'FoodPacking1CansTask': (('visual',), 60),
-    'FoodPacking2BoxesTask': (('visual',), 180),
-    'FoodPacking2CansTask': (('visual',), 180),
-    'FoodPacking3BoxesTask': (('visual',), 240),
-    'FoodPacking3CansTask': (('visual',), 240),
-    'FoodPackingByColorTask': (('procedural', 'relational', 'visual'), 120),
-    'FruitsGreenLimesOnPlateTask': (('visual',), 90),
-    'FruitsMovingOrangeOrLimeTask': (('relational',), 60),
-    'FruitsMovingTask': (('visual',), 60),
-    'FruitsOnPlate3Task': (('relational', 'visual'), 200),
-    'FruitsOnPlateTask': (('visual',), 300),
-    'FruitsOnionTask': (('visual',), 60),
-    'FruitsOnionToPlateTask': (('visual',), 60),
-    'FruitsOrangesOnPlateTask': (('relational', 'visual'), 90),
-    'GrabABagelTask': (('visual',), 30),
-    'GrabAFruitTask': (('visual',), 30),
-    'GreenSpoonsInPotTask': (('procedural', 'visual'), 180),
-    'HammersInLeftBinTask': (('relational', 'visual'), 180),
-    'JugsOnShelfTask': (('visual',), 120),
-    'KeyboardOutOfBinTask': (('relational',), 60),
-    'LargerObjectRaisinBoxInBinTask': (('visual',), 30),
-    'MarkerInMugTask': (('procedural',), 40),
-    'MouseOnKeyboardTask': (('visual',), 60),
-    'MoveBananaToBagelPlateTask': (('visual',), 90),
-    'MustardAboveRaisinTask': (('relational',), 40),
-    'MustardInLeftBinTask': (('relational',), 30),
-    'MustardInRightBinTask': (('relational',), 30),
-    'NonHammerToolsInRightBinTask': (('procedural', 'relational', 'visual'), 180),
-    'OneBottleInSquarePailTask': (('visual',), 60),
-    'OneBottleOnShelfTask': (('visual',), 60),
-    'PhoneOrRemoteInBinTask': (('relational',), 60),
-    'PickDrillTask': (('visual',), 40),
-    'PickGlassesTask': (('visual',), 30),
-    'PickOrangeObjectTask': (('visual',), 60),
-    'PickUpBluePitcherTask': (('procedural', 'visual'), 30),
-    'PickUpGreenObjectTask': (('visual',), 30),
-    'PinkSpoonInPotTask': (('procedural', 'visual'), 60),
-    'PlasticBottlesInSquarePailTask': (('procedural', 'visual'), 180),
-    'PutBowlOnShelfTopTask': (('relational',), 60),
-    'PutMugsOnShelfTask': (('procedural', 'relational'), 180),
-    'PutTwoMugsOnShelfTask': (('procedural', 'relational'), 180),
-    'RecycleCartonTask': (('visual',), 90),
-    'RecycleCartonsOnBoxTask': (('visual',), 90),
-    'RecycleCartonsVerticalCrateTask': (('relational', 'visual'), 90),
-    'RedDishesInBinTask': (('visual',), 60),
-    'RedItemsInBinTask': (('procedural', 'visual'), 60),
-    'ReorientAllMugsTask': (('procedural',), 90),
-    'ReorientJugTask': (('procedural', 'visual'), 60),
-    'ReorientRedMugTask': (('procedural', 'visual'), 60),
-    'ReorientWhiteMugsTask': (('procedural', 'visual'), 60),
-    'RubiksCubeAndBananaTask': (('relational',), 60),
-    'RubiksCubeBehindBowlTask': (('relational',), 30),
-    'RubiksCubeInFrontOfBowlTask': (('relational',), 30),
-    'RubiksCubeLeftOfBowlTask': (('relational',), 30),
-    'RubiksCubeOrBananaTask': (('relational',), 30),
-    'RubiksCubeRightOfBowlTask': (('relational',), 30),
-    'RubiksCubeTask': ((), 40),
-    'RubiksCubeThenBananaTask': (('relational',), 60),
-    'RubiksCubesInBinTask': (('procedural',), 120),
-    'SauceBottlesCrateTask': (('visual',), 40),
-    'SmallPumpkinInBinTask': (('visual',), 60),
-    'SmallerObjectButterInBinTask': (('visual',), 30),
-    'SmartphoneInBinTask': (('visual',), 60),
-    'SpoonInMugTask': (('procedural', 'relational'), 60),
-    'SpoonsInPotTask': (('procedural', 'visual'), 180),
-    'Stack3RubiksCubeTask': (('procedural',), 60),
-    'StackWhiteMugsTask': (('procedural', 'visual'), 60),
-    'StackYellowOnRedTask': (('procedural',), 60),
-    'TakeMeasuringSpoonOutTask': (('visual',), 40),
-    'TakeMugsOffOfShelfTask': (('procedural', 'visual'), 180),
-    'TakeSpatulaOffShelfTask': (('procedural', 'relational'), 60),
-    'ThrowAwayAppleTask': (('visual',), 60),
-    'ThrowAwaySnacksTask': (('visual',), 120),
-    'ToolOrganizationBothTask': (('relational', 'visual'), 180),
-    'ToolOrganizationTask': (('relational', 'visual'), 180),
-    'ToolsPickingAllHammersTask': (('relational', 'visual'), 240),
-    'ToolsPickingDrillTask': (('relational', 'visual'), 60),
-    'ToolsPickingHammerTask': (('relational', 'visual'), 60),
-    'ToyInBinTask': (('visual',), 60),
-    'UnstackRubiksCubeTask': (('procedural',), 90),
-    'UtensilsInMugTask': (('procedural', 'visual'), 90),
-    'WhiteMugInCenterOfTableTask': (('relational', 'visual'), 30),
-    'WhiteMugsInBinTask': (('visual',), 60),
-    'WoodSpatulaToBowlTask': (('visual',), 60),
-    'YellowAndWhiteObjectsInBinTask': (('relational', 'visual'), 60),
-    'YogurtInBowlTask': (('visual',), 40),
-}
-
-_CATEGORIES = ('visual', 'relational', 'procedural')
-
-
-def _resolve_tasks(task) -> list[str]:
-    """A task name, a list of names, a category, or ``'all'`` -> the benchmark task names to run."""
-    if task == 'all':
-        return list(_TASKS)
-    if task in _CATEGORIES:
-        return [name for name, (categories, _) in _TASKS.items() if task in categories]
-    return [task] if isinstance(task, str) else list(task)
 
 
 @cfn.config(
@@ -159,17 +18,16 @@ def _resolve_tasks(task) -> list[str]:
 def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
-    RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: 120 tabletop manipulation
+    RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
     tasks on the DROID rig (Franka arm + Robotiq 2F-85), each with a fixed scene, a language instruction in
-    three phrasings (``instruction_type`` ``default``/``vague``/``specific``), and a scripted success check.
-    Tasks carry categories — ``visual`` (color/size/semantics), ``relational`` (spatial/conjunction/counting),
-    ``procedural`` (stacking/sorting/reorientation/affordance) — and one task can sit on several axes, so the
-    three category sweeps overlap.
+    three phrasings (``instruction_type`` ``default``/``vague``/``specific``), a time budget of its own and a
+    scripted success check. RoboLab scores three task categories — ``visual``, ``relational`` and
+    ``procedural`` — and one task can sit on several axes, so the three category sweeps overlap.
 
     ``_robolab_eval`` leaves ``task`` unbound; each named config below is a ``.override`` binding it — to a
-    single task name, a category, or ``all``. A list of names also works. The instruction is never pinned:
-    the task reads its language live from the env, which reports the resolved instruction in every reset's
-    meta.
+    single task name, a category, or ``None`` for every task. A list of names also works. The env resolves it
+    when the run starts. The instruction is never pinned: the task reads its language live from the env, which
+    reports the resolved instruction in every reset's meta.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
@@ -177,32 +35,29 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
     """
-    names = _resolve_tasks(task)
-    if timeout is None:
-        # The env truncates itself at each task's episode_length_s; the harness deadline is a backstop above
-        # the longest selected task.
-        timeout = max(_TASKS[name][1] for name in names) + 10.0
     proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
-    # RoboLab exposes no seed hook, so trial params carry no ``eval.seed``.
-    params = [
-        {keys.EVAL_TASK: name, keys.EVAL_INSTRUCTION_TYPE: instruction_type}
-        for name in names
-        for _ in range(trial_count)
-    ]
+
+    def tasks() -> list[Task]:
+        trials = []
+        for params in proxy.tasks(spec(task=task)):
+            # RoboLab truncates an episode at its own budget, so the deadline sits above it and the env's verdict
+            # ends a trial.
+            deadline = timeout if timeout is not None else params[robolab_keys.EPISODE_LENGTH] + 10.0
+            # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
+            trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline)
+            trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
+        return number_trials(trials)
+
     return Eval(
-        embodiment,
-        # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-        partial(number_trials, Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
-        privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
-        done=proxy.done,
+        embodiment, tasks, privileged={'subtask': Observation(proxy.privileged['subtask'], None)}, done=proxy.done
     )
 
 
-# The full 120-task benchmark in one run.
-benchmark = _robolab_eval.override(task='all')
+# Every task the benchmark holds, in one run.
+benchmark = _robolab_eval.override(task=None)
 
 # One category each — the three axes RoboLab reports scores on.
 visual = _robolab_eval.override(task='visual')

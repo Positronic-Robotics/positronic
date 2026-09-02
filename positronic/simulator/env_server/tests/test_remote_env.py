@@ -20,6 +20,7 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
+from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule
@@ -30,7 +31,12 @@ from positronic.simulator.env_server.launcher import free_port
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
-from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoco_env, remote_stack_cubes_eval
+from positronic.simulator.env_server.tests.mujoco_env import (
+    CAMERAS,
+    SCENE_NAME,
+    make_mujoco_env,
+    remote_stack_cubes_eval,
+)
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -101,6 +107,18 @@ def test_transport_is_transparent(env_server):
         assert direct_step['control_dt'] == socket_step['control_dt']
 
 
+@pytest.mark.timeout(60.0)
+def test_the_env_answers_its_own_task_list(env_server):
+    """The env answers its own records, and a spec it does not know raises through to the client."""
+    host, port = env_server
+    conn = EnvConnection(host, port)
+    assert conn.tasks({}) == [{'name': SCENE_NAME}]
+    assert conn.tasks({'task': SCENE_NAME}) == [{'name': SCENE_NAME}]
+    with pytest.raises(RuntimeError, match='nosuchscene'):
+        conn.tasks({'task': 'nosuchscene'})
+    conn.close()
+
+
 @contextmanager
 def _mute_server():
     """A peer that accepts the connection and then answers nothing, holding the socket open.
@@ -159,8 +177,8 @@ def test_a_pinned_control_mode_rides_the_wire():
 class TestEnvControlFrame:
     """An env measuring somewhere other than the embodiment's ``default`` gets commands re-expressed for it.
 
-    ``RobolabAdapter`` is the live case and has no test module of its own, so its round-trip lands here beside
-    the rest of the adapter's wire contract.
+    ``RobolabAdapter`` is the live case, and this file covers the adapter wire contract, so its frame
+    round-trip runs here.
     """
 
     frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
@@ -236,6 +254,10 @@ def test_cartesian_delta_matches_absolute_target():
     np.testing.assert_allclose(ee_idle, ee_delta, atol=1e-3)  # one-shot: idle ticks add no motion
 
 
+# The one task ``_CountdownEnv`` serves.
+_COUNTDOWN = 'countdown'
+
+
 class _CountdownEnv(EnvProtocol):
     """A degenerate env exercising the proxy's terminal and free-run paths without the real ``stack_cubes``
     wrapper. Obs encodes the step count (``reset`` is step 0, each ``step`` increments) so a reader can
@@ -246,9 +268,16 @@ class _CountdownEnv(EnvProtocol):
         self._control_dt = control_dt
         self._steps = 0
 
+    def tasks(self, spec):
+        selection = spec.get('task', _COUNTDOWN)
+        names = [selection] if isinstance(selection, str) else list(selection)
+        if any(name != _COUNTDOWN for name in names):
+            raise ValueError(f'_CountdownEnv serves {_COUNTDOWN!r}, not {names}')
+        return [{'name': name} for name in names]
+
     def reset(self, token):
         self._steps = 0
-        meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
+        meta = {'task': _COUNTDOWN}  # scene meta the env reports only at reset; ``step`` omits it
         return {
             'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
             'meta': meta,
@@ -266,8 +295,11 @@ class _CountdownEnv(EnvProtocol):
 
 
 class _CountdownAdapter(EnvAdapter):
+    def task_params(self, records):
+        return [{eval_keys.TASK: record['name']} for record in records]
+
     def reset_token(self, params):
-        return params.get(keys.EVAL_SEED)
+        return params.get(eval_keys.SEED)
 
     def action(self, commands):
         return {}
@@ -279,7 +311,51 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {keys.EVAL_SUCCESS: True} if result['done'] else None
+        return {eval_keys.SUCCESS: True} if result['done'] else None
+
+
+@pytest.mark.timeout(60.0)
+def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
+    """``tasks`` runs before the first trial, so it starts the server; the reset that follows shares its
+    connection."""
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        obs_rx = world.pair(proxy.observations['value'])
+        world.start([proxy])
+
+        assert proxy.tasks({'task': _COUNTDOWN}) == [{eval_keys.TASK: _COUNTDOWN}]
+
+        proxy.reset({eval_keys.SEED: 0})
+        np.testing.assert_array_equal(obs_rx.value, np.zeros(7))
+
+
+@pytest.mark.timeout(60.0)
+def test_a_selection_naming_no_task_is_refused():
+    """A sweep of no trials ends at once and reads as a run that succeeded, so an empty listing raises."""
+    with serve_env(_CountdownEnv()) as (host, port):
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        with pytest.raises(ValueError, match='no task'):
+            proxy.tasks({'task': []})
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refused_listing_stops_the_server_it_started():
+    """The scheduler enters ``run``, whose teardown stops the server, only after the listing."""
+    with serve_env(_CountdownEnv()) as address:
+        stopped = False
+
+        @contextmanager
+        def serve():
+            nonlocal stopped
+            try:
+                yield address
+            finally:
+                stopped = True
+
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), serve())
+        with pytest.raises(RuntimeError, match='nosuchtask'):
+            proxy.tasks({'task': 'nosuchtask'})
+        assert stopped, 'the server stayed up with nobody left to stop it'
 
 
 @pytest.mark.timeout(60.0)
@@ -295,7 +371,7 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({keys.EVAL_SEED: 0})
+        proxy.reset({eval_keys.SEED: 0})
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
 
@@ -313,7 +389,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
         scheduler = world.start([proxy])
 
-        proxy.reset({keys.EVAL_SEED: 0})
+        proxy.reset({eval_keys.SEED: 0})
         assert task.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
@@ -327,7 +403,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
+        trial = number_trials([(replace(next(iter(ev.tasks())), timeout_sec=0.1), {eval_keys.SEED: 100})])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(
             policy=ChunkedSchedule().wrap(policy),
@@ -339,10 +415,10 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert len(ds) == 1
     episode = ds[0]
     assert isinstance(episode, Episode)
-    assert episode.static[keys.EVAL_TERMINATED] is False
-    assert keys.EVAL_SUCCESS not in episode.static
-    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
-    assert episode.static[keys.EVAL_EMBODIMENT] == 'remote.mujoco.franka'
+    assert episode.static[eval_keys.TERMINATED] is False
+    assert eval_keys.SUCCESS not in episode.static
+    assert episode.static[eval_keys.UNIVERSE] == 'sim'
+    assert episode.static[eval_keys.EMBODIMENT] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert keys.EXTERIOR_IMAGE in signals
@@ -401,7 +477,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]
+        task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt)
+        trial = number_trials([(task, {eval_keys.SEED: 100})])[0]
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

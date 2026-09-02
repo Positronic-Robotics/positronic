@@ -4,7 +4,7 @@ This is the duplicated, test-only remote copy of the production native path (in-
 ``stack_cubes`` stays the real one), and the reference ``WireCommandAdapter`` env — it decodes the
 same tagged command dialect the real benchmarks speak, with no OSC/axis-angle quirks. ``MujocoEnv``
 drives ``MujocoSim.run()`` directly, binding local pipes to its ports the way ``World.start`` does,
-and exposes it as the gym-style ``reset``/``step`` the server serves. ``make_mujoco_env`` builds it;
+and exposes it as the ``tasks``/``reset``/``step``/``close`` the server serves. ``make_mujoco_env`` builds it;
 ``StackCubesAdapter`` is the client-side mapping.
 """
 
@@ -21,6 +21,7 @@ from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Eval, Observation, Task
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
@@ -32,6 +33,9 @@ _ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
 # Logical observation name -> the model camera the sim renders.
 CAMERAS = {keys.EXTERIOR_IMAGE: 'agentview'}
 
+# The one scene this fixture serves.
+SCENE_NAME = 'stack_cubes'
+
 
 class _NeverStop(pimm.SignalReceiver):
     """A ``should_stop`` that never fires — ``MujocoEnv`` drives the sim loop tick by tick instead."""
@@ -41,7 +45,7 @@ class _NeverStop(pimm.SignalReceiver):
 
 
 class MujocoEnv(EnvProtocol):
-    """A ``MujocoSim`` behind the gym-style env protocol, driving its ``run()`` loop one tick at a time.
+    """A ``MujocoSim`` behind the env protocol, driving its ``run()`` loop one tick at a time.
 
     Binding local pipes to the sim's ports (the wiring ``World.start`` performs) lets ``step`` inject a
     raw action and pump the fused per-tick loop, then read the post-step signals back. The control
@@ -96,6 +100,13 @@ class MujocoEnv(EnvProtocol):
             'cameras': {name: recv.read().data.array.copy() for name, recv in self._camera_recvs.items()},
             'sim_state': dict(self._sim_state_recv.read().data),
         }
+
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        selection = spec.get('task', SCENE_NAME)
+        names = [selection] if isinstance(selection, str) else list(selection)
+        if any(name != SCENE_NAME for name in names):
+            raise ValueError(f'MujocoEnv serves {SCENE_NAME!r}, not {names}')
+        return [{'name': name} for name in names]
 
     def reset(self, token: Any) -> dict[str, Any]:
         # Close the prior generator before rebuilding the scene, so its ``run`` cleanup tears down the old
@@ -162,8 +173,11 @@ class StackCubesAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
 
+    def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{eval_keys.TASK: record['name']} for record in records]
+
     def _reset_token(self, params: dict[str, Any]) -> Any:
-        return params.get(keys.EVAL_SEED)
+        return params.get(eval_keys.SEED)
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
