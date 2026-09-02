@@ -88,7 +88,13 @@ def trossen(ip: str):
     return Robot(ip=ip)
 
 
-@cfn.config(ip='192.168.1.2', force_feedback_gain=0.0, gripper_friction_constant=None)
+# What the controller cancels of the gripper's own friction on a leader the operator holds, in N. Felt at
+# the rig on the leader at 192.168.1.2, which is calibrated at 5.77: at 10.02 the trigger moves under a
+# finger and still holds where it is left. Another arm may want its own.
+TROSSEN_LEADER_GRIPPER_FRICTION = 10.02
+
+
+@cfn.config(ip='192.168.1.2', force_feedback_gain=0.0, gripper_friction_constant=TROSSEN_LEADER_GRIPPER_FRICTION)
 def trossen_leader(ip: str, force_feedback_gain: float, gripper_friction_constant: float | None):
     from positronic.drivers.roboarm.trossen_leader import Leader
 
