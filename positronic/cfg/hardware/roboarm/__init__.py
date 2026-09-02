@@ -83,3 +83,10 @@ def trossen(ip: str):
     from positronic.drivers.roboarm.trossen import Robot
 
     return Robot(ip=ip)
+
+
+@cfn.config(ip='192.168.1.2', force_feedback_gain=0.0)
+def trossen_leader(ip: str, force_feedback_gain: float):
+    from positronic.drivers.roboarm.trossen_leader import Leader
+
+    return Leader(ip=ip, force_feedback_gain=force_feedback_gain)

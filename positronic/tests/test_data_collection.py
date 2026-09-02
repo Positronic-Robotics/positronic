@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, D
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D
@@ -76,7 +78,7 @@ def test_the_tracker_takes_the_shake_out_of_a_hand_that_holds_still():
         at = geom.Transform3D(np.array([shake * np.sin(2 * np.pi * 10 * tick / 100), 0.0, 0.0]))
         seen.append(tracker.update(at, tick * 10_000_000).translation)
     left = np.ptp(np.asarray(seen)[100:], axis=0).max()
-    assert left < shake, f'the arm still swings {left * 1000:.1f} mm of the hand\'s {shake * 2000:.1f} mm'
+    assert left < shake, f"the arm still swings {left * 1000:.1f} mm of the hand's {shake * 2000:.1f} mm"
 
 
 def test_the_tracker_follows_a_hand_that_means_it():
@@ -327,6 +329,155 @@ def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():
     assert np.all(np.abs(offsets) < 1)  # inside the spread the nominal allows each joint
     assert np.all(offsets.std(axis=0) > 0)  # a draw of its own each time
     assert np.all(offsets.std(axis=1) > 0)  # each joint drawn on its own, not one offset for the whole vector
+
+
+@dataclass
+class _StandingStill:
+    """The least an arm reports for a controller to follow it: where it stands, and that it takes commands."""
+
+    ee_pose: Transform3D = field(default_factory=Transform3D)
+    status: RobotStatus = RobotStatus.AVAILABLE
+    q: np.ndarray = field(default_factory=lambda: np.zeros(6))
+    dq: np.ndarray = field(default_factory=lambda: np.zeros(6))
+
+
+@dataclass
+class _LeaderRig:
+    """A controller over an arm the operator drives with the leader beside it, with its ports paired."""
+
+    dc: DataCollectionController
+    commands: RecordingEmitter
+    grips: RecordingEmitter
+    state: pimm.ControlSystemEmitter
+    joints: pimm.ControlSystemEmitter
+    grip: pimm.ControlSystemEmitter
+    events: pimm.ControlSystemEmitter
+    move: pimm.calls.ControlSystemHandler
+
+
+def build_leader_rig(world) -> _LeaderRig:
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, teleop=data_collection.Teleop.LEADER)
+    commands, grips = RecordingEmitter(), RecordingEmitter()
+    dc.robot_commands._bind(commands)
+    dc.target_grip._bind(grips)
+    return _LeaderRig(
+        dc=dc,
+        commands=commands,
+        grips=grips,
+        state=world.pair(dc.robot_state),
+        joints=world.pair(dc.leader_joints),
+        grip=world.pair(dc.leader_grip),
+        events=world.pair(dc.session_events),
+        move=world.pair(dc.sync_move),
+    )
+
+
+def test_the_keys_the_session_answers_to():
+    """The names a key asks by are the session's, not the keyboard's: a pedal would ask by the same ones."""
+    assert data_collection._session_event('r') is data_collection.SessionEvent.RECORD
+    assert data_collection._session_event(' ') is data_collection.SessionEvent.READY
+    assert data_collection._session_event('x') is None
+
+
+def test_a_follower_waits_until_its_leader_has_come_to_it(world):
+    """A follower that starts copying a leader standing somewhere else travels the whole way there at once.
+    Rather than take the operator's word that the arms are lined up, this waits until they are."""
+    rig = build_leader_rig(world)
+    apart, together = np.full(6, 0.5), np.full(6, 0.05)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_StandingStill(q=np.zeros(6))), 0.01),
+        (lambda: rig.grip.emit(0.0), 0.01),
+        (lambda: rig.joints.emit(apart), 0.01),
+        (lambda: rig.joints.emit(apart), 0.01),
+        (lambda: marks.update(apart=len(rig.commands.emitted)), 0.01),
+        (lambda: rig.joints.emit(together), 0.01),
+        (lambda: rig.joints.emit(together), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert marks['apart'] == 0, 'the follower was sent to where the leader stood, all at once'
+    asked = rig.commands.emitted
+    assert asked, 'the follower never took up the leader it had met'
+    assert isinstance(asked[-1][1], roboarm_command.JointPosition), 'the leader was solved for, not copied'
+    np.testing.assert_allclose(asked[-1][1].positions, together)
+
+
+def test_the_trigger_of_a_leader_holds_the_follower_grip(world):
+    """The grip crosses even before the arms meet: closing the hand is not moving the arm."""
+    rig = build_leader_rig(world)
+
+    driver = ManualDriver([(lambda: rig.grip.emit(0.75), 0.01), (None, 0.01)])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert rig.grips.emitted[-1][1] == pytest.approx(0.75)
+
+
+def test_the_keys_carry_the_session_a_leader_rig_has_no_buttons_for(world):
+    """The operator's hand is on the arm, so the recording and the start pose are asked for by name from
+    somewhere else — the same names whatever presses them."""
+    rig = build_leader_rig(world)
+    written = RecordingEmitter()
+    rig.dc.ds_agent_commands._bind(written)
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: rig.events.emit(data_collection.SessionEvent.RECORD), 0.01),
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (lambda: asked.extend(rig.move.incoming()), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    started = [command for _ts, command in written.emitted]
+    assert started and started[0].type is DsWriterCommandType.START_EPISODE, 'the keys started no episode'
+    assert len(asked) == 1, 'the start pose did not reach the arm'
+
+
+def test_a_press_in_front_of_a_travelling_arm_does_not_run_the_move_again(world):
+    """An operator watching an arm cross the table presses again because it is slow, not because they want
+    a second start pose. The arm that arrives is the one the first press asked for."""
+    rig = build_leader_rig(world)
+    asked, marks = [], {}
+
+    driver = ManualDriver([
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (lambda: asked.extend(rig.move.incoming()), 0.01),
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),  # ... while the arm travels
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (lambda: asked.extend(rig.move.incoming()), 0.01),
+        (lambda: marks.update(travelling=len(asked)), 0.01),
+        (lambda: [call.set_result(None) for call in asked], 0.01),
+        (lambda: asked.extend(rig.move.incoming()), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert marks['travelling'] == 1, 'a press in front of the travelling arm asked for the move again'
+    assert len(asked) == 1, 'the presses the arm outran reached it after it landed'
+
+
+def test_an_arm_driven_by_both_a_leader_and_a_headset_is_refused():
+    """Two things asking one arm to be in two places at once is not a rig; it is a fight, and the arm loses
+    it somewhere over the table."""
+    with pytest.raises(ValueError, match='leader'):
+        data_collection.main(
+            robot_arm=DummyRobot(),
+            gripper=None,
+            webxr=WebXR(port=0),
+            sound=None,
+            cameras=None,
+            nominal_joints=NOMINAL_JOINTS.tolist(),
+            leader=DummyRobot(),
+        )
+
+
+def test_a_leader_with_no_follower_is_refused():
+    """A leader is held to drive a follower. One with nothing on the other end moves nothing at all."""
+    with pytest.raises(ValueError, match='leader'):
+        data_collection.main(robot_arm=None, gripper=None, webxr=None, sound=None, cameras=None, leader=DummyRobot())
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):

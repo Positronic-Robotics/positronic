@@ -23,6 +23,7 @@ from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, T
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
+from positronic.drivers.keyboard import KeyboardControl
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
 from positronic.gui import dpg_ui
@@ -32,11 +33,18 @@ from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
 
-def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
+def _parse_buttons(buttons: dict, button_handler: ButtonHandler) -> set[str]:
+    """Feed the controllers' buttons to ``button_handler``, and answer with the hands that sent any.
+
+    A controller the headset has lost sends nothing at all, and the handler raises when asked for a button
+    it has never seen — so the hands named here are exactly the ones a caller may ask about.
+    """
+    hands = set()
     for side in ['left', 'right']:
         if buttons[side] is None:
             continue
 
+        hands.add(side)
         mapping = {
             f'{side}_A': buttons[side][4],
             f'{side}_B': buttons[side][5],
@@ -45,6 +53,7 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
             f'{side}_stick': buttons[side][3],
         }
         button_handler.update_buttons(mapping)
+    return hands
 
 
 def _check_error(is_error, was_error):
@@ -117,6 +126,47 @@ class _Tracker:
         )
 
 
+class Teleop(Enum):
+    """What the operator moves to drive the arm."""
+
+    # A hand tracked in space. The arm follows the pose of the controller in that hand, and the operator
+    # starts and stops the tracking with that controller's own `A`.
+    HAND = 'hand'
+    # A leader arm the operator holds. The follower stands at the joints the leader reads — nothing is
+    # solved in between — and starts following once the two arms have met.
+    LEADER = 'leader'
+
+
+# How closely the leader and the follower must stand before the follower starts copying it, per joint. The
+# follower takes up whatever is left as one streamed step, so this is the largest jump engaging can make.
+_MEET_RAD = 0.1
+
+
+class _Follow:
+    """The follower waiting for the leader it copies to come to it.
+
+    Asking the operator to line the arms up and then press something takes their word for it, and a press
+    with the arms apart moves the follower the whole way at once. This engages on the fact instead: the
+    arms are together, or the follower is not following.
+    """
+
+    def __init__(self) -> None:
+        self.on = False
+
+    def turn_off(self) -> None:
+        if self.on:
+            logging.info('The arm stopped following its leader')
+        self.on = False
+
+    def met(self, leader: np.ndarray, follower: np.ndarray) -> bool:
+        """Whether the follower may copy the leader: it may once every joint of the two is within
+        ``_MEET_RAD`` of the other's, and goes on doing so until something turns it off."""
+        if not self.on and leader.shape == follower.shape and np.max(np.abs(leader - follower)) <= _MEET_RAD:
+            self.on = True
+            logging.info('The arm met its leader and follows it now')
+        return self.on
+
+
 class OperatorPosition(Enum):
     # map xyz -> zxy
     FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
@@ -131,10 +181,12 @@ class DataCollectionController(pimm.ControlSystem):
         nominal_joints: Sequence[float] | np.ndarray,
         joints_spread: Sequence[float] | np.ndarray = (),
         *,
+        teleop: Teleop = Teleop.HAND,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
     ):
         self.operator_position = operator_position
+        self.teleop = teleop
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
         spread = joints_spread if len(joints_spread) else np.zeros_like(self._nominal_joints)
@@ -142,7 +194,14 @@ class DataCollectionController(pimm.ControlSystem):
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.DefaultingReceiver(self, default={})
-        self.buttons_receiver = pimm.ControlSystemReceiver(self)
+        # An arm driven by a leader has no controller to press, and the session runs off `session_events`
+        # instead — so no buttons is a rig without them, not a rig whose operator has not pressed yet.
+        self.buttons_receiver = pimm.DefaultingReceiver(self, default={'left': None, 'right': None})
+        # A keyboard carries these on a rig whose operator holds the leader.
+        self.session_events = pimm.ControlSystemReceiver[SessionEvent](self)
+        # What the leader publishes, on a rig driven by one.
+        self.leader_joints = pimm.ControlSystemReceiver[np.ndarray](self)
+        self.leader_grip = pimm.ControlSystemReceiver[float](self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
         self.frames = pimm.ReceiverDict(self, fake=True)
@@ -155,6 +214,12 @@ class DataCollectionController(pimm.ControlSystem):
 
         self.ds_agent_commands = pimm.ControlSystemEmitter(self)
         self.sound = pimm.ControlSystemEmitter(self)
+
+    @property
+    def _umi(self) -> bool:
+        """Whether a hand's poses reach the arm as they are, with no tracking to start or stop and no
+        start pose to put anything back at. A leader is never that: it is an arm, and it has one."""
+        return self.teleop is Teleop.HAND and self.operator_position is None
 
     def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
         """Redraw the scene and put the arm at a start pose drawn around the nominal joints, yielding until
@@ -173,8 +238,40 @@ class DataCollectionController(pimm.ControlSystem):
         while not ready.done():
             if should_stop.value:
                 return
+            # What the operator asks for in front of a travelling arm is not asked of the arm that comes
+            # back: the press is impatience with this move, and holding it would run the move again.
+            self.session_events.read()
             yield pimm.Sleep(0.001)
         ready.result()
+
+    def _from_hand(self, tracker: _Tracker, hands: set[str], buttons: ButtonHandler) -> tuple[Any, float | None]:
+        """What the hand asks the arm for, and what it holds the grip at.
+
+        The tracker is fed whether or not the arm is tracking: what the hand did while it was not is how
+        far the arm would jump the moment it starts, and the offset is measured off it.
+        """
+        grip = buttons.get_value('right_trigger') if 'right' in hands else None
+        cp_msg = self.controller_positions.read()
+        if cp_msg.updated and cp_msg.data.get('right') is not None:
+            pose = tracker.update(cp_msg.data['right'], cp_msg.ts)
+            return roboarm.command.CartesianPosition(pose), grip
+        return None, grip
+
+    def _from_leader(self, follow: _Follow, state: pimm.Message[RoboarmState] | None) -> tuple[Any, float | None]:
+        """What the leader asks its follower for, and what its trigger holds the grip at.
+
+        The joints go over as they read: a leader and its follower are the same arm, so there is nothing
+        to solve between them.
+        """
+        held = self.leader_grip.read()
+        grip = None if held is None else float(held.data)
+        joints = self.leader_joints.read()
+        if joints is None or state is None:
+            return None, grip
+        leader = np.asarray(joints.data, dtype=np.float64)
+        if not follow.met(leader, np.asarray(state.data.q, dtype=np.float64)) or not joints.updated:
+            return None, grip
+        return roboarm.command.JointPosition(leader), grip
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         sounds = Path(package_assets_path('assets/sounds'))
@@ -183,7 +280,7 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = _Tracker(self.operator_position)
+        source = _Tracker(self.operator_position) if self.teleop is Teleop.HAND else _Follow()
         button_handler = ButtonHandler()
 
         recording = False
@@ -191,8 +288,10 @@ class DataCollectionController(pimm.ControlSystem):
 
         while not should_stop.value:
             try:
-                _parse_buttons(self.buttons_receiver.value, button_handler)
-                if button_handler.just_pressed('right_B'):
+                hands = _parse_buttons(self.buttons_receiver.value, button_handler)
+                state = self.robot_state.read()
+                asked = pimm.value_updated(self.session_events)
+                if button_handler.just_pressed('right_B') or asked is SessionEvent.RECORD:
                     if not recording:
                         meta = dict(self._static_meta)
                         meta.update(self.robot_meta_in.value)
@@ -203,17 +302,19 @@ class DataCollectionController(pimm.ControlSystem):
                         self.ds_agent_commands.emit(DsWriterCommand.STOP())
                         self.sound.emit(end_wav_path)
                     recording = not recording
-                elif button_handler.just_pressed('right_A'):
-                    if tracker.on:
-                        tracker.turn_off()
+                elif isinstance(source, _Tracker) and button_handler.just_pressed('right_A'):
+                    if source.on:
+                        source.turn_off()
+                    elif state is None:
+                        logging.warning('The arm has not said where it stands, so there is nothing to follow from')
                     else:
-                        tracker.turn_on(self.robot_state.value.ee_pose)
-                    logging.info('Tracking is %s', 'on' if tracker.on else 'off')
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                        source.turn_on(state.data.ee_pose)
+                    logging.info('Tracking is %s', 'on' if source.on else 'off')
+                elif (button_handler.just_pressed('right_stick') or asked is SessionEvent.READY) and not self._umi:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)
-                    tracker.turn_off()
+                    source.turn_off()
                     recording = False
                     try:
                         yield from self._ready(should_stop)
@@ -222,20 +323,19 @@ class DataCollectionController(pimm.ControlSystem):
                         logging.error(f'The rig was not readied: {e}')
                         self.sound.emit(error_wav_path)
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
-                cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data['right'], cp_msg.ts)
+                if isinstance(source, _Tracker):
+                    cmd, grip = self._from_hand(source, hands, button_handler)
+                else:
+                    cmd, grip = self._from_leader(source, state)
+                if grip is not None:
+                    self.target_grip.emit(grip)
 
-                if tracker.on:
-                    in_error, entered_error = _check_error(
-                        self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
-                    )
+                if source.on and state is not None:
+                    in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, in_error)
                     if entered_error:
                         logging.error('The arm is in error. It holds still until a reset clears the error.')
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                    if not in_error and cmd is not None:
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
@@ -243,6 +343,25 @@ class DataCollectionController(pimm.ControlSystem):
             except pimm.NoValueException:
                 yield pimm.Sleep(0.001)
                 continue
+
+
+class SessionEvent(Enum):
+    """What the operator asks of the session itself, by whatever device is to hand."""
+
+    # Start the recording, or stop the one that runs.
+    RECORD = 'record'
+    # Put the arm back at its start pose, and abandon the recording that runs.
+    READY = 'ready'
+
+
+# The key that asks for each. An operator holding the leader has no hand free for these, so a second
+# person presses them; a pedal under the operator's own foot would ask for the same ones.
+_SESSION_KEYS = {'r': SessionEvent.RECORD, ' ': SessionEvent.READY}
+
+
+def _session_event(key: str) -> SessionEvent | None:
+    """What a keystroke asks of the session, or nothing for a key that asks for nothing."""
+    return _SESSION_KEYS.get(key)
 
 
 def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
@@ -263,12 +382,25 @@ def _wire(
     world: pimm.World,
     ds_agent: DsWriterAgent | None,
     data_collection: DataCollectionController,
-    webxr: WebXR,
+    webxr: WebXR | None,
     robot_arm: pimm.ControlSystem | None,
     sound: pimm.ControlSystem | None,
+    leader: pimm.ControlSystem | None = None,
+    keyboard: KeyboardControl | None = None,
 ):
-    world.connect(webxr.controller_positions, data_collection.controller_positions)
-    world.connect(webxr.buttons, data_collection.buttons_receiver)
+    if webxr is not None:
+        world.connect(webxr.controller_positions, data_collection.controller_positions)
+        world.connect(webxr.buttons, data_collection.buttons_receiver)
+
+    if leader is not None:
+        # A driver's ports are its own: ``pimm.ControlSystem`` declares none for the checker to find.
+        world.connect(leader.joints, data_collection.leader_joints)  # pyright: ignore[reportAttributeAccessIssue]
+        world.connect(leader.grip, data_collection.leader_grip)  # pyright: ignore[reportAttributeAccessIssue]
+
+    if keyboard is not None:
+        world.connect(
+            keyboard.keyboard_inputs, data_collection.session_events, receiver_wrapper=pimm.map(_session_event)
+        )
 
     if robot_arm is not None:
         # A driver's ports are its own: ``pimm.ControlSystem`` declares none for the checker to find.
@@ -280,7 +412,9 @@ def _wire(
             world.connect(robot_arm.state, sound.level, receiver_wrapper=pimm.map(_wrench_to_level))
 
     if ds_agent is not None:
-        if robot_arm is not None:
+        # A leader's joints are not recorded beside these: the command the follower is given is those very
+        # joints, and it is recorded already.
+        if robot_arm is not None and webxr is not None:
             ds_agent.add_signal('controller_positions', controller_positions_serializer)
             world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
@@ -295,12 +429,16 @@ def _frame_array(frame: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
 def main(
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
-    webxr: WebXR,
+    webxr: WebXR | None,
     sound: pimm.ControlSystem | None,
     cameras: dict[str, pimm.ControlSystem] | None,
-    # The start pose the right stick puts the arm at: drawn around ``nominal_joints``, within ``joints_spread``.
+    # The start pose the stick and the space key put the arm at: drawn around ``nominal_joints``, within
+    # ``joints_spread``.
     nominal_joints: Sequence[float] = (),
     joints_spread: Sequence[float] = (),
+    # The arm the operator holds. Naming it is what makes this a rig driven by a leader rather than by a
+    # hand tracked in space.
+    leader: pimm.ControlSystem | None = None,
     output_dir: str | None = None,
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
@@ -323,6 +461,13 @@ def main(
             '--nominal_joints and --joints_spread name joint angles: every value has to be finite, or the '
             'draw between them raises instead of reaching the arm'
         )
+    if leader is not None and robot_arm is None:
+        raise ValueError('--leader is held to drive a follower, and one with nothing on the other end drives nothing')
+    if leader is not None and webxr is not None:
+        raise ValueError(
+            'the arm is driven by a leader or by a hand tracked in space, not by both: --leader and --webxr '
+            'would leave two things asking one arm to be in two places at once'
+        )
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
@@ -330,8 +475,14 @@ def main(
         static_meta[keys.TASK] = task
     if robot_arm is not None:
         static_meta.update(wire.ROBOT_STATIC_META)
+    # An operator with a hand on the leader has none free for the session, so the keys carry it.
+    keyboard = KeyboardControl(quit_key='q') if leader is not None else None
     data_collection = DataCollectionController(
-        operator_position.value, nominal_joints, joints_spread, static_meta=static_meta
+        operator_position.value,
+        nominal_joints,
+        joints_spread,
+        teleop=Teleop.LEADER if leader is not None else Teleop.HAND,
+        static_meta=static_meta,
     )
 
     if output_dir is not None:
@@ -340,20 +491,17 @@ def main(
     writer_cm = LocalDatasetWriter(output_dir, video_options=video_options) if output_dir is not None else nullcontext()
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
-        _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
+        _wire(world, ds_agent, data_collection, webxr, robot_arm, sound, leader, keyboard)
 
         # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
         gripper_cs = [] if gripper is robot_arm else [gripper]
-        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, sound]
+        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, leader, sound]
 
-        if stream_video_to_webxr is not None:
-            world.connect(
-                camera_emitters[stream_video_to_webxr],
-                webxr.frame,
-                receiver_wrapper=pimm.map(_frame_array),
-            )
+        if stream_video_to_webxr is not None and webxr is not None:
+            world.connect(camera_emitters[stream_video_to_webxr], webxr.frame, receiver_wrapper=pimm.map(_frame_array))
 
-        world.run(data_collection, bg_cs)
+        # The keyboard reads the terminal this was started from, which no spawned process holds.
+        world.run([data_collection, keyboard], bg_cs)
 
 
 @cfn.config(
@@ -491,6 +639,14 @@ def trossencfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+# The same arm, driven by the leader arm beside it instead of from the headset. There is nothing to wear:
+# the operator holds the leader, and the keys carry the session — `r` records, space puts the arm back at
+# its start pose, `q` ends the run.
+trossen_leader = trossencfg.override(
+    leader=positronic.cfg.hardware.roboarm.trossen_leader, webxr=None, stream_video_to_webxr=None
+)
+
+
 droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
@@ -528,6 +684,7 @@ def _internal_main():
         'so101': so101cfg,
         'yam': yamcfg,
         'trossen': trossencfg,
+        'trossen_leader': trossen_leader,
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,
