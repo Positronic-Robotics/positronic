@@ -11,6 +11,7 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 GRIP_TRAVEL_M = 0.04  # the gripper joint's range, which the arm reports and grip is normalized against
+GRIPPER_FRICTION = 5.77  # the friction constant term the station's leaders carry, in N
 HELD = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, GRIP_TRAVEL_M]
 
 
@@ -25,13 +26,28 @@ class FakeLeader:
         def __init__(self, lower: float, upper: float):
             self.position_min, self.position_max = lower, upper
 
+    class _Characteristic:
+        def __init__(self, friction_constant_term: float):
+            self.friction_constant_term = friction_constant_term
+
     def __init__(self, positions: list[float] | None = None):
         self.positions = list(positions if positions is not None else HELD)
         self.modes: list[object] = []
         self.efforts: list[list[float]] = []
         self.moves: list[tuple[list[float], float, bool]] = []
+        self.characteristics = [self._Characteristic(0.0)] * 6 + [self._Characteristic(GRIPPER_FRICTION)]
+        self.friction_terms: list[float] = []
         self.raises: Exception | None = None
         self.cleaned_up = False
+
+    def get_joint_characteristics(self):
+        return self.characteristics
+
+    def set_joint_characteristics(self, characteristics) -> None:
+        if self.raises is not None:
+            raise self.raises
+        self.characteristics = list(characteristics)
+        self.friction_terms.append(characteristics[6].friction_constant_term)
 
     def get_joint_limits(self):
         return [self._Limit(-3.14, 3.14)] * 6 + [self._Limit(0.0, GRIP_TRAVEL_M)]
@@ -191,6 +207,28 @@ def test_force_feedback_pushes_back_what_the_follower_is_holding():
     drive(leader, clock, stop, ticks=2)
 
     np.testing.assert_allclose(arm.efforts[0], -0.1 * held)
+
+
+def test_the_gripper_friction_the_operator_asks_for_stands_only_for_the_run():
+    """The term is the arm's configuration, and it outlives the process that set it. A run that leaves it
+    raised hands the next one an arm that is not the arm it was calibrated as."""
+    arm = FakeLeader()
+    leader, _joints, _grips, clock, stop = build(arm, gripper_friction_constant=8.0)
+
+    drive(leader, clock, stop, ticks=2)
+
+    assert arm.friction_terms == [8.0, GRIPPER_FRICTION], 'the run did not hand the gripper back as it took it'
+
+
+def test_an_arm_asked_for_no_gripper_friction_keeps_what_it_was_calibrated_with():
+    """Every arm ships with its own calibration, and a station that names no preference has none to state."""
+    arm = FakeLeader()
+    leader, _joints, _grips, clock, stop = build(arm)
+
+    drive(leader, clock, stop, ticks=2)
+
+    assert not arm.friction_terms, 'the run wrote a characteristic nobody asked for'
+    assert arm.characteristics[6].friction_constant_term == GRIPPER_FRICTION
 
 
 def test_a_leader_that_stops_being_read_does_not_end_the_session():

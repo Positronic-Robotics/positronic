@@ -15,6 +15,10 @@ leaders of the station: the same arm reads -0.0004 m as a leader and -0.0063 m a
 Force feedback is what the follower is holding, pushed back into the operator's hand. It stays off until
 the follower driver publishes its external efforts, which it does not yet; ``force_feedback_gain`` is 0
 and ``follower_efforts`` goes unconnected, which leaves plain gravity compensation.
+
+The trigger takes the operator's hand to move, because the gripper joint carries the most friction of any
+joint on the arm. What the controller cancels of it is that joint's ``friction_constant_term``, which
+``gripper_friction_constant`` stands in for.
 """
 
 import contextlib
@@ -63,6 +67,33 @@ def _connect(ip: str) -> Any:
 
 
 @contextlib.contextmanager
+def _gripper_freed(driver: Any, constant: float | None) -> Iterator[None]:
+    """The gripper with ``constant`` as its friction constant term, and the arm's own value back after.
+
+    The controller adds this term to the effort it puts on the joint, in the direction the joint moves, so
+    a larger one leaves less of the gripper's own friction for the operator's hand to overcome.
+    """
+    if constant is None:
+        yield
+        return
+    characteristics = driver.get_joint_characteristics()
+    stood_at = characteristics[_GRIPPER_JOINT].friction_constant_term
+    characteristics[_GRIPPER_JOINT].friction_constant_term = constant
+    driver.set_joint_characteristics(characteristics)
+    logger.info(f'The gripper friction constant is {constant}, where the arm carries {stood_at}')
+    try:
+        yield
+    finally:
+        characteristics[_GRIPPER_JOINT].friction_constant_term = stood_at
+        try:
+            driver.set_joint_characteristics(characteristics)
+        # rules-allow: swallowed-error — an arm that cannot be reached keeps the term until it is
+        # configured again, and the handle still has to go back
+        except Exception as exc:
+            logger.error(f'The gripper keeps the friction constant {constant} until it is configured again: {exc}')
+
+
+@contextlib.contextmanager
 def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
     """The arm, left idle and its handle given back however the run ends — including one that never starts."""
     driver = connect(ip)
@@ -86,15 +117,26 @@ class Leader(pimm.ControlSystem):
     driven from here. Whoever reads these ports decides when they reach a follower.
     """
 
-    def __init__(self, ip: str, *, force_feedback_gain: float = 0.0, connect: Callable[[str], Any] = _connect) -> None:
+    def __init__(
+        self,
+        ip: str,
+        *,
+        force_feedback_gain: float = 0.0,
+        gripper_friction_constant: float | None = None,
+        connect: Callable[[str], Any] = _connect,
+    ) -> None:
         """
         :param ip: Address of the leader arm's controller.
         :param force_feedback_gain: Share of the follower's external effort pushed back into the
             operator's hand. 0 leaves the arm in plain gravity compensation.
+        :param gripper_friction_constant: What the controller cancels of the gripper's own friction, in N.
+            None keeps the value the arm was calibrated with. A larger one takes the trigger's stiffness
+            off the operator's hand; too large and the trigger moves on its own.
         :param connect: ``ip -> TrossenArmDriver`` factory; a test injects its own.
         """
         self._ip = ip
         self._gain = force_feedback_gain
+        self._gripper_friction = gripper_friction_constant
         self._connect = connect
 
         self.joints = pimm.ControlSystemEmitter[np.ndarray](self)
@@ -136,7 +178,7 @@ class Leader(pimm.ControlSystem):
             driver.set_all_modes(trossen_arm.Mode.external_effort)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with _opened(self._connect, self._ip) as driver:
+        with _opened(self._connect, self._ip) as driver, _gripper_freed(driver, self._gripper_friction):
             limit = driver.get_joint_limits()[_GRIPPER_JOINT]
             closed, travel = limit.position_min, limit.position_max - limit.position_min
             driver.set_all_modes(trossen_arm.Mode.external_effort)
