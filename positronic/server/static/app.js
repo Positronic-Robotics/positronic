@@ -97,27 +97,40 @@ function baseScopedKey(name) {
 // The name an empty filter set takes, which the export writer and the browser must spell alike.
 const UNFILTERED_NAME = 'all';
 
+// A digest stands in for a query over the byte budget; positronic_server.py spells both numbers
+// too, as _MAX_COMPONENT_BYTES and _QUERY_DIGEST_CHARS.
+const MAX_QUERY_BYTES = 200;
+const QUERY_DIGEST_CHARS = 16;
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 // The file name a static export writes an API response to; `static_export_key` in
 // positronic_server.py builds the same name — {b: '2', a: 'x y'} on `leaderboard` names
 // api/groups/leaderboard/a=x%20y&b=2.json.
-function staticExportKey(path, params) {
+async function staticExportKey(path, params) {
   if (!params) return `${path}.json`;
-  const query = Object.keys(params)
+  let query = Object.keys(params)
     .filter((key) => params[key])
     .sort()
     .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
     .join('&');
+  if (new TextEncoder().encode(query).length > MAX_QUERY_BYTES) {
+    query = (await sha256Hex(query)).slice(0, QUERY_DIGEST_CHARS);
+  }
   return `${path}/${query || UNFILTERED_NAME}.json`;
 }
 
 // The path a browser asks for that file at. A host decodes a URL path before it looks the file
 // up, so a name that carries a percent escape is reached by escaping its own `%` again.
-function staticExportUrlPath(path, params) {
-  return staticExportKey(path, params).replaceAll('%', '%25');
+async function staticExportUrlPath(path, params) {
+  return (await staticExportKey(path, params)).replaceAll('%', '%25');
 }
 
-function apiUrl(path, params) {
-  if (window.STATIC_EXPORT) return appUrl(staticExportUrlPath(path, params));
+async function apiUrl(path, params) {
+  if (window.STATIC_EXPORT) return appUrl(await staticExportUrlPath(path, params));
   const url = new URL(path, document.baseURI);
   for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
   return url.href;
@@ -130,7 +143,7 @@ async function fetchJSON(url) {
 }
 
 async function loadDatasetInfo() {
-  const data = await fetchJSON(apiUrl('api/dataset_info'));
+  const data = await fetchJSON(await apiUrl('api/dataset_info'));
   if (!data) return;
   document.getElementById('dataset-stats').innerHTML =
     `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
@@ -140,7 +153,7 @@ async function loadEpisodes(filters = {}) {
   // A static export holds one file per filter set of a group table, and one file for the whole
   // flat table, whose filters then apply in the browser.
   const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
-  return fetchJSON(apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null));
+  return fetchJSON(await apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null));
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +190,7 @@ async function pollUntilLoaded() {
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
-      const status = await fetchJSON(apiUrl('api/dataset_status'));
+      const status = await fetchJSON(await apiUrl('api/dataset_status'));
       if (!status || status.loading) return;
       clearInterval(interval);
       statusEl.classList.remove('show');
@@ -193,7 +206,7 @@ async function initEpisodesTable() {
   const loadingEl = container.querySelector('.loading');
 
   // Check if dataset is ready
-  const status = await fetchJSON(apiUrl('api/dataset_status'));
+  const status = await fetchJSON(await apiUrl('api/dataset_status'));
   if (!status) return;
 
   if (status.loading) {

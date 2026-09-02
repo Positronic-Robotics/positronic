@@ -141,6 +141,9 @@ _QUERY_SAFE = "!*'()"
 # The name an empty filter set takes, which the export writer and the browser must spell alike.
 _UNFILTERED_NAME = 'all'
 
+# A digest stands in for a query over the byte budget; app.js spells both numbers too.
+_QUERY_DIGEST_CHARS = 16
+
 
 def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str:
     """The file name a static export writes an API response to.
@@ -149,6 +152,8 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
     - `params` is a mapping: `<path>/<query>.json`, for one it writes a file per filter set for.
       The query holds the parameters that carry a value, sorted by key and percent-encoded, and
       an empty query is named `all`.
+    - A query past the byte budget becomes a digest of itself, which no filesystem's name limit
+      rejects. A digest is hexadecimal, so it can never read as a query or as `all`.
 
     `app.js` builds the same name.
     """
@@ -156,6 +161,8 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
         return f'{path}.json'
     pairs = sorted((key, value) for key, value in params.items() if value)
     query = '&'.join(f'{quote(k, safe=_QUERY_SAFE)}={quote(v, safe=_QUERY_SAFE)}' for k, v in pairs)
+    if len(query.encode()) > _MAX_COMPONENT_BYTES:
+        query = hashlib.sha256(query.encode()).hexdigest()[:_QUERY_DIGEST_CHARS]
     return f'{path}/{query or _UNFILTERED_NAME}.json'
 
 
@@ -192,13 +199,11 @@ def _page_context() -> dict[str, Any]:
         # Episodes is home, insert at beginning
         nav_items.insert(0, {'name': 'episodes', 'url': '.', 'label': 'Episodes'})
 
-    base_href = str(app_state['base_href'])
     return {
         'nav_items': nav_items,
         'home_page': home_page,
         'episodes_url': episodes_url,
-        # A base href without a trailing slash loses its last segment when a relative link resolves.
-        'base_href': base_href if base_href.endswith('/') else base_href + '/',
+        'base_href': normalized_base_href(str(app_state['base_href'])),
         'title': str(app_state['title']) if app_state['title'] else _shown_root(),
         'show_paths': app_state['show_paths'],
         'static_export': app_state['static_export'],
@@ -232,6 +237,17 @@ def static_export_url_path(path: str, params: Mapping[str, str] | None = None) -
     is reached by escaping its own `%` again.
     """
     return static_export_key(path, params).replace('%', '%25')
+
+
+def normalized_base_href(value: str) -> str:
+    """`value` with the trailing slash a relative link needs.
+
+    A base href starts at the server root. A relative one resolves against each page's own URL, so
+    a page under `/episode/0` would reach a different prefix than the root page reaches.
+    """
+    if not value.startswith('/'):
+        raise ValueError(f"base_href must start at the server root ('/'), got {value!r}")
+    return value if value.endswith('/') else value + '/'
 
 
 def _cacheable_api_path(suffix: str) -> str:
@@ -280,7 +296,7 @@ async def episode_viewer(request: Request, episode_id: int):
         {
             'episode_id': episode_id,
             'num_episodes': len(ds),
-            'rerun_version': rr.__version__,
+            'viewer_path': f'/static/rerun/{rr.__version__}/index.html',
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': _cacheable_api_path(f'episode_rrd/{episode_id}'),
             'episode_path': meta.get(META_PATH),
@@ -785,7 +801,7 @@ def main(
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
-    app_state['base_href'] = base_href
+    app_state['base_href'] = normalized_base_href(base_href)
     app_state['title'] = title
     app_state['show_paths'] = show_paths
     app_state['static_export'] = static_export

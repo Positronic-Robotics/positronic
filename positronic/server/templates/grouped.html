@@ -6,9 +6,9 @@
 
 {% block scripts %}
 <script>
-    window.API_ENDPOINT = "{{ api_endpoint }}";
+    window.API_ENDPOINT = {{ api_endpoint | tojson }};
     window.IS_GROUPED_TABLE = true;
-    window.EPISODES_URL = "{{ episodes_url | default('.') }}";
+    window.EPISODES_URL = {{ episodes_url | default('.') | tojson }};
 </script>
 {% endblock %}
 

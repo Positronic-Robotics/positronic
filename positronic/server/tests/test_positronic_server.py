@@ -1,3 +1,4 @@
+import hashlib
 import ipaddress
 import os
 import re
@@ -17,6 +18,7 @@ from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
+    _QUERY_DIGEST_CHARS,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -25,6 +27,7 @@ from positronic.server.positronic_server import (
     _served_addresses,
     app,
     app_state,
+    normalized_base_href,
     static_export_key,
     static_export_url_path,
 )
@@ -399,6 +402,55 @@ def test_a_name_that_carries_a_percent_escape_is_asked_for_with_that_escape_esca
 def test_a_name_that_needs_no_escape_is_asked_for_as_it_stands():
     for params in (None, {}, {'model': 'pi0'}):
         assert static_export_url_path('api/x', params) == static_export_key('api/x', params)
+
+
+def test_a_filter_set_that_fits_a_file_name_keeps_its_readable_one():
+    value = 'x' * (_MAX_COMPONENT_BYTES - len('model='))
+
+    assert static_export_key('api/groups/g', {'model': value}) == f'api/groups/g/model={value}.json'
+
+
+def test_a_filter_set_too_long_for_a_file_name_takes_a_digest_of_itself():
+    value = 'x' * _MAX_COMPONENT_BYTES
+    name = static_export_key('api/groups/g', {'model': value}).removeprefix('api/groups/g/').removesuffix('.json')
+
+    assert name == hashlib.sha256(f'model={value}'.encode()).hexdigest()[:_QUERY_DIGEST_CHARS]
+    assert len(name.encode()) <= _MAX_COMPONENT_BYTES
+
+
+def test_two_filter_sets_past_the_budget_that_differ_reach_different_files():
+    over = 'x' * _MAX_COMPONENT_BYTES
+
+    assert static_export_key('api/groups/g', {'model': over}) != static_export_key('api/groups/g', {'task': over})
+
+
+def test_app_js_bounds_a_file_name_by_the_same_numbers():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert f'const MAX_QUERY_BYTES = {_MAX_COMPONENT_BYTES};' in app_js
+    assert f'const QUERY_DIGEST_CHARS = {_QUERY_DIGEST_CHARS};' in app_js
+
+
+def test_a_base_href_that_starts_at_the_server_root_stands():
+    assert normalized_base_href('/') == '/'
+    assert normalized_base_href('/v/tok/') == '/v/tok/'
+    assert normalized_base_href('/v/tok') == '/v/tok/'
+
+
+def test_a_base_href_that_does_not_start_at_the_server_root_is_refused():
+    for value in ('shares/run', '', 'https://app.example.com/v/tok/'):
+        with pytest.raises(ValueError, match='server root'):
+            normalized_base_href(value)
+
+
+def test_a_build_id_reaches_the_page_script_as_json(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'static_export', True)
+    monkeypatch.setitem(app_state, 'build_id', 'k3&n9')
+
+    body = viewer.get('/episode/0').text
+
+    assert 'build/k3\\u0026n9/api/episode_rrd/0' in body
+    assert 'k3&amp;n9' not in body
 
 
 def test_app_js_asks_for_the_file_name_this_module_writes():
