@@ -165,3 +165,25 @@ leaks a timing vocabulary into the dataset core. Hence telemetry is a set of sid
 process, next to the dataset but never inside it: nested spans for the phase split and a free-running
 machine-load sampler, wall-clock native, owned by `positronic/telemetry.py`. The pass report is an
 offline reduce over those raw files, so nothing is stored twice and the dataset stays clock-agnostic.
+
+**An adoption loses nothing.** A task is defined in real or in one simulator, and carries that
+simulator with it — object poses, success criteria and horizons included. What a customer buys is
+one API across all of them: they implement a single Positronic policy interface and their model
+runs on every supported env, giving up nothing the env offers natively. Two requirements hold that
+up, one on each side of the interface:
+
+- Given a policy that already drives an env directly, it must be possible to construct a Positronic
+  `Policy` equivalent to it. This binds policy construction as much as it binds the adoption.
+- An adoption's capabilities match what its env provides natively, so a Positronic run reproduces
+  the env's own run: a deterministic env to byte-identical outcomes (modulo wire format), a
+  non-deterministic env to an identical sim/inference call sequence (same count, same order).
+
+Every sim-env adoption ships a native-vs-Positronic parity test that drives one pinned episode
+through both stacks and asserts this, re-run on every bump of the sim's pinned version.
+
+The episode horizon is one case of that reproduction rather than a rule of its own: a task that
+defines a horizon has it enforced by the env, which reports expiry through the same terminal `done`
+a success uses; a task that defines none leaves nothing to reproduce. The harness `Task.timeout` is
+only a runaway-cost safety net, so the config that knows the benchmark derives the timeout from the
+horizon it declares rather than taking one on faith — a budget below the horizon would silently
+truncate valid episodes and score them as failures.
