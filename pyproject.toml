@@ -267,14 +267,16 @@ include = ["client", "pimm", "positronic"]
 # mujoco ships no `.pyi` and re-exports from binary extension modules, so its whole API reads as
 # attribute errors without these. Regenerate with utilities/generate_mujoco_stubs.py.
 stubPath = "stubs"
-# vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass.
+# vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass. molmo_spaces/env.py stays
+# checked even though it runs in MolmoSpaces' own venv: its foreign imports are suppressed in-file by a
+# scoped `reportMissingImports` plus targeted per-line ignores, so every other diagnostic still fires.
 exclude = [
     "**/.venv",
     "**/node_modules",
     "positronic/vendors",
 ]
-# `exclude` only drops vendors as analysis roots; a checked module that imports them
-# still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
+# `exclude` only drops these as analysis roots; a checked module that imports them still pulls their
+# diagnostics. `ignore` suppresses those transitive errors too.
 ignore = ["positronic/vendors"]
 
 # ``robolab/env.py`` runs in RoboLab's isolated interpreter with the env-server modules (``server``,
@@ -301,4 +303,7 @@ positronic = [
   "drivers/**/*.urdf",
   "server/static/**",
   "server/templates/**",
+  # The launcher feeds this to `uv pip install -c` when it builds the MolmoSpaces venv, so a packaged
+  # install needs it on disk just as much as a checkout does.
+  "simulator/molmo_spaces/molmo_constraints.txt",
 ]

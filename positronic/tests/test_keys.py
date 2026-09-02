@@ -4,6 +4,7 @@ from pathlib import Path
 from positronic import keys
 from positronic.eval import keys as eval_keys
 from positronic.simulator.libero import keys as libero_keys
+from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.robolab import keys as robolab_keys
 
 # Namespaced raw wire keys that denote an observation signal, and the keys a trial records — the params it
@@ -33,6 +34,8 @@ _GUARDED = {
     libero_keys.SETTLE_STEPS,
     eval_keys.TASK,
     robolab_keys.INSTRUCTION_TYPE,
+    molmo_keys.EPISODE_INDEX,
+    molmo_keys.TASK_HORIZON,
     keys.OBS_TIME_NS,
     keys.WALL_TIME_NS,
 }
