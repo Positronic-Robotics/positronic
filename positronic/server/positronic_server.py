@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -255,20 +255,16 @@ def is_download(value: object) -> bool:
     return isinstance(value, bytes) or (isinstance(value, str) and len(value) > 1024)
 
 
-def download_paths(static: Mapping[str, Any], path: str = '') -> Iterator[str]:
-    """The field path of every static value an episode page links as a download."""
-    for key, value in static.items():
-        field_path = f'{path}.{key}' if path else key
-        if is_download(value):
-            yield field_path
-        elif isinstance(value, dict):
-            yield from download_paths(value, field_path)
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    yield from download_paths(item, field_path)
-                elif is_download(item):
-                    yield field_path
+def download_paths(value: object, path: str = '') -> Iterator[str]:
+    """The field path of every static value an episode page links as a download; a list item by its index."""
+    if is_download(value):
+        yield path
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from download_paths(item, f'{path}.{key}' if path else key)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from download_paths(item, f'{path}.{index}' if path else str(index))
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -297,7 +293,7 @@ async def episode_viewer(request: Request, episode_id: int):
         if isinstance(obj, dict):
             return {k: _make_serializable(v, f'{path}.{k}' if path else k) for k, v in obj.items()}
         if isinstance(obj, list):
-            return [_make_serializable(v, path) for v in obj]
+            return [_make_serializable(v, f'{path}.{i}' if path else str(i)) for i, v in enumerate(obj)]
         return obj
 
     return templates.TemplateResponse(
@@ -499,7 +495,8 @@ async def api_groups(request: Request, suffix: str):  # noqa: C901
         for filter_key in cfg.group_filter_keys:
             group_filters[filter_key][FILTER_VALUES].add(episode.static.get(filter_key))
         # Apply filters for grouping
-        match = all(episode.static[key] == value for key, value in active_filters.items())
+        # A query carries a string, and the page offers the value as one.
+        match = all(str(episode.static.get(key)) == value for key, value in active_filters.items())
         if match:
             groups[_group_id(episode, group_keys)].append(episode)
 
@@ -532,6 +529,34 @@ async def api_dataset_status():
     }
 
 
+def _static_field(static: dict, field_path: str) -> object:
+    """The value at a dotted path into `static`, or an HTTP 404.
+
+    A dict key is matched greedily, so a key holding a dot (`link0.stl`) is found; a list is
+    walked by an index.
+    """
+    value: object = static
+    remaining = field_path
+    while remaining:
+        if isinstance(value, list):
+            index, _, rest = remaining.partition('.')
+            if not index.isdigit() or int(index) >= len(value):
+                raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+            value, remaining = value[int(index)], rest
+            continue
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+        parts = remaining.split('.')
+        for i in range(len(parts), 0, -1):
+            key = '.'.join(parts[:i])
+            if key in value:
+                value, remaining = value[key], '.'.join(parts[i:])
+                break
+        else:
+            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+    return value
+
+
 @app.get('/api/episode/{episode_id}/static/{field_path:path}')
 @require_dataset
 async def api_episode_static_field(episode_id: int, field_path: str):
@@ -541,25 +566,7 @@ async def api_episode_static_field(episode_id: int, field_path: str):
     except IndexError as e:
         raise HTTPException(status_code=404, detail='Episode not found') from e
 
-    # Navigate dotted path, greedily matching dict keys (handles keys with dots like "link0.stl")
-    value = episode.static
-    remaining = field_path
-    while remaining:
-        if not isinstance(value, dict):
-            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
-        # Try the full remaining path first, then progressively shorter prefixes
-        parts = remaining.split('.')
-        matched = False
-        for i in range(len(parts), 0, -1):
-            key = '.'.join(parts[:i])
-            if key in value:
-                value = value[key]
-                remaining = '.'.join(parts[i:])
-                matched = True
-                break
-        if not matched:
-            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
-
+    value = _static_field(episode.static, field_path)
     filename = field_path.rsplit('.', 1)[-1] if '.' in field_path else field_path
     if isinstance(value, bytes):
         return Response(

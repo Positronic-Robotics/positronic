@@ -8,9 +8,10 @@ import itertools
 import json
 import logging
 import mimetypes
+import re
 import tempfile
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -52,6 +53,16 @@ ASSET_DIR = 'static'
 # The routes whose responses a page reads whole. `episodes` is filtered in the browser.
 _WHOLE_API_ROUTES = ('dataset_info', 'dataset_status', 'episodes')
 
+# The `secrets.token_urlsafe` alphabet: a build id is a path segment and sits inside a script string.
+_BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
+
+
+def validated_build_id(value: str) -> str:
+    """`value` when a path and a page can carry it as it is; empty names no build."""
+    if not _BUILD_ID.fullmatch(value):
+        raise ValueError(f'build_id must match {_BUILD_ID.pattern!r}, got {value!r}')
+    return value
+
 
 @dataclass(frozen=True)
 class ExportedFile:
@@ -72,11 +83,11 @@ class GroupFile:
 
 class _Output:
     def __init__(self, directory: Path):
-        self._directory = directory
+        self.directory = directory
         self.files: list[ExportedFile] = []
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
-        target = self._directory / path
+        target = self.directory / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
         written = ExportedFile(PurePosixPath(path), content_type, len(body))
@@ -112,21 +123,29 @@ def filter_sets(response: dict) -> Iterator[dict[str, str]]:
         yield {key: value for key, value in zip(keys, chosen, strict=True) if value is not None}
 
 
-def large_file_links_under(html: str, build_id: str) -> str:
-    """`html` with every recording and download link moved under `build/<build_id>/`."""
+def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> str:
+    """`html` with each of `links`, a quoted script string, moved under `build/<build_id>/`."""
     if not build_id:
         return html
-    prefix = f'{BUILD_DIR}/{build_id}/'
-    return html.replace('"api/episode_rrd/', f'"{prefix}api/episode_rrd/').replace(
-        '"api/episode/', f'"{prefix}api/episode/'
-    )
+    for link in links:
+        html = html.replace(f'"{link}"', f'"{BUILD_DIR}/{build_id}/{link}"')
+    return html
 
 
 def _large_file_path(link: str, build_id: str) -> str:
     return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
 
 
-def _write_pages(client: TestClient, out: _Output, group_names: list[str], count: int, build_id: str) -> list[str]:
+def _episode_links(dataset: Dataset, index: int) -> list[str]:
+    """The recording and the downloads an episode page links, as the page spells them."""
+    static = cast(Episode, dataset[index]).static
+    downloads = (f'{API_DIR}/episode/{index}/static/{field}' for field in download_paths(static))
+    return [f'{API_DIR}/episode_rrd/{index}', *downloads]
+
+
+def _write_pages(
+    client: TestClient, out: _Output, group_names: list[str], dataset: Dataset, build_id: str
+) -> list[str]:
     """Write every page, and give back the recording and download links the episode pages held."""
     body, content_type = _fetch(client, '/')
     out.write(PAGE_FILE, body, content_type)
@@ -134,15 +153,15 @@ def _write_pages(client: TestClient, out: _Output, group_names: list[str], count
         body, content_type = _fetch(client, f'/{route}')
         out.write(f'{route}/{PAGE_FILE}', body, content_type)
     links = []
-    for index in range(count):
+    for index in range(len(dataset)):
         body, content_type = _fetch(client, f'/episode/{index}')
         page = body.decode()
-        moved = large_file_links_under(page, build_id)
-        rrd_link = f'{API_DIR}/episode_rrd/{index}'
-        if build_id and rrd_link not in page:
-            raise RuntimeError(f'episode page {index} carries no recording link to move under the build')
+        page_links = _episode_links(dataset, index)
+        if any(f'"{link}"' not in page for link in page_links):
+            raise RuntimeError(f'episode page {index} does not carry every link the export expects')
+        moved = large_file_links_under(page, page_links, build_id)
         out.write(f'episode/{index}/{PAGE_FILE}', moved.encode(), content_type)
-        links.append(rrd_link)
+        links.extend(page_links)
     return links
 
 
@@ -156,7 +175,7 @@ def _write_group(client: TestClient, out: _Output, name: str) -> None:
         entry = GroupFile(params, f'{number}.json')
         out.write(f'{route}/{entry.file}', filtered, filtered_type)
         index.append(entry)
-    listing = json.dumps([{'params': entry.params, 'file': entry.file} for entry in index]).encode()
+    listing = json.dumps([asdict(entry) for entry in index]).encode()
     out.write(f'{route}/{GROUP_INDEX_FILE}', listing, 'application/json')
 
 
@@ -203,6 +222,9 @@ def export_static(
     the app's own scripts, styles and viewer under `static/`, which every export at one host shares.
     """
     out = _Output(Path(out_dir))
+    if out.directory.exists() and any(out.directory.iterdir()):
+        raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
+    validated_build_id(build_id)
     shown = CachedDataset(dataset)
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         configure_tables(
@@ -219,7 +241,7 @@ def export_static(
         client = TestClient(app)
         group_names = list(group_tables or {})
 
-        links = _write_pages(client, out, group_names, len(shown), build_id)
+        links = _write_pages(client, out, group_names, shown, build_id)
         for route in _WHOLE_API_ROUTES:
             body, content_type = _fetch(client, f'/{API_DIR}/{route}')
             out.write(f'{API_DIR}/{route}.json', body, content_type)
@@ -227,9 +249,6 @@ def export_static(
             _write_group(client, out, name)
 
         install_dataset(CachedDataset(full_dataset) if full_dataset is not None else shown)
-        for index in range(len(shown)):
-            static = cast(Episode, shown[index]).static
-            links.extend(f'{API_DIR}/episode/{index}/static/{field}' for field in download_paths(static))
         for link in links:
             body, content_type = _fetch(client, f'/{link}')
             out.write(_large_file_path(link, build_id), body, content_type)

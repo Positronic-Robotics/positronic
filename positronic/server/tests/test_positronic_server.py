@@ -354,10 +354,10 @@ def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_pat
         'notes': 'n' * 2000,
         'short': 'ok',
         'nested': {'blob': b'x', 'n': 1},
-        'many': [{'a': b'x'}],
+        'many': [{'a': b'x'}, b'y'],
     }
 
-    assert list(download_paths(static)) == ['scene', 'notes', 'nested.blob', 'many.a']
+    assert list(download_paths(static)) == ['scene', 'notes', 'nested.blob', 'many.0.a', 'many.1']
 
 
 def test_a_base_href_that_starts_at_the_server_root_stands():

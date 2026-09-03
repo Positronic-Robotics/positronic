@@ -18,11 +18,13 @@ from positronic.server.export import (
     export_static,
     filter_sets,
     large_file_links_under,
+    validated_build_id,
 )
 from positronic.server.positronic_server import FILTER_VALUES, GROUP_FILTERS, ColumnConfig, GroupTableConfig, app_state
 
 OUTCOME = 'eval.outcome'
 OBJECT = 'eval.object'
+ATTEMPT = 'attempt'
 HIDDEN_KEY = 'checkpoint_path'
 HIDDEN_VALUE = 's3://internal/checkpoints/step_1000'
 OBJECTS = ('Plastic banana', 'Wooden block')
@@ -34,7 +36,13 @@ GROUPS = {
         group_fn=lambda episodes: {'count': len(episodes)},
         format_table={OUTCOME: ColumnConfig(label='Outcome'), 'count': ColumnConfig(label='Episodes', format='%d')},
         group_filter_keys={OBJECT: 'Object'},
-    )
+    ),
+    'attempts': GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {'count': len(episodes)},
+        format_table={OUTCOME: ColumnConfig(label='Outcome'), 'count': ColumnConfig(label='Episodes', format='%d')},
+        group_filter_keys={ATTEMPT: 'Attempt'},
+    ),
 }
 
 
@@ -57,7 +65,9 @@ def dataset(tmp_path):
                 episode.set_static(keys.TASK, 'Put the banana on the plate')
                 episode.set_static(OUTCOME, 'Success' if index == 0 else 'Failure')
                 episode.set_static(OBJECT, object_name)
+                episode.set_static(ATTEMPT, index + 1)
                 episode.set_static('notes', 'n' * 2000)
+                episode.set_static('artifacts', [b'first blob', 'short'])
                 episode.set_static(HIDDEN_KEY, HIDDEN_VALUE)
                 for step in range(4):
                     episode.append('robot_state.q', np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
@@ -65,7 +75,7 @@ def dataset(tmp_path):
 
 
 def shown(dataset):
-    return TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, 'notes')))
+    return TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'notes', 'artifacts')))
 
 
 def an_export(dataset, out, **overrides):
@@ -193,15 +203,62 @@ def test_a_filter_value_no_episode_carries_asks_for_no_file():
     assert list(filter_sets({GROUP_FILTERS: {'a': {FILTER_VALUES: [None, 'x']}}})) == [{}, {'a': 'x'}]
 
 
-def test_a_link_is_moved_under_the_build_and_a_page_route_is_not():
-    page = 'appUrl("api/episode_rrd/3") "api/episode/3/static/scene" href="episodes" "api/episodes.json"'
+def test_a_link_is_moved_under_the_build_and_a_value_that_looks_like_one_is_not():
+    links = ['api/episode_rrd/3', 'api/episode/3/static/scene']
+    page = 'appUrl("api/episode_rrd/3") "api/episode/3/static/scene" "api/episode/3/static/note" href="episodes"'
 
-    moved = large_file_links_under(page, 'bld')
+    moved = large_file_links_under(page, links, 'bld')
 
     assert '"build/bld/api/episode_rrd/3"' in moved
     assert '"build/bld/api/episode/3/static/scene"' in moved
-    assert 'href="episodes"' in moved and '"api/episodes.json"' in moved
-    assert large_file_links_under(page, '') == page
+    assert '"api/episode/3/static/note"' in moved and 'href="episodes"' in moved
+    assert large_file_links_under(page, links, '') == page
+
+
+def test_a_build_id_outside_the_token_alphabet_is_refused(dataset, tmp_path):
+    for value in ('../../shared', 'k"3', 'k3/n9', 'k3 n9'):
+        with pytest.raises(ValueError, match='build_id'):
+            an_export(dataset, tmp_path / 'out', build_id=value)
+    assert validated_build_id('k3n9_-A') == 'k3n9_-A'
+
+
+def test_an_export_refuses_a_directory_that_holds_something(dataset, tmp_path):
+    out = tmp_path / 'out'
+    out.mkdir()
+    (out / 'episode').mkdir()
+    (out / 'episode' / 'stale').write_text('an older export')
+
+    with pytest.raises(ValueError, match='not empty'):
+        an_export(dataset, out)
+    assert (out / 'episode' / 'stale').read_text() == 'an older export'
+
+
+def test_an_empty_directory_is_exported_into(dataset, tmp_path):
+    out = tmp_path / 'out'
+    out.mkdir()
+
+    assert an_export(dataset, out)
+
+
+def test_a_download_inside_a_list_is_linked_by_its_index_and_served(dataset, tmp_path):
+    out = tmp_path / 'out'
+    written = paths_of(an_export(dataset, out))
+
+    assert '"api/episode/0/static/artifacts.0"' in (out / 'episode/0/index.html').read_text()
+    assert 'api/episode/0/static/artifacts.0' in written
+    assert (out / 'api/episode/0/static/artifacts.0').read_bytes() == b'first blob'
+    assert 'api/episode/0/static/artifacts.1' not in written
+
+
+def test_a_filter_on_a_number_reaches_the_episodes_that_carry_it(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out, group_tables=GROUPS)
+
+    index = json.loads((out / 'api/groups/attempts' / GROUP_INDEX_FILE).read_text())
+    second = next(entry for entry in index if entry['params'] == {ATTEMPT: '2'})
+    table = json.loads((out / 'api/groups/attempts' / second['file']).read_text())
+    outcome = [column['key'] for column in table['columns']].index(OUTCOME)
+    assert [row[1][outcome] for row in table['episodes']] == ['Failure']
 
 
 def test_an_export_leaves_the_app_state_as_it_found_it(dataset, tmp_path):
