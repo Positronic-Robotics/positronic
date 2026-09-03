@@ -94,42 +94,30 @@ function baseScopedKey(name) {
   return `${name}:${document.baseURI}`;
 }
 
-// The name an empty filter set takes, which the export writer and the browser must spell alike.
-const UNFILTERED_NAME = 'all';
+// A static export holds one file per filter set of a group table, and `index.json` beside them says
+// which file holds which set. The unfiltered flat table is one file, filtered in the browser.
+const groupIndexes = new Map();
 
-// A digest stands in for a query over the byte budget; positronic_server.py spells both numbers
-// too, as _MAX_COMPONENT_BYTES and _QUERY_DIGEST_CHARS.
-const MAX_QUERY_BYTES = 200;
-const QUERY_DIGEST_CHARS = 16;
-
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+async function groupIndex(path) {
+  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/index.json`)));
+  return groupIndexes.get(path);
 }
 
-// The file name a static export writes an API response to; `static_export_key` in
-// positronic_server.py builds the same name — {b: '2', a: 'x y'} on `leaderboard` names
-// api/groups/leaderboard/a=x%20y&b=2.json.
-async function staticExportKey(path, params) {
-  if (!params) return `${path}.json`;
-  let query = Object.keys(params)
-    .filter((key) => params[key])
-    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
-    .sort()
-    .join('&');
-  if (new TextEncoder().encode(query).length > MAX_QUERY_BYTES) {
-    query = (await sha256Hex(query)).slice(0, QUERY_DIGEST_CHARS);
-  }
-  return `${path}/${query || UNFILTERED_NAME}.json`;
+function sameFilters(a, b) {
+  const keys = Object.keys(a).sort();
+  const other = Object.keys(b).sort();
+  return keys.length === other.length && keys.every((key, i) => key === other[i] && String(a[key]) === String(b[key]));
 }
 
-// The path a browser asks for that file at; `static_export_url_path` says why the escape.
-async function staticExportUrlPath(path, params) {
-  return (await staticExportKey(path, params)).replaceAll('%', '%25');
+async function exportedGroupFile(path, params) {
+  const chosen = Object.fromEntries(Object.entries(params).filter(([, value]) => value));
+  const entry = (await groupIndex(path)).find((item) => sameFilters(item.params, chosen));
+  if (!entry) throw new Error(`the export holds no ${path} file for ${JSON.stringify(chosen)}`);
+  return appUrl(`${path}/${entry.file}`);
 }
 
 async function apiUrl(path, params) {
-  if (window.STATIC_EXPORT) return appUrl(await staticExportUrlPath(path, params));
+  if (window.STATIC_EXPORT) return params ? exportedGroupFile(path, params) : appUrl(`${path}.json`);
   const url = new URL(path, document.baseURI);
   for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
   return url.href;

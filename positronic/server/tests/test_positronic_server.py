@@ -1,4 +1,3 @@
-import hashlib
 import ipaddress
 import os
 import re
@@ -18,7 +17,6 @@ from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
-    _QUERY_DIGEST_CHARS,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -28,10 +26,8 @@ from positronic.server.positronic_server import (
     app,
     app_state,
     configure_pages,
+    download_paths,
     normalized_base_href,
-    static_export_key,
-    static_export_url_path,
-    validated_build_id,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
@@ -344,93 +340,24 @@ def test_the_api_reports_the_dataset_root_by_default(viewer):
     assert viewer.get('/api/dataset_status').json()['repo_id'] == '/datasets/run-7'
 
 
-def test_a_build_id_carries_the_files_a_browser_caches_for_a_year(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'static_export', True)
-    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
-
+def test_the_episode_page_links_its_recording_and_its_downloads_at_their_routes(viewer):
     body = viewer.get('/episode/0').text
 
-    assert 'build/k3n9/api/episode_rrd/0' in body
-    assert 'build/k3n9/api/episode/0/static/scene' in body
-
-
-def test_without_a_build_id_the_same_files_sit_beside_the_other_api_calls(viewer):
-    body = viewer.get('/episode/0').text
-
-    assert 'api/episode_rrd/0' in body
-    assert 'api/episode/0/static/scene' in body
-    assert 'build/' not in body
-
-
-def test_a_live_viewer_asks_for_the_routes_it_serves_whatever_the_build_id_says(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
-
-    body = viewer.get('/episode/0').text
-
-    assert 'build/' not in body
+    assert 'appUrl("api/episode_rrd/0")' in body
+    assert '"api/episode/0/static/scene"' in body
     assert viewer.get('/api/episode/0/static/scene').content == b'a mesh'
 
 
-def test_an_endpoint_the_export_writes_whole_takes_one_file():
-    assert static_export_key('api/episodes') == 'api/episodes.json'
-    assert static_export_key('api/dataset_info') == 'api/dataset_info.json'
+def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_path():
+    static = {
+        'scene': b'a mesh',
+        'notes': 'n' * 2000,
+        'short': 'ok',
+        'nested': {'blob': b'x', 'n': 1},
+        'many': [{'a': b'x'}],
+    }
 
-
-def test_an_endpoint_the_export_writes_per_filter_set_names_an_empty_set_all():
-    assert static_export_key('api/groups/leaderboard', {}) == 'api/groups/leaderboard/all.json'
-    assert static_export_key('api/groups/leaderboard', {'model': ''}) == 'api/groups/leaderboard/all.json'
-
-
-def test_one_filter_set_reaches_one_file_whatever_order_it_arrives_in():
-    forwards = static_export_key('api/groups/g', {'model': 'pi0', 'task': 'pick a cube'})
-    backwards = static_export_key('api/groups/g', {'task': 'pick a cube', 'model': 'pi0'})
-
-    assert forwards == backwards == 'api/groups/g/model=pi0&task=pick%20a%20cube.json'
-
-
-def test_a_filter_value_that_carries_a_separator_stays_in_one_component():
-    key = static_export_key('api/groups/g', {'task': 'a&b=c/d'})
-
-    assert key == 'api/groups/g/task=a%26b%3Dc%2Fd.json'
-
-
-def test_a_name_that_carries_a_percent_escape_is_asked_for_with_that_escape_escaped():
-    params = {'task': 'pick a cube'}
-
-    assert static_export_key('api/groups/g', params) == 'api/groups/g/task=pick%20a%20cube.json'
-    assert static_export_url_path('api/groups/g', params) == 'api/groups/g/task=pick%2520a%2520cube.json'
-
-
-def test_a_name_that_needs_no_escape_is_asked_for_as_it_stands():
-    for params in (None, {}, {'model': 'pi0'}):
-        assert static_export_url_path('api/x', params) == static_export_key('api/x', params)
-
-
-def test_a_filter_set_that_fits_a_file_name_keeps_its_readable_one():
-    value = 'x' * (_MAX_COMPONENT_BYTES - len('model='))
-
-    assert static_export_key('api/groups/g', {'model': value}) == f'api/groups/g/model={value}.json'
-
-
-def test_a_filter_set_too_long_for_a_file_name_takes_a_digest_of_itself():
-    value = 'x' * _MAX_COMPONENT_BYTES
-    name = static_export_key('api/groups/g', {'model': value}).removeprefix('api/groups/g/').removesuffix('.json')
-
-    assert name == hashlib.sha256(f'model={value}'.encode()).hexdigest()[:_QUERY_DIGEST_CHARS]
-    assert len(name.encode()) <= _MAX_COMPONENT_BYTES
-
-
-def test_two_filter_sets_past_the_budget_that_differ_reach_different_files():
-    over = 'x' * _MAX_COMPONENT_BYTES
-
-    assert static_export_key('api/groups/g', {'model': over}) != static_export_key('api/groups/g', {'task': over})
-
-
-def test_app_js_bounds_a_file_name_by_the_same_numbers():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
-
-    assert f'const MAX_QUERY_BYTES = {_MAX_COMPONENT_BYTES};' in app_js
-    assert f'const QUERY_DIGEST_CHARS = {_QUERY_DIGEST_CHARS};' in app_js
+    assert list(download_paths(static)) == ['scene', 'notes', 'nested.blob', 'many.a']
 
 
 def test_a_base_href_that_starts_at_the_server_root_stands():
@@ -462,42 +389,15 @@ def test_a_base_href_whose_segment_only_contains_dots_stands():
 
 
 def test_configure_pages_checks_what_it_is_given_and_fills_the_state(monkeypatch):
-    for key in ('base_href', 'title', 'show_paths', 'static_export', 'build_id'):
+    for key in ('base_href', 'title', 'show_paths', 'static_export'):
         monkeypatch.setitem(app_state, key, app_state[key])
 
-    configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True, build_id='k3n9')
+    configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True)
 
     assert app_state['base_href'] == '/v/tok/'
     assert (app_state['title'], app_state['show_paths'], app_state['static_export']) == ('A run', False, True)
-    assert app_state['build_id'] == 'k3n9'
-    with pytest.raises(ValueError, match='build_id'):
-        configure_pages(build_id='k3/n9')
-
-
-def test_a_build_id_in_the_token_alphabet_stands():
-    assert validated_build_id('') == ''
-    assert validated_build_id('k3n9_-A') == 'k3n9_-A'
-
-
-def test_a_build_id_that_would_cut_a_url_path_short_is_refused():
-    for value in ('k3#n9', 'k3?n9', 'k3/n9', 'k3 n9'):
-        with pytest.raises(ValueError, match='build_id'):
-            validated_build_id(value)
-
-
-def test_a_filter_key_outside_the_basic_plane_orders_by_its_encoding():
-    # Python orders these two by code point and JavaScript by UTF-16 code unit, the other way
-    # about; both languages order their percent-encoded ASCII alike.
-    key = static_export_key('api/groups/g', {'\U0001f600': '1', '\ue000': '2'})
-
-    assert key == 'api/groups/g/%EE%80%80=2&%F0%9F%98%80=1.json'
-
-
-def test_the_rrd_path_reaches_the_page_script_as_json(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'static_export', True)
-    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
-
-    assert 'appUrl("build/k3n9/api/episode_rrd/0")' in viewer.get('/episode/0').text
+    with pytest.raises(ValueError, match='server root'):
+        configure_pages(base_href='v/tok')
 
 
 def test_a_group_name_reaches_the_page_script_as_json(viewer):
@@ -505,9 +405,3 @@ def test_a_group_name_reaches_the_page_script_as_json(viewer):
 
     assert 'window.API_ENDPOINT = "api/groups/a\\u0026b";' in body
     assert 'a&amp;b' not in body
-
-
-def test_app_js_asks_for_the_file_name_this_module_writes():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
-
-    assert static_export_key('api/groups/leaderboard', {'b': '2', 'a': 'x y'}) in app_js
