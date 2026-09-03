@@ -29,7 +29,7 @@ class EnvAdapter(ABC):
     def reset_token(self, params: dict[str, Any]) -> Any:
         """The trial's params -> the env's opaque reset token (an int for most, a blob for exact replay).
 
-        Reads the param keys it needs (e.g. ``eval.seed``, ``eval.task_id``). Called at each trial start, so
+        Reads the param keys it needs (e.g. ``eval.seed``, ``libero.task_id``). Called at each trial start, so
         it is also where the adapter clears any per-trial command state.
         """
 
