@@ -362,12 +362,21 @@ def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_pat
 
 def test_a_base_href_that_starts_at_the_server_root_stands():
     assert normalized_base_href('/') == '/'
+    assert normalized_base_href('/v//tok/') == '/v//tok/'
     assert normalized_base_href('/v/tok/') == '/v/tok/'
     assert normalized_base_href('/v/tok') == '/v/tok/'
 
 
 def test_a_base_href_that_is_not_a_path_at_the_server_root_is_refused():
-    outside = ('shares/run', '', 'https://app.example.com/v/tok/', '//other.example/', '/p?q/', '/p#f/')
+    outside = (
+        'shares/run',
+        '',
+        'https://app.example.com/v/tok/',
+        '//other.example/',
+        '////other.example/',
+        '/p?q/',
+        '/p#f/',
+    )
 
     for value in outside:
         with pytest.raises(ValueError, match='server root'):
