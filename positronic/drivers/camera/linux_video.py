@@ -37,26 +37,25 @@ class LinuxVideo(pimm.ControlSystem):
 
     @staticmethod
     def _framed(data: np.ndarray, frame, bytes_per_pixel: int) -> np.ndarray | None:
-        """``data`` shaped as the frame it belongs to, or ``None`` where the buffer arrived short.
-
-        A camera hands over a buffer with its tail missing when the bus is busy, and several cameras on one
-        controller are enough to see it. A partial frame has nothing to read, and the next one is a
-        thirtieth of a second away.
-        """
+        """``data`` shaped as the frame it belongs to, or ``None`` where it is short of one."""
         if data.size != frame.height * frame.width * bytes_per_pixel:
             return None
         return data.reshape((frame.height, frame.width, bytes_per_pixel))
 
-    def _images(self, frame, codec_context) -> list[np.ndarray]:
-        """Every image the buffer ``frame`` carries, as RGB. Empty where the buffer arrived short."""
+    def _images(self, frame, codec_context) -> list[np.ndarray] | None:
+        """Every image the buffer ``frame`` carries, as RGB, or ``None`` where it is short of a frame.
+
+        A compressed buffer whole enough to read may still carry no image: the parser and the decoder both
+        hold data back until they have a frame to give, so an empty list is a wait, not a loss.
+        """
         data = np.frombuffer(frame.data, dtype=np.uint8)
         match frame.pixel_format:
             case PixelFormat.YUYV:
                 raw = self._framed(data, frame, 2)
-                return [] if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_YUYV)]
+                return None if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_YUYV)]
             case PixelFormat.UYVY:
                 raw = self._framed(data, frame, 2)
-                return [] if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_UYVY)]
+                return None if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_UYVY)]
             case _ if frame.pixel_format in _CODECS:
                 codec_ctx = codec_context(_CODECS[frame.pixel_format])
                 # `av` types what it parses as `bytes` and carries `decode` on the subclasses of
@@ -69,7 +68,7 @@ class LinuxVideo(pimm.ControlSystem):
                 ]
             case _:
                 raw = self._framed(data, frame, 3)  # assume 3 bytes per pixel (RGB/BGR)
-                return [] if raw is None else [raw]
+                return None if raw is None else [raw]
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         codec_contexts = {}
@@ -92,15 +91,20 @@ class LinuxVideo(pimm.ControlSystem):
                 break
 
             images = self._images(frame, codec_context)
-            if not images:
+            if images is None:
                 short += 1
                 if short == 1:
                     logger.warning('%s handed over a buffer short of a frame', self.device_path)
-
-            for image in images:
-                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
+            elif len(images) == 1:
+                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(images[0], self._frame_adapter)
                 self.frame.emit(self._frame_adapter)
                 self.fps_counter.tick()
+            else:
+                # A buffer that decodes to several images emits them with nothing read in between, so one
+                # adapter shared between them would show every reader the last image.
+                for image in images:
+                    self.frame.emit(pimm.shared_memory.NumpySMAdapter.lazy_init(image, None))
+                    self.fps_counter.tick()
 
             yield pimm.Yield()  # Give control back to the world
 
