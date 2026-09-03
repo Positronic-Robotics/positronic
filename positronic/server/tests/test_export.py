@@ -70,7 +70,7 @@ def dataset(tmp_path):
                 episode.set_static('artifacts', [b'first blob', 'short'])
                 episode.set_static(HIDDEN_KEY, HIDDEN_VALUE)
                 for step in range(4):
-                    episode.append('robot_state.q', np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
+                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
     return load_all_datasets(root)
 
 
