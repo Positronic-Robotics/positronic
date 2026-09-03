@@ -10,7 +10,8 @@ only the framework-independent arithmetic lives here.
 
 import sys
 from collections.abc import Callable, Iterable
-from typing import Any, TypeAlias
+from pathlib import Path
+from typing import Any, NamedTuple, TypeAlias
 
 import numpy as np
 
@@ -44,9 +45,55 @@ ASSETS_BENCHMARKS_DIR = 'benchmarks'
 # directory as a benchmark for discovery.
 MOLMO_BENCHMARK_MANIFEST = 'benchmark.json'
 
+
+class BenchmarkPath(NamedTuple):
+    """A benchmark's place under the asset packs' ``benchmarks/``: the four directory levels MolmoSpaces lays
+    its benchmarks out in. The field names are the dimensions an eval spec pins, the keys a task record and a
+    reset token carry, and the order of the path segments."""
+
+    suite: str
+    scene_dataset: str
+    task_config: str
+    benchmark: str
+
+    @classmethod
+    def parse(cls, relative: str) -> 'BenchmarkPath':
+        parts = Path(relative).parts
+        if len(parts) != len(cls._fields):
+            raise ValueError(f'a benchmark path is {"/".join(cls._fields)}, not {relative!r}')
+        return cls(*parts)
+
+    @property
+    def relative(self) -> Path:
+        return Path(*self)
+
+    def under(self, assets_dir: Path) -> Path:
+        return assets_dir / ASSETS_BENCHMARKS_DIR / self.relative
+
+
+def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
+    """Every benchmark under the asset packs, by the manifest that marks it."""
+    root = assets_dir / ASSETS_BENCHMARKS_DIR
+    return [BenchmarkPath.parse(str(p.parent.relative_to(root))) for p in sorted(root.rglob(MOLMO_BENCHMARK_MANIFEST))]
+
+
+def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[BenchmarkPath]:
+    """The benchmarks ``spec`` selects: each dimension is one name, a list of them, or absent (any)."""
+
+    def admits(dimension: str, value: str) -> bool:
+        pinned = spec.get(dimension)
+        return pinned is None or value == pinned or (not isinstance(pinned, str) and value in pinned)
+
+    selected = [b for b in found if all(admits(d, v) for d, v in zip(BenchmarkPath._fields, b, strict=True))]
+    if not selected:
+        pinned = {d: spec[d] for d in BenchmarkPath._fields if d in spec}
+        available = ', '.join(str(b.relative) for b in found) or 'none'
+        raise ValueError(f'no benchmark matches {pinned}; available under {ASSETS_BENCHMARKS_DIR}/: {available}')
+    return selected
+
+
 # The env-server subprocess CLI, spelled by the launcher building the command and by ``env.py``'s parser
 # declaring it — two interpreters, so a rename that misses one fails at spawn rather than at import.
-OPT_BENCHMARK_DIR = '--benchmark_dir'
 OPT_TASK_HORIZON_STEPS = '--task_horizon_steps'
 
 # MuJoCo's backend selector, and the backend this adoption asks for. MuJoCo validates the value against the
@@ -55,7 +102,8 @@ OPT_TASK_HORIZON_STEPS = '--task_horizon_steps'
 GL_BACKEND_ENV = 'MUJOCO_GL'
 GL_BACKEND_DEFAULT = 'cgl' if sys.platform == 'darwin' else 'egl'
 
-# The reset token: which benchmark episode to build, and the seed overriding the episode spec's own.
+# The reset token: the benchmark under ``BenchmarkPath._fields``, the episode within it, and the seed overriding
+# the episode spec's own.
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
 

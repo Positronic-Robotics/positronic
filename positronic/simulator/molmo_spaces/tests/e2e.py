@@ -11,11 +11,11 @@ Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``
 mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run on a box with those::
 
     MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
-        uv run --locked python -m positronic.simulator.molmo_spaces.tests.e2e --benchmark_dir <dir>
+        uv run --locked python -m positronic.simulator.molmo_spaces.tests.e2e \
+            --benchmark <suite/scene_dataset/task_config/benchmark>
 """
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 
@@ -38,21 +38,24 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
 
 
 def run(
-    benchmark_dir: Path,
+    bench: mapping.BenchmarkPath | None,
     *,
     episodes: int = 1,
     steps: int = 5,
     camera_dict: dict[str, str] | None = None,
     task_horizon_steps: int | None = None,
 ) -> None:
-    """Reset + step the first ``episodes`` benchmark episodes over the socket, mapping each frame with the adapter."""
+    """Reset + step the first ``episodes`` episodes the server lists for ``bench`` (every benchmark when
+    ``None``) over the socket, mapping each frame with the adapter."""
     camera_dict = camera_dict or DEFAULT_CAMERA_DICT
     adapter = MolmoAdapter(camera_dict)
-    with serve_molmo_spaces(benchmark_dir, task_horizon_steps=task_horizon_steps) as (host, port):
+    with serve_molmo_spaces(task_horizon_steps=task_horizon_steps) as (host, port):
         conn = EnvConnection(host, port)
         try:
-            for i in range(episodes):
-                frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: i, mapping.TOKEN_SEED: None})
+            for record in conn.tasks(bench._asdict() if bench is not None else {})[:episodes]:
+                i = record['episode_index']
+                token = {**{d: record[d] for d in mapping.BenchmarkPath._fields}, mapping.TOKEN_EPISODE_INDEX: i}
+                frame = conn.reset({**token, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
                 assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
                 assert all(logical in obs for logical in camera_dict), f'missing cameras: {sorted(obs)}'
@@ -60,8 +63,8 @@ def run(
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
                 print(
-                    f'  episode {i}: reset ok — task={frame[protocol.FRAME_META][mapping.META_TASK]!r} '
-                    f'grip={obs[keys.GRIP]:.3f} '
+                    f'  episode {i} of {record["benchmark"]}: reset ok — '
+                    f'task={frame[protocol.FRAME_META][mapping.META_TASK]!r} grip={obs[keys.GRIP]:.3f} '
                     f'q0={q[0]:.4f} sim_state={sim_state.size}d'
                 )
                 out = {protocol.FRAME_DONE: False}
@@ -78,14 +81,19 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Drive the MolmoSpaces env server over the socket.')
-    parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
+    parser.add_argument(
+        '--benchmark',
+        type=mapping.BenchmarkPath.parse,
+        default=None,
+        help='suite/scene_dataset/task_config/benchmark under the asset packs; absent, the first one found',
+    )
     parser.add_argument('--episodes', type=int, default=1)
     parser.add_argument('--steps', type=int, default=5)
     parser.add_argument(
         '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
     )
     args = parser.parse_args()
-    run(Path(args.benchmark_dir), episodes=args.episodes, steps=args.steps, task_horizon_steps=args.task_horizon_steps)
+    run(args.benchmark, episodes=args.episodes, steps=args.steps, task_horizon_steps=args.task_horizon_steps)
 
 
 if __name__ == '__main__':

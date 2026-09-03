@@ -39,7 +39,6 @@ only, never the videos).
 
 import argparse
 import os
-import re
 from pathlib import Path
 
 import numpy as np
@@ -68,10 +67,6 @@ FIELD_EXPECTED_SUCCESS = 'expected_success'
 # end state, sparse enough to keep the fixture small. The final step is always included on top.
 CHECKPOINT_STRIDE = 8
 
-# The eval CLI records its full command line in the dataset's run metadata; the benchmark the episodes were
-# recorded against is the one argument the replay must resolve on the box it runs on.
-_BENCHMARK_ARG = re.compile(r'--eval\.benchmark_dir=(\S+)')
-
 
 def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
     """The recorded episode directory whose spec carries ``episode_index``."""
@@ -82,24 +77,9 @@ def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
     raise SystemExit(f'no recorded episode with {molmo_keys.EPISODE_INDEX}={episode_index} under {dataset_dir}')
 
 
-def read_benchmark_path(dataset_dir: Path) -> str:
-    """The evaluated benchmark's path under the asset packs' ``benchmarks/`` root, from the run metadata.
-
-    The path is kept from ``benchmarks/`` down — suite, scene dataset, task, benchmark — because the leaf
-    name alone is ambiguous: the same benchmark name exists under every scene dataset (ithor,
-    procthor-10k, ...) with different episodes, and replaying the wrong one silently replays a different
-    scene. Everything above ``benchmarks/`` is the box's own asset root and varies, so it is dropped.
-    """
-    metadata = sorted(dataset_dir.glob('run_metadata_*.yaml'))
-    if not metadata:
-        raise SystemExit(f'no run_metadata_*.yaml in {dataset_dir} — cannot tell which benchmark was evaluated')
-    match = _BENCHMARK_ARG.search(metadata[-1].read_text())
-    if match is None:
-        raise SystemExit(f'{metadata[-1]} records no --eval.benchmark_dir')
-    parts = Path(match.group(1)).parts
-    if mapping.ASSETS_BENCHMARKS_DIR not in parts:
-        raise SystemExit(f'evaluated benchmark {match.group(1)} is not under a benchmarks/ asset root')
-    return str(Path(*parts[parts.index(mapping.ASSETS_BENCHMARKS_DIR) + 1 :]))
+def benchmark_of(episode: DiskEpisode) -> mapping.BenchmarkPath:
+    """The benchmark the episode was recorded against, as its trial params name it."""
+    return mapping.BenchmarkPath(*(episode.static[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
 
 
 def sample_at(signal: Signal, timestamps: list[int]) -> list:
@@ -110,7 +90,7 @@ def sample_at(signal: Signal, timestamps: list[int]) -> list:
 
 
 def replay_commands(
-    benchmark_dir: Path, episode_index: int, commands: np.ndarray, grips: np.ndarray
+    bench: mapping.BenchmarkPath, episode_index: int, commands: np.ndarray, grips: np.ndarray
 ) -> list[np.ndarray]:
     """Step the commands open-loop through a MolmoSpaces env server, returning the sim state each produced.
 
@@ -118,11 +98,11 @@ def replay_commands(
     length of what comes back.
     """
     states: list[np.ndarray] = []
-    with launcher.serve_molmo_spaces(benchmark_dir) as (host, port):
+    with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
             # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
-            conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
+            conn.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
             for command, grip in zip(commands, grips, strict=True):
                 action = {
                     protocol.ACTION_COMMAND: {
@@ -140,8 +120,9 @@ def replay_commands(
     return states
 
 
-def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> dict[str, np.ndarray]:
+def build_fixture(episode_dir: Path) -> dict[str, np.ndarray]:
     episode = DiskEpisode(episode_dir)
+    bench = benchmark_of(episode)
     states = episode[mapping.OBS_SIM_STATE]
     # rules-allow: hardcoded-keys — 'target_grip' is a canonical channel name spelled across every
     # adoption and the eval configs; it belongs in positronic.keys, as its own sweep (internal#211).
@@ -164,8 +145,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
     episode_index = int(episode.static[molmo_keys.EPISODE_INDEX])
     played_prefix = np.stack(played[:replayable])
     grip_prefix = np.array(grip[:replayable], dtype=np.float32)
-    benchmark_dir = assets_dir / mapping.ASSETS_BENCHMARKS_DIR / benchmark_path
-    replayed = replay_commands(benchmark_dir, episode_index, played_prefix, grip_prefix)
+    replayed = replay_commands(bench, episode_index, played_prefix, grip_prefix)
     if len(replayed) != replayable:
         raise SystemExit(
             f'episode {episode_index}: the sim ended after {len(replayed)} of {replayable} replayable steps, '
@@ -173,7 +153,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
         )
     return {
         FIELD_EPISODE_INDEX: np.asarray(episode.static[molmo_keys.EPISODE_INDEX], dtype=np.int32),
-        FIELD_BENCHMARK_PATH: np.asarray(benchmark_path),
+        FIELD_BENCHMARK_PATH: np.asarray(str(bench.relative)),
         FIELD_TASK: np.asarray(episode.static[mapping.META_TASK]),
         FIELD_COMMANDS: played_prefix,
         FIELD_GRIPS: grip_prefix,
@@ -192,22 +172,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
-    if not assets:
+    if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise SystemExit(
             f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs — the checkpoints '
             'are taken by replaying the recorded commands, which needs the benchmark scene'
         )
 
-    benchmark_path = read_benchmark_path(args.dataset_dir)
     for episode_index in args.episode_index:
-        fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index), benchmark_path, Path(assets))
+        fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index))
         if not fixture[FIELD_EXPECTED_SUCCESS]:
             raise SystemExit(f'episode {episode_index} did not succeed — replay fixtures pin successful rollouts')
         out = Path(__file__).parent / f'replay_ep{episode_index:02d}.npz'
         np.savez_compressed(out, **fixture)  # pyright: ignore[reportArgumentType] -- numpy's savez **kwds stub
         steps = len(fixture[FIELD_COMMANDS])
-        print(f'Wrote {out} ({out.stat().st_size} bytes, {steps} steps, {benchmark_path})')
+        print(f'Wrote {out} ({out.stat().st_size} bytes, {steps} steps, {fixture[FIELD_BENCHMARK_PATH]})')
 
 
 if __name__ == '__main__':

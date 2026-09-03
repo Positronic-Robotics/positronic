@@ -23,7 +23,8 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``), and
 ``task_horizon_sec`` (the horizon the sim owns). Run on a box with those::
 
     MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
-        uv run --locked python -m positronic.simulator.molmo_spaces.tests.parity --benchmark_dir <dir>
+        uv run --locked python -m positronic.simulator.molmo_spaces.tests.parity \
+            --benchmark <suite/scene_dataset/task_config/benchmark>
 """
 
 import argparse
@@ -47,7 +48,7 @@ _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protoc
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
-def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int) -> dict:
+def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
     """Drive one episode through launcher -> env server -> wire, holding the arm to the sim's own ``done``."""
     fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
     camera_names: list[str] = []
@@ -59,10 +60,11 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         for name in camera_names:
             cam_hashes[name].append(hashlib.sha256(np.ascontiguousarray(obs[name]).tobytes()).hexdigest())
 
-    with launcher.serve_molmo_spaces(benchmark_dir) as (host, port):
+    with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed})
+            token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed}
+            frame = conn.reset(token)
             reported_horizon = frame[protocol.FRAME_HORIZON]
             camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
             cam_hashes = {name: [] for name in camera_names}
@@ -96,7 +98,7 @@ def _native_env() -> dict[str, str]:
     return {**env, 'PYTHONPATH': os.pathsep.join([env['PYTHONPATH'], str(Path(__file__).parent)])}
 
 
-def _run_native(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
+def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
     """Drive the native reference (``parity_native.py``) in MolmoSpaces' venv and load its recorded rollout."""
     python = launcher.ensure_molmo_venv()
     subprocess.run(
@@ -104,7 +106,7 @@ def _run_native(benchmark_dir: Path, episode_index: int, seed: int, max_steps: i
             str(python),
             str(_PARITY_NATIVE),
             parity_record.OPT_BENCHMARK_DIR,
-            str(benchmark_dir),
+            str(bench.under(Path(os.environ[mapping.ASSETS_DIR_ENV]))),
             parity_record.OPT_EPISODE_INDEX,
             str(episode_index),
             parity_record.OPT_SEED,
@@ -151,11 +153,11 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
         assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
 
 
-def run(benchmark_dir: Path, *, episode_index: int = 0, seed: int = 0, max_steps: int = 1200) -> None:
+def run(bench: mapping.BenchmarkPath, *, episode_index: int = 0, seed: int = 0, max_steps: int = 1200) -> None:
     """Run the same episode natively and through positronic and assert byte-identical parity."""
     with tempfile.TemporaryDirectory() as tmp:
-        native = _run_native(benchmark_dir, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
-        positronic = _drive_positronic(benchmark_dir, episode_index, seed, max_steps)
+        native = _run_native(bench, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
+        positronic = _drive_positronic(bench, episode_index, seed, max_steps)
     _assert_parity(native, positronic, max_steps)
     frames = positronic[parity_record.TERMINATION_STEP] + 1
     horizon = native[parity_record.HORIZON_STEPS]
@@ -165,13 +167,16 @@ def run(benchmark_dir: Path, *, episode_index: int = 0, seed: int = 0, max_steps
 def main() -> None:
     parser = argparse.ArgumentParser(description='Native-vs-positronic parity check for MolmoSpaces.')
     parser.add_argument(
-        '--benchmark_dir', required=True, help='dir containing benchmark.json (task_horizon_sec required)'
+        '--benchmark',
+        type=mapping.BenchmarkPath.parse,
+        required=True,
+        help='suite/scene_dataset/task_config/benchmark under the asset packs (task_horizon_sec required)',
     )
     parser.add_argument('--episode_index', type=int, default=0)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max_steps', type=int, default=1200, help='safety cap; must exceed the benchmark horizon')
     args = parser.parse_args()
-    run(Path(args.benchmark_dir), episode_index=args.episode_index, seed=args.seed, max_steps=args.max_steps)
+    run(args.benchmark, episode_index=args.episode_index, seed=args.seed, max_steps=args.max_steps)
 
 
 if __name__ == '__main__':
