@@ -878,7 +878,7 @@ def test_a_refusal_that_never_lets_up_is_not_reported_as_recovered(desk, caplog)
 
 
 def test_a_refusal_the_retry_overwrites_is_still_logged(desk, caplog):
-    """The run loop does not tick inside a synchronous move, so the goal carrying the reason is gone by then."""
+    """The refusal is read while the goal still carries its reason, so the retry cannot erase the line."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
