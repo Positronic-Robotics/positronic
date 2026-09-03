@@ -1,27 +1,18 @@
 """MolmoSpaces — AllenAI's MuJoCo manipulation benchmark — behind the env-server protocol.
 
-MolmoSpaces pins ``mujoco ~=3.5`` + its asset stack on Python 3.11, so this never shares positronic's venv: the
-launcher runs it with the molmospaces ``.venv``'s python (``env.py --host ... --port ... --benchmark_dir ...``),
-with the positronic-free ``server``/``protocol`` and this package's ``mapping`` module on ``PYTHONPATH``. It
-imports only ``molmo_spaces`` (+ mujoco/numpy) and those, never ``positronic``.
+MolmoSpaces pins ``mujoco ~=3.5`` + its asset stack on Python 3.11. The launcher runs it with the molmospaces venv,
+with the positronic-free ``server``/``protocol`` and this package's ``mapping`` module on ``PYTHONPATH``.
+It imports ``molmo_spaces`` (+ mujoco/numpy) and those, never ``positronic``.
 
-positronic owns the control loop: this server drives a single MolmoSpaces ``BaseMujocoTask`` per episode directly
-(``JsonEvalTaskSampler.sample_task`` builds the full sim/scene/renderer; ``reset``/``step``/``is_done``/
-``judge_success`` drive it), replacing MolmoSpaces' own ``JsonEvalRunner`` loop. The reset token selects the
-benchmark episode (index into ``benchmark.json``) and an optional seed; the client-side ``MolmoAdapter`` maps the
-raw payload this server reports into the canonical embodiment contract.
+positronic owns the control loop: this server drives a single MolmoSpaces ``BaseMujocoTask`` per episode directly,
+replacing MolmoSpaces' own ``JsonEvalRunner`` loop. The reset token selects the benchmark episode and an optional seed.
+The client-side ``MolmoAdapter`` maps the raw payload this server reports into the canonical embodiment contract.
 
-Command side: the ``MolmoAdapter`` forwards a joint command (the DROID rig runs the joint-position controller);
-this server integrates it onto the measured joints and steps the per-move-group ``{arm, gripper}`` action.
-Observation side: MolmoSpaces' obs carries the joint positions/velocities and camera frames, but the
-end-effector *world* pose is read from the robot view's grasp-site frame here, alongside the gripper closure, into
-the raw payload the adapter assembles into a ``MujocoFrankaState``.
+Command side: the ``MolmoAdapter`` translates all commands into joint space, this server integrates it onto the measured
+joints and steps the per-move-group ``{arm, gripper}`` action.
+Observation side: MolmoSpaces' obs carries the joint positions/velocities and camera frames and the end-effector
+cartesian pose is read from the robot view's grasp-site frame here, alongside the gripper closure.
 """
-
-# ``molmo_spaces`` (+ its transitive configs/tasks) and the flat ``protocol`` resolve only inside MolmoSpaces'
-# own venv, where the launcher runs this module; pyright checks it against positronic's deps, which cannot see
-# them. Each of those imports carries its own ``reportMissingImports`` suppression, so an import that should
-# resolve here — anything from positronic, which this module must never take — still fails the check.
 
 import argparse
 import os
@@ -30,15 +21,16 @@ import types
 
 import mapping  # positronic-free wire mappings, on PYTHONPATH; numpy only, so it pulls in no GL
 
-# MolmoSpaces renders MuJoCo scenes, so the GL backend must be selected before any mujoco/molmo_spaces import.
-# The launcher sets it in the subprocess env; default it here too so a direct invocation (e.g. a validate/e2e
-# run) still boots. Set before the imports below.
+# GL backend must be selected before any mujoco/molmo_spaces import.
+# !!!! This module should not care about convinience of tests, tests should take care of this
+# !!!! This leaks this knowledge in the env, which is not its problem. Ideally we should remove it
 os.environ.setdefault(mapping.GL_BACKEND_ENV, mapping.GL_BACKEND_DEFAULT)
 
 
 # MolmoSpaces' renderer module, which the stub below stands in for on Linux.
 _CGL_PACKAGE = 'mujoco.cgl'
 _CGL_MODULE = f'{_CGL_PACKAGE}.cgl'
+# !!! so is it 'mujoco.cgl.cgl'???
 
 
 def _install_cgl_noop_stub() -> None:
@@ -133,7 +125,7 @@ def _discovery_hint() -> str:
     return f' Available under {root}: {", ".join(found)}'
 
 
-def _assert_measures_at_grasp_site(robot_view: Any) -> None:
+def _assert_measures_at_grasp_site(robot_view) -> None:
     """Fail unless the arm move group's leaf frame is ``mapping.MOLMO_GRASP_SITE``.
 
     That frame is what every pose this server reports is measured in, and the eval declares its recorded
@@ -163,8 +155,6 @@ class MolmoSpacesEnv(EnvProtocol):
     def __init__(self, benchmark_dir: Path, task_horizon_steps: int | None = None) -> None:
         self._benchmark_dir = benchmark_dir
         self._episodes = load_all_episodes(benchmark_dir)
-        # An explicit per-run horizon override (steps), mirroring MolmoSpaces' ``--task_horizon_steps``; ``None``
-        # reads the benchmark's own ``task_horizon_sec``.
         self._task_horizon_override = task_horizon_steps
         self._sampler: Any = None
         self._task: Any = None
@@ -174,8 +164,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # at reset.
         self._horizon_sec: float | None = None
         self._meta: dict[str, Any] | None = None
-        # The RGB camera keys the current episode renders, emitted every frame.
-        self._camera_names: list[str] = []
+        self._camera_names: list[str] = []  # The RGB camera keys the current episode renders, emitted every frame.
         # Scratch ``MjData`` the kinematics probes (``_fk``/``_ik``) run on, allocated once per episode and
         # refreshed from the live buffer per call — a Cartesian policy solves IK every control step, so the
         # allocation stays out of the loop. Rebuilt in ``_build``, since it is sized by the episode's model.
@@ -310,6 +299,8 @@ class MolmoSpacesEnv(EnvProtocol):
         mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
         return _leaf_pose(arm, data)
 
+    # !!!!! Does the Molmo space accept the cartesian commands? Can we use it, instead of implementing
+    # IK again and again?
     def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         """Absolute world grasp-site target -> the arm joint targets that reach it.
 

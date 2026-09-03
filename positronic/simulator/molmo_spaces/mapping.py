@@ -192,17 +192,16 @@ def wire_command_to_arm_action(
     return target.astype(np.float32)
 
 
-def resolve_camera_key(available: Any, key: str, variants: tuple[str, ...] = ()) -> str:
+def resolve_camera_key(available: dict[str, Any], key: str, variants: tuple[str, ...] = ()) -> str:
     """The MolmoSpaces observation key to read for a camera role, mirroring the upstream policy's precedence.
 
     A present benchmark variant wins over ``key`` (matching molmo_spaces pi_policy); with no variants ``key``
     is read as-is. Raises with the candidate list on a miss.
     """
-    keys = set(available)
     for candidate in (*variants, key):
-        if candidate in keys:
+        if candidate in available:
             return candidate
-    raise KeyError(f'observation has none of {(*variants, key)}; available: {sorted(keys)}')
+    raise KeyError(f'observation has none of {(*variants, key)}; available: {sorted(available.keys())}')
 
 
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:

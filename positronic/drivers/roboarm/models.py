@@ -101,8 +101,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
 
 GRASP_SITE_LINK = 'gripper_grasp_site'
 # The 2F-85's grasp point — where the closed pads meet — 155mm along the flange approach axis, sharing the
-# flange's orientation. MuJoCo Menagerie's own 2F-85 places its ``grasp_site`` here, and a MuJoCo rig driving
-# this gripper measures and accepts poses at that site rather than at the arm's flange.
+# flange's orientation.
 _2F85_GRASP_XYZ = '0 0 0.155'
 
 # The coupler stays fixed: given an axis, the outer link hangs 19 mm out at full grip.
