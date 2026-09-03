@@ -50,20 +50,19 @@ FIXTURES = sorted(Path(__file__).parent.glob('replay_ep*.npz'))
 SIM_STATE_TOL = 1e-6
 
 
-def _benchmark_dir(benchmark_path: str) -> Path:
-    """The benchmark the fixture was recorded against, resolved in this box's asset packs.
+def _skip_unless_present(bench: mapping.BenchmarkPath) -> None:
+    """Skip unless this box's asset packs hold the benchmark the fixture was recorded against.
 
-    The fixture pins the path from ``benchmarks/`` down, so the lookup is exact rather than a name search:
+    The fixture pins the whole path under ``benchmarks/``, so the lookup is exact rather than a name search:
     the same benchmark name sits under every scene dataset with different episodes, and resolving to the
     wrong one would replay these commands against a different scene.
     """
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         pytest.skip(f'{mapping.ASSETS_DIR_ENV} is unset — MolmoSpaces asset packs are needed to replay')
-    benchmark_dir = Path(assets) / mapping.ASSETS_BENCHMARKS_DIR / benchmark_path
+    benchmark_dir = bench.under(Path(assets))
     if not (benchmark_dir / mapping.MOLMO_BENCHMARK_MANIFEST).is_file():
         pytest.skip(f'{benchmark_dir} is absent — this asset pack cannot replay the fixture')
-    return benchmark_dir
 
 
 @pytest.mark.parametrize('fixture_path', FIXTURES, ids=lambda path: path.stem)
@@ -71,8 +70,9 @@ def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path):
     fixture = np.load(fixture_path, allow_pickle=False)
     commands, grips = fixture[fixture_fields.FIELD_COMMANDS], fixture[fixture_fields.FIELD_GRIPS]
     episode_index = int(fixture[fixture_fields.FIELD_EPISODE_INDEX])
-    benchmark_dir = _benchmark_dir(str(fixture[fixture_fields.FIELD_BENCHMARK_PATH]))
-    states = replay_commands(benchmark_dir, episode_index, commands, grips)
+    bench = mapping.BenchmarkPath.parse(str(fixture[fixture_fields.FIELD_BENCHMARK_PATH]))
+    _skip_unless_present(bench)
+    states = replay_commands(bench, episode_index, commands, grips)
 
     # The sim must not end the trial inside the replayed prefix: the recording ran every one of these steps,
     # so an early terminal means the integration now scores or expires the episode differently.

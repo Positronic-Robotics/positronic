@@ -113,18 +113,6 @@ class _DroidPickEvalConfig(JsonBenchmarkEvalConfig):
 _SITE_FRAME = 'site'
 
 
-def _discovery_hint() -> str:
-    """The benchmark dirs found under ``MLSPACES_ASSETS_DIR``, appended to a path that holds none."""
-    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
-    if not assets:
-        return f' Point {mapping.ASSETS_DIR_ENV} at the MolmoSpaces asset packs to have the available ones listed.'
-    root = Path(assets) / mapping.ASSETS_BENCHMARKS_DIR
-    found = sorted(str(p.parent) for p in root.rglob(mapping.MOLMO_BENCHMARK_MANIFEST))
-    if not found:
-        return f' No {mapping.MOLMO_BENCHMARK_MANIFEST} found under {root}.'
-    return f' Available under {root}: {", ".join(found)}'
-
-
 def _assert_measures_at_grasp_site(robot_view) -> None:
     """Fail unless the arm move group's leaf frame is ``mapping.MOLMO_GRASP_SITE``.
 
@@ -142,19 +130,21 @@ def _assert_measures_at_grasp_site(robot_view) -> None:
 
 
 class MolmoSpacesEnv(EnvProtocol):
-    """A MolmoSpaces benchmark behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
+    """The MolmoSpaces benchmarks under the asset packs, behind the ``tasks``/``reset``/``step``/``close`` the
+    env server serves.
 
-    ``tasks`` answers the benchmark's episode records. Each reset builds from the token's episode index (into
-    the loaded ``benchmark.json``) and its seed: MolmoSpaces' ``task.reset()`` does not re-place the scene —
-    ``sample_task`` does — so each reset rebuilds the task for a clean, deterministic scene (benchmark episodes
-    are exact-pose deterministic, so a rebuild reproduces them). ``step`` integrates the forwarded joint command
-    onto the measured joints, drives the per-move-group action, and reports MolmoSpaces'
-    ``is_done``/``judge_success``.
+    ``tasks`` answers the episode records of the benchmarks a spec selects. Each reset builds from the token's
+    benchmark, its episode index (into that benchmark's ``benchmark.json``) and its seed: MolmoSpaces'
+    ``task.reset()`` does not re-place the scene — ``sample_task`` does — so each reset rebuilds the task for a
+    clean, deterministic scene (benchmark episodes are exact-pose deterministic, so a rebuild reproduces them).
+    ``step`` integrates the forwarded joint command onto the measured joints, drives the per-move-group action,
+    and reports MolmoSpaces' ``is_done``/``judge_success``.
     """
 
-    def __init__(self, benchmark_dir: Path, task_horizon_steps: int | None = None) -> None:
-        self._benchmark_dir = benchmark_dir
-        self._episodes = load_all_episodes(benchmark_dir)
+    def __init__(self, assets_dir: Path, task_horizon_steps: int | None = None) -> None:
+        self._assets_dir = assets_dir
+        self._found = mapping.discover_benchmarks(assets_dir)
+        self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}  # a benchmark's specs, loaded on first use
         self._task_horizon_override = task_horizon_steps
         self._sampler: Any = None
         self._task: Any = None
@@ -170,19 +160,28 @@ class MolmoSpacesEnv(EnvProtocol):
         # allocation stays out of the loop. Rebuilt in ``_build``, since it is sized by the episode's model.
         self._scratch: Any = None
 
-    def _build(self, episode_index: int, seed: int | None) -> None:
+    def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
+        if bench not in self._episodes:
+            # Every dimension pinned: the selection is an existence check that lists what is there on a miss.
+            mapping.select_benchmarks(self._found, bench._asdict())
+            episodes = load_all_episodes(bench.under(self._assets_dir))
+            if not episodes:
+                raise ValueError(f'{bench.relative} holds no episodes')
+            self._episodes[bench] = episodes
+        return self._episodes[bench]
+
+    def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None) -> None:
         if self._sampler is not None:
             self._sampler.close()  # release the prior episode's sim/renderer before building the next
-        episode = self._episodes[episode_index]
+        episodes = self._episodes_of(bench)
+        episode = episodes[episode_index]
         cfg = _DroidPickEvalConfig()
         # Determinism enters at sampler construction (seed_task_sampling).
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The horizon is the
         # benchmark's, not an episode's.
-        cfg.task_horizon = mapping.resolve_task_horizon_steps(
-            self._episodes, cfg.policy_dt_ms, self._task_horizon_override
-        )
+        cfg.task_horizon = mapping.resolve_task_horizon_steps(episodes, cfg.policy_dt_ms, self._task_horizon_override)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
@@ -199,33 +198,38 @@ class MolmoSpacesEnv(EnvProtocol):
         }
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        """The episode records ``spec`` selects: ``episodes`` is one index, or a list of them; absent, the whole
-        benchmark. Every record carries the one horizon the benchmark enforces, converted against the config
-        that enforces it."""
-        if not self._episodes:
-            raise ValueError(
-                f'no benchmark episodes under {self._benchmark_dir}; expected a '
-                f'{mapping.MOLMO_BENCHMARK_MANIFEST} or a legacy house_*/episode_*.json layout.{_discovery_hint()}'
-            )
-        count = len(self._episodes)
-        selection = spec.get('episodes')
-        indices = list(range(count)) if selection is None else [selection] if isinstance(selection, int) else selection
-        # A negative index would silently run a from-the-end episode mislabeled by its own index.
-        out_of_range = [i for i in indices if not 0 <= i < count]
-        if out_of_range:
-            raise ValueError(
-                f'episodes {out_of_range} out of range for the {count} episodes under {self._benchmark_dir}'
-            )
+        """The episode records ``spec`` selects: the benchmark dimensions pin benchmarks among those under the
+        asset packs; ``episodes`` is one index, or a list of them, within each; absent, the whole benchmark.
+        Every record carries the one horizon its benchmark enforces, converted against the config that
+        enforces it."""
         cfg = _DroidPickEvalConfig()
-        steps = mapping.resolve_task_horizon_steps(self._episodes, cfg.policy_dt_ms, self._task_horizon_override)
-        horizon_sec = steps * cfg.policy_dt_ms / 1000.0
-        return [
-            {'name': self._episodes[i].language.task_description, 'episode_index': i, 'task_horizon_sec': horizon_sec}
-            for i in indices
-        ]
+        selection = spec.get('episodes')
+        pinned = None if selection is None else [selection] if isinstance(selection, int) else list(selection)
+        records = []
+        for bench in mapping.select_benchmarks(self._found, spec):
+            episodes = self._episodes_of(bench)
+            count = len(episodes)
+            indices = list(range(count)) if pinned is None else pinned
+            # A negative index would silently run a from-the-end episode mislabeled by its own index.
+            out_of_range = [i for i in indices if not 0 <= i < count]
+            if out_of_range:
+                raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
+            steps = mapping.resolve_task_horizon_steps(episodes, cfg.policy_dt_ms, self._task_horizon_override)
+            horizon_sec = steps * cfg.policy_dt_ms / 1000.0
+            records += [
+                {
+                    **bench._asdict(),
+                    'episode_index': i,
+                    'name': episodes[i].language.task_description,
+                    'task_horizon_sec': horizon_sec,
+                }
+                for i in indices
+            ]
+        return records
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        self._build(token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))
+        bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
+        self._build(bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))
         obs, _info = self._task.reset()  # obs is a list, one dict per env; n_batch == 1
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
@@ -421,18 +425,16 @@ def main() -> None:
     parser.add_argument(protocol.OPT_HOST, default='localhost')
     parser.add_argument(protocol.OPT_PORT, type=int, required=True)
     parser.add_argument(
-        mapping.OPT_BENCHMARK_DIR, required=True, help=f'dir containing {mapping.MOLMO_BENCHMARK_MANIFEST}'
-    )
-    parser.add_argument(
         mapping.OPT_TASK_HORIZON_STEPS,
         type=int,
         default=None,
         help='override the benchmark horizon (steps per episode)',
     )
     args = parser.parse_args()
-    if not os.environ.get(mapping.ASSETS_DIR_ENV):
+    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
+    if not assets:
         parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(args.benchmark_dir), args.task_horizon_steps)
+    env = MolmoSpacesEnv(Path(assets), args.task_horizon_steps)
     EnvServer(env, args.host, args.port).serve_forever()
 
 

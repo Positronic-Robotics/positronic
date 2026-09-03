@@ -28,7 +28,8 @@ way ``parity.py`` launches the native reference — the venv python under ``laun
     import subprocess
     from positronic.simulator.molmo_spaces import launcher
     subprocess.run([str(launcher.ensure_molmo_venv()),
-                    'positronic/simulator/molmo_spaces/tests/validate.py', '--benchmark_dir', '<dir>'],
+                    'positronic/simulator/molmo_spaces/tests/validate.py',
+                    '--benchmark', '<suite/scene_dataset/task_config/benchmark>'],
                    env=launcher.molmo_subprocess_env(), check=True)"
 """
 
@@ -37,6 +38,7 @@ way ``parity.py`` launches the native reference — the venv python under ``laun
 # ``reportMissingImports`` suppression, so one that should resolve here still fails the check.
 
 import argparse
+import os
 from pathlib import Path
 
 # env.py sets MUJOCO_GL and installs the CGL stub at import, GL-safely pulling in the molmo_spaces stack — so
@@ -133,7 +135,12 @@ def _check_every_canonical_command_converts(sim_env) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate the MolmoSpaces rig's Cartesian command transform.")
-    parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
+    parser.add_argument(
+        '--benchmark',
+        type=mapping.BenchmarkPath.parse,
+        required=True,
+        help='suite/scene_dataset/task_config/benchmark under the asset packs',
+    )
     parser.add_argument('--episode_index', type=int, default=0)
     parser.add_argument('--seed', type=int, default=0)
     # These checks are pure kinematics — they never step the sim, so the episode horizon is irrelevant to them.
@@ -143,8 +150,9 @@ def main() -> None:
     args = parser.parse_args()
     np.random.seed(0)
 
-    sim_env = env.MolmoSpacesEnv(Path(args.benchmark_dir), args.task_horizon_steps)
-    sim_env.reset({mapping.TOKEN_EPISODE_INDEX: args.episode_index, mapping.TOKEN_SEED: args.seed})
+    sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]), args.task_horizon_steps)
+    token = {**args.benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: args.episode_index, mapping.TOKEN_SEED: args.seed}
+    sim_env.reset(token)
     print(f'molmo_spaces episode {args.episode_index} (seed {args.seed})')
     try:
         _check_fk_identity(sim_env)

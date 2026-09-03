@@ -93,36 +93,25 @@ def molmo_subprocess_env() -> dict[str, str]:
     }
 
 
-def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | None) -> subprocess.Popen:
-    # env.py exits on these before it binds the port. Check them here, where the failure can name the missing
+def _spawn(host: str, port: int, task_horizon_steps: int | None) -> subprocess.Popen:
+    # env.py exits on this before it binds the port. Check it here, where the failure can name the missing
     # precondition instead of reaching the caller as a bare pre-bind exit status.
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    if not benchmark_dir.is_dir():
-        raise ValueError(f'benchmark dir {benchmark_dir} does not exist')
     python = ensure_molmo_venv()
-    command = [
-        str(python),
-        str(_ENV_SCRIPT),
-        protocol.OPT_HOST,
-        host,
-        protocol.OPT_PORT,
-        str(port),
-        mapping.OPT_BENCHMARK_DIR,
-        str(benchmark_dir),
-    ]
+    command = [str(python), str(_ENV_SCRIPT), protocol.OPT_HOST, host, protocol.OPT_PORT, str(port)]
     if task_horizon_steps is not None:
         command += [mapping.OPT_TASK_HORIZON_STEPS, str(task_horizon_steps)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
 def serve_molmo_spaces(
-    benchmark_dir: Path, host: str = 'localhost', task_horizon_steps: int | None = None
+    host: str = 'localhost', task_horizon_steps: int | None = None
 ) -> AbstractContextManager[tuple[str, int]]:
     """The MolmoSpaces env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
-    ``benchmark_dir`` (a dir holding ``benchmark.json``) is fixed for the run; the reset token selects the
-    episode within it, so one task-agnostic server serves every trial. ``task_horizon_steps`` optionally overrides
-    the benchmark's own horizon (mirroring MolmoSpaces' ``--task_horizon_steps``); ``None`` reads it per episode.
+    The server holds every benchmark under the asset packs; the reset token selects the benchmark and the
+    episode within it, so one server serves every trial. ``task_horizon_steps`` optionally overrides the
+    benchmarks' own horizon (mirroring MolmoSpaces' ``--task_horizon_steps``); ``None`` reads it per benchmark.
     """
-    return serve_subprocess(lambda host, port: _spawn(host, port, benchmark_dir, task_horizon_steps), host)
+    return serve_subprocess(lambda host, port: _spawn(host, port, task_horizon_steps), host)

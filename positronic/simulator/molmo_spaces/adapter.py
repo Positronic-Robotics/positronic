@@ -29,6 +29,10 @@ _CAMERA_VARIANTS = {
 DEFAULT_CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
 
 
+# Each benchmark dimension's trial key: the env's records and the reset token carry the dimension names.
+_DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
+
+
 class MolmoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]) -> None:
         super().__init__()
@@ -37,6 +41,7 @@ class MolmoAdapter(WireCommandAdapter):
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             {
+                **{key: record[dimension] for dimension, key in _DIMENSION_KEYS.items()},
                 eval_keys.TASK: record['name'],
                 molmo_keys.EPISODE_INDEX: record['episode_index'],
                 molmo_keys.TASK_HORIZON: record['task_horizon_sec'],
@@ -46,6 +51,7 @@ class MolmoAdapter(WireCommandAdapter):
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
         return {
+            **{dimension: params[key] for dimension, key in _DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
         }

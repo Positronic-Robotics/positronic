@@ -78,20 +78,30 @@ def test_terminal_reports_success_only_when_done():
     assert adapter.terminal(running) is None
 
 
+_BENCH = mapping.BenchmarkPath('molmospaces-bench-v1', 'procthor-10k', 'FrankaPickDroidMiniBench', 'pick_20251231')
+_BENCH_PARAMS = dict(zip(molmo_keys.BENCHMARK_DIMENSIONS, _BENCH, strict=True))
+
+
 def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
     adapter = MolmoAdapter(CAMERA_DICT)
-    params = adapter.task_params([{'name': 'put the banana in the bowl', 'episode_index': 3, 'task_horizon_sec': 30.0}])
-    assert params == [
-        {eval_keys.TASK: 'put the banana in the bowl', molmo_keys.EPISODE_INDEX: 3, molmo_keys.TASK_HORIZON: 30.0}
+    record = {**_BENCH._asdict(), 'name': 'put the banana in the bowl', 'episode_index': 3, 'task_horizon_sec': 30.0}
+    assert adapter.task_params([record]) == [
+        {
+            **_BENCH_PARAMS,
+            eval_keys.TASK: 'put the banana in the bowl',
+            molmo_keys.EPISODE_INDEX: 3,
+            molmo_keys.TASK_HORIZON: 30.0,
+        }
     ]
 
 
-def test_reset_token_carries_episode_and_seed():
+def test_reset_token_carries_benchmark_episode_and_seed():
     adapter = MolmoAdapter(CAMERA_DICT)
-    expected = {mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
-    assert adapter.reset_token({molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
+    expected = {**_BENCH._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
+    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
     # An absent seed falls back to the spec's own (None here).
-    assert adapter.reset_token({molmo_keys.EPISODE_INDEX: 2}) == {
+    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
+        **_BENCH._asdict(),
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
     }
