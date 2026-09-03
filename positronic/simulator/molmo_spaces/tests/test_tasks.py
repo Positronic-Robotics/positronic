@@ -14,13 +14,14 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 
+_SUITE, _SCENE_DATASET, _TASK_CONFIG, _BENCHMARK = molmo_keys.BENCHMARK_DIMENSIONS
 _PICK = {
-    molmo_keys.SUITE: 'molmospaces-bench-v1',
-    molmo_keys.SCENE_DATASET: 'procthor-10k',
-    molmo_keys.TASK_CONFIG: 'FrankaPickDroidMiniBench',
-    molmo_keys.BENCHMARK: 'pick_20251231',
+    _SUITE: 'molmospaces-bench-v1',
+    _SCENE_DATASET: 'procthor-10k',
+    _TASK_CONFIG: 'FrankaPickDroidMiniBench',
+    _BENCHMARK: 'pick_20251231',
 }
-_PLACE = {**_PICK, molmo_keys.TASK_CONFIG: 'FrankaPickandPlaceDroidMiniBench', molmo_keys.BENCHMARK: 'pnp_20260111'}
+_PLACE = {**_PICK, _TASK_CONFIG: 'FrankaPickandPlaceDroidMiniBench', _BENCHMARK: 'pnp_20260111'}
 _PICK_HORIZON_SEC = 30.0
 _PLACE_HORIZON_SEC = 60.0
 
@@ -60,7 +61,7 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
 
     assert asked == [{}]
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
-    assert [scene[molmo_keys.TASK_CONFIG] for scene in scenes] == [
+    assert [scene[_TASK_CONFIG] for scene in scenes] == [
         'FrankaPickDroidMiniBench',
         'FrankaPickDroidMiniBench',
         'FrankaPickandPlaceDroidMiniBench',
@@ -68,7 +69,7 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
     ]
     assert all(eval_keys.SEED not in scene for scene in scenes)
     assert [trial.meta[eval_keys.TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
-    assert trials[0].meta[molmo_keys.BENCHMARK] == 'pick_20251231'
+    assert trials[0].meta[_BENCHMARK] == 'pick_20251231'
 
 
 def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked):
