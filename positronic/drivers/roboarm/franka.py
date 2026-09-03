@@ -232,8 +232,8 @@ class _SafeInputs:
 class _StoppedShort(RuntimeError):
     """The arm ended a goal without reaching it: how it reports a command it would not take.
 
-    Its own type because it is the failure a triggered safe input produces — the control box refuses
-    every command while one is triggered — and so the only one ``_Arm.move_to`` makes a move again after.
+    Its own type because it is the failure a triggered safe input produces: the control box refuses
+    every command while one is triggered.
     """
 
 
