@@ -142,12 +142,11 @@ class _SafeInputs:
 
     @property
     def mark(self) -> int:
-        """What the command going out hands ``tripped_since`` when it fails.
+        """The trip count a later reading is measured against.
 
-        One below the count where a live reading finds an input triggered, so the trip under way counts
-        as during the move it is about to refuse: it may clear again before anything samples next, and
-        nothing would then attribute the refusal to it. A stale reading backdates nothing: the trip it
-        holds may have cleared long before the move began.
+        One below the count while a live reading finds an input triggered, so a trip already under way
+        reads as later than the mark: it may clear before the next sample and leave nothing behind. A
+        stale reading backdates nothing, since the trip it holds may have cleared long before.
         """
         reading = self._reading
         return reading.trips - 1 if reading.sampled and reading.triggered else reading.trips
@@ -253,8 +252,7 @@ class _Arm(DriverRun[command.CommandType]):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
-    # How long a move waits for a triggered safe input to clear before it fails. The longest interval a safe
-    # input stayed triggered in this rig's safety log is 4 s.
+    # Long enough to outlast a transient trip, and what a latched one costs the run before the move fails.
     _SAFE_STOP_WAIT_S = 15.0
     # How many times one move may be made again after a safe input stopped it.
     _SAFE_STOP_RETRIES = 2
@@ -403,8 +401,7 @@ class _Arm(DriverRun[command.CommandType]):
             try:
                 return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
             except _StoppedShort:
-                # Read while the refused goal still carries its reason: the run loop does not tick inside a
-                # move, and both the wait below and the retry after it leave nothing for it to find.
+                # Read while the refused goal still carries its reason; the retry below replaces it.
                 self.note_refusals()
                 outcome = yield from self._await_safe_stop(self._mark, at_teardown=at_teardown)
                 if outcome is _SafeStopWait.KEEP_THE_FAILURE:
