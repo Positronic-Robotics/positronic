@@ -19,7 +19,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import configuronic as cfn
 import pos3
@@ -246,11 +246,14 @@ def normalized_base_href(value: str) -> str:
     """`value` with the trailing slash a relative link needs.
 
     Only a path at the server root: a relative one, a netloc, a query or a fragment each send a
-    relative link somewhere other than the prefix.
+    relative link somewhere other than the prefix. A browser resolves a dot segment and a backslash
+    before it reads the `<base>`, so a path holding one names a different prefix than it shows.
     """
     parts = urlsplit(value)
     if parts.scheme or parts.netloc or parts.query or parts.fragment or not parts.path.startswith('/'):
         raise ValueError(f'base_href must be a path at the server root and nothing else, got {value!r}')
+    if '\\' in parts.path or any(unquote(segment) in ('.', '..') for segment in parts.path.split('/')):
+        raise ValueError(f'base_href must hold no dot segment and no backslash, got {value!r}')
     return parts.path if parts.path.endswith('/') else parts.path + '/'
 
 
@@ -265,6 +268,21 @@ def validated_build_id(value: str) -> str:
     if not _BUILD_ID.fullmatch(value):
         raise ValueError(f'build_id must match {_BUILD_ID.pattern!r}, got {value!r}')
     return value
+
+
+def configure_pages(
+    *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False, build_id: str = ''
+) -> None:
+    """Set where the pages are served and what they show; see `main` for what each value does.
+
+    The one place the five values enter `app_state`, so a crawler in another repository names no
+    key of it and gets the same checks the command line does.
+    """
+    app_state['base_href'] = normalized_base_href(base_href)
+    app_state['title'] = title
+    app_state['show_paths'] = show_paths
+    app_state['static_export'] = static_export
+    app_state['build_id'] = validated_build_id(build_id)
 
 
 def _cacheable_api_path(suffix: str) -> str:
@@ -818,11 +836,9 @@ def main(
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
-    app_state['base_href'] = normalized_base_href(base_href)
-    app_state['title'] = title
-    app_state['show_paths'] = show_paths
-    app_state['static_export'] = static_export
-    app_state['build_id'] = validated_build_id(build_id)
+    configure_pages(
+        base_href=base_href, title=title, show_paths=show_paths, static_export=static_export, build_id=build_id
+    )
 
     if reset_cache and cache_root.exists():
         logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')

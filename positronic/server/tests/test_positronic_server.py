@@ -27,6 +27,7 @@ from positronic.server.positronic_server import (
     _served_addresses,
     app,
     app_state,
+    configure_pages,
     normalized_base_href,
     static_export_key,
     static_export_url_path,
@@ -444,6 +445,33 @@ def test_a_base_href_that_is_not_a_path_at_the_server_root_is_refused():
     for value in outside:
         with pytest.raises(ValueError, match='server root'):
             normalized_base_href(value)
+
+
+def test_a_base_href_a_browser_would_resolve_outside_the_prefix_is_refused():
+    """A browser applies a dot segment and a backslash before it reads the `<base>`."""
+    escaping = ('/v/../', '/v/%2e%2e/', '/v/%2E./tok/', '/v/./tok/', '/v/tok/..', '/v\\tok/')
+
+    for value in escaping:
+        with pytest.raises(ValueError, match='dot segment'):
+            normalized_base_href(value)
+
+
+def test_a_base_href_whose_segment_only_contains_dots_stands():
+    for value in ('/v/tok.1/', '/v/..tok/', '/v/tok../', '/v/a.b.c/'):
+        assert normalized_base_href(value) == value
+
+
+def test_configure_pages_checks_what_it_is_given_and_fills_the_state(monkeypatch):
+    for key in ('base_href', 'title', 'show_paths', 'static_export', 'build_id'):
+        monkeypatch.setitem(app_state, key, app_state[key])
+
+    configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True, build_id='k3n9')
+
+    assert app_state['base_href'] == '/v/tok/'
+    assert (app_state['title'], app_state['show_paths'], app_state['static_export']) == ('A run', False, True)
+    assert app_state['build_id'] == 'k3n9'
+    with pytest.raises(ValueError, match='build_id'):
+        configure_pages(build_id='k3/n9')
 
 
 def test_a_build_id_in_the_token_alphabet_stands():
