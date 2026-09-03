@@ -65,6 +65,7 @@ _OBS_SPECS = {
     'eef_pos': ((3,), np.float32),
     'eef_quat': ((4,), np.float32),
     'over_shoulder_left_camera': ((720, 1280, 3), np.uint8),
+    'over_shoulder_right_camera': ((720, 1280, 3), np.uint8),
     'wrist_cam': ((720, 1280, 3), np.uint8),
     'subtask': ((4,), np.float32),
 }
