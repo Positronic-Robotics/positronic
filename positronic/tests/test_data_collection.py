@@ -76,7 +76,7 @@ def test_the_tracker_takes_the_shake_out_of_a_hand_that_holds_still():
         at = geom.Transform3D(np.array([shake * np.sin(2 * np.pi * 10 * tick / 100), 0.0, 0.0]))
         seen.append(tracker.update(at, tick * 10_000_000).translation)
     left = np.ptp(np.asarray(seen)[100:], axis=0).max()
-    assert left < shake, f'the arm still swings {left * 1000:.1f} mm of the hand\'s {shake * 2000:.1f} mm'
+    assert left < shake, f"the arm still swings {left * 1000:.1f} mm of the hand's {shake * 2000:.1f} mm"
 
 
 def test_the_tracker_follows_a_hand_that_means_it():
@@ -86,6 +86,22 @@ def test_the_tracker_follows_a_hand_that_means_it():
     for tick in range(100):  # one second of holding the hand 20 cm away
         where = tracker.update(geom.Transform3D(np.array([0.2, 0.0, 0.0])), tick * 10_000_000)
     assert np.linalg.norm(where.translation) > 0.19
+
+
+def test_the_tracker_reads_a_negated_quaternion_as_the_turn_it_is():
+    """A rotation and its negated quaternion are the same turn, and a hand holding still sends either."""
+    tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
+    tracker.turn_on(geom.Transform3D())
+    held = geom.Rotation.from_rotvec(np.array([0.01, 0.0, 0.0]))
+    barely_moved = geom.Rotation.from_rotvec(np.array([0.02, 0.0, 0.0]))
+    negated = geom.Rotation.from_quat(-barely_moved.as_quat)  # the same turn, written the other way
+
+    first = tracker.update(geom.Transform3D(rotation=held), 0)
+    second = tracker.update(geom.Transform3D(rotation=negated), 10_000_000)
+
+    # A rotation matrix reads the same for a quaternion and its negative, so it is what the two are alike in
+    swing = float(np.abs(first.rotation.as_rotation_matrix - second.rotation.as_rotation_matrix).max())
+    assert swing < 0.02, f'the arm turned where the hand barely moved, by {swing:.3f} of a rotation matrix'
 
 
 def test_data_collection_records_task_metadata(tmp_path, world):
