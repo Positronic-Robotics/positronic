@@ -10,10 +10,11 @@ import logging
 import mimetypes
 import re
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
+from urllib.parse import unquote
 
 import configuronic as cfn
 import pos3
@@ -28,8 +29,6 @@ from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
-    FILTER_VALUES,
-    GROUP_FILTERS,
     GroupTableConfig,
     TableConfig,
     app,
@@ -37,7 +36,14 @@ from positronic.server.positronic_server import (
     configure_pages,
     configure_tables,
     default_table,
+    download_link,
     download_paths,
+    episode_link,
+    episode_rrd_link,
+    episodes_link,
+    filter_spelling,
+    group_api_link,
+    group_link,
     install_dataset,
     normalized_base_href,
 )
@@ -106,17 +112,24 @@ def _fetch(client: TestClient, path: str, params: dict[str, str] | None = None) 
     return response.content, response.headers.get('content-type', '')
 
 
-def filter_sets(response: dict) -> Iterator[dict[str, str]]:
-    """Every filter set a group page can ask for, the empty one first.
+def _filter_values(dataset: Dataset, keys: Iterable[str]) -> Iterator[dict[str, str]]:
+    """Each episode's values on the filter `keys`, as a filter spells them; an absent value is left out."""
+    for episode in dataset:
+        spelled = ((key, filter_spelling(cast(Episode, episode).static.get(key))) for key in keys)
+        yield {key: value for key, value in spelled if value is not None}
 
-    Each key offers its values and the choice of not filtering on it, so k keys of v values each
-    give (v+1)^k sets.
+
+def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
+    """Every filter set some episode satisfies, the empty one first.
+
+    An episode satisfies each subset of its own values, so k filter keys give at most 2^k sets per
+    episode, and a set no episode satisfies gets no file.
     """
-    filters = response.get(GROUP_FILTERS, {})
-    keys = sorted(filters)
-    options = [[None, *filters[key][FILTER_VALUES]] for key in keys]
-    for chosen in itertools.product(*options):
-        yield {key: value for key, value in zip(keys, chosen, strict=True) if value is not None}
+    satisfied: set[tuple[tuple[str, str], ...]] = set()
+    for values in episode_values:
+        items = sorted(values.items())
+        satisfied.update(chosen for n in range(len(items) + 1) for chosen in itertools.combinations(items, n))
+    return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
 
 
 def _large_file_path(link: str, build_id: str) -> str:
@@ -151,8 +164,7 @@ def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> st
 def _episode_links(dataset: Dataset, index: int) -> list[str]:
     """The recording and the downloads an episode page links, as the page spells them."""
     static = cast(Episode, dataset[index]).static
-    downloads = (f'{API_DIR}/episode/{index}/static/{field}' for field in download_paths(static))
-    return [f'{API_DIR}/episode_rrd/{index}', *downloads]
+    return [episode_rrd_link(index), *(download_link(index, field) for field in download_paths(static))]
 
 
 def _write_pages(
@@ -161,28 +173,28 @@ def _write_pages(
     """Write every page, and give back the recording and download links the episode pages held."""
     body, content_type = _fetch(client, '/')
     out.write(PAGE_FILE, body, content_type)
-    for route in ('episodes', *(f'groups/{name}' for name in group_names)):
+    for route in (episodes_link(), *(group_link(name) for name in group_names)):
         body, content_type = _fetch(client, f'/{route}')
         out.write(f'{route}/{PAGE_FILE}', body, content_type)
     links = []
     for index in range(len(dataset)):
-        body, content_type = _fetch(client, f'/episode/{index}')
+        body, content_type = _fetch(client, f'/{episode_link(index)}')
         page = body.decode()
         page_links = _episode_links(dataset, index)
         if not all(_carries(page, link) for link in page_links):
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
-        out.write(f'episode/{index}/{PAGE_FILE}', moved.encode(), content_type)
+        out.write(f'{episode_link(index)}/{PAGE_FILE}', moved.encode(), content_type)
         links.extend(page_links)
     return links
 
 
-def _write_group(client: TestClient, out: _Output, name: str) -> None:
-    route = f'{API_DIR}/groups/{name}'
+def _write_group(client: TestClient, out: _Output, name: str, sets: Iterable[dict[str, str]]) -> None:
+    route = group_api_link(name)
     body, content_type = _fetch(client, f'/{route}')
     index = [GroupFile({}, UNFILTERED_FILE)]
     out.write(f'{route}/{UNFILTERED_FILE}', body, content_type)
-    for number, params in enumerate((chosen for chosen in filter_sets(json.loads(body)) if chosen), start=1):
+    for number, params in enumerate((chosen for chosen in sets if chosen), start=1):
         filtered, filtered_type = _fetch(client, f'/{route}', params)
         entry = GroupFile(params, f'{number}.json')
         out.write(f'{route}/{entry.file}', filtered, filtered_type)
@@ -287,13 +299,13 @@ def export_static(
         for route in _whole_api_routes():
             body, content_type = _fetch(client, f'/{route}')
             out.write(f'{route}.json', body, content_type)
-        for name in group_names:
-            _write_group(client, out, name)
+        for name, cfg in (group_tables or {}).items():
+            _write_group(client, out, name, filter_sets(_filter_values(shown, cfg.group_filter_keys)))
 
         install_dataset(full)
         for link in links:
             body, content_type = _fetch(client, f'/{link}')
-            out.write(_large_file_path(link, build_id), body, content_type)
+            out.write(_large_file_path(unquote(link), build_id), body, content_type)
     if assets:
         _write_assets(out)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
