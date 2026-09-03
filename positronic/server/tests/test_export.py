@@ -20,13 +20,21 @@ from positronic.server.export import (
     GROUP_INDEX_FILE,
     UNFILTERED_FILE,
     GroupFile,
+    _Output,
     asset_content_type,
     export_static,
     filter_sets,
     large_file_links_under,
     validated_build_id,
 )
-from positronic.server.positronic_server import FILTER_VALUES, GROUP_FILTERS, ColumnConfig, GroupTableConfig, app_state
+from positronic.server.positronic_server import (
+    DOWNLOAD_LINK,
+    FILTER_VALUES,
+    GROUP_FILTERS,
+    ColumnConfig,
+    GroupTableConfig,
+    app_state,
+)
 
 OUTCOME = 'eval.outcome'
 OBJECT = 'eval.object'
@@ -217,16 +225,44 @@ def test_every_filter_set_a_page_can_ask_for_is_listed_with_the_empty_one_first(
     ]
 
 
-def test_a_link_is_moved_under_the_build_and_a_value_that_looks_like_one_is_not():
+def test_a_link_is_moved_in_the_nodes_a_page_carries_it_and_an_equal_value_is_not():
     links = ['api/episode_rrd/3', 'api/episode/3/static/scene']
-    page = 'appUrl("api/episode_rrd/3") "api/episode/3/static/scene" "api/episode/3/static/note" href="episodes"'
+    download = {DOWNLOAD_LINK: 'api/episode/3/static/scene', 'size': 6}
+    values = {'twin': 'api/episode_rrd/3', 'note': 'api/episode/3/static/note'}
+    page = f'appUrl("api/episode_rrd/3") {json.dumps(download)} {json.dumps(values)} href="episodes"'
 
     moved = large_file_links_under(page, links, 'bld')
 
-    assert '"build/bld/api/episode_rrd/3"' in moved
-    assert '"build/bld/api/episode/3/static/scene"' in moved
-    assert '"api/episode/3/static/note"' in moved and 'href="episodes"' in moved
+    assert 'appUrl("build/bld/api/episode_rrd/3")' in moved
+    assert json.dumps({**download, DOWNLOAD_LINK: 'build/bld/api/episode/3/static/scene'}) in moved
+    assert json.dumps(values) in moved and 'href="episodes"' in moved
     assert large_file_links_under(page, links, '') == page
+
+
+def test_a_static_value_equal_to_a_link_stays_as_it_is(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'twin': 'api/episode_rrd/0'})
+    out = tmp_path / 'out'
+
+    export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
+
+    page = (out / 'episode/0/index.html').read_text()
+    assert 'appUrl("build/bld/api/episode_rrd/0")' in page
+    assert json.dumps({'twin': 'api/episode_rrd/0'})[1:-1] in page
+
+
+def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(tmp_path):
+    out = _Output(tmp_path / 'out')
+
+    for path in ('../index.html', '..\\..\\index.html', '/index.html'):
+        with pytest.raises(ValueError, match='outside'):
+            out.write(path, b'', 'text/html')
+    assert not (tmp_path / 'out').exists()
+
+
+def test_the_assets_go_with_the_root_base_href_only(dataset, tmp_path):
+    with pytest.raises(ValueError, match='assets'):
+        an_export(dataset, tmp_path / 'out', base_href='/v/tok/', assets=True)
+    assert not (tmp_path / 'out').exists()
 
 
 def test_a_build_id_outside_the_token_alphabet_is_refused(dataset, tmp_path):

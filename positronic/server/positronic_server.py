@@ -254,6 +254,10 @@ def app_state_restored() -> Iterator[None]:
             _api_cache.clear()
 
 
+# The field of a static value's sidebar entry that holds its download link, as `app.js` reads it.
+DOWNLOAD_LINK = '__download__'
+
+
 def is_download(value: object) -> bool:
     """Whether a static value reaches a page as a download link rather than inline."""
     return isinstance(value, bytes) or (isinstance(value, str) and len(value) > 1024)
@@ -288,7 +292,7 @@ async def episode_viewer(request: Request, episode_id: int):
     def _make_serializable(obj, path=''):
         if is_download(obj):
             return {
-                '__download__': f'api/episode/{episode_id}/static/{path}',
+                DOWNLOAD_LINK: f'api/episode/{episode_id}/static/{path}',
                 'size': len(obj),
                 'type': 'bytes' if isinstance(obj, bytes) else 'text',
             }

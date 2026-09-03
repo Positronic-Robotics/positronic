@@ -27,6 +27,7 @@ from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
+    DOWNLOAD_LINK,
     FILTER_VALUES,
     GROUP_FILTERS,
     GroupTableConfig,
@@ -38,6 +39,7 @@ from positronic.server.positronic_server import (
     default_table,
     download_paths,
     install_dataset,
+    normalized_base_href,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,9 +90,9 @@ class _Output:
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
         relative = PurePosixPath(path)
-        if relative.is_absolute() or '..' in relative.parts:
+        if relative.is_absolute() or '\\' in path or '..' in relative.parts:
             raise ValueError(f'{path!r} would land outside {self.directory}')
-        target = self.directory / path
+        target = self.directory.joinpath(*relative.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
         written = ExportedFile(PurePosixPath(path), content_type, len(body))
@@ -126,12 +128,23 @@ def _page_spelling(link: str) -> str:
     return str(htmlsafe_json_dumps(link))
 
 
+def _link_nodes(link: str) -> list[str]:
+    """The nodes of an episode page that carry `link`: the recording's `appUrl(...)` call, a download's field."""
+    spelling = _page_spelling(link)
+    return [f'appUrl({spelling})', f'{_page_spelling(DOWNLOAD_LINK)}: {spelling}']
+
+
+def _carries(page: str, link: str) -> bool:
+    return any(node in page for node in _link_nodes(link))
+
+
 def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> str:
-    """`html` with each of `links`, as a page spells them, moved under `build/<build_id>/`."""
+    """`html` with each of `links`, in the nodes a page carries them, moved under `build/<build_id>/`."""
     if not build_id:
         return html
     for link in links:
-        html = html.replace(_page_spelling(link), _page_spelling(_large_file_path(link, build_id)))
+        for node, moved in zip(_link_nodes(link), _link_nodes(_large_file_path(link, build_id)), strict=True):
+            html = html.replace(node, moved)
     return html
 
 
@@ -156,7 +169,7 @@ def _write_pages(
         body, content_type = _fetch(client, f'/episode/{index}')
         page = body.decode()
         page_links = _episode_links(dataset, index)
-        if any(_page_spelling(link) not in page for link in page_links):
+        if not all(_carries(page, link) for link in page_links):
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
         out.write(f'episode/{index}/{PAGE_FILE}', moved.encode(), content_type)
@@ -243,12 +256,15 @@ def export_static(
     when given, which holds the same episodes in the same order: the recording builder reads an
     episode's robot model out of its static values, so a caller that hides static values from the
     pages passes the unhidden dataset here. `assets` writes the app's own scripts, styles and viewer
-    under `static/`, which every export at one host shares. An export holds the app's state for its
+    under `static/`, which the pages request at the host root, so it goes with the root base href
+    only; an export under a prefix shares the host's copy. An export holds the app's state for its
     duration, so a second export in the process waits for it.
     """
     out = _Output(Path(out_dir))
     if out.directory.exists() and any(out.directory.iterdir()):
         raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
+    if assets and normalized_base_href(base_href) != '/':
+        raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
@@ -309,7 +325,7 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         build_id: Names one build; the recordings and the downloads are written under `build/<build_id>/`
-        assets: Whether to write the app's own assets under `static/`
+        assets: Whether to write the app's own assets under `static/`; with the root base href only
     """
     written = export_static(
         dataset,
