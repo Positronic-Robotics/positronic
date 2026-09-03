@@ -372,6 +372,9 @@ Keep a typed value typed to the end: copy the model and assign the field, which 
 reads. Where a set of names is needed, derive it from the type (`model_fields`,
 `dataclasses.fields`) or pin it with a test that fails when the model renames or gains a field.
 
+A frozen model refuses the assignment. There `model_copy(update=…)` stays, and a test pins each
+name to `model_fields`, so a rename fails the suite instead of the run.
+
 Exception: a name that is the wire — a JSON key two deploys exchange, an environment variable, a
 third-party object's attribute. There the string is the contract (`hardcoded-keys`).
 
