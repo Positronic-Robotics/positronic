@@ -1,7 +1,7 @@
 """What one export writes, where, and what it keeps off a page."""
 
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 import pytest
@@ -14,6 +14,7 @@ from positronic.dataset.transforms.episode import EpisodeTransform
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     UNFILTERED_FILE,
+    asset_content_type,
     export_static,
     filter_sets,
     large_file_links_under,
@@ -208,3 +209,16 @@ def test_an_export_leaves_the_app_state_as_it_found_it(dataset, tmp_path):
     an_export(dataset, tmp_path / 'out', base_href='/v/tok/', title='A run')
 
     assert app_state == before
+
+
+@pytest.mark.parametrize(
+    ('name', 'expected'),
+    [
+        ('viewer_bg.wasm', 'application/wasm'),
+        ('episode_0.rrd', 'application/octet-stream'),
+        ('app.js', 'text/javascript'),
+        ('styles.css', 'text/css'),
+    ],
+)
+def test_an_asset_is_served_under_the_type_a_browser_needs(name, expected):
+    assert asset_content_type(Path(name)) == expected

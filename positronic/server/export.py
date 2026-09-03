@@ -1,9 +1,7 @@
 """Write the viewer for one dataset as static files.
 
 The app is composed in this process and read with a test client, so the export holds what the
-server answers. A page lands at `<route>/index.html`, an API response at `api/<route>.json`, a group
-table as one file per filter set with `index.json` beside them, and a recording or a download under
-`build/<build_id>/` when a build id is given.
+server answers. A page lands at `<route>/index.html` and an API response at `api/<route>.json`.
 """
 
 import itertools
@@ -40,11 +38,12 @@ from positronic.server.positronic_server import (
 
 logger = logging.getLogger(__name__)
 
-# What a page, an API response and a group table's files are written as. A page is a directory
-# with an index file, so a static host answers `episode/3` with it.
+# A page is a directory with an index file, so a static host answers `episode/3` with it.
 PAGE_FILE = 'index.html'
 API_DIR = 'api'
+# The recordings and the downloads sit under `build/<build_id>/`, a path a rebuild never rewrites.
 BUILD_DIR = 'build'
+# A group table is one file per filter set, and the index beside them says which file holds which.
 GROUP_INDEX_FILE = 'index.json'
 UNFILTERED_FILE = 'all.json'
 # The app's own assets, at the server root, so every export a host serves shares one copy.
@@ -161,7 +160,7 @@ def _write_group(client: TestClient, out: _Output, name: str) -> None:
     out.write(f'{route}/{GROUP_INDEX_FILE}', listing, 'application/json')
 
 
-# What the viewer ships and `mimetypes` does not answer for on every box.
+# `mimetypes` answers for neither on every box.
 _CONTENT_TYPE_BY_SUFFIX = {'.wasm': 'application/wasm', '.rrd': 'application/octet-stream'}
 
 

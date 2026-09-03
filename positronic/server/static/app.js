@@ -137,8 +137,6 @@ async function loadDatasetInfo() {
 }
 
 async function loadEpisodes(filters = {}) {
-  // A static export holds one file per filter set of a group table, and one file for the whole
-  // flat table, whose filters then apply in the browser.
   const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
   return fetchJSON(await apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null));
 }
