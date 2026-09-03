@@ -340,8 +340,8 @@ class Harness(pimm.ControlSystem):
         # trial's own args, not a fresh draw. The scene is a person's to set up, and is not asked again. The
         # terminal waits on the move: the next trial's scene draw would rebuild the model mid-travel.
         back_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
-        # rules-allow: swallowed-error — the episode is recorded, and the next episode's ``_ready`` refuses a
-        # rig too stuck to run. A move back that raises ends the run with episodes left to play.
+        # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
+        # A raise here costs the recorded episode its answer, and the run every episode it has left.
         try:
             yield from self._ready(should_stop, back_args)
         except Exception as exc:
