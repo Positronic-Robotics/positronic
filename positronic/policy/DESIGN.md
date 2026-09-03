@@ -291,8 +291,10 @@ Commands = Mapping[str, Any]
 
 
 class Session(Protocol):
+    def __init__(self, context: dict[str, Any]) -> None: ...
+
     # `time_ns` and the returned `resume_at` are nanoseconds on the same clock.
-    def __call__(self, obs: Obs, time_ns: int) -> tuple[Commands, int]: ...
+    def __call__(self, runtime: InferenceRuntime, obs: Obs) -> tuple[Commands, int]: ...
 
     # Called by the framework, at any moment.
     def close(self) -> None: ...
@@ -320,11 +322,13 @@ Fn = Callable[..., Answer]
 
 ```python
 # The framework's standing offer to one session. Every session gets its own.
-class Runtime(Protocol):
+class InferenceRuntime(Protocol):
     # The inference functions, each wrapped into an `Fn`: a worker pool in
     # process, a stub over the wire.
+    def async_infer(self, Obs obs) -> Answer: ...
+
     @property
-    def fns(self) -> Mapping[str, Fn]: ...
+    def time_ns(self) -> int: ...
 
     # Append `value` to this session's series `name`. The framework places
     # it on the timelines.
@@ -337,12 +341,11 @@ class Runtime(Protocol):
 class Policy(Protocol):
     # The policy's heavy work: plain callables, given by name, offered
     # back as `rt.fns`.
-    @property
-    def functions(self) -> Mapping[str, Callable]: ...
+    def infer(Obs obs) -> Commands: ...
 
     # `context` carries the robot the session will control, and whatever
     # else the framework knows about the episode.
-    def new_session(self, context: dict[str, Any], rt: Runtime) -> Session: ...
+    def new_session(self, context: dict[str, Any]) -> Session: ...
 ```
 
 ### Layers and codecs
