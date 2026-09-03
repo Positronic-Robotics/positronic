@@ -90,6 +90,7 @@ from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
+from robolab.registrations.droid.camera_presets import WRIST_LEFT_RIGHT  # noqa: E402
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
@@ -157,7 +158,7 @@ class RobolabEnv(EnvProtocol):
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         if task not in self._registered:
-            auto_register_droid_envs(task=[task])
+            auto_register_droid_envs(task=[task], cameras=WRIST_LEFT_RIGHT)
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
         self._env, self._env_cfg = create_env(
@@ -335,8 +336,7 @@ class RobolabEnv(EnvProtocol):
             'eef_pos': proprio['eef_pos'][0].cpu().numpy(),
             'eef_quat': proprio['eef_quat'][0].cpu().numpy(),
             'grip': float(proprio['gripper_pos'][0, 0]),
-            'over_shoulder_left_camera': images['over_shoulder_left_camera'][0].cpu().numpy(),
-            'wrist_cam': images['wrist_cam'][0].cpu().numpy(),
+            **{name: frame[0].cpu().numpy() for name, frame in images.items()},
             'subtask': subtask,
         }
 

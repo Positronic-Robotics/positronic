@@ -52,6 +52,8 @@ DESCRIPTOR = 'descriptor'
 IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
+# A rig with a second exterior view names it this way; the DROID rig and RoboLab both carry one.
+EXTERIOR_RIGHT_IMAGE = f'{IMAGE_PREFIX}exterior_right'
 
 # The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
 # clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.
