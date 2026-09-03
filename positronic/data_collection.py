@@ -100,6 +100,10 @@ class _Tracker:
         self._steady_at = ts_ns
         share = step / (step + 1.0 / (2.0 * np.pi * _HAND_CUTOFF_HZ))
         turn = (self._steady.rotation.inv * pose.rotation).as_rotvec
+        # A quaternion and its negative are the same turn, and `as_rotvec` reads the negative one as
+        # nearly a full turn the other way. The hand went the short way round.
+        if (angle := float(np.linalg.norm(turn))) > np.pi:
+            turn = turn * (1.0 - 2.0 * np.pi / angle)
         self._steady = geom.Transform3D(
             self._steady.translation + share * (pose.translation - self._steady.translation),
             self._steady.rotation * geom.Rotation.from_rotvec(share * turn),
@@ -347,11 +351,7 @@ def main(
         bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, sound]
 
         if stream_video_to_webxr is not None:
-            world.connect(
-                camera_emitters[stream_video_to_webxr],
-                webxr.frame,
-                receiver_wrapper=pimm.map(_frame_array),
-            )
+            world.connect(camera_emitters[stream_video_to_webxr], webxr.frame, receiver_wrapper=pimm.map(_frame_array))
 
         world.run(data_collection, bg_cs)
 

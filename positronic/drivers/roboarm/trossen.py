@@ -218,27 +218,21 @@ def _configure(driver: Any, ip: str, timeout_s: float) -> None:
 
 
 def _connect(ip: str) -> Any:
-    """Open the arm controller and take ownership of it."""
+    """Open the arm controller and take ownership of it.
+
+    A configuration that fails leaves a driver holding whatever it opened, and nobody else has the handle
+    yet, so it goes back here.
+    """
     driver = trossen_arm.TrossenArmDriver()
-    _configure(driver, ip, _CONNECT_TIMEOUT_S)
-    return driver
-
-
-@contextlib.contextmanager
-def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
-    """The arm, left idle and its handle given back however the run ends — including one that never starts."""
-    driver = connect(ip)
     try:
-        yield driver
-    finally:
-        try:
-            driver.set_all_modes(trossen_arm.Mode.idle)
-        # rules-allow: swallowed-error — an arm that cannot be reached cannot be set idle either, and the
-        # handle still has to go back
-        except trossen_arm.RuntimeError as exc:
-            logger.error(f'The arm at {ip} was not set idle: {exc}')
-        finally:  # an arm that will not go idle still has a handle to give back
+        _configure(driver, ip, _CONNECT_TIMEOUT_S)
+    except BaseException:
+        # rules-allow: swallowed-error — the failure to configure is the one to report, and a session that
+        # never opened has nothing to say about closing
+        with contextlib.suppress(Exception):
             driver.cleanup()
+        raise
+    return driver
 
 
 class _Arm(DriverRun[command.CommandType]):
@@ -342,10 +336,6 @@ class _Arm(DriverRun[command.CommandType]):
         """
         travelled = (float(output.joint.gripper.position) - self._grip_closed) / self._grip_travel
         return float(np.clip(1.0 - travelled, 0.0, 1.0))
-
-    def _grip_metres(self, grip: float) -> float:
-        """The gripper joint position that holds the fingers at ``grip``."""
-        return self._grip_closed + (1.0 - grip) * self._grip_travel
 
     def limit_violation(self) -> str:
         """What reads outside the range the controller reports for it, if anything.
@@ -451,7 +441,13 @@ class _Arm(DriverRun[command.CommandType]):
             self._target, self._arm_unsent = self._target + step, True
 
     def hold_grip(self, grip: float) -> None:
-        """Hold the fingers at ``grip``."""
+        """Hold the fingers at ``grip``, and refuse one that is not a number.
+
+        ``np.clip`` carries a NaN through, and the controller takes whatever finger position it is handed.
+        """
+        if not np.isfinite(grip):
+            self.complain(f'The arm at {self.ip} was asked to grip at {grip}', key='grip refused')
+            return
         self._grip_target = float(np.clip(grip, 0.0, 1.0))
         self._grip_unsent = True
 
@@ -535,6 +531,9 @@ class _Arm(DriverRun[command.CommandType]):
                 target = self._ik(delta_cmd.apply(from_pose), streamed=streamed)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+        # A shorter target broadcasts across the limits and moves every joint; a NaN clips to itself.
+        if target.shape != (len(_JOINT_NAMES),) or not np.all(np.isfinite(target)):
+            raise ValueError(f'{cmd} asks the arm for {target}, and not for {len(_JOINT_NAMES)} finite joints')
         return np.clip(target, self._q_lower, self._q_upper)
 
     def track(self, cmd: command.CommandType) -> None:
@@ -560,6 +559,10 @@ class _Arm(DriverRun[command.CommandType]):
             self._goal_time = max(_MIN_MOVE_TIME_S, travel / _MOVE_SPEED)
             self._arm_unsent = True
             self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
+
+    def _grip_metres(self, grip: float) -> float:
+        """The gripper joint position that holds the fingers at ``grip``."""
+        return self._grip_closed + (1.0 - grip) * self._grip_travel
 
     def _put_goal(self, setpoint: np.ndarray, move_arm: bool) -> None:
         """Hand the controller this tick's setpoint, fingers included where one call carries both.
@@ -605,8 +608,12 @@ class _Arm(DriverRun[command.CommandType]):
         self._reconnect_at = now
         logger.info(f'Opening a new session with the arm at {self.ip}')
         try:
-            with contextlib.suppress(trossen_arm.RuntimeError):  # the old session is what failed
+            try:
                 self.driver.cleanup()
+            # rules-allow: swallowed-error — the session being closed is the one that failed, and the
+            # replacement still has to be opened
+            except trossen_arm.RuntimeError as exc:
+                logger.error(f'The old session with the arm at {self.ip} did not close: {exc}')
             _configure(self.driver, self.ip, _RECONNECT_TIMEOUT_S)
             self._take_control()
         # rules-allow: swallowed-error — an arm still out of reach reads ERROR; the next attempt tries again
@@ -641,6 +648,23 @@ class _Arm(DriverRun[command.CommandType]):
         self.grip_out.emit(self._grip_of(self._output))
 
 
+@contextlib.contextmanager
+def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
+    """The arm, left idle and its handle given back however the run ends — including one that never starts."""
+    driver = connect(ip)
+    try:
+        yield driver
+    finally:
+        try:
+            driver.set_all_modes(trossen_arm.Mode.idle)
+        # rules-allow: swallowed-error — an arm that cannot be reached cannot be set idle either, and the
+        # handle still has to go back
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {ip} was not set idle: {exc}')
+        finally:  # an arm that will not go idle still has a handle to give back
+            driver.cleanup()
+
+
 class Robot(pimm.ControlSystem):
     """Drives one Trossen WidowX AI arm over Ethernet, in the arm base frame.
 
@@ -667,8 +691,9 @@ class Robot(pimm.ControlSystem):
         with _opened(self._connect, self._ip) as driver:
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
-                # TODO: carry the URDF and the joint names, which live in `trossen_arm_description`.
-                self.robot_meta.emit({keys.ROBOT: 'trossen_wxai'})
+                # TODO: carry the URDF, which lives in `trossen_arm_description`. `keys.CONTROL_FRAME`
+                # names a frame in it, so it waits for the same change.
+                self.robot_meta.emit({keys.ROBOT: 'trossen_wxai', keys.JOINT_NAMES: list(_JOINT_NAMES)})
 
                 while not should_stop.value:
                     arm.read()

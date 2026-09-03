@@ -230,6 +230,39 @@ def test_a_joint_target_outside_the_range_is_clipped_to_it():
     assert _held(arm)[1] == pytest.approx(0.0)
 
 
+def test_a_joint_target_that_is_not_six_finite_joints_moves_nothing(caplog):
+    """One number broadcasts across all six limits, and a NaN clips to itself: neither may reach the arm."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    home = _held(arm)
+
+    for target in (np.array([0.5]), np.array([0.5, np.nan, 0.5, 0.0, 0.0, 0.0])):
+        commands.push(command.JointPosition(target))
+        _settle(loop, ticks=5)
+
+    np.testing.assert_allclose(_held(arm), home)
+    assert 'not applied' in caplog.text
+
+
+def test_a_grip_that_is_not_a_number_leaves_the_fingers_alone(caplog):
+    """``np.clip`` carries a NaN through, and the controller takes whatever finger position it is handed."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    grip = ManualCommandReceiver()
+    driver.target_grip._bind(grip)
+    next(loop)
+    written = len(arm.goals) + len(arm.gripper_goals)
+
+    grip.push(float('nan'))
+    next(loop)
+
+    assert len(arm.goals) + len(arm.gripper_goals) == written
+    assert 'grip at nan' in caplog.text
+
+
 def test_a_streamed_command_the_arm_cannot_be_put_at_leaves_it_where_it_is(monkeypatch):
     """A command stream cannot end the run: the next command supersedes one that could not be applied.
 
