@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -238,16 +238,20 @@ def install_dataset(dataset: Dataset) -> None:
     app_state['loading_state'] = False
 
 
+_APP_STATE_HELD = threading.Lock()
+
+
 @contextmanager
 def app_state_restored() -> Iterator[None]:
-    """Give the app its state back on exit, for a caller that composes the app in its own process."""
-    saved = dict(app_state)
-    try:
-        yield
-    finally:
-        app_state.clear()
-        app_state.update(saved)
-        _api_cache.clear()
+    """Hold the app's state for the block and give it back on exit; a second holder waits."""
+    with _APP_STATE_HELD:
+        saved = dict(app_state)
+        try:
+            yield
+        finally:
+            app_state.clear()
+            app_state.update(saved)
+            _api_cache.clear()
 
 
 def is_download(value: object) -> bool:
@@ -427,6 +431,11 @@ def parse_table_cfg(table_cfg: TableConfig) -> tuple:
     return columns, formatters, defaults
 
 
+def filter_spelling(value: object) -> str | None:
+    """The string a page offers a static value as and sends back in a query; None for an absent value."""
+    return None if value is None else str(value)
+
+
 @app.get('/api/episodes')
 @require_dataset
 async def api_episodes(request: Request):
@@ -440,7 +449,7 @@ async def api_episodes(request: Request):
     filters = {k: v for k, v in request.query_params.items() if v}
 
     def matches(ep: Episode) -> bool:
-        return filters is None or all(str(ep.static.get(k)) == v for k, v in filters.items())
+        return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
     ep_it = (
         {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
@@ -457,9 +466,26 @@ def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
     return tuple(episode.static.get(k) for k in group_keys)
 
 
+def _grouped(
+    ds: Dataset, group_keys: tuple[str, ...], filter_keys: Iterable[str], active_filters: dict[str, str]
+) -> tuple[dict[str, set[str]], dict[tuple[Any, ...], list[Episode]]]:
+    """The values each filter offers, and the episodes that match `active_filters`, by group id."""
+    offered: dict[str, set[str]] = {key: set() for key in filter_keys}
+    groups: dict[tuple[Any, ...], list[Episode]] = defaultdict(list)
+    for episode in ds:
+        # Every value is offered, whichever filters are active
+        for filter_key in offered:
+            spelling = filter_spelling(episode.static.get(filter_key))
+            if spelling is not None:
+                offered[filter_key].add(spelling)
+        if all(filter_spelling(episode.static.get(key)) == value for key, value in active_filters.items()):
+            groups[_group_id(episode, group_keys)].append(episode)
+    return offered, groups
+
+
 @app.get('/api/groups/{suffix}')
 @require_dataset
-async def api_groups(request: Request, suffix: str):  # noqa: C901
+async def api_groups(request: Request, suffix: str):
     cache_key = ('groups', suffix, tuple(sorted(request.query_params.items())))
     if cache_key in _api_cache:
         return _api_cache[cache_key]
@@ -488,17 +514,11 @@ async def api_groups(request: Request, suffix: str):  # noqa: C901
         if filter_value:
             active_filters[filter_key] = filter_value
 
-    groups = defaultdict(list)
-    group_filters = {key: {'label': label or key, FILTER_VALUES: set()} for key, label in cfg.group_filter_keys.items()}
-    for episode in ds:
-        # Always collect all filter values regardless of active filters
-        for filter_key in cfg.group_filter_keys:
-            group_filters[filter_key][FILTER_VALUES].add(episode.static.get(filter_key))
-        # Apply filters for grouping
-        # A query carries a string, and the page offers the value as one.
-        match = all(str(episode.static.get(key)) == value for key, value in active_filters.items())
-        if match:
-            groups[_group_id(episode, group_keys)].append(episode)
+    offered, groups = _grouped(cast(Dataset, ds), group_keys, cfg.group_filter_keys, active_filters)
+    group_filters = {
+        key: {'label': label or key, FILTER_VALUES: sorted(offered[key])}
+        for key, label in cfg.group_filter_keys.items()
+    }
 
     rows = []
     for group_id, episodes in groups.items():
@@ -557,6 +577,14 @@ def _static_field(static: dict, field_path: str) -> object:
     return value
 
 
+def _content_disposition(disposition: str, filename: str) -> str:
+    """The `Content-Disposition` value naming a download `filename`; a name outside plain ASCII is percent-encoded."""
+    encoded = quote(filename)
+    if encoded == filename:
+        return f'{disposition}; filename="{filename}"'
+    return f"{disposition}; filename*=utf-8''{encoded}"
+
+
 @app.get('/api/episode/{episode_id}/static/{field_path:path}')
 @require_dataset
 async def api_episode_static_field(episode_id: int, field_path: str):
@@ -572,13 +600,13 @@ async def api_episode_static_field(episode_id: int, field_path: str):
         return Response(
             content=value,
             media_type='application/octet-stream',
-            headers={'Content-Disposition': f'attachment; filename={filename}'},
+            headers={'Content-Disposition': _content_disposition('attachment', filename)},
         )
     if isinstance(value, str):
         return Response(
             content=value.encode(),
             media_type='text/plain; charset=utf-8',
-            headers={'Content-Disposition': f'inline; filename={filename}.txt'},
+            headers={'Content-Disposition': _content_disposition('inline', f'{filename}.txt')},
         )
     raise HTTPException(status_code=400, detail=f'Field {field_path} is not downloadable')
 

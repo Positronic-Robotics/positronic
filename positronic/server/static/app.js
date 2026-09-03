@@ -98,12 +98,14 @@ function baseScopedKey(name) {
 // which file holds which set. The unfiltered flat table is one file, filtered in the browser.
 const groupIndexes = new Map();
 
-// The fields of an index entry, as `GroupFile` in export.py writes them.
+// The index file, as `GROUP_INDEX_FILE` in export.py writes it, and the fields of an entry in it, as
+// `GroupFile` there writes them.
+const GROUP_INDEX_FILE = 'index.json';
 const ENTRY_PARAMS = 'params';
 const ENTRY_FILE = 'file';
 
 async function groupIndex(path) {
-  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/index.json`)));
+  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${GROUP_INDEX_FILE}`)));
   return groupIndexes.get(path);
 }
 

@@ -2,6 +2,7 @@ import ipaddress
 import os
 import re
 import socket
+import threading
 from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,10 @@ from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
+    FILTER_VALUES,
+    GROUP_FILTERS,
+    ColumnConfig,
+    GroupTableConfig,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -25,6 +30,7 @@ from positronic.server.positronic_server import (
     _served_addresses,
     app,
     app_state,
+    app_state_restored,
     configure_pages,
     download_paths,
     normalized_base_href,
@@ -348,6 +354,15 @@ def test_the_episode_page_links_its_recording_and_its_downloads_at_their_routes(
     assert viewer.get('/api/episode/0/static/scene').content == b'a mesh'
 
 
+def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_encoded(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'scene': b'a mesh', 'notes & é': 'n' * 2000})
+
+    assert viewer.get('/api/episode/0/static/scene').headers['content-disposition'] == 'attachment; filename="scene"'
+    assert viewer.get('/api/episode/0/static/notes & é').headers['content-disposition'] == (
+        "inline; filename*=utf-8''notes%20%26%20%C3%A9.txt"
+    )
+
+
 def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_path():
     static = {
         'scene': b'a mesh',
@@ -414,3 +429,80 @@ def test_a_group_name_reaches_the_page_script_as_json(viewer):
 
     assert 'window.API_ENDPOINT = "api/groups/a\\u0026b";' in body
     assert 'a&amp;b' not in body
+
+
+class _Statics:
+    """A dataset of episodes that hold static values and nothing else."""
+
+    def __init__(self, *statics: dict):
+        self._statics = statics
+
+    def __len__(self) -> int:
+        return len(self._statics)
+
+    def __getitem__(self, index: int) -> SimpleNamespace:
+        if index >= len(self):
+            raise IndexError(index)
+        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=0)
+
+
+ASSISTED = 'assisted'
+_BY_TASK = GroupTableConfig(
+    group_keys=keys.TASK,
+    group_fn=lambda episodes: {'count': len(episodes)},
+    format_table={keys.TASK: ColumnConfig(label='Task'), 'count': ColumnConfig(label='Episodes')},
+    group_filter_keys={ASSISTED: 'Assisted'},
+)
+
+
+@pytest.fixture
+def grouped(monkeypatch):
+    episodes = _Statics(
+        {keys.TASK: 'fold', ASSISTED: True},
+        {keys.TASK: 'fold', ASSISTED: False},
+        {keys.TASK: 'stack', ASSISTED: False},
+        {keys.TASK: 'stack'},
+    )
+    monkeypatch.setitem(app_state, 'dataset', episodes)
+    monkeypatch.setitem(app_state, 'loading_state', False)
+    monkeypatch.setitem(app_state, 'group_tables_cfg', {'by_task': _BY_TASK})
+    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    return TestClient(app)
+
+
+def test_a_group_filter_offers_each_value_as_the_string_a_query_carries_and_no_absent_one(grouped):
+    table = grouped.get('/api/groups/by_task').json()
+
+    assert table[GROUP_FILTERS][ASSISTED][FILTER_VALUES] == ['False', 'True']
+
+
+def test_a_group_filter_matches_the_value_it_offered(grouped):
+    assisted = grouped.get('/api/groups/by_task', params={ASSISTED: 'True'}).json()
+    unassisted = grouped.get('/api/groups/by_task', params={ASSISTED: 'False'}).json()
+
+    assert [row[1][0] for row in assisted['episodes']] == ['fold']
+    assert [row[1][0] for row in unassisted['episodes']] == ['fold', 'stack']
+
+
+def test_a_second_holder_of_the_app_state_waits_for_the_first():
+    first_holds, released, second_holds = threading.Event(), threading.Event(), threading.Event()
+
+    def first():
+        with app_state_restored():
+            first_holds.set()
+            released.wait(5)
+
+    def second():
+        with app_state_restored():
+            second_holds.set()
+
+    holders = [threading.Thread(target=first), threading.Thread(target=second)]
+    holders[0].start()
+    assert first_holds.wait(5)
+    holders[1].start()
+
+    assert not second_holds.wait(0.2)
+    released.set()
+    for holder in holders:
+        holder.join(5)
+    assert second_holds.is_set()
