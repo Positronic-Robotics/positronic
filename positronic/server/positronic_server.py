@@ -5,15 +5,14 @@ import hashlib
 import ipaddress
 import logging
 import os
-import re
 import shutil
 import socket
 import subprocess
 import tempfile
 import threading
 from collections import defaultdict
-from collections.abc import Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import wraps
@@ -64,7 +63,6 @@ app_state: dict[str, object] = {
     'title': '',  # empty = the dataset root
     'show_paths': True,
     'static_export': False,
-    'build_id': '',
 }
 
 
@@ -136,37 +134,10 @@ async def cache_rerun_assets(request: Request, call_next):
     return response
 
 
-# What `encodeURIComponent` leaves unescaped, so app.js and this module name one file alike.
-_QUERY_SAFE = "!*'()"
-
-# The name an empty filter set takes, which the export writer and the browser must spell alike.
-_UNFILTERED_NAME = 'all'
-
-# A digest stands in for a query over the byte budget; app.js spells both numbers too.
-_QUERY_DIGEST_CHARS = 16
-
-
-def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str:
-    """The file name a static export writes an API response to.
-
-    - `params` is None: `<path>.json`, for an endpoint the export writes whole.
-    - `params` is a mapping: `<path>/<query>.json`, for one it writes a file per filter set for.
-      The query holds the parameters that carry a value, percent-encoded and then sorted, and
-      an empty query is named `all`. Sorting the encoded pair compares ASCII in every language.
-    - A query past the byte budget becomes a digest of itself, which no filesystem's name limit
-      rejects. A digest is hexadecimal, so it can never read as a query or as `all`.
-
-    `app.js` builds the same name.
-    """
-    if params is None:
-        return f'{path}.json'
-    pairs = sorted(
-        f'{quote(key, safe=_QUERY_SAFE)}={quote(value, safe=_QUERY_SAFE)}' for key, value in params.items() if value
-    )
-    query = '&'.join(pairs)
-    if len(query.encode()) > _MAX_COMPONENT_BYTES:
-        query = hashlib.sha256(query.encode()).hexdigest()[:_QUERY_DIGEST_CHARS]
-    return f'{path}/{query or _UNFILTERED_NAME}.json'
+# The field a group table's response carries its filters under, and the field of each filter
+# holding its values. The export reads them back to write one file per filter set.
+GROUP_FILTERS = 'group_filters'
+FILTER_VALUES = 'values'
 
 
 def _shown_root() -> str:
@@ -233,15 +204,6 @@ async def episodes_view(request: Request):
     return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
 
 
-def static_export_url_path(path: str, params: Mapping[str, str] | None = None) -> str:
-    """The path a browser asks for the `static_export_key` file at.
-
-    A host decodes a URL path before it looks the file up, so a name that carries a percent escape
-    is reached by escaping its own `%` again.
-    """
-    return static_export_key(path, params).replace('%', '%25')
-
-
 def normalized_base_href(value: str) -> str:
     """`value` with the trailing slash a relative link needs.
 
@@ -257,43 +219,54 @@ def normalized_base_href(value: str) -> str:
     return parts.path if parts.path.endswith('/') else parts.path + '/'
 
 
-_BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
-
-
-def validated_build_id(value: str) -> str:
-    """`value` when it holds only what `secrets.token_urlsafe` produces; empty names no build.
-
-    A `?` or a `#` would turn the rest of the URL path into a query or a fragment.
-    """
-    if not _BUILD_ID.fullmatch(value):
-        raise ValueError(f'build_id must match {_BUILD_ID.pattern!r}, got {value!r}')
-    return value
-
-
 def configure_pages(
-    *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False, build_id: str = ''
+    *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False
 ) -> None:
-    """Set where the pages are served and what they show; see `main` for what each value does.
-
-    The one place the five values enter `app_state`, so a crawler in another repository names no
-    key of it and gets the same checks the command line does.
-    """
+    """Set where the pages are served and what they show; see `main` for what each value does."""
     app_state['base_href'] = normalized_base_href(base_href)
     app_state['title'] = title
     app_state['show_paths'] = show_paths
     app_state['static_export'] = static_export
-    app_state['build_id'] = validated_build_id(build_id)
 
 
-def _cacheable_api_path(suffix: str) -> str:
-    """`api/<suffix>`, under the build id when the pages read a static export.
+def install_dataset(dataset: Dataset) -> None:
+    """Serve `dataset` from now on."""
+    app_state['dataset'] = dataset
+    _api_cache.clear()
+    app_state['loading_state'] = False
 
-    Only an export writes such a file: a live server serves no `build/…` route.
-    """
-    build_id = validated_build_id(str(app_state['build_id']))
-    if app_state['static_export'] and build_id:
-        return f'build/{build_id}/api/{suffix}'
-    return f'api/{suffix}'
+
+@contextmanager
+def app_state_restored() -> Iterator[None]:
+    """Give the app its state back on exit, for a caller that composes the app in its own process."""
+    saved = dict(app_state)
+    try:
+        yield
+    finally:
+        app_state.clear()
+        app_state.update(saved)
+        _api_cache.clear()
+
+
+def is_download(value: object) -> bool:
+    """Whether a static value reaches a page as a download link rather than inline."""
+    return isinstance(value, bytes) or (isinstance(value, str) and len(value) > 1024)
+
+
+def download_paths(static: Mapping[str, Any], path: str = '') -> Iterator[str]:
+    """The field path of every static value an episode page links as a download."""
+    for key, value in static.items():
+        field_path = f'{path}.{key}' if path else key
+        if is_download(value):
+            yield field_path
+        elif isinstance(value, dict):
+            yield from download_paths(value, field_path)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    yield from download_paths(item, field_path)
+                elif is_download(item):
+                    yield field_path
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -311,9 +284,9 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
     def _make_serializable(obj, path=''):
-        if isinstance(obj, bytes) or (isinstance(obj, str) and len(obj) > 1024):
+        if is_download(obj):
             return {
-                '__download__': _cacheable_api_path(f'episode/{episode_id}/static/{path}'),
+                '__download__': f'api/episode/{episode_id}/static/{path}',
                 'size': len(obj),
                 'type': 'bytes' if isinstance(obj, bytes) else 'text',
             }
@@ -333,7 +306,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'viewer_path': f'/static/rerun/{rr.__version__}/index.html',
             'task': episode.static.get(keys.TASK, None),
-            'rrd_path': _cacheable_api_path(f'episode_rrd/{episode_id}'),
+            'rrd_path': f'api/episode_rrd/{episode_id}',
             'episode_path': meta.get(META_PATH),
             'episode_size_mb': size_mb_display,
             'static_data': _make_serializable(episode.static),
@@ -518,11 +491,11 @@ async def api_groups(request: Request, suffix: str):  # noqa: C901
             active_filters[filter_key] = filter_value
 
     groups = defaultdict(list)
-    group_filters = {key: {'label': label or key, 'values': set()} for key, label in cfg.group_filter_keys.items()}
+    group_filters = {key: {'label': label or key, FILTER_VALUES: set()} for key, label in cfg.group_filter_keys.items()}
     for episode in ds:
         # Always collect all filter values regardless of active filters
         for filter_key in cfg.group_filter_keys:
-            group_filters[filter_key]['values'].add(episode.static.get(filter_key))
+            group_filters[filter_key][FILTER_VALUES].add(episode.static.get(filter_key))
         # Apply filters for grouping
         match = all(episode.static[key] == value for key, value in active_filters.items())
         if match:
@@ -534,7 +507,7 @@ async def api_groups(request: Request, suffix: str):  # noqa: C901
         rows.append({**key_fields, '__meta__': {'group': key_fields}, **cfg.group_fn(episodes)})
 
     episodes = get_episodes_list(rows, cfg.format_table.keys(), formatters=formatters, defaults=defaults)
-    result = {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
+    result = {'columns': columns, 'episodes': episodes, GROUP_FILTERS: group_filters}
     if cfg.default_sort:
         result['default_sort'] = asdict(cfg.default_sort)
     _api_cache[cache_key] = result
@@ -744,6 +717,26 @@ def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
     return _SelfSignedCert(keyfile, certfile)
 
 
+def configure_tables(
+    *,
+    root: str,
+    cache_dir: Path,
+    ep_table_cfg: TableConfig | None,
+    group_tables: dict[str, GroupTableConfig] | None,
+    home_page: str | None,
+    max_resolution: int,
+    max_hz: float,
+) -> None:
+    """Set what the tables show and how a recording is built; see `main` for what each value does."""
+    app_state['root'] = root
+    app_state['cache_dir'] = cache_dir
+    app_state['episode_table_cfg'] = ep_table_cfg or {}
+    app_state['group_tables_cfg'] = group_tables or {}
+    app_state['max_resolution'] = max_resolution
+    app_state['max_hz'] = max_hz
+    app_state['home_page'] = home_page
+
+
 @cfn.config(
     dataset=positronic.cfg.ds.local_all,
     ep_table_cfg=default_table,
@@ -767,7 +760,6 @@ def main(
     title: str = '',
     show_paths: bool = True,
     static_export: bool = False,
-    build_id: str = '',
 ):
     """Visualize a Dataset with Rerun.
 
@@ -819,8 +811,6 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         static_export: Whether the pages ask for the file names a static export writes
-        build_id: Names one build, in the `secrets.token_urlsafe` alphabet. With static_export,
-            the episode RRD and the static-field downloads sit under it
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -828,17 +818,17 @@ def main(
 
     # configuronic passes this CLI value through uncoerced.
     cache_root = Path(cache_dir).expanduser()
-    app_state['root'] = root
-    app_state['cache_dir'] = cache_root
-    app_state['loading_state'] = True
-    app_state['episode_table_cfg'] = ep_table_cfg or {}
-    app_state['group_tables_cfg'] = group_tables or {}
-    app_state['max_resolution'] = max_resolution
-    app_state['max_hz'] = max_hz
-    app_state['home_page'] = home_page
-    configure_pages(
-        base_href=base_href, title=title, show_paths=show_paths, static_export=static_export, build_id=build_id
+    configure_tables(
+        root=root,
+        cache_dir=cache_root,
+        ep_table_cfg=ep_table_cfg,
+        group_tables=group_tables,
+        home_page=home_page,
+        max_resolution=max_resolution,
+        max_hz=max_hz,
     )
+    configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=static_export)
+    app_state['loading_state'] = True
 
     if reset_cache and cache_root.exists():
         logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')
@@ -852,9 +842,7 @@ def main(
         try:
             ds = CachedDataset(dataset)
             logging.info(f'Dataset loaded. Episodes: {len(ds)}')
-            app_state['dataset'] = ds
-            _api_cache.clear()
-            app_state['loading_state'] = False
+            install_dataset(ds)
         except Exception as e:
             logging.error(f'Failed to load dataset: {e}', exc_info=True)
             app_state['loading_state'] = False
