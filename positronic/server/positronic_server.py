@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -145,6 +145,36 @@ def _shown_root() -> str:
     return str(app_state['root']) if app_state['show_paths'] else ''
 
 
+def _route(endpoint: Callable, **params: str) -> str:
+    """The path `endpoint` answers at, relative to the base href."""
+    return app.url_path_for(endpoint.__name__, **params).removeprefix('/')
+
+
+def episodes_link() -> str:
+    return _route(episodes_view)
+
+
+def episode_link(episode_id: int) -> str:
+    return _route(episode_viewer, episode_id=str(episode_id))
+
+
+def episode_rrd_link(episode_id: int) -> str:
+    return _route(api_episode_rrd, episode_id=str(episode_id))
+
+
+def download_link(episode_id: int, field_path: str) -> str:
+    """The download's path; the field path is percent-encoded, so a `?`, a `#` or a space stays in the path."""
+    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=quote(field_path, safe='/'))
+
+
+def group_link(name: str) -> str:
+    return _route(grouped_view, suffix=name)
+
+
+def group_api_link(name: str) -> str:
+    return _route(api_groups, suffix=name)
+
+
 def _page_context() -> dict[str, Any]:
     """The template context every page shares."""
     home_page = app_state.get('home_page')
@@ -162,7 +192,7 @@ def _page_context() -> dict[str, Any]:
     for group_name in group_tables.keys():
         if group_name == home_page:
             continue  # Already added as home
-        url = f'groups/{group_name}'
+        url = group_link(group_name)
         label = group_name.replace('_', ' ').title()
         nav_items.append({'name': group_name, 'url': url, 'label': label})
 
@@ -192,7 +222,7 @@ async def index(request: Request):
         return templates.TemplateResponse(
             request,
             'grouped.html',
-            {'api_endpoint': f'api/groups/{home_page}', **_page_context(), 'current_page': home_page},
+            {'api_endpoint': group_api_link(str(home_page)), **_page_context(), 'current_page': home_page},
         )
     # Default: render episodes
     return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
@@ -292,7 +322,7 @@ async def episode_viewer(request: Request, episode_id: int):
     def _make_serializable(obj, path=''):
         if is_download(obj):
             return {
-                DOWNLOAD_LINK: f'api/episode/{episode_id}/static/{path}',
+                DOWNLOAD_LINK: download_link(episode_id, path),
                 'size': len(obj),
                 'type': 'bytes' if isinstance(obj, bytes) else 'text',
             }
@@ -312,7 +342,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'viewer_path': f'/static/rerun/{rr.__version__}/index.html',
             'task': episode.static.get(keys.TASK, None),
-            'rrd_path': f'api/episode_rrd/{episode_id}',
+            'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
             'episode_size_mb': size_mb_display,
             'static_data': _make_serializable(episode.static),
@@ -540,7 +570,7 @@ async def api_groups(request: Request, suffix: str):
 @app.get('/groups/{suffix}', response_class=HTMLResponse)
 async def grouped_view(request: Request, suffix: str):
     return templates.TemplateResponse(
-        request, 'grouped.html', {'api_endpoint': f'api/groups/{suffix}', **_page_context(), 'current_page': suffix}
+        request, 'grouped.html', {'api_endpoint': group_api_link(suffix), **_page_context(), 'current_page': suffix}
     )
 
 
@@ -769,6 +799,11 @@ def configure_tables(
     max_hz: float,
 ) -> None:
     """Set what the tables show and how a recording is built; see `main` for what each value does."""
+    for name in group_tables or {}:
+        if name in ('.', '..') or quote(name, safe='') != name:
+            raise ValueError(f'a group name is one URL path segment (letters, digits, "_", "-", "."), got {name!r}')
+    if home_page and home_page not in (group_tables or {}):
+        raise ValueError(f'home_page {home_page!r} names no group table; the tables are {sorted(group_tables or {})}')
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['episode_table_cfg'] = ep_table_cfg or {}

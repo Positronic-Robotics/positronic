@@ -94,8 +94,9 @@ function baseScopedKey(name) {
   return `${name}:${document.baseURI}`;
 }
 
-// A static export holds one file per filter set of a group table, and `index.json` beside them says
-// which file holds which set. The unfiltered flat table is one file, filtered in the browser.
+// A static export holds one file per filter set of a group table that some episode satisfies, and
+// `index.json` beside them says which file holds which set. The unfiltered flat table is one file,
+// filtered in the browser.
 const groupIndexes = new Map();
 
 // The index file, as `GROUP_INDEX_FILE` in export.py writes it, and the fields of an entry in it, as
@@ -118,8 +119,7 @@ function sameFilters(a, b) {
 async function exportedGroupFile(path, params) {
   const chosen = Object.fromEntries(Object.entries(params).filter(([, value]) => value));
   const entry = (await groupIndex(path)).find((item) => sameFilters(item[ENTRY_PARAMS], chosen));
-  if (!entry) throw new Error(`the export holds no ${path} file for ${JSON.stringify(chosen)}`);
-  return appUrl(`${path}/${entry[ENTRY_FILE]}`);
+  return entry ? appUrl(`${path}/${entry[ENTRY_FILE]}`) : null;  // no episode satisfies this filter set
 }
 
 async function apiUrl(path, params) {
@@ -144,7 +144,9 @@ async function loadDatasetInfo() {
 
 async function loadEpisodes(filters = {}) {
   const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
-  return fetchJSON(await apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null));
+  const url = await apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null);
+  if (!url) return { columns: state.columns, episodes: [] };
+  return fetchJSON(url);
 }
 
 // ---------------------------------------------------------------------------

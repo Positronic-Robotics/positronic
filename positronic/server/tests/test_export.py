@@ -27,14 +27,7 @@ from positronic.server.export import (
     large_file_links_under,
     validated_build_id,
 )
-from positronic.server.positronic_server import (
-    DOWNLOAD_LINK,
-    FILTER_VALUES,
-    GROUP_FILTERS,
-    ColumnConfig,
-    GroupTableConfig,
-    app_state,
-)
+from positronic.server.positronic_server import DOWNLOAD_LINK, ColumnConfig, GroupTableConfig, app_state
 
 OUTCOME = 'eval.outcome'
 OBJECT = 'eval.object'
@@ -56,6 +49,12 @@ GROUPS = {
         group_fn=lambda episodes: {'count': len(episodes)},
         format_table={OUTCOME: ColumnConfig(label='Outcome'), 'count': ColumnConfig(label='Episodes', format='%d')},
         group_filter_keys={ATTEMPT: 'Attempt'},
+    ),
+    'pairs': GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {'count': len(episodes)},
+        format_table={OUTCOME: ColumnConfig(label='Outcome'), 'count': ColumnConfig(label='Episodes', format='%d')},
+        group_filter_keys={OBJECT: 'Object', ATTEMPT: 'Attempt'},
     ),
 }
 
@@ -212,17 +211,29 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
 
 
-def test_every_filter_set_a_page_can_ask_for_is_listed_with_the_empty_one_first():
-    response = {GROUP_FILTERS: {'b': {FILTER_VALUES: ['1', '2']}, 'a': {FILTER_VALUES: ['x']}}}
+def test_every_filter_set_an_episode_satisfies_is_listed_once_with_the_empty_one_first():
+    episodes = [{'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 
-    assert list(filter_sets(response)) == [
-        {},
-        {'b': '1'},
-        {'b': '2'},
-        {'a': 'x'},
-        {'a': 'x', 'b': '1'},
-        {'a': 'x', 'b': '2'},
-    ]
+    assert filter_sets(episodes) == [{}, {'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+
+
+def test_a_filter_set_no_episode_satisfies_gets_no_file(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out, group_tables=GROUPS)
+
+    index = json.loads((out / 'api/groups/pairs' / GROUP_INDEX_FILE).read_text())
+    assert index[0]['params'] == {}
+    assert sorted(json.dumps(entry['params'], sort_keys=True) for entry in index[1:]) == sorted(
+        json.dumps(params, sort_keys=True)
+        for params in (
+            {OBJECT: OBJECTS[0]},
+            {OBJECT: OBJECTS[1]},
+            {ATTEMPT: '1'},
+            {ATTEMPT: '2'},
+            {OBJECT: OBJECTS[0], ATTEMPT: '1'},
+            {OBJECT: OBJECTS[1], ATTEMPT: '2'},
+        )
+    )
 
 
 def test_a_link_is_moved_in_the_nodes_a_page_carries_it_and_an_equal_value_is_not():
@@ -318,14 +329,6 @@ def test_an_export_leaves_the_app_state_as_it_found_it(dataset, tmp_path):
     assert app_state == before
 
 
-def test_a_group_name_that_would_leave_the_output_directory_is_refused(dataset, tmp_path):
-    out = tmp_path / 'out'
-
-    with pytest.raises(ValueError, match='outside'):
-        an_export(dataset, out, group_tables={'../..': GROUPS['outcomes']})
-    assert not (tmp_path / 'index.html').exists()
-
-
 class _Reversed(Dataset):
     def __init__(self, dataset: Dataset):
         self._dataset = dataset
@@ -347,18 +350,31 @@ def test_a_full_dataset_holding_other_episodes_at_the_shown_indexes_is_refused(d
     assert not (tmp_path / 'reversed').exists() and not (tmp_path / 'shorter').exists()
 
 
-ESCAPED_KEY = 'notes & é'
+ESCAPED_KEY = 'notes & é?'
 
 
-def test_a_download_whose_field_name_a_page_escapes_is_linked_and_written(tmp_path):
+def test_a_download_whose_field_name_a_url_cannot_carry_as_it_is_is_linked_encoded_and_written(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', ESCAPED_KEY: 'n' * 2000})
     out = tmp_path / 'out'
 
     written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
 
-    assert '"build/bld/api/episode/0/static/notes \\u0026 \\u00e9"' in (out / 'episode/0/index.html').read_text()
+    assert '"build/bld/api/episode/0/static/notes%20%26%20%C3%A9%3F"' in (out / 'episode/0/index.html').read_text()
     assert f'build/bld/api/episode/0/static/{ESCAPED_KEY}' in written
     assert (out / 'build/bld/api/episode/0/static' / ESCAPED_KEY).read_bytes() == b'n' * 2000
+
+
+def test_a_group_name_that_is_not_one_url_path_segment_is_refused(dataset, tmp_path):
+    for name in ('a?b', 'a#b', 'a b', 'a/b', '.', '../..'):
+        with pytest.raises(ValueError, match='group name'):
+            an_export(dataset, tmp_path / 'out', group_tables={name: GROUPS['outcomes']})
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):
+    with pytest.raises(ValueError, match='home_page'):
+        an_export(dataset, tmp_path / 'out', group_tables=GROUPS, home_page='nope')
+    assert not (tmp_path / 'out').exists()
 
 
 def test_the_page_script_spells_a_group_index_as_the_export_writes_it():
