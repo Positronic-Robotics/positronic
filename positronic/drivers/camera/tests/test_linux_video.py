@@ -1,5 +1,8 @@
 """What the Linux video driver puts on its frame port, from the buffers a device hands it."""
 
+import io
+
+import av
 import numpy as np
 import pytest
 
@@ -60,20 +63,22 @@ class FakeDevice:
 
 @pytest.fixture
 def device(monkeypatch):
+    """The class the driver opens, replaced by one a test hands frames to. Pass it to ``_driven``."""
     monkeypatch.setattr(linux_video, 'Device', FakeDevice)
+    FakeDevice.to_serve, FakeDevice.opened = [], None
     return FakeDevice
 
 
-def _driven(frames, **kwargs):
-    """A driver over a device carrying ``frames``, with its port recorded, run to exhaustion."""
+def _driven(device, frames, **kwargs):
+    """A driver over ``device`` carrying ``frames``, with its port recorded, run to exhaustion."""
     camera = linux_video.LinuxVideo(
         device_path='/dev/null', width=WIDTH, height=HEIGHT, fps=30, pixel_format='YUYV', **kwargs
     )
     emitted = RecordingEmitter()
     camera.frame._bind(emitted)
-    FakeDevice.to_serve = frames
+    device.to_serve = frames
     list(camera.run(StopFlag(), pimm.world.SystemClock()))
-    opened = FakeDevice.opened
+    opened = device.opened
     assert opened is not None, 'the driver opened no device'
     return emitted, opened
 
@@ -84,7 +89,7 @@ def _yuyv(luma: int) -> bytes:
 
 
 def test_a_yuyv_buffer_reaches_the_port_as_an_image(device):
-    emitted, _ = _driven([FakeFrame(_yuyv(200), linux_video.PixelFormat.YUYV)])
+    emitted, _ = _driven(device, [FakeFrame(_yuyv(200), linux_video.PixelFormat.YUYV)])
 
     assert len(emitted.emitted) == 1
     _, adapter = emitted.emitted[0]
@@ -96,20 +101,20 @@ def test_a_yuyv_buffer_reaches_the_port_as_an_image(device):
 def test_every_buffer_is_one_frame(device):
     frames = [FakeFrame(_yuyv(v), linux_video.PixelFormat.YUYV) for v in (50, 120, 200)]
 
-    emitted, _ = _driven(frames)
+    emitted, _ = _driven(device, frames)
 
     assert len(emitted.emitted) == 3
 
 
 def test_the_device_is_set_to_what_the_driver_was_asked_for(device):
-    _, opened = _driven([FakeFrame(_yuyv(100), linux_video.PixelFormat.YUYV)])
+    _, opened = _driven(device, [FakeFrame(_yuyv(100), linux_video.PixelFormat.YUYV)])
 
     assert opened.format == ('capture', WIDTH, HEIGHT, 'YUYV')
     assert opened.fps == ('capture', 30)
 
 
 def test_the_device_is_closed_when_the_frames_run_out(device):
-    _, opened = _driven([FakeFrame(_yuyv(100), linux_video.PixelFormat.YUYV)])
+    _, opened = _driven(device, [FakeFrame(_yuyv(100), linux_video.PixelFormat.YUYV)])
 
     assert opened.closed
 
@@ -119,7 +124,7 @@ def test_a_buffer_short_of_a_frame_is_dropped(device, caplog):
     short = FakeFrame(_yuyv(200)[: WIDTH * HEIGHT], linux_video.PixelFormat.YUYV)
     whole = FakeFrame(_yuyv(200), linux_video.PixelFormat.YUYV)
 
-    emitted, _ = _driven([short, whole, short])
+    emitted, _ = _driven(device, [short, whole, short])
 
     assert len(emitted.emitted) == 1
     assert 'short of a frame' in caplog.text
@@ -129,7 +134,43 @@ def test_a_buffer_short_of_a_frame_is_dropped(device, caplog):
 def test_a_buffer_of_three_bytes_a_pixel_is_taken_as_it_is(device):
     raw = bytes(range(WIDTH * HEIGHT * 3))
 
-    emitted, _ = _driven([FakeFrame(raw, linux_video.PixelFormat.RGB24)])
+    emitted, _ = _driven(device, [FakeFrame(raw, linux_video.PixelFormat.RGB24)])
 
     _, adapter = emitted.emitted[0]
     np.testing.assert_array_equal(adapter.array, np.frombuffer(raw, dtype=np.uint8).reshape(HEIGHT, WIDTH, 3))
+
+
+def _h264(count: int) -> bytes:
+    """An H.264 stream of ``count`` frames, as a camera that compresses would hand it over."""
+    stream = io.BytesIO()
+    container = av.open(stream, 'w', format='h264')
+    encoded = container.add_stream('libx264', rate=30)
+    encoded.width, encoded.height, encoded.pix_fmt = WIDTH * 16, HEIGHT * 16, 'yuv420p'
+    encoded.options = {'tune': 'zerolatency'}  # a camera streams frames in order, and so must the fixture
+    for i in range(count):
+        image = np.full((HEIGHT * 16, WIDTH * 16, 3), i * 40, np.uint8)
+        for packet in encoded.encode(av.VideoFrame.from_ndarray(image, format='rgb24')):
+            container.mux(packet)
+    for packet in encoded.encode(None):
+        container.mux(packet)
+    container.close()
+    return stream.getvalue()
+
+
+def test_a_compressed_buffer_the_decoder_holds_back_is_not_counted_short(device, caplog):
+    """The decoder gives no image until it has one, and a whole buffer is not a truncated one."""
+    head = FakeFrame(_h264(4)[:64], linux_video.PixelFormat.H264)
+
+    emitted, _ = _driven(device, [head])
+
+    assert emitted.emitted == []
+    assert 'short of a frame' not in caplog.text
+
+
+def test_every_image_of_one_buffer_keeps_its_own_pixels(device):
+    """One buffer decoding to several images must not hand the same adapter, and its pixels, to each."""
+    emitted, _ = _driven(device, [FakeFrame(_h264(4), linux_video.PixelFormat.H264)])
+
+    greys = [adapter.array.mean() for _, adapter in emitted.emitted]
+    assert len(greys) > 1, 'the buffer decoded to a single image, so nothing was shared'
+    assert len({round(grey) for grey in greys}) == len(greys), f'images share their pixels: {greys}'
