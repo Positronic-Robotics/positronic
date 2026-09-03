@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import pimm.world
 from pimm.core import (
     ControlSystem,
     ControlSystemEmitter,
@@ -97,6 +98,23 @@ class DummySMValue(SMCompliant):
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
         self.value = struct.unpack('d', buffer[:8])[0]
+
+
+def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypatch):
+    """An interrupt can land inside a call to the manager, and that connection then holds half a message.
+
+    Reading it again returns what another call asked for, so a reader takes a value off a channel it never
+    subscribed to. A process that has taken one neither reads nor sends after it.
+    """
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        emitter.emit('before', ts=1)
+        assert receiver.read() is not None
+
+        monkeypatch.setattr(pimm.world, '_interrupted', True)
+
+        emitter.emit('after', ts=2)  # dropped, not sent
+        assert receiver.read() is None
 
 
 class TestQueueEmitter:
