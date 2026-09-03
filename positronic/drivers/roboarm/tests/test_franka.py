@@ -177,9 +177,14 @@ def _drive(loop, clock: MockClock | None = None) -> None:
             clock.advance(wait.seconds)
 
 
+def _safe_inputs(driver: franka.Robot) -> franka._SafeInputs:
+    """The watch the driver builds for itself, from the Desk credentials its configuration reaches."""
+    return franka._SafeInputs(driver._ip, driver._desk_credentials)
+
+
 def _arm(driver: franka.Robot, clock: MockClock) -> franka._Arm:
     """The driver's arm, watching the safe inputs its own configuration reaches."""
-    return driver._arm(StopFlag(), clock, driver._safe_inputs())
+    return driver._arm(StopFlag(), clock, _safe_inputs(driver))
 
 
 def _run_move(travel, clock: MockClock) -> franka.MoveStatus:
@@ -689,7 +694,7 @@ def test_a_world_that_comes_down_while_a_safe_input_is_triggered_ends_the_move(d
     stop = StopFlag()
     clock = MockClock()
     desk.safe_inputs['x31'] = STOPPED
-    travel = driver._arm(stop, clock, driver._safe_inputs()).move_to(JOGGED, None)
+    travel = driver._arm(stop, clock, _safe_inputs(driver)).move_to(JOGGED, None)
 
     assert isinstance(next(travel), pimm.Sleep)
     stop.stopped = True
@@ -749,7 +754,7 @@ def test_a_safe_input_that_stops_every_attempt_gives_the_move_up(desk):
 def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
     """Which is the run's only trace of a trip: the control box logs one on its own separate clock."""
     caplog.set_level(logging.INFO)
-    watch = _driver(FakeArm(PARK))._safe_inputs()
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
 
     watch.sample()
     desk.safe_inputs['x31'] = STOPPED
@@ -800,7 +805,7 @@ def test_a_safe_input_triggered_before_the_move_started_still_answers_for_its_re
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    watch = driver._safe_inputs()
+    watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()  # the watch reads the trip before the move is ever dispatched
     desk.safe_inputs['x31'] = CLEAR  # and it clears before the failed move reads for itself
@@ -828,7 +833,7 @@ def test_a_world_that_comes_down_as_the_safe_input_clears_ends_the_move(desk):
         return {franka.SAFE_INPUT_STATE: {'x31': reading}}
 
     desk.safety_status = read
-    travel = driver._arm(stop, clock, driver._safe_inputs()).move_to(JOGGED, None)
+    travel = driver._arm(stop, clock, _safe_inputs(driver)).move_to(JOGGED, None)
 
     with pytest.raises(RuntimeError, match='stopped short'):
         _run_move(travel, clock)
@@ -895,7 +900,7 @@ def test_a_desk_that_stops_answering_leaves_the_move_the_outcome_it_had(desk):
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    watch = driver._safe_inputs()
+    watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()  # a trip is on the record, and then the control box goes quiet
 
@@ -929,7 +934,7 @@ def test_a_trip_left_on_a_stale_reading_does_not_answer_for_a_later_refusal(desk
         return {franka.SAFE_INPUT_STATE: answer}
 
     desk.safety_status = read
-    watch = driver._safe_inputs()
+    watch = _safe_inputs(driver)
     watch.sample()  # a trip is on the record
     watch.sample()  # and the reading goes stale still holding it
     travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
@@ -947,7 +952,7 @@ def test_a_trip_that_cleared_before_the_target_went_out_does_not_answer_for_the_
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    watch = driver._safe_inputs()
+    watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()  # the trip is on the record when the move begins
     desk.safe_inputs['x31'] = CLEAR
@@ -970,7 +975,7 @@ def test_a_trip_that_cleared_before_the_target_went_out_does_not_answer_for_the_
 def test_a_failed_reading_is_published_under_the_sampling_lock(desk, monkeypatch):
     """The watch thread and a failed move both sample, so a failure published after the lock is released
     can land on top of a good reading another sampler took meanwhile."""
-    watch = _driver(FakeArm(PARK))._safe_inputs()
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
     locked_while_publishing: list[bool] = []
     monkeypatch.setattr(franka.logger, 'error', lambda *_: locked_while_publishing.append(watch._lock.locked()))
 

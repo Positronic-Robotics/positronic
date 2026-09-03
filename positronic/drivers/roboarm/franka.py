@@ -650,12 +650,8 @@ class Robot(pimm.ControlSystem):
             safe_inputs,
         )
 
-    def _safe_inputs(self) -> _SafeInputs:
-        """The watch on the control box's safe inputs. It reads nothing where the driver does not manage Desk."""
-        return _SafeInputs(self._ip, self._desk_credentials)
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        safe_inputs = self._safe_inputs()
+        safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
         with self._desk_session(), safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
             robot = arm.robot
             self._init_robot(robot)
