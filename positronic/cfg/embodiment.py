@@ -70,12 +70,7 @@ def yam(robot_arm, cameras):
 
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.trossen,
-    # The views the station records a demonstration with. A policy reads what it was trained on, so these
-    # are the cameras `trossencfg` names, under the same keys.
-    cameras={
-        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.d405_wrist_right,
-        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.d405_scene_top,
-    },
+    cameras=dict(positronic.cfg.hardware.camera.TROSSEN_STATION_VIEWS),
 )
 def trossen(robot_arm, cameras):
     """Real single-arm Trossen WidowX AI: the arm driver carries the gripper (they share one controller)."""

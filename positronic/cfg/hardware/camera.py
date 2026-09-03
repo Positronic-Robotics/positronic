@@ -1,5 +1,7 @@
 import configuronic as cfn
 
+from positronic import keys
+
 
 @cfn.config()
 def linux_video(**kwargs):
@@ -36,6 +38,11 @@ d405_wrist_right = d405_wrist_left.override(device_path=f'{_D405}251323070565-vi
 d405_scene_top = d405_wrist_left.override(device_path=f'{_D405}260323072626-video-index4')
 
 d405_scene_bottom = d405_wrist_left.override(device_path=f'{_D405}260323072970-video-index4')
+
+# The views the station records a demonstration with: the wrist camera of the arm it drives, and the one
+# that looks down on the table. The other two belong to the other arm. Data collection and the embodiment
+# read this one mapping, because a policy is fed what it was trained on or it is fed nothing.
+TROSSEN_STATION_VIEWS = {keys.WRIST_IMAGE: d405_wrist_right, keys.EXTERIOR_IMAGE: d405_scene_top}
 
 
 @cfn.config()

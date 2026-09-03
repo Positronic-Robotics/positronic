@@ -1,3 +1,4 @@
+import logging
 import pickle
 from collections.abc import Callable
 from importlib import import_module
@@ -8,13 +9,24 @@ import pytest
 import pimm
 from pimm.core import ControlSystem
 
+logger = logging.getLogger(__name__)
+
+_OURS = ('positronic', 'pimm')
+
 
 def _optional_import(module: str, symbol: str) -> Any | None:
+    """``symbol``, or ``None`` where the vendor package it needs is not usable on this machine.
+
+    A vendor that is installed but cannot load — its own native library is missing — leaves this station
+    without the component just as an absent package does. A project module that fails to import is a broken
+    build rather than a missing vendor, and is not one of those.
+    """
     try:
         return getattr(import_module(module), symbol)
-    # A vendor that is installed but cannot load — its own native library is missing — leaves this station
-    # without the component just as an absent package does.
-    except ImportError:  # pragma: no cover - optional dependency
+    except ImportError as e:  # pragma: no cover - optional dependency
+        if (e.name or '').split('.')[0] in _OURS:
+            raise
+        logger.error('%s is not available: %s', module, e)
         return None
 
 

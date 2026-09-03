@@ -90,6 +90,22 @@ def test_the_tracker_follows_a_hand_that_means_it():
     assert np.linalg.norm(where.translation) > 0.19
 
 
+def test_the_tracker_reads_a_negated_quaternion_as_the_turn_it_is():
+    """A rotation and its negated quaternion are the same turn, and a hand holding still sends either."""
+    tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
+    tracker.turn_on(geom.Transform3D())
+    held = geom.Rotation.from_rotvec(np.array([0.01, 0.0, 0.0]))
+    barely_moved = geom.Rotation.from_rotvec(np.array([0.02, 0.0, 0.0]))
+    negated = geom.Rotation.from_quat(-barely_moved.as_quat)  # the same turn, written the other way
+
+    first = tracker.update(geom.Transform3D(rotation=held), 0)
+    second = tracker.update(geom.Transform3D(rotation=negated), 10_000_000)
+
+    # A rotation matrix reads the same for a quaternion and its negative, so it is what the two are alike in
+    swing = float(np.abs(first.rotation.as_rotation_matrix - second.rotation.as_rotation_matrix).max())
+    assert swing < 0.02, f'the arm turned where the hand barely moved, by {swing:.3f} of a rotation matrix'
+
+
 def test_data_collection_records_task_metadata(tmp_path, world):
     call_count = 0
 

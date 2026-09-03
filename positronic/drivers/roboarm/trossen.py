@@ -453,7 +453,13 @@ class _Arm(DriverRun[command.CommandType]):
             self._target, self._arm_unsent = self._target + step, True
 
     def hold_grip(self, grip: float) -> None:
-        """Hold the fingers at ``grip``."""
+        """Hold the fingers at ``grip``, and refuse one that is not a number.
+
+        ``np.clip`` carries a NaN through, and the controller takes whatever finger position it is handed.
+        """
+        if not np.isfinite(grip):
+            self.complain(f'The arm at {self.ip} was asked to grip at {grip}', key='grip refused')
+            return
         self._grip_target = float(np.clip(grip, 0.0, 1.0))
         self._grip_unsent = True
 
@@ -537,6 +543,9 @@ class _Arm(DriverRun[command.CommandType]):
                 target = self._ik(delta_cmd.apply(from_pose), streamed=streamed)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+        # A shorter target broadcasts across the limits and moves every joint; a NaN clips to itself.
+        if target.shape != (len(_JOINT_NAMES),) or not np.all(np.isfinite(target)):
+            raise ValueError(f'{cmd} asks the arm for {target}, and not for {len(_JOINT_NAMES)} finite joints')
         return np.clip(target, self._q_lower, self._q_upper)
 
     def track(self, cmd: command.CommandType) -> None:

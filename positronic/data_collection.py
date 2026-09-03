@@ -1,6 +1,6 @@
 import logging
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -109,6 +109,10 @@ class _Tracker:
         self._steady_at = ts_ns
         share = step / (step + 1.0 / (2.0 * np.pi * _HAND_CUTOFF_HZ))
         turn = (self._steady.rotation.inv * pose.rotation).as_rotvec
+        # A quaternion and its negative are the same turn, and `as_rotvec` reads the negative one as
+        # nearly a full turn the other way. The hand went the short way round.
+        if (angle := float(np.linalg.norm(turn))) > np.pi:
+            turn = turn * (1.0 - 2.0 * np.pi / angle)
         self._steady = geom.Transform3D(
             self._steady.translation + share * (pose.translation - self._steady.translation),
             self._steady.rotation * geom.Rotation.from_rotvec(share * turn),
@@ -181,6 +185,25 @@ class OperatorPosition(Enum):
     FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
     # map xyz -> zxy + flip x and y
     BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
+
+
+class SessionEvent(Enum):
+    """What the operator asks of the session itself, by whatever device is to hand."""
+
+    # Start the recording, or stop the one that runs.
+    RECORD = 'record'
+    # Put the arm back at its start pose, and abandon the recording that runs.
+    READY = 'ready'
+    # Put the arm where it rests, and abandon the recording that runs.
+    PARK = 'park'
+
+
+# What a session plays at the operator, from the sounds the package carries.
+_SOUNDS = Path(package_assets_path('assets/sounds'))
+_RECORDING_STARTED = _SOUNDS / 'recording-has-started.wav'
+_RECORDING_STOPPED = _SOUNDS / 'recording-has-stopped.wav'
+_RECORDING_ABANDONED = _SOUNDS / 'recording-has-been-aborted.wav'
+_SOMETHING_WENT_WRONG = _SOUNDS / 'error-occurred.wav'
 
 
 class DataCollectionController(pimm.ControlSystem):
@@ -292,13 +315,68 @@ class DataCollectionController(pimm.ControlSystem):
         logging.info('Taking the rig to rest')
         yield from self._travel(roboarm.command.JointPosition(self._park_joints), should_stop)
 
-    def _abandon(self, recording: bool, abort_wav_path: Path) -> bool:
+    def _abandon(self, recording: bool) -> bool:
         """Give up the recording that runs, if one does, and answer that none runs now."""
         if recording:
             self.ds_agent_commands.emit(DsWriterCommand.ABORT())
-            self.sound.emit(abort_wav_path)
+            self.sound.emit(_RECORDING_ABANDONED)
             logging.info('The recording was abandoned')
         return False
+
+    def _recorded(self, recording: bool) -> bool:
+        """Start a recording, or stop the one that runs; answer whether one runs now."""
+        if recording:
+            self.ds_agent_commands.emit(DsWriterCommand.STOP())
+            self.sound.emit(_RECORDING_STOPPED)
+            logging.info('The recording stopped')
+        else:
+            meta = dict(self._static_meta)
+            meta.update(self.robot_meta_in.value)
+            meta.update(self.metadata_getter())
+            self.ds_agent_commands.emit(DsWriterCommand.START(self._output_path, meta))
+            self.sound.emit(_RECORDING_STARTED)
+            logging.info('The recording started')
+        return not recording
+
+    def _tracked(self, source: _Tracker, state: pimm.Message[RoboarmState] | None) -> None:
+        """Follow the hand, or stop following it. An arm that has not said where it stands cannot be left."""
+        if source.on:
+            source.turn_off()
+        elif state is None:
+            logging.warning('The arm has not said where it stands, so there is nothing to follow from')
+        else:
+            source.turn_on(state.data.ee_pose)
+        logging.info('Tracking is %s', 'on' if source.on else 'off')
+
+    def _readied(
+        self, source: Any, recording: bool, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, bool]:
+        """Take the rig to its start pose, giving up the recording and the tracking first."""
+        recording = self._abandon(recording)
+        source.turn_off()
+        try:
+            yield from self._ready(should_stop)
+            if isinstance(source, _Follow):
+                source.arm()
+        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+        except Exception as e:
+            logging.error(f'The rig was not readied: {e}')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
+        return recording
+
+    def _parked(
+        self, source: Any, recording: bool, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, bool]:
+        """Take the rig to rest, giving up the recording and the tracking first."""
+        recording = self._abandon(recording)
+        source.turn_off()
+        try:
+            yield from self._park(should_stop)
+        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+        except Exception as e:
+            logging.error(f'The rig was not parked: {e}')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
+        return recording
 
     def _from_hand(self, tracker: _Tracker, hands: set[str], buttons: ButtonHandler) -> tuple[Any, float | None]:
         """What the hand asks the arm for, and what it holds the grip at.
@@ -331,13 +409,25 @@ class DataCollectionController(pimm.ControlSystem):
             return None, grip
         return roboarm.command.JointPosition(leader), grip
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        sounds = Path(package_assets_path('assets/sounds'))
-        start_wav_path = sounds / 'recording-has-started.wav'
-        end_wav_path = sounds / 'recording-has-stopped.wav'
-        abort_wav_path = sounds / 'recording-has-been-aborted.wav'
-        error_wav_path = sounds / 'error-occurred.wav'
+    def _asked_of_the_arm(
+        self, source: Any, hands: set[str], buttons: ButtonHandler, state: pimm.Message[RoboarmState] | None
+    ) -> tuple[Any, float | None]:
+        """What the operator asks the arm for, through whichever device drives it."""
+        if isinstance(source, _Tracker):
+            return self._from_hand(source, hands, buttons)
+        return self._from_leader(source, state)
 
+    def _drove(self, cmd: Any, state: pimm.Message[RoboarmState], in_error: bool) -> bool:
+        """Put ``cmd`` on the arm unless it is in error, and answer whether it is in error now."""
+        in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, in_error)
+        if entered_error:
+            logging.error('The arm is in error. It holds still until a reset clears the error.')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
+        if not in_error and cmd is not None:
+            self.robot_commands.emit(cmd)
+        return in_error
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         source = _Tracker(self.operator_position) if self.teleop is Teleop.HAND else _Follow()
         button_handler = ButtonHandler()
 
@@ -350,78 +440,25 @@ class DataCollectionController(pimm.ControlSystem):
                 state = self.robot_state.read()
                 asked = pimm.value_updated(self.session_events)
                 if button_handler.just_pressed('right_B') or asked is SessionEvent.RECORD:
-                    if not recording:
-                        meta = dict(self._static_meta)
-                        meta.update(self.robot_meta_in.value)
-                        meta.update(self.metadata_getter())
-                        self.ds_agent_commands.emit(DsWriterCommand.START(self._output_path, meta))
-                        self.sound.emit(start_wav_path)
-                        logging.info('The recording started')
-                    else:
-                        self.ds_agent_commands.emit(DsWriterCommand.STOP())
-                        self.sound.emit(end_wav_path)
-                        logging.info('The recording stopped')
-                    recording = not recording
+                    recording = self._recorded(recording)
                 elif isinstance(source, _Tracker) and button_handler.just_pressed('right_A'):
-                    if source.on:
-                        source.turn_off()
-                    elif state is None:
-                        logging.warning('The arm has not said where it stands, so there is nothing to follow from')
-                    else:
-                        source.turn_on(state.data.ee_pose)
-                    logging.info('Tracking is %s', 'on' if source.on else 'off')
+                    self._tracked(source, state)
                 elif (button_handler.just_pressed('right_stick') or asked is SessionEvent.READY) and not self._umi:
-                    recording = self._abandon(recording, abort_wav_path)
-                    source.turn_off()
-                    try:
-                        yield from self._ready(should_stop)
-                        if isinstance(source, _Follow):
-                            source.arm()
-                    # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
-                    except Exception as e:
-                        logging.error(f'The rig was not readied: {e}')
-                        self.sound.emit(error_wav_path)
+                    recording = yield from self._readied(source, recording, should_stop)
                 elif asked is SessionEvent.PARK:
-                    recording = self._abandon(recording, abort_wav_path)
-                    source.turn_off()
-                    try:
-                        yield from self._park(should_stop)
-                    # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
-                    except Exception as e:
-                        logging.error(f'The rig was not parked: {e}')
-                        self.sound.emit(error_wav_path)
+                    recording = yield from self._parked(source, recording, should_stop)
 
-                if isinstance(source, _Tracker):
-                    cmd, grip = self._from_hand(source, hands, button_handler)
-                else:
-                    cmd, grip = self._from_leader(source, state)
+                cmd, grip = self._asked_of_the_arm(source, hands, button_handler, state)
                 if grip is not None:
                     self.target_grip.emit(grip)
-
                 if source.on and state is not None:
-                    in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, in_error)
-                    if entered_error:
-                        logging.error('The arm is in error. It holds still until a reset clears the error.')
-                        self.sound.emit(error_wav_path)
-                    if not in_error and cmd is not None:
-                        self.robot_commands.emit(cmd)
+                    in_error = self._drove(cmd, state, in_error)
 
                 yield pimm.Sleep(0.001)
 
             except pimm.NoValueException:
                 yield pimm.Sleep(0.001)
                 continue
-
-
-class SessionEvent(Enum):
-    """What the operator asks of the session itself, by whatever device is to hand."""
-
-    # Start the recording, or stop the one that runs.
-    RECORD = 'record'
-    # Put the arm back at its start pose, and abandon the recording that runs.
-    READY = 'ready'
-    # Put the arm where it rests, and abandon the recording that runs.
-    PARK = 'park'
 
 
 # The key that asks for each. An operator holding the leader has no hand free for these, so a second
@@ -729,12 +766,7 @@ def yamcfg(robot_arm, **kwargs):
     operator_position=OperatorPosition.BACK,
     # The station has no audio device, so the operator reads the recording state off the terminal.
     sound=None,
-    # The wrist camera of the arm this configuration drives, and the one that looks down on the table. The
-    # station carries two more, `d405_wrist_left` and `d405_scene_bottom`, which belong to the other arm.
-    cameras={
-        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.d405_wrist_right,
-        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.d405_scene_top,
-    },
+    cameras=dict(positronic.cfg.hardware.camera.TROSSEN_STATION_VIEWS),
     stream_video_to_webxr=keys.WRIST_IMAGE,
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
     park_joints=positronic.cfg.hardware.roboarm.TROSSEN_PARK_JOINTS,
