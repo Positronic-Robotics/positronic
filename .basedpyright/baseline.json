@@ -5452,22 +5452,6 @@
                 }
             },
             {
-                "code": "reportOptionalIterable",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportGeneralTypeIssues",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 33,

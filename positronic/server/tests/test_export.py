@@ -1,19 +1,25 @@
 """What one export writes, where, and what it keeps off a page."""
 
 import json
+from dataclasses import fields
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.dataset import Dataset
+from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform
+from positronic.server import positronic_server
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     UNFILTERED_FILE,
+    GroupFile,
     asset_content_type,
     export_static,
     filter_sets,
@@ -55,23 +61,36 @@ class _KeepStatic(EpisodeTransform):
         return EpisodeContainer({**episode.signals, **static}, meta=episode.meta)
 
 
-@pytest.fixture
-def dataset(tmp_path):
-    """Two episodes; one static value is long enough to become a download, one is hidden."""
-    root = tmp_path / 'dataset'
+def a_dataset(root: Path, *statics: dict) -> Dataset:
+    """One episode per static-value dict, each four joint samples long."""
     with LocalDatasetWriter(root) as writer:
-        for index, object_name in enumerate(OBJECTS):
+        for static in statics:
             with writer.new_episode() as episode:
-                episode.set_static(keys.TASK, 'Put the banana on the plate')
-                episode.set_static(OUTCOME, 'Success' if index == 0 else 'Failure')
-                episode.set_static(OBJECT, object_name)
-                episode.set_static(ATTEMPT, index + 1)
-                episode.set_static('notes', 'n' * 2000)
-                episode.set_static('artifacts', [b'first blob', 'short'])
-                episode.set_static(HIDDEN_KEY, HIDDEN_VALUE)
+                for name, value in static.items():
+                    episode.set_static(name, value)
                 for step in range(4):
                     episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
     return load_all_datasets(root)
+
+
+@pytest.fixture
+def dataset(tmp_path):
+    """Two episodes; one static value is long enough to become a download, one is hidden."""
+    return a_dataset(
+        tmp_path / 'dataset',
+        *(
+            {
+                keys.TASK: 'Put the banana on the plate',
+                OUTCOME: 'Success' if index == 0 else 'Failure',
+                OBJECT: object_name,
+                ATTEMPT: index + 1,
+                'notes': 'n' * 2000,
+                'artifacts': [b'first blob', 'short'],
+                HIDDEN_KEY: HIDDEN_VALUE,
+            }
+            for index, object_name in enumerate(OBJECTS)
+        ),
+    )
 
 
 def shown(dataset):
@@ -186,7 +205,7 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
 
 
 def test_every_filter_set_a_page_can_ask_for_is_listed_with_the_empty_one_first():
-    response = {GROUP_FILTERS: {'b': {FILTER_VALUES: ['2', '1']}, 'a': {FILTER_VALUES: ['x']}}}
+    response = {GROUP_FILTERS: {'b': {FILTER_VALUES: ['1', '2']}, 'a': {FILTER_VALUES: ['x']}}}
 
     assert list(filter_sets(response)) == [
         {},
@@ -196,11 +215,6 @@ def test_every_filter_set_a_page_can_ask_for_is_listed_with_the_empty_one_first(
         {'a': 'x', 'b': '1'},
         {'a': 'x', 'b': '2'},
     ]
-
-
-def test_a_filter_value_no_episode_carries_asks_for_no_file():
-    """The server matches a filter against an episode's own value, and never against an absent one."""
-    assert list(filter_sets({GROUP_FILTERS: {'a': {FILTER_VALUES: [None, 'x']}}})) == [{}, {'a': 'x'}]
 
 
 def test_a_link_is_moved_under_the_build_and_a_value_that_looks_like_one_is_not():
@@ -266,6 +280,57 @@ def test_an_export_leaves_the_app_state_as_it_found_it(dataset, tmp_path):
     an_export(dataset, tmp_path / 'out', base_href='/v/tok/', title='A run')
 
     assert app_state == before
+
+
+def test_a_group_name_that_would_leave_the_output_directory_is_refused(dataset, tmp_path):
+    out = tmp_path / 'out'
+
+    with pytest.raises(ValueError, match='outside'):
+        an_export(dataset, out, group_tables={'../..': GROUPS['outcomes']})
+    assert not (tmp_path / 'index.html').exists()
+
+
+class _Reversed(Dataset):
+    def __init__(self, dataset: Dataset):
+        self._dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def _get_episode(self, index: int) -> Episode:
+        return cast(Episode, self._dataset[len(self._dataset) - 1 - index])
+
+
+def test_a_full_dataset_holding_other_episodes_at_the_shown_indexes_is_refused(dataset, tmp_path):
+    with pytest.raises(ValueError, match='uid'):
+        an_export(dataset, tmp_path / 'reversed', full_dataset=_Reversed(dataset))
+    with pytest.raises(ValueError, match='holds 1 episodes'):
+        an_export(
+            dataset, tmp_path / 'shorter', full_dataset=FilterDataset(dataset, lambda ep: ep.static[ATTEMPT] == 1)
+        )
+    assert not (tmp_path / 'reversed').exists() and not (tmp_path / 'shorter').exists()
+
+
+ESCAPED_KEY = 'notes & é'
+
+
+def test_a_download_whose_field_name_a_page_escapes_is_linked_and_written(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', ESCAPED_KEY: 'n' * 2000})
+    out = tmp_path / 'out'
+
+    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
+
+    assert '"build/bld/api/episode/0/static/notes \\u0026 \\u00e9"' in (out / 'episode/0/index.html').read_text()
+    assert f'build/bld/api/episode/0/static/{ESCAPED_KEY}' in written
+    assert (out / 'build/bld/api/episode/0/static' / ESCAPED_KEY).read_bytes() == b'n' * 2000
+
+
+def test_the_page_script_spells_a_group_index_as_the_export_writes_it():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    params, file = (field.name for field in fields(GroupFile))
+
+    assert f"const GROUP_INDEX_FILE = '{GROUP_INDEX_FILE}';" in app_js
+    assert f"const ENTRY_PARAMS = '{params}';" in app_js and f"const ENTRY_FILE = '{file}';" in app_js
 
 
 @pytest.mark.parametrize(

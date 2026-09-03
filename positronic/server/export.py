@@ -17,11 +17,14 @@ from typing import cast
 
 import configuronic as cfn
 import pos3
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from jinja2.utils import htmlsafe_json_dumps
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     FILTER_VALUES,
@@ -49,9 +52,6 @@ GROUP_INDEX_FILE = 'index.json'
 UNFILTERED_FILE = 'all.json'
 # The app's own assets, at the server root, so every export a host serves shares one copy.
 ASSET_DIR = 'static'
-
-# The routes whose responses a page reads whole. `episodes` is filtered in the browser.
-_WHOLE_API_ROUTES = ('dataset_info', 'dataset_status', 'episodes')
 
 # The `secrets.token_urlsafe` alphabet: a build id is a path segment and sits inside a script string.
 _BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
@@ -87,6 +87,9 @@ class _Output:
         self.files: list[ExportedFile] = []
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or '..' in relative.parts:
+            raise ValueError(f'{path!r} would land outside {self.directory}')
         target = self.directory / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
@@ -101,39 +104,35 @@ def _fetch(client: TestClient, path: str, params: dict[str, str] | None = None) 
     return response.content, response.headers.get('content-type', '')
 
 
-def _filter_values(response: dict, key: str) -> list[str]:
-    """The values a group's filter offers, as the page sends them.
-
-    None is left out: the server compares a filter against an episode's own value, and no query
-    matches a value that is absent.
-    """
-    values = response.get(GROUP_FILTERS, {}).get(key, {}).get(FILTER_VALUES, [])
-    return sorted(str(value) for value in values if value is not None)
-
-
 def filter_sets(response: dict) -> Iterator[dict[str, str]]:
     """Every filter set a group page can ask for, the empty one first.
 
     Each key offers its values and the choice of not filtering on it, so k keys of v values each
     give (v+1)^k sets.
     """
-    keys = sorted(response.get(GROUP_FILTERS, {}))
-    options = [[None, *_filter_values(response, key)] for key in keys]
+    filters = response.get(GROUP_FILTERS, {})
+    keys = sorted(filters)
+    options = [[None, *filters[key][FILTER_VALUES]] for key in keys]
     for chosen in itertools.product(*options):
         yield {key: value for key, value in zip(keys, chosen, strict=True) if value is not None}
 
 
+def _large_file_path(link: str, build_id: str) -> str:
+    return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
+
+
+def _page_spelling(link: str) -> str:
+    """`link` as a page carries it: a quoted JSON string, escaped as Jinja's `tojson` writes one."""
+    return str(htmlsafe_json_dumps(link))
+
+
 def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> str:
-    """`html` with each of `links`, a quoted script string, moved under `build/<build_id>/`."""
+    """`html` with each of `links`, as a page spells them, moved under `build/<build_id>/`."""
     if not build_id:
         return html
     for link in links:
-        html = html.replace(f'"{link}"', f'"{BUILD_DIR}/{build_id}/{link}"')
+        html = html.replace(_page_spelling(link), _page_spelling(_large_file_path(link, build_id)))
     return html
-
-
-def _large_file_path(link: str, build_id: str) -> str:
-    return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
 
 
 def _episode_links(dataset: Dataset, index: int) -> list[str]:
@@ -157,7 +156,7 @@ def _write_pages(
         body, content_type = _fetch(client, f'/episode/{index}')
         page = body.decode()
         page_links = _episode_links(dataset, index)
-        if any(f'"{link}"' not in page for link in page_links):
+        if any(_page_spelling(link) not in page for link in page_links):
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
         out.write(f'episode/{index}/{PAGE_FILE}', moved.encode(), content_type)
@@ -197,6 +196,30 @@ def _write_assets(out: _Output) -> None:
         out.write(f'{ASSET_DIR}/{relative}', path.read_bytes(), asset_content_type(path))
 
 
+def _whole_api_routes() -> list[str]:
+    """The API routes a page reads whole: every GET under `api/` that takes no path parameter.
+
+    The flat episode table is one of them; a static page filters it in the browser.
+    """
+    return [
+        route.path.removeprefix('/')
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path.startswith(f'/{API_DIR}/') and not route.param_convertors
+    ]
+
+
+def _aligned(full: Dataset, shown: Dataset) -> Dataset:
+    """`full`, once it holds the episodes of `shown` at the same indexes, by uid."""
+    if len(full) != len(shown):
+        raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(shown)}')
+    for index in range(len(shown)):
+        full_uid = cast(Episode, full[index]).meta[META_UID]
+        shown_uid = cast(Episode, shown[index]).meta[META_UID]
+        if full_uid != shown_uid:
+            raise ValueError(f'full_dataset episode {index} has uid {full_uid!r} and dataset has {shown_uid!r}')
+    return full
+
+
 def export_static(
     dataset: Dataset,
     out_dir: Path,
@@ -217,15 +240,18 @@ def export_static(
     """Write the viewer for `dataset` under `out_dir` and give back every file written.
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
-    when given: the recording builder reads an episode's robot model out of its static values, so a
-    caller that hides static values from the pages passes the unhidden dataset here. `assets` writes
-    the app's own scripts, styles and viewer under `static/`, which every export at one host shares.
+    when given, which holds the same episodes in the same order: the recording builder reads an
+    episode's robot model out of its static values, so a caller that hides static values from the
+    pages passes the unhidden dataset here. `assets` writes the app's own scripts, styles and viewer
+    under `static/`, which every export at one host shares. An export holds the app's state for its
+    duration, so a second export in the process waits for it.
     """
     out = _Output(Path(out_dir))
     if out.directory.exists() and any(out.directory.iterdir()):
         raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
+    full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         configure_tables(
             root=get_dataset_root(dataset) or 'unknown_dataset',
@@ -242,13 +268,13 @@ def export_static(
         group_names = list(group_tables or {})
 
         links = _write_pages(client, out, group_names, shown, build_id)
-        for route in _WHOLE_API_ROUTES:
-            body, content_type = _fetch(client, f'/{API_DIR}/{route}')
-            out.write(f'{API_DIR}/{route}.json', body, content_type)
+        for route in _whole_api_routes():
+            body, content_type = _fetch(client, f'/{route}')
+            out.write(f'{route}.json', body, content_type)
         for name in group_names:
             _write_group(client, out, name)
 
-        install_dataset(CachedDataset(full_dataset) if full_dataset is not None else shown)
+        install_dataset(full)
         for link in links:
             body, content_type = _fetch(client, f'/{link}')
             out.write(_large_file_path(link, build_id), body, content_type)
