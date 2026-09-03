@@ -237,11 +237,11 @@ class _StoppedShort(RuntimeError):
     """
 
 
-class _SafeStop(Enum):
-    """Where the safe input that stopped a move stands, once the wait on it ends."""
+class _SafeStopWait(Enum):
+    """What a wait on the safe inputs leaves the move to do."""
 
-    CLEARED = auto()
-    STANDS = auto()
+    MAKE_THE_MOVE_AGAIN = auto()
+    KEEP_THE_FAILURE = auto()
 
 
 class _Arm(DriverRun[command.CommandType]):
@@ -358,16 +358,16 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
             self._refusals = 0
 
-    def _await_safe_stop(self, since: int, *, at_teardown: bool) -> Generator[pimm.Command, None, _SafeStop]:
+    def _await_safe_stop(self, since: int, *, at_teardown: bool) -> Generator[pimm.Command, None, _SafeStopWait]:
         """Read the safe inputs, then yield until one that tripped after ``since`` clears.
 
-        ``STANDS`` where nothing attributes the failure to a safe input, where the input stayed
-        triggered for ``_SAFE_STOP_WAIT_S``, and where the world came down while it waited.
+        ``KEEP_THE_FAILURE`` where nothing attributes the failure to a safe input, where the input
+        stayed triggered for ``_SAFE_STOP_WAIT_S``, and where the world came down while it waited.
         """
         watch = self.safe_inputs
         watch.sample()
         if not watch.tripped_since(since):
-            return _SafeStop.STANDS
+            return _SafeStopWait.KEEP_THE_FAILURE
         wait_s = self._SAFE_STOP_WAIT_S
         logger.warning(f'A safe input stopped the move; waiting up to {wait_s:.0f}s for it to clear')
         deadline = self.clock.now() + wait_s
@@ -376,12 +376,12 @@ class _Arm(DriverRun[command.CommandType]):
             # move rather than commanding a fresh one on its way out.
             if self.should_stop.value and not at_teardown:
                 logger.warning('The world stopped before the move could be made again; the move fails')
-                return _SafeStop.STANDS
+                return _SafeStopWait.KEEP_THE_FAILURE
             if watch.motion_permitted:
-                return _SafeStop.CLEARED
+                return _SafeStopWait.MAKE_THE_MOVE_AGAIN
             if self.clock.now() >= deadline:
                 logger.error(f'A safe input stayed triggered for {wait_s:.0f}s; the move fails')
-                return _SafeStop.STANDS
+                return _SafeStopWait.KEEP_THE_FAILURE
             yield pimm.Sleep(_SAFE_INPUT_POLL_S)
             watch.sample()
 
@@ -406,7 +406,8 @@ class _Arm(DriverRun[command.CommandType]):
                 # Read while the refused goal still carries its reason: the run loop does not tick inside a
                 # move, and both the wait below and the retry after it leave nothing for it to find.
                 self.note_refusals()
-                if (yield from self._await_safe_stop(self._mark, at_teardown=at_teardown)) is not _SafeStop.CLEARED:
+                outcome = yield from self._await_safe_stop(self._mark, at_teardown=at_teardown)
+                if outcome is _SafeStopWait.KEEP_THE_FAILURE:
                     raise
                 self.robot.recover_from_errors()  # the stop faulted the arm; the target is unchanged
                 logger.warning('Every safe input is clear; making the move again')
