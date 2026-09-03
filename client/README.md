@@ -12,18 +12,38 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.3.0"
+uv add "positronic-platform-client==0.4.0"
 ```
 
-`platform_client` never imports `positronic`. The commands a user drives it with — `positronic eval
-run` and `positronic account` — ship with `positronic`, which depends on this package rather
-than the other way round.
+`platform_client` never imports `positronic`. Registration ships here (below); the commands that
+drive an eval — `positronic eval run` and `positronic account` — ship with `positronic`, which
+depends on this package rather than the other way round.
+
+## Registering
+
+This package carries one command, `platform-register`, and it mints the API key everything else
+needs. It runs GitHub's device flow: it prints a short code and a URL, waits while you authorize it
+in a browser, and registers the account GitHub then names. Installing the package above puts it on
+your path.
+
+```bash
+export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
+platform-register --alias=<display name>
+export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
+```
+
+The token GitHub mints carries `read:user user:email`, so it reads your profile and your verified
+email. The platform reads the account once, mints a key, and keeps no GitHub token.
+
+`POSITRONIC_PLATFORM_URL` and `--platform-url` name a platform other than the default one, as
+everywhere else in this package.
 
 ## From the command line
 
-Nothing here has a command of its own. The user-facing side is `positronic`, and from a checkout it
-needs no installation step at all. `eval run` runs an eval here when given a policy, and on the
-platform when given a policy image:
+The rest of the user-facing side is `positronic`, and from a checkout it needs no installation step
+at all. `eval run` runs an eval here when given a policy, and on the platform when given a policy
+image. `account register` registers with a credential you already hold, where `platform-register`
+mints one from GitHub:
 
 ```bash
 export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
