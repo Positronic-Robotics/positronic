@@ -98,6 +98,10 @@ function baseScopedKey(name) {
 // which file holds which set. The unfiltered flat table is one file, filtered in the browser.
 const groupIndexes = new Map();
 
+// The fields of an index entry, as `GroupFile` in export.py writes them.
+const ENTRY_PARAMS = 'params';
+const ENTRY_FILE = 'file';
+
 async function groupIndex(path) {
   if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/index.json`)));
   return groupIndexes.get(path);
@@ -111,9 +115,9 @@ function sameFilters(a, b) {
 
 async function exportedGroupFile(path, params) {
   const chosen = Object.fromEntries(Object.entries(params).filter(([, value]) => value));
-  const entry = (await groupIndex(path)).find((item) => sameFilters(item.params, chosen));
+  const entry = (await groupIndex(path)).find((item) => sameFilters(item[ENTRY_PARAMS], chosen));
   if (!entry) throw new Error(`the export holds no ${path} file for ${JSON.stringify(chosen)}`);
-  return appUrl(`${path}/${entry.file}`);
+  return appUrl(`${path}/${entry[ENTRY_FILE]}`);
 }
 
 async function apiUrl(path, params) {
