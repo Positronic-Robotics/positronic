@@ -100,6 +100,31 @@ class DummySMValue(SMCompliant):
         self.value = struct.unpack('d', buffer[:8])[0]
 
 
+def test_an_interrupt_taken_inside_a_send_is_what_stops_the_process(monkeypatch):
+    """Nothing installs a handler in a process for it: the transport it interrupts is what records it.
+
+    A main-process control system reaches the same transports a background one does, so an interrupt that
+    tears a connection has to be noted where the tearing happens.
+    """
+    monkeypatch.setattr(pimm.world, '_interrupted', False)
+
+    def torn(data, ts):
+        raise KeyboardInterrupt
+
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)
+        emitter.emit('before', ts=1)
+        assert receiver.read() is not None
+
+        monkeypatch.setattr(emitter, '_emit_queue', torn)
+        with pytest.raises(KeyboardInterrupt):
+            emitter.emit('torn', ts=2)
+
+        assert pimm.world._interrupted, 'the interrupt went unrecorded'
+        assert receiver.read() is None
+
+
 def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypatch):
     """An interrupt can land inside a call to the manager, and that connection then holds half a message.
 
@@ -108,6 +133,7 @@ def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypat
     """
     with World() as world:
         emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)
         emitter.emit('before', ts=1)
         assert receiver.read() is not None
 

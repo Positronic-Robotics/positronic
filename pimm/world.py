@@ -6,12 +6,12 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
-import signal
 import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -143,8 +143,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, ts: int) -> bool:
-        if _interrupted:
-            return False
         msg = Message(data, ts)
         success = False
 
@@ -193,16 +191,19 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return True
 
     def emit(self, data: T, ts: int = -1):
-        ts = ts if ts >= 0 else self._clock.now_ns()
-        mode = self._ensure_mode(data)
-
-        if mode is TransportMode.SHARED_MEMORY:
-            if not isinstance(data, SMCompliant):
-                raise TypeError('Shared memory transport selected; data must implement SMCompliant')
-            self._emit_shared_memory(data, ts)
+        if _interrupted:
             return
+        with _noting_interrupt():
+            ts = ts if ts >= 0 else self._clock.now_ns()
+            mode = self._ensure_mode(data)  # itself a call to the manager, so it sits inside the guard
 
-        self._emit_queue(data, ts)
+            if mode is TransportMode.SHARED_MEMORY:
+                if not isinstance(data, SMCompliant):
+                    raise TypeError('Shared memory transport selected; data must implement SMCompliant')
+                self._emit_shared_memory(data, ts)
+                return
+
+            self._emit_queue(data, ts)
 
     def close(self) -> None:
         if self._closed:
@@ -230,10 +231,20 @@ class MultiprocessEmitter(SignalEmitter[T]):
 _interrupted = False
 
 
-def _note_interrupt(signum, frame):
+@contextmanager
+def _noting_interrupt() -> Iterator[None]:
+    """Record an interrupt taken inside the block, and let it go on.
+
+    A connection is torn by an interrupt that lands in the middle of a call over it, so every process that
+    reaches a transport records its own -- there is nowhere else the tearing can happen, and no process has
+    to have had a handler installed for it.
+    """
     global _interrupted
-    _interrupted = True
-    raise KeyboardInterrupt
+    try:
+        yield
+    except KeyboardInterrupt:
+        _interrupted = True
+        raise
 
 
 class MultiprocessReceiver(SignalReceiver[T]):
@@ -286,8 +297,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return self.transport_mode is TransportMode.SHARED_MEMORY
 
     def _read_queue(self) -> Message[T] | None:
-        if _interrupted:
-            return None
         try:
             message = self._queue.get_nowait()
         except Empty:
@@ -355,19 +364,22 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
 
     def read(self) -> Message[T] | None:
-        mode = self.transport_mode
-
-        if mode is TransportMode.SHARED_MEMORY:
-            return self._read_shared_memory()
-
-        message = self._read_queue()
-        if message is not None:
-            return message
-
-        if mode is TransportMode.UNDECIDED:
-            # No data yet; underlying transport still undecided.
+        if _interrupted:
             return None
-        return None
+        with _noting_interrupt():
+            mode = self.transport_mode  # itself a call to the manager, so it sits inside the guard
+
+            if mode is TransportMode.SHARED_MEMORY:
+                return self._read_shared_memory()
+
+            message = self._read_queue()
+            if message is not None:
+                return message
+
+            if mode is TransportMode.UNDECIDED:
+                # No data yet; underlying transport still undecided.
+                return None
+            return None
 
     def close(self) -> None:
         if self._closed:
@@ -488,7 +500,6 @@ class _CallAnsweringLoop:
 def _bg_wrapper(
     run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
-    signal.signal(signal.SIGINT, _note_interrupt)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
@@ -665,6 +676,28 @@ class World:
             self._advance_to(target_ns)
             yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
+    @overload
+    def connect(self, source: ControlSystemCaller[Req, Res], target: ControlSystemHandler[Req, Res]) -> None: ...
+
+    @overload
+    def connect(
+        self,
+        source: ControlSystemEmitter[T],
+        target: ControlSystemReceiver[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = ...,
+    ) -> None: ...
+
+    @overload
+    def connect(
+        self,
+        source: ControlSystemEmitter[T],
+        target: ControlSystemReceiver[U],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = ...,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[U]],
+    ) -> None: ...
+
     def connect(
         self,
         source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
@@ -686,7 +719,8 @@ class World:
             emitter_wrapper: Optional function to wrap the underlying SignalEmitter
                            before binding. Defaults to identity function.
             receiver_wrapper: Optional function to wrap the underlying SignalReceiver
-                            before binding. Defaults to identity function.
+                            before binding. Defaults to identity function. It is the only way the
+                            receiver may carry a type other than the emitter's.
 
         The wrapper functions allow for transformation or decoration of the
         underlying signal transport mechanisms, such as adding logging,

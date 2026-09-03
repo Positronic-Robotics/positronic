@@ -15,7 +15,7 @@ def wire(  # noqa: C901
     world: pimm.World,
     harness: pimm.ControlSystem,
     dataset_writer: DatasetWriter | None,
-    cameras: dict[str, pimm.SignalEmitter] | None,
+    cameras: dict[str, pimm.ControlSystemEmitter] | None,
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     gui: pimm.ControlSystem | None,
@@ -103,7 +103,7 @@ def wire_embodiment(
     dataset_writer: DatasetWriter | None,
     time_mode: TimeMode = TimeMode.CLOCK,
     privileged: dict[str, Observation] | None = None,
-    done: pimm.SignalEmitter | None = None,
+    done: pimm.ControlSystemEmitter | None = None,
 ):
     """Wire an embodiment to the Harness for the inference path.
 
