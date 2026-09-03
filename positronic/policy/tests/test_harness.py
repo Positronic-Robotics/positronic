@@ -1058,7 +1058,7 @@ def test_a_trial_does_not_end_until_the_rig_is_back_where_it_started(world):
     assert not answer.done(), 'the terminal landed while the return move was still in hand'
 
 
-# The diagnostic `_FailsNthAsk` fails an ask with.
+# libfranka's message when a reflex aborts a move.
 REFUSED_ASK_DIAGNOSTIC = 'motion aborted by reflex'
 
 
@@ -1082,9 +1082,9 @@ class _FailsNthAsk(pimm.ControlSystem):
 
 
 @pytest.mark.timeout(3.0)
-def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
-    """A reflex trip on the way home fails the closing ask. The close logs the failure, and the run answers
-    the episode and keeps its remaining episodes: the episode is already recorded."""
+def test_a_refused_move_back_leaves_the_run_playing(world):
+    """The episode is already recorded, so a move back the rig refuses is logged and not raised. The run
+    answers the episode and plays the episodes it has left."""
     arm = _FailsNthAsk(2)  # the second ask is the close; the first opened the episode
     policy = StubPolicy()
     harness = Harness(make_embodiment(prepare_handlers={eval_keys.ARM: arm.env_reset}))
@@ -1096,15 +1096,15 @@ def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
     answer = p['perform_task'](task)
     drive_scheduler(scheduler, steps=2000)
 
-    assert arm.asks == 2, 'the rig was never asked to go back, so no release was under test'
-    assert answer.done(), 'the failed release ended the run instead of being logged'
+    assert arm.asks == 2, 'the rig was never asked to go back, so nothing was under test'
+    assert answer.done(), 'the refused move back ended the run instead of being logged'
     answer.result()  # whoever asked reads a clean episode
 
 
 @pytest.mark.timeout(3.0)
 def test_a_rig_that_refuses_to_open_still_ends_the_run(world):
-    """An episode must not record on a rig that never got ready. A failed opening ask ends the run, and
-    whoever asked for the episode hears the failure."""
+    """An episode must not record on a rig that never got ready. A refused opening ask ends the run, and
+    whoever asked hears the failure."""
     arm = _FailsNthAsk(1)  # the first ask is the open
     policy = StubPolicy()
     harness = Harness(make_embodiment(prepare_handlers={eval_keys.ARM: arm.env_reset}))

@@ -326,17 +326,6 @@ class Harness(pimm.ControlSystem):
         # The fresh data is here, later round would read a frame the recording did not open on.
         self._infer(self._inference, clock, should_stop)
 
-    def _release(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Put the rig back the way ``_ready`` does, and log a failure instead of raising it.
-
-        A release that raises ends the run with episodes left to play.
-        """
-        # rules-allow: swallowed-error — the next episode's ``_ready`` refuses a stuck rig before it records.
-        try:
-            yield from self._ready(should_stop, args)
-        except Exception as exc:
-            logging.error(f'Releasing the rig after the episode ended failed: {exc}')
-
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
     ) -> Generator[pimm.Command, None, None]:
@@ -347,15 +336,18 @@ class Harness(pimm.ControlSystem):
         recording and the move nothing.
         """
         yield from self._finalize_recording(clock, payload)
-        # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
-        # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
-        # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
-        # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        release_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
-        yield from self._release(should_stop, release_args)
-        # The answer waits until the model is out of this episode's function. An in-process policy is one
-        # model across every episode, so the session that the next ask opens must not overtake it. The move
-        # back above gives the function that time.
+        # A powered arm holds the policy's last setpoint, so every device the trial placed goes back with the
+        # trial's own args, not a fresh draw. The scene is a person's to set up, and is not asked again. The
+        # terminal waits on the move: the next trial's scene draw would rebuild the model mid-travel.
+        back_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
+        # rules-allow: swallowed-error — the episode is recorded, and the next episode's ``_ready`` refuses a
+        # rig too stuck to run. A move back that raises ends the run with episodes left to play.
+        try:
+            yield from self._ready(should_stop, back_args)
+        except Exception as exc:
+            logging.error(f'The rig failed to go back after the episode: {exc}')
+        # One in-process model serves every episode, so the next ask's session must not overtake this
+        # episode's function. The move back above gives it that time.
         self._reap_inference()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
