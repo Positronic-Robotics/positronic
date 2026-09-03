@@ -147,10 +147,6 @@ def _link_nodes(link: str) -> list[str]:
     return [f'appUrl({spelling})', f'{_page_spelling(DOWNLOAD_LINK)}: {spelling}']
 
 
-def _carries(page: str, link: str) -> bool:
-    return any(node in page for node in _link_nodes(link))
-
-
 def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> str:
     """`html` with each of `links`, in the nodes a page carries them, moved under `build/<build_id>/`."""
     if not build_id:
@@ -181,7 +177,7 @@ def _write_pages(
         body, content_type = _fetch(client, f'/{episode_link(index)}')
         page = body.decode()
         page_links = _episode_links(dataset, index)
-        if not all(_carries(page, link) for link in page_links):
+        if not all(any(node in page for node in _link_nodes(link)) for link in page_links):
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
         out.write(f'{episode_link(index)}/{PAGE_FILE}', moved.encode(), content_type)
@@ -265,9 +261,8 @@ def export_static(
     """Write the viewer for `dataset` under `out_dir` and give back every file written.
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
-    when given, which holds the same episodes in the same order: the recording builder reads an
-    episode's robot model out of its static values, so a caller that hides static values from the
-    pages passes the unhidden dataset here. `assets` writes the app's own scripts, styles and viewer
+    when given, which holds the same episodes in the same order; the recording builder reads an
+    episode's robot model out of its static values. `assets` writes the app's own scripts, styles and viewer
     under `static/`, which the pages request at the host root, so it goes with the root base href
     only; an export under a prefix shares the host's copy. An export holds the app's state for its
     duration, so a second export in the process waits for it.

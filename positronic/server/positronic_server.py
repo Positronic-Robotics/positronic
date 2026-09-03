@@ -135,7 +135,7 @@ async def cache_rerun_assets(request: Request, call_next):
 
 
 # The field a group table's response carries its filters under, and the field of each filter
-# holding its values. The export reads them back to write one file per filter set.
+# holding its values.
 GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
 
@@ -163,8 +163,13 @@ def episode_rrd_link(episode_id: int) -> str:
 
 
 def download_link(episode_id: int, field_path: str) -> str:
-    """The download's path; the field path is percent-encoded, so a `?`, a `#` or a space stays in the path."""
-    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=quote(field_path, safe='/'))
+    """The download's path; the field path is one percent-encoded segment, so a `?`, a `/` or a space stays in it.
+
+    A browser reads a segment of dots as a step in the path, encoded or not, so `.` and `..` are refused.
+    """
+    if field_path in ('.', '..'):
+        raise ValueError(f'a static value named {field_path!r} has no link a browser keeps')
+    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=quote(field_path, safe=''))
 
 
 def group_link(name: str) -> str:
@@ -800,7 +805,7 @@ def configure_tables(
 ) -> None:
     """Set what the tables show and how a recording is built; see `main` for what each value does."""
     for name in group_tables or {}:
-        if name in ('.', '..') or quote(name, safe='') != name:
+        if not name or name in ('.', '..') or quote(name, safe='') != name:
             raise ValueError(f'a group name is one URL path segment (letters, digits, "_", "-", "."), got {name!r}')
     if home_page and home_page not in (group_tables or {}):
         raise ValueError(f'home_page {home_page!r} names no group table; the tables are {sorted(group_tables or {})}')

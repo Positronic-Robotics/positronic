@@ -365,7 +365,7 @@ def test_a_download_whose_field_name_a_url_cannot_carry_as_it_is_is_linked_encod
 
 
 def test_a_group_name_that_is_not_one_url_path_segment_is_refused(dataset, tmp_path):
-    for name in ('a?b', 'a#b', 'a b', 'a/b', '.', '../..'):
+    for name in ('', 'a?b', 'a#b', 'a b', 'a/b', '.', '../..'):
         with pytest.raises(ValueError, match='group name'):
             an_export(dataset, tmp_path / 'out', group_tables={name: GROUPS['outcomes']})
     assert not (tmp_path / 'out').exists()

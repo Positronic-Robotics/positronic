@@ -365,13 +365,19 @@ def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_e
 
 
 def test_a_download_link_carries_its_field_path_encoded_and_the_route_answers_it(viewer, monkeypatch):
-    monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh'})
+    monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/../b': b'a step'})
 
-    link = download_link(0, 'a?b c')
+    link, stepped = download_link(0, 'a?b c'), download_link(0, 'a/../b')
 
-    assert link == 'api/episode/0/static/a%3Fb%20c'
-    assert viewer.get(f'/{link}').content == b'a mesh'
+    assert (link, stepped) == ('api/episode/0/static/a%3Fb%20c', 'api/episode/0/static/a%2F..%2Fb')
+    assert viewer.get(f'/{link}').content == b'a mesh' and viewer.get(f'/{stepped}').content == b'a step'
     assert f'"{link}"' in viewer.get('/episode/0').text
+
+
+def test_a_static_value_named_as_a_path_step_gets_no_link():
+    for name in ('.', '..'):
+        with pytest.raises(ValueError, match='no link'):
+            download_link(0, name)
 
 
 def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_path():
