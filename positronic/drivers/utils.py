@@ -78,12 +78,11 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def streamed(self) -> T | None:
-        """The newest setpoint streamed at the device; reading it lets go of every setpoint older than it.
+    def take_newest_setpoint(self) -> T | None:
+        """The newest setpoint streamed at the device, letting go of every setpoint older than it.
 
-        A setpoint says where the device is wanted now. A transport that queues them hands the oldest over
-        first, so a device asked for one a tick is driven through what its asker has already done — seconds
-        of it where a move owned the device and nothing was read at all.
+        A transport that queues setpoints hands the oldest over first, and a setpoint says where the device
+        is wanted now, not where it was wanted when the setpoint was written.
         """
         latest = None
         while (message := self._async_move.read()) is not None and message.updated:
@@ -98,12 +97,12 @@ class Moves(Generic[T]):
         puts the device somewhere else. A device a move already owns is asked for nothing, and the setpoints
         streamed at it while it travels are let go for the same reason.
         """
-        streamed = self.streamed()
+        newest = self.take_newest_setpoint()
         if self.busy:
             return None
         if (call := next(self._sync_move.incoming(), None)) is not None:
             return call
-        return streamed
+        return newest
 
     def accept(
         self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
@@ -206,7 +205,7 @@ def grip_setpoint(moves: Moves[float], grip: float, now: float) -> float | None:
     """
     if moves.active:
         # A width streamed at fingers a move owns is older than where the move puts them.
-        moves.streamed()
+        moves.take_newest_setpoint()
         return grip if moves.settle(grip, now) is MoveStatus.GAVE_UP else None
     asked = moves.next_request()
     if isinstance(asked, pimm.calls.Call):
