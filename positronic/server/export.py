@@ -164,7 +164,7 @@ def _episode_links(dataset: Dataset, index: int) -> list[str]:
 
 
 def _write_pages(
-    client: TestClient, out: _Output, group_names: list[str], dataset: Dataset, build_id: str
+    client: TestClient, out: _Output, group_names: list[str], episode_links: list[list[str]], build_id: str
 ) -> list[str]:
     """Write every page, and give back the recording and download links the episode pages held."""
     body, content_type = _fetch(client, '/')
@@ -173,10 +173,9 @@ def _write_pages(
         body, content_type = _fetch(client, f'/{route}')
         out.write(f'{route}/{PAGE_FILE}', body, content_type)
     links = []
-    for index in range(len(dataset)):
+    for index, page_links in enumerate(episode_links):
         body, content_type = _fetch(client, f'/{episode_link(index)}')
         page = body.decode()
-        page_links = _episode_links(dataset, index)
         if not all(any(node in page for node in _link_nodes(link)) for link in page_links):
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
@@ -275,6 +274,7 @@ def export_static(
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
+    episode_links = [_episode_links(shown, index) for index in range(len(shown))]
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         configure_tables(
             root=get_dataset_root(dataset) or 'unknown_dataset',
@@ -290,7 +290,7 @@ def export_static(
         client = TestClient(app)
         group_names = list(group_tables or {})
 
-        links = _write_pages(client, out, group_names, shown, build_id)
+        links = _write_pages(client, out, group_names, episode_links, build_id)
         for route in _whole_api_routes():
             body, content_type = _fetch(client, f'/{route}')
             out.write(f'{route}.json', body, content_type)

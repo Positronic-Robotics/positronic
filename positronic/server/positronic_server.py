@@ -165,9 +165,9 @@ def episode_rrd_link(episode_id: int) -> str:
 def download_link(episode_id: int, field_path: str) -> str:
     """The download's path; the field path is one percent-encoded segment, so a `?`, a `/` or a space stays in it.
 
-    A browser reads a segment of dots as a step in the path, encoded or not, so `.` and `..` are refused.
+    A browser reads a segment of dots as a step in the path, encoded or not, so a `.` or `..` segment is refused.
     """
-    if field_path in ('.', '..'):
+    if any(part in ('.', '..') for part in field_path.split('/')):
         raise ValueError(f'a static value named {field_path!r} has no link a browser keeps')
     return _route(api_episode_static_field, episode_id=str(episode_id), field_path=quote(field_path, safe=''))
 
@@ -803,7 +803,10 @@ def configure_tables(
     max_resolution: int,
     max_hz: float,
 ) -> None:
-    """Set what the tables show and how a recording is built; see `main` for what each value does."""
+    """Set what the tables show and how a recording is built; see `main` for what each value does.
+
+    A table response cached under the previous settings is dropped.
+    """
     for name in group_tables or {}:
         if not name or name in ('.', '..') or quote(name, safe='') != name:
             raise ValueError(f'a group name is one URL path segment (letters, digits, "_", "-", "."), got {name!r}')
@@ -816,6 +819,7 @@ def configure_tables(
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
+    _api_cache.clear()
 
 
 @cfn.config(

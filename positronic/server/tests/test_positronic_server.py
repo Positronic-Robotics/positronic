@@ -4,6 +4,7 @@ import re
 import socket
 import threading
 from collections import namedtuple
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +33,7 @@ from positronic.server.positronic_server import (
     app_state,
     app_state_restored,
     configure_pages,
+    configure_tables,
     download_link,
     download_paths,
     normalized_base_href,
@@ -365,19 +367,41 @@ def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_e
 
 
 def test_a_download_link_carries_its_field_path_encoded_and_the_route_answers_it(viewer, monkeypatch):
-    monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/../b': b'a step'})
+    monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/b': b'nested'})
 
-    link, stepped = download_link(0, 'a?b c'), download_link(0, 'a/../b')
+    link, nested = download_link(0, 'a?b c'), download_link(0, 'a/b')
 
-    assert (link, stepped) == ('api/episode/0/static/a%3Fb%20c', 'api/episode/0/static/a%2F..%2Fb')
-    assert viewer.get(f'/{link}').content == b'a mesh' and viewer.get(f'/{stepped}').content == b'a step'
+    assert (link, nested) == ('api/episode/0/static/a%3Fb%20c', 'api/episode/0/static/a%2Fb')
+    assert viewer.get(f'/{link}').content == b'a mesh' and viewer.get(f'/{nested}').content == b'nested'
     assert f'"{link}"' in viewer.get('/episode/0').text
 
 
-def test_a_static_value_named_as_a_path_step_gets_no_link():
-    for name in ('.', '..'):
+def test_a_static_value_named_with_a_path_step_gets_no_link():
+    for name in ('.', '..', 'a/../b', 'a/./b'):
         with pytest.raises(ValueError, match='no link'):
             download_link(0, name)
+
+
+def test_reconfiguring_the_tables_drops_a_cached_table_response(grouped):
+    before = grouped.get('/api/groups/by_task').json()
+    renamed = replace(
+        _BY_TASK, format_table={keys.TASK: ColumnConfig(label='Job'), 'count': ColumnConfig(label='Episodes')}
+    )
+
+    with app_state_restored():
+        configure_tables(
+            root='',
+            cache_dir=Path(),
+            ep_table_cfg=None,
+            group_tables={'by_task': renamed},
+            home_page=None,
+            max_resolution=64,
+            max_hz=0,
+        )
+        after = grouped.get('/api/groups/by_task').json()
+
+    assert [column['label'] for column in before['columns']] == ['Task', 'Episodes']
+    assert [column['label'] for column in after['columns']] == ['Job', 'Episodes']
 
 
 def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_path():
