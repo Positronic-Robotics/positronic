@@ -51,7 +51,7 @@ _api_cache: dict[tuple, dict] = {}
 
 @dataclass(frozen=True)
 class PageConfig:
-    """The settings every page is rendered with; `configure_pages` fills them."""
+    """The settings every page is rendered with."""
 
     base_href: str = '/'
     title: str = ''  # empty = the dataset root
