@@ -102,6 +102,8 @@ const groupIndexes = new Map();
 // The index file, as `GROUP_INDEX_FILE` in export.py writes it, and the fields of an entry in it, as
 // `GroupFile` there writes them.
 const GROUP_INDEX_FILE = 'index.json';
+// The route `api_dataset_status` answers at, as `positronic_server.py` declares it.
+const DATASET_STATUS_ROUTE = 'api/dataset_status';
 const ENTRY_PARAMS = 'params';
 const ENTRY_FILE = 'file';
 
@@ -169,8 +171,8 @@ function readFiltersFromURL(serverFilterKeys, columns, episodes) {
     }
     const index = columns.findIndex((c) => c.key === key);
     if (index === -1) continue;  // a key that names no column carries no per-episode value to filter on
-    state.filters[key] = value;
     if (!(key in state.filtersData)) state.filtersData[key] = columnValues(episodes, index);
+    if (state.filtersData[key].includes(value)) state.filters[key] = value;  // a value no row carries is no filter
   }
 }
 
@@ -187,7 +189,7 @@ async function pollUntilLoaded() {
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
-      const status = await fetchJSON(await apiUrl('api/dataset_status'));
+      const status = await fetchJSON(await apiUrl(DATASET_STATUS_ROUTE));
       if (!status || status.loading) return;
       clearInterval(interval);
       statusEl.classList.remove('show');
@@ -203,7 +205,7 @@ async function initEpisodesTable() {
   const loadingEl = container.querySelector('.loading');
 
   // Check if dataset is ready
-  const status = await fetchJSON(await apiUrl('api/dataset_status'));
+  const status = await fetchJSON(await apiUrl(DATASET_STATUS_ROUTE));
   if (!status) return;
 
   if (status.loading) {

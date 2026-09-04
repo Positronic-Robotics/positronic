@@ -190,11 +190,22 @@ def _download_segment(key: str) -> str:
     return encoded
 
 
+# The object key limit of an S3-style host; with an output directory in front it stays within a filesystem's path limit.
+_MAX_DOWNLOAD_PATH_BYTES = 1024
+
+
+def _download_path(field_path: tuple[str, ...]) -> str:
+    """`field_path` as the segments of a download link, one percent-encoded segment per key."""
+    encoded = '/'.join(_download_segment(key) for key in field_path)
+    if len(encoded.encode()) > _MAX_DOWNLOAD_PATH_BYTES:
+        raise ValueError(f'a static value at a path of {len(encoded.encode())} encoded bytes has no link a host keeps')
+    return encoded
+
+
 def download_link(episode_id: int, field_path: tuple[str, ...]) -> str:
     """The download's path: one percent-encoded segment per key, so a `.`, `/`, `?` or space inside a key
     stays in its segment and two static values never share a link."""
-    encoded = '/'.join(_download_segment(key) for key in field_path)
-    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=encoded)
+    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=_download_path(field_path))
 
 
 def group_link(name: str) -> str:
@@ -343,11 +354,11 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
     """The key path of every static value an episode page links as a download; a list item by its index.
 
     Each key is one URL segment, so distinct paths never share a link. A key that makes no segment —
-    empty, `.`, `..`, or past a file name's limit once encoded — is refused.
+    empty, `.`, `..`, or past a file name's limit once encoded — is refused, and so is a path past a
+    host's key limit.
     """
     for key_path, _ in _downloads(static, ()):
-        for key in key_path:
-            _download_segment(key)
+        _download_path(key_path)
         yield key_path
 
 
