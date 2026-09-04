@@ -244,6 +244,14 @@ def _refusal(exc: PlatformError) -> str:
     return line
 
 
+def _positive_int(text: str) -> int:
+    """An argparse type for a count: `--limit 0` ends the command at the parser, with one line."""
+    value = int(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f'{text} is not a positive integer')
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='positronic-platform', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -289,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     listing = verbs.add_parser('list', parents=[calling], help="the caller's requests, oldest first")
     listing.add_argument('--after', default=None, metavar='ID', help='the last id seen: the page after it')
-    listing.add_argument('--limit', type=int, default=None, help='rows per page')
+    listing.add_argument('--limit', type=_positive_int, default=None, help='rows per page, a positive integer')
     listing.set_defaults(run=_list)
     return parser
 
