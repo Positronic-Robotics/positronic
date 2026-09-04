@@ -1,6 +1,7 @@
 """What one export writes, where, and what it keeps off a page."""
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -699,19 +700,15 @@ def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_expo
     assert not (tmp_path / 'out').exists()
 
 
-def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused():
-    """On disk the test would need an output directory in front, and macOS caps the whole path at 1024 bytes."""
-    tree = _PortableTree()
-    tree.add(
-        '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/' + 'b' * (export.MAX_PATH_BYTES - 4 * (MAX_COMPONENT_BYTES + 1))
-    )
+def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused(monkeypatch):
+    """The local limit is lifted: on macOS it equals the key limit, so no directory in front leaves room."""
+    monkeypatch.setattr(export, '_path_max', lambda directory: 1 << 16)
+    tree = _PortableTree(Path('out'))
+    stem = '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/'
+    tree.add(PurePosixPath(stem + 'b' * (export.MAX_PATH_BYTES - len(stem))))
 
     with pytest.raises(ValueError, match='key limit'):
-        tree.add(
-            '/'.join(['c' * MAX_COMPONENT_BYTES] * 4)
-            + '/'
-            + 'd' * (export.MAX_PATH_BYTES + 1 - 4 * (MAX_COMPONENT_BYTES + 1))
-        )
+        tree.add(PurePosixPath(stem + 'c' * (export.MAX_PATH_BYTES + 1 - len(stem))))
 
 
 def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):
@@ -728,6 +725,22 @@ def test_a_group_table_at_the_filter_set_bound_is_written(dataset, tmp_path, mon
     an_export(dataset, out, group_tables={'pairs': GROUPS['pairs']})
 
     assert len(json.loads((out / 'api/groups/pairs' / GROUP_INDEX_FILE).read_text())) == 7
+
+
+def test_a_local_path_at_the_filesystem_s_limit_is_refused_before_a_write_and_one_under_it_is_written(
+    dataset, tmp_path, monkeypatch
+):
+    out = tmp_path / 'out'
+    probe = paths_of(an_export(dataset, tmp_path / 'probe'))
+    longest = max(len(os.fsencode(out.joinpath(*PurePosixPath(path).parts))) for path in probe)
+
+    monkeypatch.setattr(export, '_path_max', lambda directory: longest)
+    with pytest.raises(ValueError, match='path limit'):
+        an_export(dataset, out)
+    assert not out.exists()
+
+    monkeypatch.setattr(export, '_path_max', lambda directory: longest + 1)
+    assert paths_of(an_export(dataset, out)) == probe
 
 
 def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):

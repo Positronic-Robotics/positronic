@@ -8,6 +8,7 @@ import itertools
 import json
 import logging
 import mimetypes
+import os
 import re
 import shutil
 import tempfile
@@ -108,29 +109,41 @@ class GroupFile:
     file: str
 
 
-class _PortableTree:
-    """The paths written so far, as any host or filesystem the tree lands on holds them.
+def _path_max(directory: Path) -> int:
+    """The longest path, its end mark included, the filesystem under `directory` takes; read off the nearest
+    ancestor that exists."""
+    existing = next(candidate for candidate in (directory, *directory.parents) if candidate.exists())
+    return os.pathconf(existing, 'PC_PATH_MAX')
 
-    A path past a host's key limit is refused. So is a component Windows reads as a device or trims, and a
-    path that folds onto a file written before, or onto a directory above one, or whose own directory folds
-    onto a file: the export writes one tree, wherever it lands.
+
+class _PortableTree:
+    """The paths written so far under `directory`, as any host or filesystem the tree lands on holds them.
+
+    A path past a host's key limit is refused, and so is one past the local filesystem's path limit with
+    `directory` in front. So is a component Windows reads as a device or trims, and a path that folds onto
+    a file written before, or onto a directory above one, or whose own directory folds onto a file.
     """
 
-    def __init__(self):
+    def __init__(self, directory: Path):
+        self._directory = directory
+        self._path_max = _path_max(directory)
         self._files: set[PurePosixPath] = set()
         self._directories: set[PurePosixPath] = set()
 
-    def add(self, path: str) -> None:
-        if len(path.encode()) > MAX_PATH_BYTES:
-            raise ValueError(f'{path!r} is past the {MAX_PATH_BYTES}-byte key limit of a host')
-        folded = PurePosixPath(path.casefold())
+    def add(self, path: PurePosixPath) -> None:
+        if len(str(path).encode()) > MAX_PATH_BYTES:
+            raise ValueError(f'{path} is past the {MAX_PATH_BYTES}-byte key limit of a host')
+        local = self._directory.joinpath(*path.parts)
+        if len(os.fsencode(local)) >= self._path_max:
+            raise ValueError(f'{local} is past the {self._path_max}-byte path limit of its filesystem')
+        folded = PurePosixPath(str(path).casefold())
         for part in folded.parts:
             if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
-                raise ValueError(f'{path!r} has a component Windows reads as a device or trims, {part!r}')
+                raise ValueError(f'{path} has a component Windows reads as a device or trims, {part!r}')
         directories = [parent for parent in folded.parents if parent.parts]
         taken = folded in self._files or folded in self._directories
         if taken or any(directory in self._files for directory in directories):
-            raise ValueError(f'{path!r} is one file with another the export writes on a filesystem that folds case')
+            raise ValueError(f'{path} is one file with another the export writes on a filesystem that folds case')
         self._files.add(folded)
         self._directories.update(directories)
 
@@ -139,7 +152,7 @@ class _Output:
     def __init__(self, directory: Path):
         self.directory = directory
         self.files: list[ExportedFile] = []
-        self._tree = _PortableTree()
+        self._tree = _PortableTree(directory)
 
     def target(self, path: str) -> Path:
         """The file `path` is written to; a path that would land outside the directory, or that a host or a
@@ -147,7 +160,7 @@ class _Output:
         relative = PurePosixPath(path)
         if relative.is_absolute() or '\\' in path or '..' in relative.parts:
             raise ValueError(f'{path!r} would land outside {self.directory}')
-        self._tree.add(path)
+        self._tree.add(relative)
         return self.directory.joinpath(*relative.parts)
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
@@ -353,17 +366,19 @@ def _filter_sets_by_group(
     return sets_by_group
 
 
-def _refuse_unportable_paths(group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str) -> None:
+def _refuse_unportable_paths(
+    out: _Output, group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str
+) -> None:
     """Refuse a group directory or a large file that a host or a filesystem does not hold as it is, before a write.
 
     Past `configure_tables`, every group name is one segment the route builder spells.
     """
-    named = _PortableTree()
+    named = _PortableTree(out.directory)
     for name in group_names:
-        named.add(group_link(name))
+        named.add(PurePosixPath(group_link(name)))
     for files in episodes:
         for link in files.links:
-            named.add(_on_disk(link, build_id))
+            named.add(PurePosixPath(_on_disk(link, build_id)))
 
 
 def export_static(
@@ -421,7 +436,7 @@ def export_static(
             max_hz=max_hz,
         )
         configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
-        _refuse_unportable_paths(group_tables or {}, episodes, build_id)
+        _refuse_unportable_paths(out, group_tables or {}, episodes, build_id)
         install_dataset(shown)
         client = TestClient(app)
         group_names = list(group_tables or {})
