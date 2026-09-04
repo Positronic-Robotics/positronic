@@ -15,6 +15,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
+from urllib.parse import quote
 
 import configuronic as cfn
 import pos3
@@ -168,13 +169,19 @@ def _link_nodes(link: str) -> list[str]:
     return [f'appUrl({spelling})', f'{_page_spelling(DOWNLOAD_LINK)}: {spelling}']
 
 
+def _host_spelling(path: str) -> str:
+    """The path a browser asks a static host for the file at `path`: a host percent-decodes a request path once
+    before it looks the file up, so each `%` of the file's own name is escaped."""
+    return quote(path, safe='/')
+
+
 def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> str:
-    """`html` with each of `links`, in the nodes a page carries them, moved under `build/<build_id>/`."""
-    if not build_id:
-        return html
+    """`html` with each of `links`, in the nodes a page carries them, moved under `build/<build_id>/` and
+    spelled as a static host resolves them to the files on disk."""
     for link in links:
-        for node, moved in zip(_link_nodes(link), _link_nodes(_large_file_path(link, build_id)), strict=True):
-            html = html.replace(node, moved)
+        moved = _host_spelling(_large_file_path(link, build_id))
+        for node, moved_node in zip(_link_nodes(link), _link_nodes(moved), strict=True):
+            html = html.replace(node, moved_node)
     return html
 
 

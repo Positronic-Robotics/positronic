@@ -614,3 +614,11 @@ def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
     assert 'function readFiltersFromURL(serverFilterKeys, columns, episodes)' in app_js
     assert 'const index = columns.findIndex((c) => c.key === key);' in app_js
     assert 'state.filters[key] = value;' in app_js
+
+
+def test_the_flat_table_compares_a_url_filter_with_a_cell_s_raw_value():
+    """A formatted cell is `[raw, formatted]`, and a View link carries the raw value as the server spells it."""
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert 'return String(rawValue(episodeData[colIdx])) === value;' in app_js
+    assert 'const v = rawValue(episodeData[index]);' in app_js

@@ -1,10 +1,16 @@
 """What one export writes, where, and what it keeps off a page."""
 
 import json
+import re
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import fields
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import cast
+from urllib.request import urlopen
 
 import numpy as np
 import pytest
@@ -272,6 +278,47 @@ def test_a_link_is_moved_in_the_nodes_a_page_carries_it_and_an_equal_value_is_no
     assert large_file_links_under(page, links, '') == page
 
 
+def test_a_link_with_an_encoded_segment_is_carried_as_a_static_host_resolves_it_to_the_file():
+    links = ['api/episode/3/static/a%2Fb']
+    page = f'{json.dumps({DOWNLOAD_LINK: links[0]})}'
+
+    assert json.dumps({DOWNLOAD_LINK: 'api/episode/3/static/a%252Fb'}) in large_file_links_under(page, links, '')
+    assert json.dumps({DOWNLOAD_LINK: 'build/bld/api/episode/3/static/a%252Fb'}) in large_file_links_under(
+        page, links, 'bld'
+    )
+
+
+@contextmanager
+def a_static_host(directory: Path) -> Iterator[str]:
+    """A local static host over `directory`, which percent-decodes a request path once, as any static host does."""
+    handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
+    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_address[1]}'
+    finally:
+        server.shutdown()
+        thread.join(5)
+
+
+def test_a_static_host_serves_every_download_at_the_link_the_page_carries(tmp_path):
+    dataset = a_dataset(
+        tmp_path / 'dataset',
+        {keys.TASK: 'Put the banana on the plate', 'a/b': b'slashed', 'a': {'b': b'nested'}, ESCAPED_KEY: 'n' * 2000},
+    )
+    out = tmp_path / 'out'
+    export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
+    page = (out / 'episode/0/index.html').read_text()
+    carried = re.findall(r'"__download__": "([^"]+)"', page)
+
+    with a_static_host(out) as host:
+        served = {link: urlopen(f'{host}/{link}').read() for link in carried}
+
+    assert len(carried) == 3
+    assert set(served.values()) == {b'slashed', b'nested', b'n' * 2000}
+
+
 def test_a_static_value_equal_to_a_link_stays_as_it_is(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'twin': 'api/episode_rrd/0'})
     out = tmp_path / 'out'
@@ -306,7 +353,7 @@ def test_a_static_value_named_with_a_backslash_is_linked_encoded_and_written(tmp
 
     written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
 
-    assert '"api/episode/0/static/models%5Cscene"' in (out / 'episode/0/index.html').read_text()
+    assert '"api/episode/0/static/models%255Cscene"' in (out / 'episode/0/index.html').read_text()
     assert 'api/episode/0/static/models%5Cscene' in written
     assert (out / 'api/episode/0/static/models%5Cscene').read_bytes() == b'a mesh'
 
@@ -458,7 +505,8 @@ def test_a_download_whose_field_name_a_url_cannot_carry_as_it_is_is_linked_encod
     written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
 
     encoded = 'notes%20%26%20%C3%A9%3F'
-    assert f'"build/bld/api/episode/0/static/{encoded}"' in (out / 'episode/0/index.html').read_text()
+    asked = 'notes%2520%2526%2520%25C3%25A9%253F'
+    assert f'"build/bld/api/episode/0/static/{asked}"' in (out / 'episode/0/index.html').read_text()
     assert f'build/bld/api/episode/0/static/{encoded}' in written
     assert (out / 'build/bld/api/episode/0/static' / encoded).read_bytes() == b'n' * 2000
 
