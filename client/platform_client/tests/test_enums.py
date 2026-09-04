@@ -12,13 +12,18 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     ACTIVE_STATUSES,
+    REQUEST_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
+    CameraVantage,
+    EndpointKind,
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    Placement,
     QuotaSubject,
     ReasonCode,
+    RequestStatus,
     SubmissionStatus,
 )
 
@@ -70,6 +75,14 @@ QUOTA_SUBJECT_VALUES = {'INVALID': 0, 'user': 1, 'tenant': 2}
 
 BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
+REQUEST_STATUS_VALUES = {'INVALID': 0, 'received': 1, 'filed': 2, 'running': 3, 'done': 4, 'cancelled': 5, 'errored': 6}
+
+ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2}
+
+PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
+
+CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
+
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),
     (ReasonCode, REASON_CODE_VALUES),
@@ -78,6 +91,10 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (OnExhausted, ON_EXHAUSTED_VALUES),
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
+    (RequestStatus, REQUEST_STATUS_VALUES),
+    (EndpointKind, ENDPOINT_KIND_VALUES),
+    (Placement, PLACEMENT_VALUES),
+    (CameraVantage, CAMERA_VANTAGE_VALUES),
 ]
 
 
@@ -99,3 +116,10 @@ def test_no_value_is_reused(enum_cls: type[IntEnum], expected: dict[str, int]):
 def test_the_status_sets_partition_the_decided_from_the_undecided():
     assert ACTIVE_STATUSES & TERMINAL_STATUSES == frozenset()
     assert ACTIVE_STATUSES | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
+
+
+def test_the_request_terminal_set_is_what_the_coordinator_is_finished_with():
+    assert REQUEST_TERMINAL_STATUSES == {RequestStatus.done, RequestStatus.cancelled, RequestStatus.errored}
+    assert (
+        RequestStatus.received not in REQUEST_TERMINAL_STATUSES and RequestStatus.filed not in REQUEST_TERMINAL_STATUSES
+    )

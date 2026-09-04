@@ -12,12 +12,13 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.4.1"
+uv add "positronic-platform-client==0.5.0"
 ```
 
-`platform_client` never imports `positronic`. The `platform-register` command ships here. The
-commands that drive an eval, `positronic eval run` and `positronic account`, ship with `positronic`,
-which depends on this package.
+`platform_client` never imports `positronic`. Two commands ship here: `platform-register`, and
+`positronic-platform`, which registers and then files and reads rollout requests. The commands that
+drive an eval, `positronic eval run` and `positronic account`, ship with `positronic`, which depends
+on this package.
 
 ## Registering
 
@@ -42,6 +43,41 @@ Run `platform-register --rotate` to mint a new key on a machine that lost it.
 `--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
 tailnet: pass `--plaintext-http` to reach it.
+
+## Rollout requests
+
+A customer files a rollout request: the catalogue tasks to run, the policies to run them on, and
+the episodes each policy takes on each task. The platform records it, the rollouts coordinator
+files it and runs it, and the request's status reads back through the same key. A key needs a
+customer grant for these calls; a key without one is refused `forbidden`.
+
+```bash
+positronic-platform register --alias='<display name>'
+positronic-platform requests create --tasks eight-spoons-into-grey-tote \
+    --endpoints gyros=wss://host/ws --episodes-per-endpoint 10 --cap 180 --preset runway_ziyi \
+    --scene tote_placement=random --scene camera.side=left
+positronic-platform requests create --from request.json
+positronic-platform requests get <hex id>
+positronic-platform requests list --after <hex id> --limit 50
+```
+
+`--from` takes a whole `RequestCreate` as JSON, which is how a served endpoint or a per-task
+override is filed; the flags cover the common round. `--scene` takes `tote_placement=<side>`,
+`camera_vantage=<vantage>` and `camera.<mount>=<side>`, where a side is `left`, `right`, `random`
+or `none`. Every command prints its answer as JSON, so an agent reads it back as the models in
+`platform_client.responses`.
+
+`register` runs the same GitHub device flow as `platform-register` and then writes the key to
+`~/.config/positronic-platform/api_key`, mode 0600, with the platform's URL beside it in
+`platform_url`. The key never appears on a command line: a command reads it from
+`POSITRONIC_PLATFORM_API_KEY`, else from the file `--api-key-file` names, else from that file.
+The platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else `platform_url` under the
+config directory, else the default below. `POSITRONIC_PLATFORM_CONFIG_DIR` names another config
+directory.
+
+From Python, `PlatformClient.requests_create`, `.requests_get` and `.requests_list` take and answer
+the same models; `requests_list` pages oldest first, and a page's `next` is the `after` of the page
+after it.
 
 ## From the command line
 
