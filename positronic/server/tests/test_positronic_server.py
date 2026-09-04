@@ -441,6 +441,19 @@ def test_a_static_value_whose_key_a_browser_rewrites_in_a_path_gets_no_link():
             list(download_paths(static))
 
 
+def test_a_key_past_a_file_name_s_limit_once_encoded_gets_no_link():
+    for key in ('x' * (_MAX_COMPONENT_BYTES + 1), 'é' * (_MAX_COMPONENT_BYTES // 6 + 1)):  # `é` encodes to 6 bytes
+        with pytest.raises(ValueError, match='no link'):
+            list(download_paths({key: b'x'}))
+
+
+def test_a_key_within_a_file_name_s_limit_once_encoded_keeps_its_link():
+    key = 'x' * _MAX_COMPONENT_BYTES
+
+    assert list(download_paths({key: b'x'})) == [(key,)]
+    assert download_link(0, (key,)) == f'api/episode/0/static/{key}'
+
+
 def test_a_dotted_key_and_a_nested_value_that_spell_alike_each_keep_their_own_link():
     assert list(download_paths({'a.b': b'1', 'a': {'b': b'2'}})) == [('a.b',), ('a', 'b')]
 

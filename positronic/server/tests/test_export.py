@@ -25,6 +25,7 @@ from positronic.dataset.transforms.episode import EpisodeTransform
 from positronic.server import positronic_server
 from positronic.server.export import (
     GROUP_INDEX_FILE,
+    MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
     GroupFile,
     _fetch,
@@ -35,7 +36,14 @@ from positronic.server.export import (
     large_file_links_under,
     validated_build_id,
 )
-from positronic.server.positronic_server import DOWNLOAD_LINK, ColumnConfig, GroupTableConfig, app_state
+from positronic.server.positronic_server import (
+    _MAX_COMPONENT_BYTES,
+    DOWNLOAD_LINK,
+    ColumnConfig,
+    GroupTableConfig,
+    TableConfig,
+    app_state,
+)
 
 OUTCOME = 'eval.outcome'
 OBJECT = 'eval.object'
@@ -483,6 +491,55 @@ class _Reversed(Dataset):
 
     def _get_episode(self, index: int) -> Episode:
         return cast(Episode, self._dataset[len(self._dataset) - 1 - index])
+
+
+def test_a_full_dataset_without_a_download_the_shown_dataset_links_is_refused_before_a_write(dataset, tmp_path):
+    without_notes = TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'artifacts')))
+
+    with pytest.raises(ValueError, match="no download at 'notes'"):
+        an_export(dataset, tmp_path / 'out', full_dataset=without_notes)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_download_whose_key_is_past_a_file_name_s_limit_stops_the_export_before_it_writes(tmp_path):
+    long_key = 'k' * (_MAX_COMPONENT_BYTES + 1)
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', long_key: b'a mesh'})
+
+    with pytest.raises(ValueError, match='no link'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
+def _with_filter_keys(count: int) -> tuple[TableConfig, dict[str, GroupTableConfig]]:
+    """A group table filtering on `count` keys no episode carries, and an episode table holding them as columns."""
+    filter_keys = {f'k{i}': f'K{i}' for i in range(count)}
+    table = {**TABLE, **{key: ColumnConfig(label=label) for key, label in filter_keys.items()}}
+    group = GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {'count': len(episodes)},
+        format_table={OUTCOME: ColumnConfig(label='Outcome'), 'count': ColumnConfig(label='Episodes', format='%d')},
+        group_filter_keys=filter_keys,
+    )
+    return table, {'wide': group}
+
+
+def test_a_group_table_past_the_filter_key_bound_is_refused_before_a_write(dataset, tmp_path):
+    table, groups = _with_filter_keys(MAX_FILTER_KEYS_PER_GROUP + 1)
+
+    with pytest.raises(ValueError, match='filter keys'):
+        an_export(dataset, tmp_path / 'out', ep_table_cfg=table, group_tables=groups)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_group_table_at_the_filter_key_bound_is_written(dataset, tmp_path):
+    table, groups = _with_filter_keys(MAX_FILTER_KEYS_PER_GROUP)
+    out = tmp_path / 'out'
+
+    an_export(dataset, out, ep_table_cfg=table, group_tables=groups)
+
+    assert json.loads((out / 'api/groups/wide' / GROUP_INDEX_FILE).read_text()) == [
+        {'params': {}, 'file': UNFILTERED_FILE}
+    ]
 
 
 def test_a_full_dataset_holding_other_episodes_at_the_shown_indexes_is_refused(dataset, tmp_path):
