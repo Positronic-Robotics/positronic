@@ -13,6 +13,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shlex
 import time
@@ -48,9 +49,6 @@ _INTERVAL_FIELD = 'interval'
 
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_EXPIRES_IN_S = 900.0
-
-# How much a `slow_down` answer raises the poll interval (RFC 8628 §3.5).
-_SLOW_DOWN_STEP_S = 5.0
 
 
 class DeviceFlowError(Exception):
@@ -120,27 +118,6 @@ class PollOutcome(Enum):
     UNREADABLE = auto()
 
 
-# GitHub's spelling of each outcome. The set of errors it may send is open, so anything else is a
-# request it could not read.
-_POLL_OUTCOMES = {
-    'authorization_pending': PollOutcome.PENDING,
-    'slow_down': PollOutcome.SLOW_DOWN,
-    'access_denied': PollOutcome.DENIED,
-    'expired_token': PollOutcome.EXPIRED,
-}
-
-# What each terminal outcome leaves the caller with. UNREADABLE carries GitHub's own word instead.
-_TERMINAL_MESSAGES = {
-    PollOutcome.DENIED: 'the user refused the authorization',
-    PollOutcome.EXPIRED: 'the device code expired before it was authorized',
-}
-
-
-def _outcome_of(error: object) -> PollOutcome:
-    """Read GitHub's `error` field. An absent one means the access token is in the answer."""
-    return PollOutcome.GRANTED if error is None else _POLL_OUTCOMES.get(str(error), PollOutcome.UNREADABLE)
-
-
 class GitHubDeviceFlow:
     """The device of RFC 8628: it asks for a code, and it polls until GitHub answers."""
 
@@ -167,12 +144,34 @@ class GitHubDeviceFlow:
             device_code=_require_str(payload, _DEVICE_CODE_FIELD),
             user_code=_require_str(payload, 'user_code'),
             verification_uri=_require_str(payload, 'verification_uri'),
-            interval=_optional_float(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
-            expires_in=_optional_float(payload, 'expires_in', DEFAULT_EXPIRES_IN_S),
+            interval=_optional_duration_s(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
+            expires_in=_optional_duration_s(payload, 'expires_in', DEFAULT_EXPIRES_IN_S),
         )
+
+    @staticmethod
+    def _outcome_of(error: object) -> PollOutcome:
+        """Read GitHub's `error` field. An absent one means the access token is in the answer."""
+        if error is None:
+            return PollOutcome.GRANTED
+        # GitHub's spelling of each outcome. The set of errors it may send is open, so anything else
+        # is a request it could not read.
+        outcomes = {
+            'authorization_pending': PollOutcome.PENDING,
+            'slow_down': PollOutcome.SLOW_DOWN,
+            'access_denied': PollOutcome.DENIED,
+            'expired_token': PollOutcome.EXPIRED,
+        }
+        return outcomes.get(str(error), PollOutcome.UNREADABLE)
 
     def poll_for_token(self, authorization: DeviceAuthorization) -> str:
         """Step two: poll the device code until GitHub mints the access token, or until it expires."""
+        # How much a `slow_down` answer raises the poll interval (RFC 8628 §3.5).
+        slow_down_step_s = 5.0
+        # What each terminal outcome leaves the caller with. UNREADABLE carries GitHub's own word.
+        terminal_messages = {
+            PollOutcome.DENIED: 'the user refused the authorization',
+            PollOutcome.EXPIRED: 'the device code expired before it was authorized',
+        }
         interval = authorization.interval
         deadline = self._monotonic() + authorization.expires_in
         while True:
@@ -190,15 +189,15 @@ class GitHubDeviceFlow:
                 },
             )
             error = payload.get(_ERROR_FIELD)
-            outcome = _outcome_of(error)
+            outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
                 return _require_str(payload, 'access_token')
             if outcome is PollOutcome.SLOW_DOWN:
                 # GitHub repeats the original interval in this answer, so the step raises the rate;
                 # taking the value alone would poll on at the rate GitHub just refused.
-                interval = max(interval + _SLOW_DOWN_STEP_S, _optional_float(payload, _INTERVAL_FIELD, 0.0))
+                interval = max(interval + slow_down_step_s, _optional_duration_s(payload, _INTERVAL_FIELD, interval))
             elif outcome is not PollOutcome.PENDING:
-                raise DeviceFlowError(_TERMINAL_MESSAGES.get(outcome, f'GitHub refused the device code: {error}'))
+                raise DeviceFlowError(terminal_messages.get(outcome, f'GitHub refused the device code: {error}'))
 
     def _post_form(self, url: str, data: Mapping[str, str]) -> Mapping[str, object]:
         """POST a form and read the JSON answer.
@@ -230,15 +229,21 @@ def _require_str(payload: Mapping[str, object], field: str) -> str:
     return value
 
 
-def _optional_float(payload: Mapping[str, object], field: str, default: float) -> float:
-    """A number GitHub may omit. Absent takes the default; present and unreadable is a bad answer."""
+def _optional_duration_s(payload: Mapping[str, object], field: str, default: float) -> float:
+    """A number of seconds GitHub may omit. Absent takes the default; present must be finite and above zero.
+
+    A negative or NaN value raises inside `time.sleep`, and a zero one polls until the code expires.
+    """
     if field not in payload:
         return default
     value = payload[field]
     # `bool` is an `int`, and `True` as an interval would poll once a second rather than refuse.
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise DeviceFlowError(f'GitHub answered with an unreadable {field}')
-    return float(value)
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise DeviceFlowError(f'GitHub answered with {field}={seconds}, which is no length of time')
+    return seconds
 
 
 def register_with_github(

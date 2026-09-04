@@ -154,6 +154,31 @@ def test_a_boolean_interval_is_a_bad_answer():
         flow.start_device_authorization()
 
 
+@pytest.mark.parametrize('field', ['interval', 'expires_in'])
+@pytest.mark.parametrize('value', [-1, 0, float('nan'), float('inf')])
+def test_a_timing_field_that_is_no_length_of_time_is_a_bad_answer(field: str, value: float):
+    """A negative or NaN value raises inside `time.sleep`. Zero polls in a tight loop, and infinity never returns."""
+    # `json` writes NaN and Infinity, which httpx's own encoder refuses, so the body is written here.
+    body = json.dumps(dict(DEVICE_ANSWER) | {field: value})
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={'content-type': 'application/json'})
+
+    http = httpx.Client(transport=httpx.MockTransport(answer))
+    flow = GitHubDeviceFlow(CLIENT_ID, http, monotonic=lambda: 0.0, sleep=lambda _: None)
+
+    with pytest.raises(DeviceFlowError, match=f'{field}=.*no length of time'):
+        flow.start_device_authorization()
+
+
+@pytest.mark.parametrize('value', [5, 5.0, 0.5, 3600])
+def test_a_positive_interval_is_taken_as_github_sent_it(value: float):
+    """The guard above refuses nothing GitHub can have meant, whole seconds or a fraction of one."""
+    flow, _ = _flow(ScriptedGitHub(device=dict(DEVICE_ANSWER) | {'interval': value}))
+
+    assert flow.start_device_authorization().interval == float(value)
+
+
 def test_a_refused_device_code_request_names_what_github_answered():
     github = ScriptedGitHub(device={'error': 'incorrect_client_credentials'})
     flow, _ = _flow(github)
