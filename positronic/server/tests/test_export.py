@@ -38,7 +38,12 @@ HIDDEN_KEY = 'checkpoint_path'
 HIDDEN_VALUE = 's3://internal/checkpoints/step_1000'
 OBJECTS = ('Plastic banana', 'Wooden block')
 
-TABLE = {'__index__': ColumnConfig(label='#', format='%d'), OUTCOME: ColumnConfig(label='Outcome', filter=True)}
+TABLE = {
+    '__index__': ColumnConfig(label='#', format='%d'),
+    OUTCOME: ColumnConfig(label='Outcome', filter=True),
+    OBJECT: ColumnConfig(label='Object', filter=True),
+    ATTEMPT: ColumnConfig(label='Attempt'),
+}
 GROUPS = {
     'outcomes': GroupTableConfig(
         group_keys=OUTCOME,
@@ -287,36 +292,48 @@ def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(t
     assert not (tmp_path / 'out').exists()
 
 
-def test_a_static_value_named_with_a_path_step_stops_the_export_before_it_writes(tmp_path):
-    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a/../b': b'a step'})
+def test_a_static_value_whose_key_a_browser_rewrites_stops_the_export_before_it_writes(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a': {'..': b'a step'}})
 
     with pytest.raises(ValueError, match='no link'):
         export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
-def test_a_static_value_named_with_a_backslash_stops_the_export_before_it_writes(tmp_path):
+def test_a_static_value_named_with_a_backslash_is_linked_encoded_and_written(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'models\\scene': b'a mesh'})
+    out = tmp_path / 'out'
 
-    with pytest.raises(ValueError, match='outside'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
-    assert not (tmp_path / 'out').exists()
+    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
 
-
-def test_two_downloads_that_would_share_one_file_stop_the_export_before_it_writes(tmp_path):
-    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a/b': b'1', 'a//b': b'2'})
-
-    with pytest.raises(ValueError, match='one file'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
-    assert not (tmp_path / 'out').exists()
+    assert '"api/episode/0/static/models%5Cscene"' in (out / 'episode/0/index.html').read_text()
+    assert 'api/episode/0/static/models%5Cscene' in written
+    assert (out / 'api/episode/0/static/models%5Cscene').read_bytes() == b'a mesh'
 
 
-def test_a_download_named_as_another_download_s_directory_stops_the_export_before_it_writes(tmp_path):
+def test_a_dotted_top_level_key_and_a_nested_value_that_spell_alike_are_written_apart(tmp_path):
+    dataset = a_dataset(
+        tmp_path / 'dataset',
+        {keys.TASK: 'Put the banana on the plate', 'scene.mesh': b'top', 'scene': {'mesh': b'nested'}},
+    )
+    out = tmp_path / 'out'
+
+    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
+
+    assert {'api/episode/0/static/scene.mesh', 'api/episode/0/static/scene/mesh'} <= written
+    assert (out / 'api/episode/0/static/scene.mesh').read_bytes() == b'top'
+    assert (out / 'api/episode/0/static/scene/mesh').read_bytes() == b'nested'
+
+
+def test_a_short_key_and_a_slashed_key_that_share_a_prefix_are_written_apart(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a': b'1', 'a/b': b'2'})
+    out = tmp_path / 'out'
 
-    with pytest.raises(ValueError, match='directory'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
-    assert not (tmp_path / 'out').exists()
+    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
+
+    assert {'api/episode/0/static/a', 'api/episode/0/static/a%2Fb'} <= written
+    assert (out / 'api/episode/0/static/a').read_bytes() == b'1'
+    assert (out / 'api/episode/0/static/a%2Fb').read_bytes() == b'2'
 
 
 def test_a_cache_inside_the_output_directory_is_refused(dataset, tmp_path):
@@ -386,10 +403,10 @@ def test_a_download_inside_a_list_is_linked_by_its_index_and_served(dataset, tmp
     out = tmp_path / 'out'
     written = paths_of(an_export(dataset, out))
 
-    assert '"api/episode/0/static/artifacts.0"' in (out / 'episode/0/index.html').read_text()
-    assert 'api/episode/0/static/artifacts.0' in written
-    assert (out / 'api/episode/0/static/artifacts.0').read_bytes() == b'first blob'
-    assert 'api/episode/0/static/artifacts.1' not in written
+    assert '"api/episode/0/static/artifacts/0"' in (out / 'episode/0/index.html').read_text()
+    assert 'api/episode/0/static/artifacts/0' in written
+    assert (out / 'api/episode/0/static/artifacts/0').read_bytes() == b'first blob'
+    assert 'api/episode/0/static/artifacts/1' not in written
 
 
 def test_a_filter_on_a_number_reaches_the_episodes_that_carry_it(dataset, tmp_path):
@@ -440,9 +457,10 @@ def test_a_download_whose_field_name_a_url_cannot_carry_as_it_is_is_linked_encod
 
     written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
 
-    assert '"build/bld/api/episode/0/static/notes%20%26%20%C3%A9%3F"' in (out / 'episode/0/index.html').read_text()
-    assert f'build/bld/api/episode/0/static/{ESCAPED_KEY}' in written
-    assert (out / 'build/bld/api/episode/0/static' / ESCAPED_KEY).read_bytes() == b'n' * 2000
+    encoded = 'notes%20%26%20%C3%A9%3F'
+    assert f'"build/bld/api/episode/0/static/{encoded}"' in (out / 'episode/0/index.html').read_text()
+    assert f'build/bld/api/episode/0/static/{encoded}' in written
+    assert (out / 'build/bld/api/episode/0/static' / encoded).read_bytes() == b'n' * 2000
 
 
 def test_a_group_name_that_is_not_one_url_path_segment_is_refused(dataset, tmp_path):

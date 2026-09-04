@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -174,14 +174,17 @@ def episode_rrd_link(episode_id: int) -> str:
     return _route(api_episode_rrd, episode_id=str(episode_id))
 
 
-def download_link(episode_id: int, field_path: str) -> str:
-    """The download's path; the field path is one percent-encoded segment, so a `?`, a `/` or a space stays in it.
+def download_link(episode_id: int, field_path: tuple[str, ...]) -> str:
+    """The download's path: one percent-encoded segment per key, so a `.`, `/`, `?` or space inside a key
+    stays in its segment and two static values never share a link.
 
-    A browser reads a segment of dots as a step in the path, encoded or not, so a `.` or `..` segment is refused.
+    A browser rewrites a segment that is empty or all dots, so a key that is `''`, `.` or `..` is refused.
     """
-    if any(part in ('.', '..') for part in field_path.split('/')):
-        raise ValueError(f'a static value named {field_path!r} has no link a browser keeps')
-    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=quote(field_path, safe=''))
+    for key in field_path:
+        if key in ('', '.', '..'):
+            raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
+    encoded = '/'.join(quote(key, safe='') for key in field_path)
+    return _route(api_episode_static_field, episode_id=str(episode_id), field_path=encoded)
 
 
 def group_link(name: str) -> str:
@@ -315,31 +318,28 @@ def is_download(value: object) -> bool:
     return isinstance(value, bytes) or (isinstance(value, str) and len(value) > 1024)
 
 
-def _downloads(value: object, path: str) -> Iterator[tuple[str, object]]:
+def _downloads(value: object, prefix: tuple[str, ...]) -> Iterator[tuple[tuple[str, ...], object]]:
     if is_download(value):
-        yield path, value
+        yield prefix, value
     elif isinstance(value, dict):
         for key, item in value.items():
-            yield from _downloads(item, f'{path}.{key}' if path else key)
+            yield from _downloads(item, prefix + (key,))
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            yield from _downloads(item, f'{path}.{index}' if path else str(index))
+            yield from _downloads(item, prefix + (str(index),))
 
 
-def download_paths(static: dict) -> Iterator[str]:
-    """The field path of every static value an episode page links as a download; a list item by its index.
+def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
+    """The key path of every static value an episode page links as a download; a list item by its index.
 
-    A path the download route does not lead back to its value is refused: an empty key, or a nested
-    value whose path a dotted top-level key also spells.
+    Each key is one URL segment, so distinct paths never share a link. A key a browser rewrites in a path
+    — empty, `.` or `..` — is refused.
     """
-    for path, value in _downloads(static, ''):
-        try:
-            found = _static_field(static, path)
-        except HTTPException:
-            found = None
-        if found is not value:
-            raise ValueError(f'a static value named {path!r} has no link the download route reads back')
-        yield path
+    for key_path, _ in _downloads(static, ()):
+        for key in key_path:
+            if key in ('', '.', '..'):
+                raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
+        yield key_path
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -358,15 +358,16 @@ async def episode_viewer(request: Request, episode_id: int):
 
     links = {path: download_link(episode_id, path) for path in download_paths(episode.static)}
 
-    def _make_serializable(obj, path=''):
+    def _make_serializable(obj, key_path=()):
         if is_download(obj):
-            return {DOWNLOAD_LINK: links[path], 'size': len(obj), 'type': 'bytes' if isinstance(obj, bytes) else 'text'}
+            link = links[key_path]
+            return {DOWNLOAD_LINK: link, 'size': len(obj), 'type': 'bytes' if isinstance(obj, bytes) else 'text'}
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
-            return {k: _make_serializable(v, f'{path}.{k}' if path else k) for k, v in obj.items()}
+            return {k: _make_serializable(v, key_path + (k,)) for k, v in obj.items()}
         if isinstance(obj, list):
-            return [_make_serializable(v, f'{path}.{i}' if path else str(i)) for i, v in enumerate(obj)]
+            return [_make_serializable(v, key_path + (str(i),)) for i, v in enumerate(obj)]
         return obj
 
     return templates.TemplateResponse(
@@ -618,31 +619,22 @@ async def api_dataset_status():
     }
 
 
-def _static_field(static: dict, field_path: str) -> object:
-    """The value at a dotted path into `static`, or an HTTP 404.
+def _static_at(static: dict, key_path: Sequence[str]) -> object:
+    """The value each key of `key_path` names in turn into `static`, or an HTTP 404.
 
-    A dict key is matched greedily, so a key holding a dot (`link0.stl`) is found; a list is
-    walked by an index.
+    Every key is one path segment, so a key holding a dot (`link0.stl`) is one step; a list is walked by
+    an index.
     """
     value: object = static
-    remaining = field_path
-    while remaining:
+    for key in key_path:
         if isinstance(value, list):
-            index, _, rest = remaining.partition('.')
-            if not index.isdigit() or int(index) >= len(value):
-                raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
-            value, remaining = value[int(index)], rest
-            continue
-        if not isinstance(value, dict):
-            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
-        parts = remaining.split('.')
-        for i in range(len(parts), 0, -1):
-            key = '.'.join(parts[:i])
-            if key in value:
-                value, remaining = value[key], '.'.join(parts[i:])
-                break
+            if not key.isdigit() or int(key) >= len(value):
+                raise HTTPException(status_code=404, detail=f'Field not found: {"/".join(key_path)}')
+            value = value[int(key)]
+        elif isinstance(value, dict) and key in value:
+            value = value[key]
         else:
-            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+            raise HTTPException(status_code=404, detail=f'Field not found: {"/".join(key_path)}')
     return value
 
 
@@ -656,15 +648,19 @@ def _content_disposition(disposition: str, filename: str) -> str:
 
 @app.get('/api/episode/{episode_id}/static/{field_path:path}')
 @require_dataset
-async def api_episode_static_field(episode_id: int, field_path: str):
+async def api_episode_static_field(episode_id: int, field_path: str, request: Request):
     ds = app_state.get('dataset')
     try:
         episode = ds[episode_id]
     except IndexError as e:
         raise HTTPException(status_code=404, detail='Episode not found') from e
 
-    value = _static_field(episode.static, field_path)
-    filename = field_path.rsplit('.', 1)[-1] if '.' in field_path else field_path
+    # The raw path keeps `%2F` apart from a `/` that separates two keys, which the decoded path loses.
+    prefix = '/' + _route(api_episode_static_field, episode_id=str(episode_id), field_path='')
+    tail = request.scope['raw_path'].decode('ascii').split('?', 1)[0].removeprefix(prefix)
+    key_path = [unquote(segment) for segment in tail.split('/')]
+    value = _static_at(episode.static, key_path)
+    filename = key_path[-1]
     if isinstance(value, bytes):
         return Response(
             content=value,
@@ -677,7 +673,7 @@ async def api_episode_static_field(episode_id: int, field_path: str):
             media_type='text/plain; charset=utf-8',
             headers={'Content-Disposition': _content_disposition('inline', f'{filename}.txt')},
         )
-    raise HTTPException(status_code=400, detail=f'Field {field_path} is not downloadable')
+    raise HTTPException(status_code=400, detail=f'Field {"/".join(key_path)} is not downloadable')
 
 
 def _recording_cache_path(episode_id: int) -> Path:
@@ -853,9 +849,17 @@ def configure_tables(
     are thinned to `max_hz`; 0 keeps every sample. `root` is the dataset path the pages report, and the
     recordings are cached under `cache_dir`. A table response cached under the previous settings is dropped.
     """
-    for name in group_tables or {}:
+    episode_columns = set(ep_table_cfg or {})
+    for name, cfg in (group_tables or {}).items():
         if not name or name in ('.', '..') or quote(name, safe='') != name:
             raise ValueError(f'a group name is one URL path segment (letters, digits, "_", "-", "."), got {name!r}')
+        group_keys = (cfg.group_keys,) if isinstance(cfg.group_keys, str) else cfg.group_keys
+        for key in (*group_keys, *cfg.group_filter_keys):
+            if key not in episode_columns:
+                raise ValueError(
+                    f'group table {name!r} sends {key!r} to a View link, and it is no column of the episode '
+                    f'table, so the flat table cannot filter on it; the episode columns are {sorted(episode_columns)}'
+                )
     if home_page and home_page not in (group_tables or {}):
         raise ValueError(f'home_page {home_page!r} names no group table; the tables are {sorted(group_tables or {})}')
     app_state['root'] = root

@@ -159,14 +159,17 @@ function syncURL() {
   window.history.replaceState({}, '', url);
 }
 
-function readFiltersFromURL(serverFilterKeys) {
+function readFiltersFromURL(serverFilterKeys, columns, episodes) {
   const params = new URLSearchParams(window.location.search);
   for (const [key, value] of params.entries()) {
     if (serverFilterKeys.has(key)) {
       state.serverFilters[key] = value;
-    } else if (state.filtersData[key]?.includes(value)) {
-      state.filters[key] = value;
+      continue;
     }
+    const index = columns.findIndex((c) => c.key === key);
+    if (index === -1) continue;  // a key that names no column carries no per-episode value to filter on
+    state.filters[key] = value;
+    if (!(key in state.filtersData)) state.filtersData[key] = columnValues(episodes, index);
   }
 }
 
@@ -229,7 +232,7 @@ async function initEpisodesTable() {
 
   // Parse URL into server/client filters
   const serverFilterKeys = groupFilters ? new Set(Object.keys(groupFilters)) : new Set();
-  readFiltersFromURL(serverFilterKeys);
+  readFiltersFromURL(serverFilterKeys, columns, initial.episodes);
 
   // Re-fetch with server filters if any were set from URL
   if (Object.keys(state.serverFilters).length > 0) {
@@ -259,16 +262,19 @@ async function initEpisodesTable() {
 // Filtering & sorting
 // ---------------------------------------------------------------------------
 
+function columnValues(episodes, index) {
+  const values = new Set();
+  for (const [, episodeData] of episodes) {
+    const v = episodeData[index];
+    if (v !== null && v !== undefined) values.add(String(v));
+  }
+  return Array.from(values);
+}
+
 function buildFiltersData(episodes, columns) {
   const result = {};
   for (const [index, column] of Object.entries(columns)) {
-    if (!column.filter) continue;
-    const values = new Set();
-    for (const [, episodeData] of episodes) {
-      const v = episodeData[index];
-      if (v !== null && v !== undefined) values.add(String(v));
-    }
-    result[column.key] = Array.from(values);
+    if (column.filter) result[column.key] = columnValues(episodes, index);
   }
   return result;
 }

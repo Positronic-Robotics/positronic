@@ -368,20 +368,30 @@ def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_e
     )
 
 
-def test_a_download_link_carries_its_field_path_encoded_and_the_route_answers_it(viewer, monkeypatch):
+def test_a_download_link_carries_each_key_encoded_and_the_route_answers_it(viewer, monkeypatch):
     monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/b': b'nested'})
 
-    link, nested = download_link(0, 'a?b c'), download_link(0, 'a/b')
+    link, slashed = download_link(0, ('a?b c',)), download_link(0, ('a/b',))
 
-    assert (link, nested) == ('api/episode/0/static/a%3Fb%20c', 'api/episode/0/static/a%2Fb')
-    assert viewer.get(f'/{link}').content == b'a mesh' and viewer.get(f'/{nested}').content == b'nested'
+    assert (link, slashed) == ('api/episode/0/static/a%3Fb%20c', 'api/episode/0/static/a%2Fb')
+    assert viewer.get(f'/{link}').content == b'a mesh' and viewer.get(f'/{slashed}').content == b'nested'
     assert f'"{link}"' in viewer.get('/episode/0').text
 
 
-def test_a_static_value_named_with_a_path_step_gets_no_link():
-    for name in ('.', '..', 'a/../b', 'a/./b'):
+def test_a_nested_value_and_a_dotted_top_level_key_get_apart_links_the_route_tells_apart(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'scene.mesh': b'top', 'scene': {'mesh': b'nested'}})
+
+    top, nested = download_link(0, ('scene.mesh',)), download_link(0, ('scene', 'mesh'))
+
+    assert (top, nested) == ('api/episode/0/static/scene.mesh', 'api/episode/0/static/scene/mesh')
+    assert viewer.get(f'/{top}').content == b'top'
+    assert viewer.get(f'/{nested}').content == b'nested'
+
+
+def test_a_key_a_browser_rewrites_in_a_path_gets_no_link():
+    for keys_ in (('.',), ('..',), ('a', '..', 'b'), ('a', '', 'b')):
         with pytest.raises(ValueError, match='no link'):
-            download_link(0, name)
+            download_link(0, keys_)
 
 
 def test_reconfiguring_the_tables_drops_a_cached_table_response(grouped):
@@ -390,11 +400,12 @@ def test_reconfiguring_the_tables_drops_a_cached_table_response(grouped):
         _BY_TASK, format_table={keys.TASK: ColumnConfig(label='Job'), 'count': ColumnConfig(label='Episodes')}
     )
 
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task'), ASSISTED: ColumnConfig(label='Assisted')}
     with app_state_restored():
         configure_tables(
             root='',
             cache_dir=Path(),
-            ep_table_cfg=None,
+            ep_table_cfg=ep_table_cfg,
             group_tables={'by_task': renamed},
             home_page=None,
             max_resolution=64,
@@ -415,17 +426,23 @@ def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_pat
         'many': [{'a': b'x'}, b'y'],
     }
 
-    assert list(download_paths(static)) == ['scene', 'notes', 'nested.blob', 'many.0.a', 'many.1']
+    assert list(download_paths(static)) == [
+        ('scene',),
+        ('notes',),
+        ('nested', 'blob'),
+        ('many', '0', 'a'),
+        ('many', '1'),
+    ]
 
 
-def test_a_static_value_the_download_route_does_not_read_back_gets_no_link():
-    for static in ({'': b'x'}, {'a': {'': b'x'}}, {'a.b': b'1', 'a': {'b': b'2'}}):
+def test_a_static_value_whose_key_a_browser_rewrites_in_a_path_gets_no_link():
+    for static in ({'': b'x'}, {'a': {'': b'x'}}, {'..': b'x'}, {'a': {'.': b'x'}}):
         with pytest.raises(ValueError, match='no link'):
             list(download_paths(static))
 
 
-def test_a_dotted_key_beside_an_unrelated_nested_value_keeps_both_links():
-    assert list(download_paths({'a.b': b'1', 'a': {'c': b'2'}})) == ['a.b', 'a.c']
+def test_a_dotted_key_and_a_nested_value_that_spell_alike_each_keep_their_own_link():
+    assert list(download_paths({'a.b': b'1', 'a': {'b': b'2'}})) == [('a.b',), ('a', 'b')]
 
 
 def test_a_base_href_that_starts_at_the_server_root_stands():
@@ -557,3 +574,43 @@ def test_a_second_holder_of_the_app_state_waits_for_the_first():
     for holder in holders:
         holder.join(5)
     assert second_holds.is_set()
+
+
+def _configure(ep_table_cfg, group_tables):
+    configure_tables(
+        root='',
+        cache_dir=Path(),
+        ep_table_cfg=ep_table_cfg,
+        group_tables=group_tables,
+        home_page=None,
+        max_resolution=64,
+        max_hz=0,
+    )
+
+
+def test_a_group_key_that_is_no_episode_column_is_refused():
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task')}
+    group_tables = {'by_object': replace(_BY_TASK, group_keys='object', group_filter_keys={})}
+    with app_state_restored(), pytest.raises(ValueError, match='no column of the episode table'):
+        _configure(ep_table_cfg, group_tables)
+
+
+def test_a_group_filter_key_that_is_no_episode_column_is_refused():
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task')}
+    with app_state_restored(), pytest.raises(ValueError, match='no column of the episode table'):
+        _configure(ep_table_cfg, {'by_task': _BY_TASK})  # _BY_TASK filters on ASSISTED, which is no column here
+
+
+def test_group_keys_that_are_episode_columns_are_accepted():
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task'), ASSISTED: ColumnConfig(label='Assisted')}
+    with app_state_restored():
+        _configure(ep_table_cfg, {'by_task': _BY_TASK})  # the group key and the filter key are both episode columns
+
+
+def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
+    """A View link carries a group key; the flat table filters on it when it is a column, not only a filter one."""
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert 'function readFiltersFromURL(serverFilterKeys, columns, episodes)' in app_js
+    assert 'const index = columns.findIndex((c) => c.key === key);' in app_js
+    assert 'state.filters[key] = value;' in app_js
