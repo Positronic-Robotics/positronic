@@ -37,8 +37,8 @@ from positronic.server.export import (
     validated_build_id,
 )
 from positronic.server.positronic_server import (
-    _MAX_COMPONENT_BYTES,
     DOWNLOAD_LINK,
+    MAX_COMPONENT_BYTES,
     ColumnConfig,
     GroupTableConfig,
     TableConfig,
@@ -502,7 +502,7 @@ def test_a_full_dataset_without_a_download_the_shown_dataset_links_is_refused_be
 
 
 def test_a_download_whose_key_is_past_a_file_name_s_limit_stops_the_export_before_it_writes(tmp_path):
-    long_key = 'k' * (_MAX_COMPONENT_BYTES + 1)
+    long_key = 'k' * (MAX_COMPONENT_BYTES + 1)
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', long_key: b'a mesh'})
 
     with pytest.raises(ValueError, match='no link'):
@@ -600,3 +600,9 @@ def test_the_page_script_spells_a_group_index_as_the_export_writes_it():
 )
 def test_an_asset_is_served_under_the_type_a_browser_needs(name, expected):
     assert asset_content_type(Path(name)) == expected
+
+
+def test_a_build_id_past_a_file_name_s_limit_is_refused_and_one_within_it_stands():
+    assert validated_build_id('b' * MAX_COMPONENT_BYTES) == 'b' * MAX_COMPONENT_BYTES
+    with pytest.raises(ValueError, match='build_id'):
+        validated_build_id('b' * (MAX_COMPONENT_BYTES + 1))
