@@ -15,7 +15,6 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
-from urllib.parse import unquote
 
 import configuronic as cfn
 import pos3
@@ -153,8 +152,9 @@ def _large_file_path(link: str, build_id: str) -> str:
 
 
 def _on_disk(link: str, build_id: str) -> str:
-    """Where the file a large-file `link` names is written: the decoded link, under the build."""
-    return _large_file_path(unquote(link), build_id)
+    """Where the file a large-file `link` names is written: its segments as a directory tree, each keeping the
+    encoded spelling the browser asks it by, under the build."""
+    return _large_file_path(link, build_id)
 
 
 def _page_spelling(link: str) -> str:
@@ -271,20 +271,6 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
-def _check_targets(out: _Output, episodes: list[_EpisodeFiles], build_id: str) -> None:
-    """Refuse, before a write, a large file the writer cannot place: a name it refuses, two names on one file, a file
-    in another file's directory."""
-    targets: dict[Path, str] = {}
-    for link in (link for files in episodes for link in files.links):
-        target = out.target(_on_disk(link, build_id))
-        if targets.setdefault(target, link) != link:
-            raise ValueError(f'{link!r} and {targets[target]!r} would be written to one file, {target}')
-    for target, link in targets.items():
-        for parent in target.parents:
-            if parent in targets:
-                raise ValueError(f'{link!r} needs {targets[parent]!r} to be a directory, and it is a file')
-
-
 def export_static(
     dataset: Dataset,
     out_dir: Path,
@@ -323,7 +309,6 @@ def export_static(
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]
-    _check_targets(out, episodes, build_id)
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
