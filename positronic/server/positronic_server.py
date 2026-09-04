@@ -59,6 +59,9 @@ class PageConfig:
     static_export: bool = False
 
 
+# The app state's key for the `PageConfig` every page reads.
+_PAGE_CONFIG_KEY = 'pages'
+
 # Global app state
 app_state: dict[str, object] = {
     'dataset': None,
@@ -70,7 +73,7 @@ app_state: dict[str, object] = {
     'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
-    'pages': PageConfig(),
+    _PAGE_CONFIG_KEY: PageConfig(),
 }
 
 
@@ -149,7 +152,7 @@ FILTER_VALUES = 'values'
 
 
 def _page_config() -> PageConfig:
-    return cast(PageConfig, app_state['pages'])
+    return cast(PageConfig, app_state[_PAGE_CONFIG_KEY])
 
 
 def _shown_root() -> str:
@@ -295,7 +298,7 @@ def configure_pages(
     the header text, the dataset root when empty. `show_paths` says whether a page reports where the
     dataset lives. `static_export` makes the pages read the files a static export writes.
     """
-    app_state['pages'] = PageConfig(
+    app_state[_PAGE_CONFIG_KEY] = PageConfig(
         base_href=normalized_base_href(base_href), title=title, show_paths=show_paths, static_export=static_export
     )
 
