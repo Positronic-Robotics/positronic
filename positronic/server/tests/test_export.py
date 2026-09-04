@@ -531,6 +531,21 @@ def test_a_full_dataset_without_a_download_the_shown_dataset_links_is_refused_be
     assert not (tmp_path / 'out').exists()
 
 
+def test_a_hidden_download_of_the_full_dataset_under_a_key_no_link_carries_is_left_alone(tmp_path):
+    """The export links the shown dataset's downloads; the full dataset only has to hold those."""
+    full = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down', 'notes': 'n' * 2000, '': 'h' * 2000})
+    shown_only = TransformedDataset(full, _KeepStatic((keys.TASK, 'notes')))
+
+    files = paths_of(
+        export_static(
+            shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full
+        )
+    )
+
+    assert 'api/episode/0/static/notes' in files
+    assert not any(path.endswith('/static/') or path.endswith('/static') for path in files)
+
+
 def test_a_download_whose_key_is_past_a_file_name_s_limit_stops_the_export_before_it_writes(tmp_path):
     long_key = 'k' * (MAX_COMPONENT_BYTES + 1)
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', long_key: b'a mesh'})
