@@ -271,6 +271,20 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
+def _check_targets(out: _Output, episodes: list[_EpisodeFiles], build_id: str) -> None:
+    """Refuse, before a write, a large file the writer cannot place: a name it refuses, two names on one file, a file
+    in another file's directory."""
+    targets: dict[Path, str] = {}
+    for link in (link for files in episodes for link in files.links):
+        target = out.target(_on_disk(link, build_id))
+        if targets.setdefault(target, link) != link:
+            raise ValueError(f'{link!r} and {targets[target]!r} would be written to one file, {target}')
+    for target, link in targets.items():
+        for parent in target.parents:
+            if parent in targets:
+                raise ValueError(f'{link!r} needs {targets[parent]!r} to be a directory, and it is a file')
+
+
 def export_static(
     dataset: Dataset,
     out_dir: Path,
@@ -295,23 +309,21 @@ def export_static(
     episode's robot model out of its static values. A recording is copied from the cache file the server
     serves, so no recording is held in memory whole. `assets` writes the app's own scripts, styles and viewer
     under `static/`, which the pages request at the host root, so it goes with the root base href
-    only; an export under a prefix shares the host's copy. An export holds the app's state for its
+    only; an export under a prefix shares the host's copy. `cache_dir`, when given, lies outside
+    `out_dir`: the recordings are built there and copied in. An export holds the app's state for its
     duration, so a second export in the process waits for it; one into the same directory is then
     refused, as the directory holds the first.
     """
     out = _Output(Path(out_dir))
+    if cache_dir is not None and Path(cache_dir).resolve().is_relative_to(out.directory.resolve()):
+        raise ValueError(f'cache_dir {cache_dir} lies inside {out.directory}; the cache stays outside the export')
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]
-    targets: dict[Path, str] = {}
-    for link in (link for files in episodes for link in files.links):
-        # A name the writer refuses, or two names for one file, stops the export before a write.
-        target = out.target(_on_disk(link, build_id))
-        if targets.setdefault(target, link) != link:
-            raise ValueError(f'{link!r} and {targets[target]!r} would be written to one file, {target}')
+    _check_targets(out, episodes, build_id)
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):

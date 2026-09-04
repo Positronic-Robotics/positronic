@@ -311,6 +311,23 @@ def test_two_downloads_that_would_share_one_file_stop_the_export_before_it_write
     assert not (tmp_path / 'out').exists()
 
 
+def test_a_download_named_as_another_download_s_directory_stops_the_export_before_it_writes(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a': b'1', 'a/b': b'2'})
+
+    with pytest.raises(ValueError, match='directory'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_cache_inside_the_output_directory_is_refused(dataset, tmp_path):
+    out = tmp_path / 'out'
+
+    for cache in (out, out / 'cache'):
+        with pytest.raises(ValueError, match='outside'):
+            an_export(dataset, out, cache_dir=cache)
+    assert not out.exists()
+
+
 def test_the_assets_go_with_the_root_base_href_only(dataset, tmp_path):
     with pytest.raises(ValueError, match='assets'):
         an_export(dataset, tmp_path / 'out', base_href='/v/tok/', assets=True)
