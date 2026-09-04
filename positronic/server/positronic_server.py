@@ -890,7 +890,6 @@ def main(
     base_href: str = '/',
     title: str = '',
     show_paths: bool = True,
-    static_export: bool = False,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -941,7 +940,6 @@ def main(
         base_href: Path at the server root that every page link and API call resolves against
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
-        static_export: Whether the pages ask for the file names a static export writes
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -958,7 +956,7 @@ def main(
         max_resolution=max_resolution,
         max_hz=max_hz,
     )
-    configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=static_export)
+    configure_pages(base_href=base_href, title=title, show_paths=show_paths)
     app_state['loading_state'] = True
 
     if reset_cache and cache_root.exists():
