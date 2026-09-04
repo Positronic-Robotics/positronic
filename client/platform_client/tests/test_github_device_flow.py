@@ -577,6 +577,22 @@ def test_the_registration_waits_out_the_gateways_own_github_budget():
     }
 
 
+def test_an_answer_lost_after_the_request_names_rotate_as_the_recovery():
+    """The gateway may have minted the key before the connection dropped, so a plain retry finds no key."""
+
+    def drop(*_args: object, **_kwargs: object) -> RegisterResponse:
+        raise httpx.ReadError('connection reset')
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'register_with_github', drop)
+        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.main()
+
+    assert isinstance(raised.value.code, str) and '--rotate' in raised.value.code
+
+
 def test_a_refused_gateway_ends_the_command_rather_than_raising():
     """A dial the gateway refuses is a transport error, which no other layer here converts."""
 

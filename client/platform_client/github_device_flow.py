@@ -333,10 +333,16 @@ def main() -> None:
             response = register_with_github(
                 platform, GitHubDeviceFlow(args.client_id, github), alias=args.alias, rotate=args.rotate
             )
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # The GitHub half wraps its own transport failures, so one arriving here dialled the
             # gateway. httpx names the cause and not the host, which is the half a reader needs.
             raise SystemExit(f'the platform at {base_url} is unreachable: {exc}') from exc
+        except httpx.HTTPError as exc:
+            # The request may have reached the gateway and minted the key before the answer was lost.
+            raise SystemExit(
+                f'the platform at {base_url} did not answer the registration: {exc}. '
+                'A key may have been minted; run again with --rotate.'
+            ) from exc
         except (DeviceFlowError, PlatformError) as exc:
             raise SystemExit(str(exc)) from exc
         except ValidationError as exc:
