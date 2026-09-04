@@ -58,8 +58,8 @@ class DeviceFlowError(Exception):
     """GitHub refused the flow, answered something this code cannot read, or is unreachable."""
 
 
-class _PollTimedOut(DeviceFlowError):
-    """One request timed out. The poll loop retries it; every other caller sees a DeviceFlowError."""
+class _RequestTimedOut(DeviceFlowError):
+    """One request to GitHub timed out. `poll_for_token` retries it; every other caller sees a DeviceFlowError."""
 
 
 # One request's phases. httpx bounds inactivity inside each one separately, never the whole request.
@@ -225,7 +225,7 @@ class GitHubDeviceFlow:
                         'grant_type': DEVICE_GRANT_TYPE,
                     },
                 )
-            except _PollTimedOut:
+            except _RequestTimedOut:
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again; the code may
                 # already be authorized, and the deadline above ends the flow.
                 interval += slow_down_step_s
@@ -254,7 +254,7 @@ class GitHubDeviceFlow:
                 'POST', url, data=dict(data), headers={'accept': 'application/json'}, timeout=REQUEST_TIMEOUT
             )
         except httpx.TimeoutException as exc:
-            raise _PollTimedOut('GitHub did not answer in time') from exc
+            raise _RequestTimedOut('GitHub did not answer in time') from exc
         except httpx.HTTPError as exc:
             raise DeviceFlowError('GitHub is unreachable') from exc
         if response.status_code >= 400:
