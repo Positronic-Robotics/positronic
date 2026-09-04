@@ -94,10 +94,17 @@ def test_register_writes_the_key_by_path_and_the_platform_beside_it(config, monk
     assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
     assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
     shown = capsys.readouterr().out
-    assert str(key_path) in shown and KEY not in shown
+    assert json.loads(shown) == {
+        'user_id': 'a1',
+        'key_status': 'created',
+        'platform_url': PLATFORM,
+        'api_key_file': str(key_path),
+    }
+    assert KEY not in shown
 
 
-def test_a_registration_that_issues_no_key_leaves_the_key_file_alone(config, monkeypatch):
+def test_a_registration_that_issues_no_key_leaves_the_saved_pair_alone(config, monkeypatch, capsys):
+    """The key on disk belongs to the platform beside it; a registration elsewhere that mints none moves neither."""
     _registered(config)
 
     def existing(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
@@ -108,9 +115,11 @@ def test_a_registration_that_issues_no_key_leaves_the_key_file_alone(config, mon
         })
 
     monkeypatch.setattr(github_device_flow, 'run_registration', existing)
-    cli.main(['register', '--client-id=x', f'--platform-url={PLATFORM}'])
+    cli.main(['register', '--client-id=x', '--platform-url=https://other.example'])
 
     assert (config / API_KEY_FILENAME).read_text() == f'{KEY}\n'
+    assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
+    assert json.loads(capsys.readouterr().out)['api_key_file'] is None
 
 
 def test_register_refuses_a_platform_that_would_show_the_token(config, monkeypatch):
@@ -232,12 +241,16 @@ def test_create_from_a_file_posts_the_file_whole(config, gateway, tmp_path):
     assert body['episodes_per_endpoint'] == 3
 
 
-def test_a_file_and_the_flags_together_are_refused(config, gateway, tmp_path):
+@pytest.mark.parametrize(
+    'flag', [['--tasks', 'a'], ['--episodes-per-endpoint', '0'], ['--cap', '0'], ['--scene', 'tote_placement=left']]
+)
+def test_a_file_and_a_flag_together_are_refused(config, gateway, tmp_path, flag: list[str]):
+    """Every flag given counts, a zero included: the file carries the whole request."""
     _registered(config)
     path = tmp_path / 'request.json'
     path.write_text('{}')
     with pytest.raises(SystemExit, match='alone'):
-        cli.main(['requests', 'create', '--from', str(path), '--tasks', 'a'])
+        cli.main(['requests', 'create', '--from', str(path), *flag])
     assert gateway.requests == []
 
 
