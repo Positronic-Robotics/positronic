@@ -1,7 +1,7 @@
 """Write the viewer for one dataset as static files.
 
-The app is composed in this process and read with a test client, so the export holds what the
-server answers. A page lands at `<route>/index.html` and an API response at `api/<route>.json`.
+The app is composed in this process and read with a test client. A page lands at
+`<route>/index.html` and an API response at `api/<route>.json`.
 """
 
 import itertools
@@ -66,7 +66,7 @@ UNFILTERED_FILE = 'all.json'
 MAX_FILTER_KEYS_PER_GROUP = 6
 # Each file of a group table is one read of the whole dataset.
 MAX_FILTER_SETS_PER_GROUP = 1024
-# The object key limit of an S3-style host; with an output directory in front it stays within a filesystem's path limit.
+# The object key limit of an S3-style host.
 MAX_PATH_BYTES = 1024
 # Windows reads these as devices, with or without a suffix, and trims a trailing dot off a name.
 _WINDOWS_DEVICES = frozenset([
@@ -388,13 +388,12 @@ def export_static(
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
     when given, which holds the same episodes in the same order; the recording builder reads an
     episode's robot model out of its static values. The recordings are built in a directory of this
-    export's own under `scratch_dir`, the system's temporary directory when None, and copied in from
-    there, so no recording is held in memory whole and no export reads another's; the directory is
-    removed at the end. `assets` writes the app's own scripts, styles and viewer under `static/`, which
-    the pages request at the host root, so it goes with the root base href only; an export under a
-    prefix shares the host's copy. An export holds the app's state for its duration, so a second
-    export in the process waits for it; one into the same directory is then refused, as the directory
-    holds the first.
+    export's own under `scratch_dir`, the system's temporary directory when None, copied in from
+    there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
+    and viewer under `static/`, which the pages request at the host root, so it goes with the root
+    base href only; an export under a prefix shares the host's copy. An export holds the app's state
+    for its duration, so a second export in the process waits for it; one into the same directory is
+    then refused, as the directory holds the first.
     """
     out = _Output(Path(out_dir))
     if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):

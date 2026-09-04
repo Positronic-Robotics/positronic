@@ -31,6 +31,7 @@ from positronic.server.export import (
     GroupFile,
     _fetch,
     _Output,
+    _PortableTree,
     asset_content_type,
     export_static,
     filter_sets,
@@ -698,16 +699,19 @@ def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_expo
     assert not (tmp_path / 'out').exists()
 
 
-def test_a_download_whose_path_on_disk_is_at_a_host_s_key_limit_is_written(tmp_path):
-    build_id = 'b' * MAX_COMPONENT_BYTES
-    static, keys = _download_at(export.MAX_PATH_BYTES, build_id)
-    dataset = a_dataset(tmp_path / 'dataset', static)
-
-    files = export_static(
-        dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id=build_id
+def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused():
+    """On disk the test would need an output directory in front, and macOS caps the whole path at 1024 bytes."""
+    tree = _PortableTree()
+    tree.add(
+        '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/' + 'b' * (export.MAX_PATH_BYTES - 4 * (MAX_COMPONENT_BYTES + 1))
     )
 
-    assert export._on_disk(download_link(0, keys), build_id) in paths_of(files)
+    with pytest.raises(ValueError, match='key limit'):
+        tree.add(
+            '/'.join(['c' * MAX_COMPONENT_BYTES] * 4)
+            + '/'
+            + 'd' * (export.MAX_PATH_BYTES + 1 - 4 * (MAX_COMPONENT_BYTES + 1))
+        )
 
 
 def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):
