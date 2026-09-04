@@ -18,7 +18,6 @@ from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
-    _MAX_DOWNLOAD_PATH_BYTES,
     FILTER_VALUES,
     GROUP_FILTERS,
     MAX_COMPONENT_BYTES,
@@ -457,20 +456,11 @@ def test_a_key_within_a_file_name_s_limit_once_encoded_keeps_its_link():
     assert download_link(0, (key,)) == f'api/episode/0/static/{key}'
 
 
-def test_a_path_past_a_host_s_key_limit_once_encoded_gets_no_link():
-    deep = {'k' * MAX_COMPONENT_BYTES: b'x'}
-    for _ in range(_MAX_DOWNLOAD_PATH_BYTES // MAX_COMPONENT_BYTES):
-        deep = {'k' * MAX_COMPONENT_BYTES: deep}
-
-    with pytest.raises(ValueError, match='no link'):
-        list(download_paths(deep))
-
-
-def test_a_path_within_a_host_s_key_limit_once_encoded_keeps_its_link():
-    keys_ = ('k' * MAX_COMPONENT_BYTES,) * (_MAX_DOWNLOAD_PATH_BYTES // (MAX_COMPONENT_BYTES + 1))
+def test_a_path_of_any_depth_keeps_its_link_on_the_live_server():
+    """A host's key limit binds the export alone; the live server links every path its route carries."""
+    keys_ = ('k' * MAX_COMPONENT_BYTES,) * 8
 
     assert download_link(0, keys_).startswith('api/episode/0/static/')
-    assert len('/'.join(keys_).encode()) <= _MAX_DOWNLOAD_PATH_BYTES
 
 
 def test_the_page_script_names_the_dataset_status_route_the_server_declares():
