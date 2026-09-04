@@ -21,6 +21,7 @@ from positronic.server.export import (
     GROUP_INDEX_FILE,
     UNFILTERED_FILE,
     GroupFile,
+    _fetch,
     _Output,
     asset_content_type,
     export_static,
@@ -171,6 +172,21 @@ def test_without_a_build_id_the_large_files_sit_at_their_routes(dataset, tmp_pat
     page = (out / 'episode/0/index.html').read_text()
     assert '"api/episode_rrd/0"' in page and 'build/' not in page
     assert {'api/episode_rrd/0', 'api/episode_rrd/1', 'api/episode/0/static/notes'} <= written
+
+
+def test_a_recording_is_copied_from_the_cache_file_and_not_read_through_the_client(dataset, tmp_path, monkeypatch):
+    def fetch_no_recording(client, path, params=None):
+        assert 'episode_rrd' not in path, path
+        return _fetch(client, path, params)
+
+    monkeypatch.setattr('positronic.server.export._fetch', fetch_no_recording)
+    cache = tmp_path / 'cache'
+
+    files = an_export(dataset, tmp_path / 'out', cache_dir=cache)
+
+    cached = {path.read_bytes() for path in cache.rglob('*.rrd')}
+    written = {(tmp_path / 'out' / path).read_bytes() for path in paths_of(files) if 'episode_rrd' in path}
+    assert len(written) == 2 and written == cached
 
 
 def test_a_recording_is_built_from_the_full_dataset(dataset, tmp_path):

@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import re
+import shutil
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
@@ -40,6 +41,7 @@ from positronic.server.positronic_server import (
     download_paths,
     episode_link,
     episode_rrd_link,
+    episode_rrd_path,
     episodes_link,
     filter_spelling,
     group_api_link,
@@ -105,7 +107,17 @@ class _Output:
         target = self.target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
-        written = ExportedFile(PurePosixPath(path), content_type, len(body))
+        return self._record(path, content_type, len(body))
+
+    def copy(self, path: str, source: Path) -> ExportedFile:
+        """Copy the file at `source` to `path` without holding it in memory."""
+        target = self.target(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return self._record(path, asset_content_type(source), target.stat().st_size)
+
+    def _record(self, path: str, content_type: str, size: int) -> ExportedFile:
+        written = ExportedFile(PurePosixPath(path), content_type, size)
         self.files.append(written)
         return written
 
@@ -140,6 +152,11 @@ def _large_file_path(link: str, build_id: str) -> str:
     return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
 
 
+def _on_disk(link: str, build_id: str) -> str:
+    """Where the file a large-file `link` names is written: the decoded link, under the build."""
+    return _large_file_path(unquote(link), build_id)
+
+
 def _page_spelling(link: str) -> str:
     """`link` as a page carries it: a quoted JSON string, escaped as Jinja's `tojson` writes one."""
     return str(htmlsafe_json_dumps(link))
@@ -161,14 +178,27 @@ def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> st
     return html
 
 
-def _episode_links(dataset: Dataset, index: int) -> list[str]:
-    """The recording and the downloads an episode page links, as the page spells them."""
+@dataclass(frozen=True)
+class _EpisodeFiles:
+    """The large files one episode page links, as the page spells them."""
+
+    index: int
+    recording: str
+    downloads: list[str]
+
+    @property
+    def links(self) -> list[str]:
+        return [self.recording, *self.downloads]
+
+
+def _episode_files(dataset: Dataset, index: int) -> _EpisodeFiles:
     static = cast(Episode, dataset[index]).static
-    return [episode_rrd_link(index), *(download_link(index, field) for field in download_paths(static))]
+    downloads = [download_link(index, field) for field in download_paths(static)]
+    return _EpisodeFiles(index, episode_rrd_link(index), downloads)
 
 
 def _write_pages(
-    client: TestClient, out: _Output, group_names: list[str], episode_links: list[list[str]], build_id: str
+    client: TestClient, out: _Output, group_names: list[str], episodes: list[_EpisodeFiles], build_id: str
 ) -> None:
     """Write every page; an episode page carries its links moved under the build."""
     body, content_type = _fetch(client, '/')
@@ -176,13 +206,13 @@ def _write_pages(
     for route in (episodes_link(), *(group_link(name) for name in group_names)):
         body, content_type = _fetch(client, f'/{route}')
         out.write(f'{route}/{PAGE_FILE}', body, content_type)
-    for index, page_links in enumerate(episode_links):
-        body, content_type = _fetch(client, f'/{episode_link(index)}')
+    for files in episodes:
+        body, content_type = _fetch(client, f'/{episode_link(files.index)}')
         page = body.decode()
-        if not all(any(node in page for node in _link_nodes(link)) for link in page_links):
-            raise RuntimeError(f'episode page {index} does not carry every link the export expects')
-        moved = large_file_links_under(page, page_links, build_id)
-        out.write(f'{episode_link(index)}/{PAGE_FILE}', moved.encode(), content_type)
+        if not all(any(node in page for node in _link_nodes(link)) for link in files.links):
+            raise RuntimeError(f'episode page {files.index} does not carry every link the export expects')
+        moved = large_file_links_under(page, files.links, build_id)
+        out.write(f'{episode_link(files.index)}/{PAGE_FILE}', moved.encode(), content_type)
 
 
 def _write_group(client: TestClient, out: _Output, name: str, sets: Iterable[dict[str, str]]) -> None:
@@ -262,7 +292,8 @@ def export_static(
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
     when given, which holds the same episodes in the same order; the recording builder reads an
-    episode's robot model out of its static values. `assets` writes the app's own scripts, styles and viewer
+    episode's robot model out of its static values. A recording is copied from the cache file the server
+    serves, so no recording is held in memory whole. `assets` writes the app's own scripts, styles and viewer
     under `static/`, which the pages request at the host root, so it goes with the root base href
     only; an export under a prefix shares the host's copy. An export holds the app's state for its
     duration, so a second export in the process waits for it; one into the same directory is then
@@ -274,10 +305,10 @@ def export_static(
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
-    episode_links = [_episode_links(shown, index) for index in range(len(shown))]
-    large_files = [(link, _large_file_path(unquote(link), build_id)) for links in episode_links for link in links]
-    for _, path in large_files:
-        out.target(path)  # a name the writer refuses stops the export before a page is written
+    episodes = [_episode_files(shown, index) for index in range(len(shown))]
+    for files in episodes:
+        for link in files.links:
+            out.target(_on_disk(link, build_id))  # a name the writer refuses stops the export before a write
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
@@ -296,7 +327,7 @@ def export_static(
         client = TestClient(app)
         group_names = list(group_tables or {})
 
-        _write_pages(client, out, group_names, episode_links, build_id)
+        _write_pages(client, out, group_names, episodes, build_id)
         for route in _whole_api_routes():
             body, content_type = _fetch(client, f'/{route}')
             out.write(f'{route}.json', body, content_type)
@@ -304,9 +335,11 @@ def export_static(
             _write_group(client, out, name, filter_sets(_filter_values(shown, cfg.group_filter_keys)))
 
         install_dataset(full)
-        for link, path in large_files:
-            body, content_type = _fetch(client, f'/{link}')
-            out.write(path, body, content_type)
+        for files in episodes:
+            out.copy(_on_disk(files.recording, build_id), episode_rrd_path(files.index))
+            for link in files.downloads:
+                body, content_type = _fetch(client, f'/{link}')
+                out.write(_on_disk(link, build_id), body, content_type)
     if assets:
         _write_assets(out)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
