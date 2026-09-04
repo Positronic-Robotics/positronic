@@ -94,16 +94,40 @@ class GroupFile:
     file: str
 
 
+class _CaseInsensitiveTree:
+    """The paths written so far, as a filesystem that folds case holds them.
+
+    A path that folds onto a file written before, or onto a directory above one, or whose own directory folds
+    onto a file, is refused: the export writes one tree, whatever filesystem it lands on.
+    """
+
+    def __init__(self):
+        self._files: set[str] = set()
+        self._directories: set[str] = set()
+
+    def add(self, path: str) -> None:
+        folded = PurePosixPath(path.casefold())
+        directories = [str(parent) for parent in folded.parents if str(parent) != '.']
+        taken = str(folded) in self._files or str(folded) in self._directories
+        if taken or any(directory in self._files for directory in directories):
+            raise ValueError(f'{path!r} is one file with another the export writes on a filesystem that folds case')
+        self._files.add(str(folded))
+        self._directories.update(directories)
+
+
 class _Output:
     def __init__(self, directory: Path):
         self.directory = directory
         self.files: list[ExportedFile] = []
+        self._tree = _CaseInsensitiveTree()
 
     def target(self, path: str) -> Path:
-        """The file `path` is written to; a path that would land outside the directory is refused."""
+        """The file `path` is written to; a path that would land outside the directory, or on another file
+        once case is folded, is refused."""
         relative = PurePosixPath(path)
         if relative.is_absolute() or '\\' in path or '..' in relative.parts:
             raise ValueError(f'{path!r} would land outside {self.directory}')
+        self._tree.add(path)
         return self.directory.joinpath(*relative.parts)
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
@@ -296,6 +320,19 @@ def _check_filter_keys(group_tables: dict[str, GroupTableConfig] | None) -> None
             )
 
 
+def _refuse_folded_collisions(group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str) -> None:
+    """Refuse a group directory or a large file that another folds onto, before a write.
+
+    Past `configure_tables`, every group name is one segment the route builder spells.
+    """
+    named = _CaseInsensitiveTree()
+    for name in group_names:
+        named.add(group_link(name))
+    for files in episodes:
+        for link in files.links:
+            named.add(_on_disk(link, build_id))
+
+
 def export_static(
     dataset: Dataset,
     out_dir: Path,
@@ -311,27 +348,26 @@ def export_static(
     build_id: str = '',
     full_dataset: Dataset | None = None,
     assets: bool = True,
-    cache_dir: Path | None = None,
+    scratch_dir: Path | None = None,
 ) -> list[ExportedFile]:
     """Write the viewer for `dataset` under `out_dir` and give back every file written.
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
     when given, which holds the same episodes in the same order; the recording builder reads an
-    episode's robot model out of its static values. A recording is copied from the cache file the server
-    serves, so no recording is held in memory whole. `assets` writes the app's own scripts, styles and viewer
-    under `static/`, which the pages request at the host root, so it goes with the root base href
-    only; an export under a prefix shares the host's copy. `cache_dir`, when given, lies outside
-    `out_dir`: the recordings are built there and copied in. An export holds the app's state for its
-    duration, so a second export in the process waits for it; one into the same directory is then
-    refused, as the directory holds the first.
+    episode's robot model out of its static values. The recordings are built in a directory of this
+    export's own under `scratch_dir`, the system's temporary directory when None, and copied in from
+    there, so no recording is held in memory whole and no export reads another's; the directory is
+    removed at the end. `assets` writes the app's own scripts, styles and viewer under `static/`, which
+    the pages request at the host root, so it goes with the root base href only; an export under a
+    prefix shares the host's copy. An export holds the app's state for its duration, so a second
+    export in the process waits for it; one into the same directory is then refused, as the directory
+    holds the first.
     """
     out = _Output(Path(out_dir))
-    if cache_dir is not None:
-        cache, output = Path(cache_dir).resolve(), out.directory.resolve()
-        if cache.is_relative_to(output) or output.is_relative_to(cache):
-            raise ValueError(
-                f'cache_dir {cache_dir} and out_dir {out.directory} overlap; the cache stays outside the export'
-            )
+    if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):
+        raise ValueError(
+            f'scratch_dir {scratch_dir} lies inside out_dir {out.directory}; the recordings are built beside it'
+        )
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
@@ -339,13 +375,13 @@ def export_static(
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]
-    with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
+    with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
             raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
         configure_tables(
             root=get_dataset_root(dataset) or 'unknown_dataset',
-            cache_dir=Path(cache_dir) if cache_dir else Path(scratch),
+            cache_dir=Path(scratch),
             ep_table_cfg=ep_table_cfg,
             group_tables=group_tables,
             home_page=home_page,
@@ -353,6 +389,7 @@ def export_static(
             max_hz=max_hz,
         )
         configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
+        _refuse_folded_collisions(group_tables or {}, episodes, build_id)
         install_dataset(shown)
         client = TestClient(app)
         group_names = list(group_tables or {})
