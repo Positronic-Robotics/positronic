@@ -99,13 +99,12 @@ function baseScopedKey(name) {
 // filtered in the browser.
 const groupIndexes = new Map();
 
-// The index file, as `GROUP_INDEX_FILE` in export.py writes it, and the fields of an entry in it, as
-// `GroupFile` there writes them.
+// A group's index: a file beside the group's files, listing {params, file} entries, one per filter set.
 const GROUP_INDEX_FILE = 'index.json';
-// The route `api_dataset_status` answers at, as `positronic_server.py` declares it.
-const DATASET_STATUS_ROUTE = 'api/dataset_status';
 const ENTRY_PARAMS = 'params';
 const ENTRY_FILE = 'file';
+// The route the dataset's loading status is read from.
+const DATASET_STATUS_ROUTE = 'api/dataset_status';
 
 async function groupIndex(path) {
   if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${GROUP_INDEX_FILE}`)));

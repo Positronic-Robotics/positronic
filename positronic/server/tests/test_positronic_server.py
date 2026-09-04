@@ -18,10 +18,10 @@ from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
-    _MAX_COMPONENT_BYTES,
     _MAX_DOWNLOAD_PATH_BYTES,
     FILTER_VALUES,
     GROUP_FILTERS,
+    MAX_COMPONENT_BYTES,
     ColumnConfig,
     GroupTableConfig,
     PageConfig,
@@ -209,7 +209,7 @@ def test_a_path_component_is_one_short_injective_name():
     assert _path_component('camera/left') != _path_component('camera_left')
 
     long_name = _path_component('x' * 4000)
-    assert len(long_name.encode()) <= _MAX_COMPONENT_BYTES
+    assert len(long_name.encode()) <= MAX_COMPONENT_BYTES
     # A value short enough to survive encoding can never collide with a hashed one.
     assert _path_component(long_name) != long_name
 
@@ -445,29 +445,29 @@ def test_a_static_value_whose_key_a_browser_rewrites_in_a_path_gets_no_link():
 
 
 def test_a_key_past_a_file_name_s_limit_once_encoded_gets_no_link():
-    for key in ('x' * (_MAX_COMPONENT_BYTES + 1), 'é' * (_MAX_COMPONENT_BYTES // 6 + 1)):  # `é` encodes to 6 bytes
+    for key in ('x' * (MAX_COMPONENT_BYTES + 1), 'é' * (MAX_COMPONENT_BYTES // 6 + 1)):  # `é` encodes to 6 bytes
         with pytest.raises(ValueError, match='no link'):
             list(download_paths({key: b'x'}))
 
 
 def test_a_key_within_a_file_name_s_limit_once_encoded_keeps_its_link():
-    key = 'x' * _MAX_COMPONENT_BYTES
+    key = 'x' * MAX_COMPONENT_BYTES
 
     assert list(download_paths({key: b'x'})) == [(key,)]
     assert download_link(0, (key,)) == f'api/episode/0/static/{key}'
 
 
 def test_a_path_past_a_host_s_key_limit_once_encoded_gets_no_link():
-    deep = {'k' * _MAX_COMPONENT_BYTES: b'x'}
-    for _ in range(_MAX_DOWNLOAD_PATH_BYTES // _MAX_COMPONENT_BYTES):
-        deep = {'k' * _MAX_COMPONENT_BYTES: deep}
+    deep = {'k' * MAX_COMPONENT_BYTES: b'x'}
+    for _ in range(_MAX_DOWNLOAD_PATH_BYTES // MAX_COMPONENT_BYTES):
+        deep = {'k' * MAX_COMPONENT_BYTES: deep}
 
     with pytest.raises(ValueError, match='no link'):
         list(download_paths(deep))
 
 
 def test_a_path_within_a_host_s_key_limit_once_encoded_keeps_its_link():
-    keys_ = ('k' * _MAX_COMPONENT_BYTES,) * (_MAX_DOWNLOAD_PATH_BYTES // (_MAX_COMPONENT_BYTES + 1))
+    keys_ = ('k' * MAX_COMPONENT_BYTES,) * (_MAX_DOWNLOAD_PATH_BYTES // (MAX_COMPONENT_BYTES + 1))
 
     assert download_link(0, keys_).startswith('api/episode/0/static/')
     assert len('/'.join(keys_).encode()) <= _MAX_DOWNLOAD_PATH_BYTES
@@ -644,6 +644,18 @@ def test_a_group_filter_key_that_is_no_episode_column_is_refused():
     ep_table_cfg = {keys.TASK: ColumnConfig(label='Task')}
     with app_state_restored(), pytest.raises(ValueError, match='no column of the episode table'):
         _configure(ep_table_cfg, {'by_task': _BY_TASK})  # _BY_TASK filters on ASSISTED, which is no column here
+
+
+def test_a_group_name_past_a_file_name_s_limit_is_refused():
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task'), ASSISTED: ColumnConfig(label='Assisted')}
+    with app_state_restored(), pytest.raises(ValueError, match='group name'):
+        _configure(ep_table_cfg, {'g' * (MAX_COMPONENT_BYTES + 1): _BY_TASK})
+
+
+def test_a_group_name_within_a_file_name_s_limit_is_accepted():
+    ep_table_cfg = {keys.TASK: ColumnConfig(label='Task'), ASSISTED: ColumnConfig(label='Assisted')}
+    with app_state_restored():
+        _configure(ep_table_cfg, {'g' * MAX_COMPONENT_BYTES: _BY_TASK})
 
 
 def test_group_keys_that_are_episode_columns_are_accepted():

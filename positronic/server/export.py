@@ -30,6 +30,7 @@ from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
+    MAX_COMPONENT_BYTES,
     GroupTableConfig,
     TableConfig,
     app,
@@ -70,9 +71,9 @@ _BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
 
 
 def validated_build_id(value: str) -> str:
-    """`value` when a path and a page can carry it as it is; empty names no build."""
-    if not _BUILD_ID.fullmatch(value):
-        raise ValueError(f'build_id must match {_BUILD_ID.pattern!r}, got {value!r}')
+    """`value` when a path, a file name and a page can carry it as it is; empty names no build."""
+    if not _BUILD_ID.fullmatch(value) or len(value) > MAX_COMPONENT_BYTES:
+        raise ValueError(f'build_id must match {_BUILD_ID.pattern!r} within {MAX_COMPONENT_BYTES} bytes, got {value!r}')
     return value
 
 
@@ -395,7 +396,11 @@ def main(
     Args:
         dataset: Dataset to export
         out_dir: Directory the files are written under; it is created
-        ep_table_cfg, max_resolution, max_hz, group_tables, home_page: As `positronic-server` takes them
+        ep_table_cfg: Columns of the episode table, by static key
+        max_resolution: Long side an episode's videos are re-encoded down to
+        max_hz: Rate an episode's numeric signals are thinned to; 0 keeps every sample
+        group_tables: Grouped tables, by name
+        home_page: The group table served at the root, or None for the episodes
         base_href: Path at the host root the export is served under
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives

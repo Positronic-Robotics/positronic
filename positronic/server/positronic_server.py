@@ -93,13 +93,13 @@ def require_dataset(func):
     return wrapper
 
 
-_MAX_COMPONENT_BYTES = 200
+MAX_COMPONENT_BYTES = 200
 
 
 def _path_component(value: str) -> str:
     """``value`` as one filename component, injectively and within any filesystem's name limit."""
     encoded = quote(value, safe='')
-    if len(encoded.encode()) <= _MAX_COMPONENT_BYTES:
+    if len(encoded.encode()) <= MAX_COMPONENT_BYTES:
         return encoded
     # A digest is never read back as an encoded value: `quote` escapes '='.
     return '=' + hashlib.sha256(value.encode()).hexdigest()
@@ -183,7 +183,7 @@ def _download_segment(key: str) -> str:
     if key in ('', '.', '..'):
         raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
     encoded = quote(key, safe='')
-    if len(encoded.encode()) > _MAX_COMPONENT_BYTES:
+    if len(encoded.encode()) > MAX_COMPONENT_BYTES:
         raise ValueError(
             f'a static value with a key of {len(encoded.encode())} encoded bytes has no link a file is named by'
         )
@@ -330,7 +330,7 @@ def app_state_restored() -> Iterator[None]:
             _api_cache.clear()
 
 
-# The field of a static value's sidebar entry that holds its download link, as `app.js` reads it.
+# The field of a static value's sidebar entry that holds its download link.
 DOWNLOAD_LINK = '__download__'
 
 
@@ -721,7 +721,7 @@ def _recording_chunks_cached(episode_id: int, cache_path: Path) -> Iterator[byte
 
 
 def episode_rrd_path(episode_id: int) -> Path:
-    """The file the recording route serves for `episode_id`, built when the cache holds none."""
+    """The complete cached recording of `episode_id`, built when the cache holds none."""
     cache_path = _recording_cache_path(episode_id)
     if not cache_path.exists():
         for _ in _recording_chunks_cached(episode_id, cache_path):
@@ -871,8 +871,11 @@ def configure_tables(
     """
     episode_columns = set(ep_table_cfg or {})
     for name, cfg in (group_tables or {}).items():
-        if not name or name in ('.', '..') or quote(name, safe='') != name:
-            raise ValueError(f'a group name is one URL path segment (letters, digits, "_", "-", "."), got {name!r}')
+        if not name or name in ('.', '..') or quote(name, safe='') != name or len(name) > MAX_COMPONENT_BYTES:
+            raise ValueError(
+                f'a group name is one URL path segment of at most {MAX_COMPONENT_BYTES} letters, digits, "_", "-" '
+                f'and ".", got {name!r}'
+            )
         group_keys = (cfg.group_keys,) if isinstance(cfg.group_keys, str) else cfg.group_keys
         for key in (*group_keys, *cfg.group_filter_keys):
             if key not in episode_columns:
