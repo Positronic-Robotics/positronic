@@ -306,9 +306,12 @@ def export_static(
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]
-    for files in episodes:
-        for link in files.links:
-            out.target(_on_disk(link, build_id))  # a name the writer refuses stops the export before a write
+    targets: dict[Path, str] = {}
+    for link in (link for files in episodes for link in files.links):
+        # A name the writer refuses, or two names for one file, stops the export before a write.
+        target = out.target(_on_disk(link, build_id))
+        if targets.setdefault(target, link) != link:
+            raise ValueError(f'{link!r} and {targets[target]!r} would be written to one file, {target}')
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
