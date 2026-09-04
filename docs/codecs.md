@@ -61,6 +61,21 @@ Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship �
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
+## Control mode
+
+`SetControlMode(mode)` sets the control law a chunk executes under. At inference it stamps `mode` on every robot command of the decoded chunk, for every arm. At training it is a pass-through. It composes left of the action decoder: `SetControlMode(mode) | action`. The decoder produces the commands, then the mode lands on them. The implementation is in [`positronic/policy/codec.py`](../positronic/policy/codec.py).
+
+`mode` is one of the two control modes in [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py): `Impedance(kq, kqd, kx, kxd)`, the hybrid joint/Cartesian impedance law, or `PositionControl(stiffness=None)`, a position servo. A command without a mode runs under the arm's native law. The driver decides what a mode does: a simulator runs its own law, and a driver that cannot execute the mode raises. [The wire format](connect-your-model.md#actions-server--client) shows the `mode` field a command carries.
+
+A pretrained checkpoint expects the law its training data ran under, so the mode belongs to the checkpoint. Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply it to an action codec:
+
+| Wrapper | Expands to | Used by |
+|---------|-----------|---------|
+| `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` — the gains DROID's Franka ran ([`positronic/cfg/hardware/roboarm`](../positronic/cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
+| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` — the position control PhAIL v1 was trained under | the `phail_v1` pipelines of LeRobot, GR00T, OpenPI and DreamZero |
+
+The wrapper is the `action` argument of `compose`, so it sits inside the `observation & action` pair of the standard composition.
+
 ## Writing custom codecs
 
 Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.

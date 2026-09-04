@@ -25,6 +25,8 @@ OpenPI supports multiple codecs for different use cases:
 - **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
 - **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
+Both DROID codecs execute each chunk under DROID's impedance gains (`codecs.droid_execution`; see [Control mode](../../../docs/codecs.md#control-mode)).
+
 ## 1. Prepare Data
 
 Positronic datasets must be converted into the LeRobot format using an OpenPI codec.

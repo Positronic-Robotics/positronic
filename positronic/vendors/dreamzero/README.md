@@ -182,7 +182,9 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 
 Each codec has a same-named serving pipeline (see [`server.py`](./server.py)), selected as the serve
 subcommand. Since the four `joints*` codecs decode inference identically, `joints` serves any of their
-checkpoints; the `droid` pipeline pairs the pretrained DROID model with its required 320×180 frames.
+checkpoints; the `droid` pipeline pairs the pretrained DROID model with its required 320×180 frames and
+executes each chunk under DROID's impedance gains (`codecs.droid_execution`; see
+[Control mode](../../../docs/codecs.md#control-mode)).
 
 ## Session parameters
 
