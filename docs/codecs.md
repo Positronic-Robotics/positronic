@@ -63,18 +63,14 @@ A `CartesianDelta` is the one command this cannot convert on its own: a delta ha
 
 ## Control mode
 
-`SetControlMode(mode)` sets the control law a chunk executes under. At inference it stamps `mode` on every robot command of the decoded chunk, for every arm. At training it is a pass-through. It composes left of the action decoder: `SetControlMode(mode) | action`. The decoder produces the commands, then the mode lands on them. The implementation is in [`positronic/policy/codec.py`](../positronic/policy/codec.py).
+`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](connect-your-model.md#actions-server--client)). Implementation in [`positronic/policy/codec.py`](../positronic/policy/codec.py).
 
-`mode` is one of the two control modes in [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py): `Impedance(kq, kqd, kx, kxd)`, the hybrid joint/Cartesian impedance law, or `PositionControl(stiffness=None)`, a position servo. A command without a mode runs under the arm's native law. The driver decides what a mode does: a simulator runs its own law, and a driver that cannot execute the mode raises. [The wire format](connect-your-model.md#actions-server--client) shows the `mode` field a command carries.
-
-A pretrained checkpoint expects the law its training data ran under, so the mode belongs to the checkpoint. Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply it to an action codec:
+Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply it to an action codec:
 
 | Wrapper | Expands to | Used by |
 |---------|-----------|---------|
-| `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` — the gains DROID's Franka ran ([`positronic/cfg/hardware/roboarm`](../positronic/cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
-| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` — the position control PhAIL v1 was trained under | the `phail_v1` pipelines of LeRobot, GR00T, OpenPI and DreamZero |
-
-The wrapper is the `action` argument of `compose`, so it sits inside the `observation & action` pair of the standard composition.
+| `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` ([the DROID gains](../positronic/cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
+| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` | the `phail_v1` pipelines of LeRobot, GR00T, OpenPI and DreamZero |
 
 ## Writing custom codecs
 
