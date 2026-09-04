@@ -420,6 +420,44 @@ def test_the_flag_admits_any_http_and_no_other_scheme(base_url: str, allowed: bo
     assert github_device_flow.platform_url_is_allowed(base_url, plaintext_http=True) is allowed
 
 
+def test_a_malformed_platform_url_exits_with_one_line():
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example:notaport']
+        )
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.main()
+
+    assert 'notaport' in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ('platform_url', 'trusts_env'), [('http://127.0.0.1:8080', False), ('https://gateway.example', True)]
+)
+def test_a_plain_http_gateway_client_ignores_an_environment_proxy(platform_url: str, trusts_env: bool):
+    """`HTTP_PROXY` with no matching `NO_PROXY` would carry a plain-http token off the machine."""
+    clients: list[dict[str, object]] = []
+    real_client = httpx.Client
+
+    def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
+        return RegisterResponse.model_validate(ScriptedGateway().body)
+
+    def capture(**kwargs: object) -> httpx.Client:
+        clients.append(kwargs)
+        return real_client(**kwargs)  # pyright: ignore[reportArgumentType]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'register_with_github', record)
+        patch.setattr(httpx, 'Client', capture)
+        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', f'--platform-url={platform_url}'])
+
+        github_device_flow.main()
+
+    gateway = next(c for c in clients if c.get('base_url') == platform_url)
+    assert gateway['trust_env'] is trusts_env
+
+
 def test_the_command_refuses_a_platform_that_would_show_the_token():
     """A shared-address http platform never sees the GitHub token: the command stops before the code."""
     reached: list[object] = []

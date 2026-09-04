@@ -54,10 +54,6 @@ DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_EXPIRES_IN_S = 900.0
 
 
-# A device code lives minutes (RFC 8628 gives 15 min as the example); a day bounds what a poll may sleep.
-_LONGEST_DURATION_S = 24 * 60 * 60
-
-
 class DeviceFlowError(Exception):
     """GitHub refused the flow, answered something this code cannot read, or is unreachable."""
 
@@ -153,8 +149,9 @@ class GitHubDeviceFlow:
         """A number of seconds GitHub may omit. Absent takes the default; present must be above zero and sleepable.
 
         A negative or NaN value raises inside `time.sleep`, a zero one polls until the code expires, and a
-        value past `_LONGEST_DURATION_S` overflows `time.sleep` or `float` itself.
+        value past a day overflows `time.sleep` or `float` itself.
         """
+        longest_s = 24 * 60 * 60  # a device code lives minutes (RFC 8628 gives 15 min as the example)
         if field not in payload:
             return default
         value = payload[field]
@@ -165,7 +162,7 @@ class GitHubDeviceFlow:
             seconds = float(value)
         except OverflowError:  # an integer past what a float holds is as unsleepable as infinity
             seconds = math.inf
-        if not math.isfinite(seconds) or seconds <= 0 or seconds > _LONGEST_DURATION_S:
+        if not math.isfinite(seconds) or seconds <= 0 or seconds > longest_s:
             raise DeviceFlowError(f'GitHub answered with {field}={seconds}, which is no length of time')
         return seconds
 
@@ -306,17 +303,19 @@ def main() -> None:
         raise SystemExit(f'pass --client-id, or set {GITHUB_CLIENT_ID_ENV} to the public OAuth client id')
     try:
         base_url = resolve_base_url(args.platform_url)
-    except ValueError as exc:
-        # An empty or relative platform URL is an argument fault, so it reads like the line above.
+        allowed = platform_url_is_allowed(base_url, plaintext_http=args.plaintext_http)
+    except (ValueError, httpx.InvalidURL) as exc:
+        # An empty, relative or malformed platform URL is an argument fault, so it reads like the line above.
         raise SystemExit(str(exc)) from exc
-    if not platform_url_is_allowed(base_url, plaintext_http=args.plaintext_http):
+    if not allowed:
         raise SystemExit(
             f'{base_url} would carry the GitHub token in the clear: '
             'use https, a loopback address, or pass --plaintext-http on a link you trust'
         )
 
     github = httpx.Client(timeout=REQUEST_TIMEOUT)
-    gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT)
+    # An environment proxy would carry a plain-http token off the machine, past the URL gate above.
+    gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT, trust_env=httpx.URL(base_url).scheme == 'https')
     with github, gateway, PlatformClient(client=gateway) as platform:
         try:
             response = register_with_github(
