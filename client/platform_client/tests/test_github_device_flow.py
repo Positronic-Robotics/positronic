@@ -369,7 +369,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
 
 @pytest.mark.parametrize(('flag', 'expected'), [(['--rotate'], True), ([], False)])
 def test_the_command_asks_for_rotation_only_when_the_flag_is_given(flag: list[str], expected: bool):
-    """Without the flag the command registers as it always did, and the account keeps its key."""
+    """Without the flag the command sends `rotate=False`, and the account keeps the key it holds."""
     asked: list[bool] = []
 
     def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:

@@ -134,6 +134,30 @@ class GitHubDeviceFlow:
         self._monotonic = monotonic
         self._sleep = sleep
 
+    @staticmethod
+    def _require_str(payload: Mapping[str, object], field: str) -> str:
+        value = payload.get(field)
+        if not isinstance(value, str) or not value:
+            raise DeviceFlowError(f'GitHub answered without {field}')
+        return value
+
+    @staticmethod
+    def _optional_duration_s(payload: Mapping[str, object], field: str, default: float) -> float:
+        """A number of seconds GitHub may omit. Absent takes the default; present must be finite and above zero.
+
+        A negative or NaN value raises inside `time.sleep`, and a zero one polls until the code expires.
+        """
+        if field not in payload:
+            return default
+        value = payload[field]
+        # `bool` is an `int`, so `True` would pass as an interval of one second.
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise DeviceFlowError(f'GitHub answered with an unreadable {field}')
+        seconds = float(value)
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise DeviceFlowError(f'GitHub answered with {field}={seconds}, which is no length of time')
+        return seconds
+
     def start_device_authorization(self) -> DeviceAuthorization:
         """Step one: ask GitHub for a device code, and for the short code the user types."""
         payload = self._post_form(DEVICE_CODE_URL, {_CLIENT_ID_FIELD: self._client_id, 'scope': IDENTITY_SCOPE})
@@ -141,11 +165,11 @@ class GitHubDeviceFlow:
         if error is not None:
             raise DeviceFlowError(f'GitHub refused the device-code request: {error}')
         return DeviceAuthorization(
-            device_code=_require_str(payload, _DEVICE_CODE_FIELD),
-            user_code=_require_str(payload, 'user_code'),
-            verification_uri=_require_str(payload, 'verification_uri'),
-            interval=_optional_duration_s(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
-            expires_in=_optional_duration_s(payload, 'expires_in', DEFAULT_EXPIRES_IN_S),
+            device_code=self._require_str(payload, _DEVICE_CODE_FIELD),
+            user_code=self._require_str(payload, 'user_code'),
+            verification_uri=self._require_str(payload, 'verification_uri'),
+            interval=self._optional_duration_s(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
+            expires_in=self._optional_duration_s(payload, 'expires_in', DEFAULT_EXPIRES_IN_S),
         )
 
     @staticmethod
@@ -191,11 +215,13 @@ class GitHubDeviceFlow:
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
-                return _require_str(payload, 'access_token')
+                return self._require_str(payload, 'access_token')
             if outcome is PollOutcome.SLOW_DOWN:
                 # GitHub repeats the original interval in this answer, so the step raises the rate;
                 # taking the value alone would poll on at the rate GitHub just refused.
-                interval = max(interval + slow_down_step_s, _optional_duration_s(payload, _INTERVAL_FIELD, interval))
+                interval = max(
+                    interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
+                )
             elif outcome is not PollOutcome.PENDING:
                 raise DeviceFlowError(terminal_messages.get(outcome, f'GitHub refused the device code: {error}'))
 
@@ -220,30 +246,6 @@ class GitHubDeviceFlow:
         if not isinstance(payload, dict):
             raise DeviceFlowError('GitHub answered with no JSON object')
         return payload
-
-
-def _require_str(payload: Mapping[str, object], field: str) -> str:
-    value = payload.get(field)
-    if not isinstance(value, str) or not value:
-        raise DeviceFlowError(f'GitHub answered without {field}')
-    return value
-
-
-def _optional_duration_s(payload: Mapping[str, object], field: str, default: float) -> float:
-    """A number of seconds GitHub may omit. Absent takes the default; present must be finite and above zero.
-
-    A negative or NaN value raises inside `time.sleep`, and a zero one polls until the code expires.
-    """
-    if field not in payload:
-        return default
-    value = payload[field]
-    # `bool` is an `int`, and `True` as an interval would poll once a second rather than refuse.
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise DeviceFlowError(f'GitHub answered with an unreadable {field}')
-    seconds = float(value)
-    if not math.isfinite(seconds) or seconds <= 0:
-        raise DeviceFlowError(f'GitHub answered with {field}={seconds}, which is no length of time')
-    return seconds
 
 
 def register_with_github(
