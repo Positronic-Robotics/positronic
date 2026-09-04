@@ -20,7 +20,12 @@ from typing import Any
 
 import numpy as np
 
+from positronic import keys
 from positronic.simulator.molmo_spaces import mapping
+from positronic.simulator.molmo_spaces.adapter import CAMERAS
+
+# The fixture stands for a DROID-system benchmark: each camera rides under the last name of its candidates.
+_WRIST, _EXTERIOR = (CAMERAS[k][-1] for k in (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE))
 
 RIG_HEIGHT, RIG_WIDTH = 36, 64  # (H, W); DROID exo/wrist cameras are 16:9.
 
@@ -41,8 +46,8 @@ def build_payload() -> dict[str, Any]:  # grip is a float32 scalar, the rest are
         # Identity orientation, scalar-first (wxyz) as env.py reports via mju_mat2Quat.
         mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
         mapping.OBS_GRIP: np.float32(0.5),
-        mapping.MOLMO_WRIST_CAMERA: _marked_frame((200, 40, 40)),  # reddish wrist view
-        mapping.MOLMO_EXTERIOR_CAMERA: _marked_frame((40, 160, 40)),  # greenish exterior view
+        _WRIST: _marked_frame((200, 40, 40)),  # reddish wrist view
+        _EXTERIOR: _marked_frame((40, 160, 40)),  # greenish exterior view
     }
 
 

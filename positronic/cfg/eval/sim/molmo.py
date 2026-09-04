@@ -9,7 +9,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT, MolmoAdapter
+from positronic.simulator.molmo_spaces.adapter import CAMERAS, MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 # How far the harness deadline sits above the benchmark horizon. Being sim-time, the spare budget costs
@@ -18,7 +18,6 @@ _TIMEOUT_MARGIN_SEC = 1.0
 
 
 @cfn.config(
-    camera_dict=DEFAULT_CAMERA_DICT,
     suite=None,
     scene_dataset=None,
     task_config=None,
@@ -36,7 +35,6 @@ def benchmarks(
     episodes: int | list[int] | None,
     trial_count: int,
     timeout: float | None,
-    camera_dict: dict[str, str],
     seed: int | None,
 ) -> Eval:
     """A MolmoSpaces eval: the embodiment proxies a remote MolmoSpaces env, the task carries the scenario.
@@ -57,10 +55,10 @@ def benchmarks(
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
-    proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces())
+    proxy = RemoteEnvControlSystem(MolmoAdapter(), serve_molmo_spaces())
     # MolmoSpaces drives a Franka DROID rig.
     embodiment = remote_franka_embodiment(
-        proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
+        proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
 

@@ -1,7 +1,7 @@
 """Pure MolmoSpaces <-> positronic-wire mappings, free of both molmo_spaces and positronic.
 
-Imported from two interpreters: the client-side ``MolmoAdapter`` (positronic) resolves camera keys with
-it, and the molmo-venv ``env.py`` builds its raw observation payload and decodes wire commands with it. It
+Imported from two interpreters: the client-side ``MolmoAdapter`` (positronic) reads the raw payload and builds
+the reset token with it, and the molmo-venv ``env.py`` builds that payload and decodes wire commands with it. It
 imports numpy plus the positronic-free ``protocol`` (which owns the wire command tags), so it loads under a
 bare pytest and inside the molmo venv alike — the fixture tests exercise it without either framework. The
 MuJoCo reads that need the live model (joint velocities, the end-effector world pose) stay in ``env.py``;
@@ -127,16 +127,6 @@ OBS_EEF_QUAT = 'eef_quat'
 OBS_GRIP = 'grip'
 OBS_SIM_STATE = 'sim_state'
 
-# MolmoSpaces DROID rig camera names (FrankaDroidCameraSystem); a benchmark's own variants replace the defaults
-# and the adapter resolves them so the default camera_dict works across the benchmarks: the light-randomization
-# suite records the exterior as ``droid_shoulder_light_randomization`` (MolmoSpaces' Pi policy prefers it), and
-# the RandCam suite records it as ``randomized_zed2_analogue_1`` (its ``--camera_names`` exterior); the Zed wrist
-# variant is ``wrist_camera_zed_mini``.
-MOLMO_WRIST_CAMERA = 'wrist_camera'
-MOLMO_EXTERIOR_CAMERA = 'exo_camera_1'
-MOLMO_WRIST_CAMERA_VARIANTS = ('wrist_camera_zed_mini',)
-MOLMO_EXTERIOR_CAMERA_VARIANTS = ('droid_shoulder_light_randomization', 'randomized_zed2_analogue_1')
-
 # The Robotiq 2F-85 finger qpos saturates at this closure; the DROID observation's grip is normalized against
 # it into the [0, 1] closure the policy was trained on (molmospaces pi_policy.py:126).
 GRIPPER_QPOS_CLOSED = 0.824033
@@ -238,18 +228,6 @@ def wire_command_to_arm_action(
                 f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
             )
     return target.astype(np.float32)
-
-
-def resolve_camera_key(available: dict[str, Any], key: str, variants: tuple[str, ...] = ()) -> str:
-    """The MolmoSpaces observation key to read for a camera role, mirroring the upstream policy's precedence.
-
-    A present benchmark variant wins over ``key`` (matching molmo_spaces pi_policy); with no variants ``key``
-    is read as-is. Raises with the candidate list on a miss.
-    """
-    for candidate in (*variants, key):
-        if candidate in available:
-            return candidate
-    raise KeyError(f'observation has none of {(*variants, key)}; available: {sorted(available.keys())}')
 
 
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:

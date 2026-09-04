@@ -76,29 +76,6 @@ def test_wire_command_cartesian_unsupported():
         )
 
 
-def test_camera_key_default_and_variant_precedence():
-    default = mapping.MOLMO_WRIST_CAMERA
-    variants = mapping.MOLMO_WRIST_CAMERA_VARIANTS
-    # Default present, no variant -> the default.
-    assert mapping.resolve_camera_key({default: 1}, default, variants) == default
-    # A benchmark-variant key present wins over the default (matches molmo_spaces pi_policy precedence).
-    both = {default: 1, variants[0]: 1}
-    assert mapping.resolve_camera_key(both, default, variants) == variants[0]
-    # Variant only (default absent) -> the variant.
-    assert mapping.resolve_camera_key({variants[0]: 1}, default, variants) == variants[0]
-
-
-def test_camera_key_explicit_nondefault_read_as_is():
-    # An explicitly configured non-default key is read as-is, never shadowed by a variant decoy.
-    obs = {'my_cam': 1, mapping.MOLMO_WRIST_CAMERA_VARIANTS[0]: 1}
-    assert mapping.resolve_camera_key(obs, 'my_cam') == 'my_cam'
-
-
-def test_camera_key_miss_raises():
-    with pytest.raises(KeyError):
-        mapping.resolve_camera_key({'other': 1}, mapping.MOLMO_WRIST_CAMERA)
-
-
 def _episodes(*horizons_sec):
     return [
         types.SimpleNamespace(task={} if sec is None else {mapping.MOLMO_TASK_HORIZON_SEC: sec}) for sec in horizons_sec
@@ -141,15 +118,6 @@ def test_task_horizon_override_wins():
     # a benchmark that declares none, or disagrees, still resolve.
     assert mapping.resolve_task_horizon_steps(_episodes(20), 66.0, override_steps=500) == 500
     assert mapping.resolve_task_horizon_steps(_episodes(20, 30, None), 66.0, override_steps=455) == 455
-
-
-def test_exterior_camera_variants_cover_light_randomization_and_randcam():
-    # The default exterior mapping must resolve both benchmark exterior names: RandCam records
-    # randomized_zed2_analogue_1, not exo_camera_1.
-    default = mapping.MOLMO_EXTERIOR_CAMERA
-    variants = mapping.MOLMO_EXTERIOR_CAMERA_VARIANTS
-    for name in ('droid_shoulder_light_randomization', 'randomized_zed2_analogue_1'):
-        assert mapping.resolve_camera_key({name: 1}, default, variants) == name
 
 
 def test_unpack_wire_pose_round_trips_translation_and_rotation():

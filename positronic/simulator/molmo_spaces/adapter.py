@@ -14,30 +14,18 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
-# Per default MolmoSpaces DROID camera, the benchmark-variant keys the upstream Pi policy falls back to; an
-# explicitly configured non-default camera key is read as-is (no variants).
-_CAMERA_VARIANTS = {
-    mapping.MOLMO_WRIST_CAMERA: mapping.MOLMO_WRIST_CAMERA_VARIANTS,
-    mapping.MOLMO_EXTERIOR_CAMERA: mapping.MOLMO_EXTERIOR_CAMERA_VARIANTS,
+# The MolmoSpaces camera names each logical image reads, first present wins. Benchmarks name the same cameras
+# differently by generation; the order mirrors MolmoSpaces' own Pi policy (``policy/learned_policy/pi_policy.py``).
+CAMERAS = {
+    keys.WRIST_IMAGE: ('wrist_camera_zed_mini', 'wrist_camera'),
+    keys.EXTERIOR_IMAGE: ('droid_shoulder_light_randomization', 'exo_camera_1'),
 }
-
-# !!!!!!!!!! Where do _CAMERA_VARIANTS come from?
-
-
-# Which MolmoSpaces camera each logical observation reads on the DROID rig — the pairing the benchmarks record,
-# and the one whose variants the table above resolves.
-DEFAULT_CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
-
 
 # Each benchmark dimension's trial key: the env's records and the reset token carry the dimension names.
 _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
 
 class MolmoAdapter(WireCommandAdapter):
-    def __init__(self, camera_dict: dict[str, str]) -> None:
-        super().__init__()
-        self._camera_dict = camera_dict
-
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             {
@@ -62,10 +50,9 @@ class MolmoAdapter(WireCommandAdapter):
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
-        for logical, molmo_key in self._camera_dict.items():
-            env_key = mapping.resolve_camera_key(raw_obs, molmo_key, _CAMERA_VARIANTS.get(molmo_key, ()))
-            frame = raw_obs[env_key]
-            obs[logical] = pimm.shared_memory.NumpySMAdapter.lazy_init(frame, None)
+        for logical, candidates in CAMERAS.items():
+            key = next((c for c in candidates if c in raw_obs), candidates[-1])
+            obs[logical] = pimm.shared_memory.NumpySMAdapter.lazy_init(raw_obs[key], None)
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

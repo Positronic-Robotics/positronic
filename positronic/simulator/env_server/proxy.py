@@ -9,7 +9,7 @@ back — so only raw arrays cross the boundary and the World's virtual clock adv
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
@@ -141,7 +141,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
 def remote_franka_embodiment(
     proxy: RemoteEnvControlSystem,
-    camera_dict: dict[str, str],
+    camera_dict: Mapping[str, object],
     *,
     descriptor: str,
     static_meta: dict[str, Any] | None = None,
