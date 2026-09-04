@@ -48,6 +48,17 @@ from positronic.server.dataset_utils import (
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
 
+
+@dataclass(frozen=True)
+class PageConfig:
+    """The settings every page is rendered with; `configure_pages` fills them."""
+
+    base_href: str = '/'
+    title: str = ''  # empty = the dataset root
+    show_paths: bool = True
+    static_export: bool = False
+
+
 # Global app state
 app_state: dict[str, object] = {
     'dataset': None,
@@ -59,10 +70,7 @@ app_state: dict[str, object] = {
     'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
-    'base_href': '/',
-    'title': '',  # empty = the dataset root
-    'show_paths': True,
-    'static_export': False,
+    'pages': PageConfig(),
 }
 
 
@@ -140,9 +148,13 @@ GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
 
 
+def _page_config() -> PageConfig:
+    return cast(PageConfig, app_state['pages'])
+
+
 def _shown_root() -> str:
     """The dataset root the pages report; empty when the viewer hides paths."""
-    return str(app_state['root']) if app_state['show_paths'] else ''
+    return str(app_state['root']) if _page_config().show_paths else ''
 
 
 def _route(endpoint: Callable, **params: str) -> str:
@@ -208,14 +220,15 @@ def _page_context() -> dict[str, Any]:
         # Episodes is home, insert at beginning
         nav_items.insert(0, {'name': 'episodes', 'url': '.', 'label': 'Episodes'})
 
+    pages = _page_config()
     return {
         'nav_items': nav_items,
         'home_page': home_page,
         'episodes_url': episodes_url,
-        'base_href': normalized_base_href(str(app_state['base_href'])),
-        'title': str(app_state['title']) if app_state['title'] else _shown_root(),
-        'show_paths': app_state['show_paths'],
-        'static_export': app_state['static_export'],
+        'base_href': pages.base_href,
+        'title': pages.title or _shown_root(),
+        'show_paths': pages.show_paths,
+        'static_export': pages.static_export,
     }
 
 
@@ -260,10 +273,9 @@ def configure_pages(
     *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False
 ) -> None:
     """Set where the pages are served and what they show; see `main` for what each value does."""
-    app_state['base_href'] = normalized_base_href(base_href)
-    app_state['title'] = title
-    app_state['show_paths'] = show_paths
-    app_state['static_export'] = static_export
+    app_state['pages'] = PageConfig(
+        base_href=normalized_base_href(base_href), title=title, show_paths=show_paths, static_export=static_export
+    )
 
 
 def install_dataset(dataset: Dataset) -> None:

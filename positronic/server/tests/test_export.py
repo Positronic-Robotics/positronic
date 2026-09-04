@@ -1,6 +1,7 @@
 """What one export writes, where, and what it keeps off a page."""
 
 import json
+import threading
 from dataclasses import fields
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -278,6 +279,14 @@ def test_a_static_value_named_with_a_path_step_stops_the_export_before_it_writes
     assert not (tmp_path / 'out').exists()
 
 
+def test_a_static_value_named_with_a_backslash_stops_the_export_before_it_writes(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'models\\scene': b'a mesh'})
+
+    with pytest.raises(ValueError, match='outside'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
 def test_the_assets_go_with_the_root_base_href_only(dataset, tmp_path):
     with pytest.raises(ValueError, match='assets'):
         an_export(dataset, tmp_path / 'out', base_href='/v/tok/', assets=True)
@@ -307,6 +316,29 @@ def test_an_empty_directory_is_exported_into(dataset, tmp_path):
     out.mkdir()
 
     assert an_export(dataset, out)
+
+
+def test_a_second_export_into_the_directory_of_a_running_one_is_refused(dataset, tmp_path):
+    out = tmp_path / 'out'
+    refusals: list[ValueError] = []
+
+    def second():
+        try:
+            an_export(dataset, out)
+        except ValueError as error:
+            refusals.append(error)
+
+    with positronic_server.app_state_restored():  # the first export, holding the state
+        thread = threading.Thread(target=second)
+        thread.start()
+        thread.join(0.2)
+        out.mkdir()
+        (out / 'index.html').write_text('the first export')
+    thread.join()
+
+    assert [str(error).partition(';')[0] for error in refusals] == [f'{out} is not empty']
+    assert [path.name for path in out.iterdir()] == ['index.html']
+    assert (out / 'index.html').read_text() == 'the first export'
 
 
 def test_a_download_inside_a_list_is_linked_by_its_index_and_served(dataset, tmp_path):
