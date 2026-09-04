@@ -4,7 +4,6 @@ It asks GitHub for a device code, shows the user the short code, polls until Git
 hands the access token to `users.register` as its `credential`.
 
 Usage
-  export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
   platform-register --alias='<display name>'
   platform-register --client-id=<id> --platform-url=http://127.0.0.1:8080
   platform-register --platform-url=http://staging.internal:8080 --plaintext-http  # a plain http link
@@ -40,7 +39,10 @@ DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
 # writes nothing, so the platform holds no power over the account.
 IDENTITY_SCOPE = 'read:user user:email'
 
-# The platform's OAuth app id. The device flow carries no client secret, so the id is public.
+# The platform's OAuth app `positronic-platform-device-flow`. A device flow carries no client
+# secret, so its client id is public (RFC 8628 section 3.1).
+DEFAULT_GITHUB_CLIENT_ID = 'Ov23liw7qPBHHzUfjfZA'
+
 GITHUB_CLIENT_ID_ENV = 'POSITRONIC_PLATFORM_GITHUB_CLIENT_ID'
 
 # GitHub's spelling of every field this flow reads or writes. The step that writes one and the step
@@ -309,10 +311,15 @@ def main() -> None:
     parser.add_argument(
         '--plaintext-http', action='store_true', help='reach an http platform that is not loopback, on a link you trust'
     )
-    parser.add_argument('--client-id', default=os.environ.get(GITHUB_CLIENT_ID_ENV), help=GITHUB_CLIENT_ID_ENV)
+    parser.add_argument(
+        '--client-id',
+        default=os.environ.get(GITHUB_CLIENT_ID_ENV, DEFAULT_GITHUB_CLIENT_ID),
+        help=f'the OAuth app to register through, else {GITHUB_CLIENT_ID_ENV}, else the platform app',
+    )
     args = parser.parse_args()
     if not args.client_id:
-        raise SystemExit(f'pass --client-id, or set {GITHUB_CLIENT_ID_ENV} to the public OAuth client id')
+        # GitHub answers an empty id with an error that names nothing, so an empty override stops here.
+        raise SystemExit(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
     try:
         base_url = resolve_base_url(args.platform_url)
         allowed = platform_url_is_allowed(base_url, plaintext_http=args.plaintext_http)

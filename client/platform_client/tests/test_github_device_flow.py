@@ -20,9 +20,11 @@ from platform_client.client import PlatformClient
 from platform_client.github_device_flow import (
     ACCESS_TOKEN_URL,
     CONNECT_TIMEOUT_S,
+    DEFAULT_GITHUB_CLIENT_ID,
     DEVICE_CODE_URL,
     DEVICE_GRANT_TYPE,
     GATEWAY_GITHUB_READS,
+    GITHUB_CLIENT_ID_ENV,
     IDENTITY_SCOPE,
     MAX_REQUEST_STALL_S,
     POOL_TIMEOUT_S,
@@ -404,6 +406,66 @@ def test_the_command_asks_for_rotation_only_when_the_flag_is_given(flag: list[st
         github_device_flow.main()
 
     assert asked == [expected]
+
+
+ENVIRONMENT_ID = 'Iv1.fromtheenvironment'
+FLAG_ID = 'Iv1.fromtheflag'
+
+
+@pytest.mark.parametrize(
+    ('flag', 'environment', 'expected'),
+    [
+        ([], None, DEFAULT_GITHUB_CLIENT_ID),
+        ([], ENVIRONMENT_ID, ENVIRONMENT_ID),
+        ([f'--client-id={FLAG_ID}'], ENVIRONMENT_ID, FLAG_ID),
+        ([f'--client-id={FLAG_ID}'], None, FLAG_ID),
+    ],
+    ids=['neither', 'the environment', 'both', 'the flag'],
+)
+def test_the_flag_beats_the_environment_and_both_beat_the_platform_app(
+    flag: list[str], environment: str | None, expected: str
+):
+    """A user who sets nothing registers through the platform's own OAuth app."""
+    asked: list[str] = []
+
+    def register(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
+        return RegisterResponse.model_validate(ScriptedGateway().body)
+
+    def capture(client_id: str, http: httpx.Client) -> GitHubDeviceFlow:
+        asked.append(client_id)
+        return GitHubDeviceFlow(client_id, http)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delenv(GITHUB_CLIENT_ID_ENV, raising=False)
+        if environment is not None:
+            patch.setenv(GITHUB_CLIENT_ID_ENV, environment)
+        patch.setattr(github_device_flow, 'register_with_github', register)
+        patch.setattr(github_device_flow, 'GitHubDeviceFlow', capture)
+        patch.setattr(sys, 'argv', ['platform-register', '--platform-url=https://gateway.example', *flag])
+
+        github_device_flow.main()
+
+    assert asked == [expected]
+
+
+@pytest.mark.parametrize('flag', [['--client-id='], []], ids=['the flag', 'the environment'])
+def test_an_override_emptied_rather_than_unset_stops_before_github(flag: list[str]):
+    """An empty value overrides the default with nothing, and GitHub reads an empty id as a bad request."""
+    reached: list[str] = []
+
+    def capture(client_id: str, http: httpx.Client) -> GitHubDeviceFlow:
+        reached.append(client_id)
+        return GitHubDeviceFlow(client_id, http)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(GITHUB_CLIENT_ID_ENV, '')
+        patch.setattr(github_device_flow, 'GitHubDeviceFlow', capture)
+        patch.setattr(sys, 'argv', ['platform-register', '--platform-url=https://gateway.example', *flag])
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.main()
+
+    assert GITHUB_CLIENT_ID_ENV in str(raised.value) and reached == []
 
 
 @pytest.mark.parametrize(

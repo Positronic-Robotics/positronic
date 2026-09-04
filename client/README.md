@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.4.0"
+uv add "positronic-platform-client==0.4.1"
 ```
 
 `platform_client` never imports `positronic`. The `platform-register` command ships here. The
@@ -26,10 +26,12 @@ it prints a short code and a URL, waits while you authorize the app in a browser
 the GitHub account that authorized it. The package install above puts the command on your path.
 
 ```bash
-export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
 platform-register --alias=<display name>
 export POSITRONIC_PLATFORM_API_KEY=<the key the command printed>
 ```
+
+The command registers through the platform's own OAuth app, whose client id it carries as its
+default. `--client-id` and `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` name another app instead.
 
 The GitHub token carries the scopes `read:user` and `user:email`. The platform reads the account
 once, mints a key, and stores no GitHub token.
