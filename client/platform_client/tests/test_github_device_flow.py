@@ -11,6 +11,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -293,6 +294,24 @@ def test_a_github_outage_is_reported_as_unavailable():
         flow.poll_for_token(_authorization())
 
 
+def test_a_poll_that_times_out_is_retried_at_a_slower_rate():
+    """RFC 8628 §3.5: a timed-out poll slows down and tries again; the code may already be authorized."""
+    answers = iter([None, dict(GRANTED)])
+    slept: list[float] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = next(answers)
+        if body is None:
+            raise httpx.ReadTimeout('no answer in time', request=request)
+        return httpx.Response(200, json=body)
+
+    http = httpx.Client(transport=httpx.MockTransport(answer))
+    flow = GitHubDeviceFlow(CLIENT_ID, http, monotonic=lambda: 0.0, sleep=slept.append)
+
+    assert flow.poll_for_token(_authorization()) == GRANTED['access_token']
+    assert slept == [_authorization().interval, _authorization().interval + 5.0]
+
+
 def test_an_unreachable_github_is_reported_as_unreachable():
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError('connection refused', request=request)
@@ -443,9 +462,9 @@ def test_a_plain_http_gateway_client_ignores_an_environment_proxy(platform_url: 
     def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
         return RegisterResponse.model_validate(ScriptedGateway().body)
 
-    def capture(**kwargs: object) -> httpx.Client:
+    def capture(**kwargs: Any) -> httpx.Client:
         clients.append(kwargs)
-        return real_client(**kwargs)  # pyright: ignore[reportArgumentType]
+        return real_client(**kwargs)
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(github_device_flow, 'register_with_github', record)

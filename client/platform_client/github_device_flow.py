@@ -58,6 +58,10 @@ class DeviceFlowError(Exception):
     """GitHub refused the flow, answered something this code cannot read, or is unreachable."""
 
 
+class _PollTimedOut(DeviceFlowError):
+    """One request timed out. The poll loop retries it; every other caller sees a DeviceFlowError."""
+
+
 # One request's phases. httpx bounds inactivity inside each one separately, never the whole request.
 CONNECT_TIMEOUT_S = 5.0
 READ_TIMEOUT_S = 10.0
@@ -212,14 +216,20 @@ class GitHubDeviceFlow:
             if self._monotonic() + interval > deadline:
                 raise DeviceFlowError('the device code was not authorized in time')
             self._sleep(interval)
-            payload = self._post_form(
-                ACCESS_TOKEN_URL,
-                {
-                    _CLIENT_ID_FIELD: self._client_id,
-                    _DEVICE_CODE_FIELD: authorization.device_code,
-                    'grant_type': DEVICE_GRANT_TYPE,
-                },
-            )
+            try:
+                payload = self._post_form(
+                    ACCESS_TOKEN_URL,
+                    {
+                        _CLIENT_ID_FIELD: self._client_id,
+                        _DEVICE_CODE_FIELD: authorization.device_code,
+                        'grant_type': DEVICE_GRANT_TYPE,
+                    },
+                )
+            except _PollTimedOut:
+                # RFC 8628 §3.5: a poll that timed out slows the rate and tries again; the code may
+                # already be authorized, and the deadline above ends the flow.
+                interval += slow_down_step_s
+                continue
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
@@ -243,6 +253,8 @@ class GitHubDeviceFlow:
             response = self._http.request(
                 'POST', url, data=dict(data), headers={'accept': 'application/json'}, timeout=REQUEST_TIMEOUT
             )
+        except httpx.TimeoutException as exc:
+            raise _PollTimedOut('GitHub did not answer in time') from exc
         except httpx.HTTPError as exc:
             raise DeviceFlowError('GitHub is unreachable') from exc
         if response.status_code >= 400:
