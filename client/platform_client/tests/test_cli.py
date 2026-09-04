@@ -375,3 +375,11 @@ def test_a_key_that_did_land_is_kept_when_the_platform_file_does_not(config, mon
     assert (config / API_KEY_FILENAME).read_text() == 'pk_live_new\n'
     assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
     assert not list(config.glob('.*'))  # no staged file is left behind by a write that landed
+
+
+@pytest.mark.parametrize('limit', ['0', '-1', 'ten'])
+def test_a_limit_that_is_not_a_positive_integer_ends_at_the_parser(config, gateway, limit: str):
+    _registered(config)
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'list', '--limit', limit])
+    assert raised.value.code == 2 and gateway.requests == []
