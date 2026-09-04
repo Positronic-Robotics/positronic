@@ -418,6 +418,16 @@ def test_every_static_value_a_page_links_as_a_download_is_named_by_its_field_pat
     assert list(download_paths(static)) == ['scene', 'notes', 'nested.blob', 'many.0.a', 'many.1']
 
 
+def test_a_static_value_the_download_route_does_not_read_back_gets_no_link():
+    for static in ({'': b'x'}, {'a': {'': b'x'}}, {'a.b': b'1', 'a': {'b': b'2'}}):
+        with pytest.raises(ValueError, match='no link'):
+            list(download_paths(static))
+
+
+def test_a_dotted_key_beside_an_unrelated_nested_value_keeps_both_links():
+    assert list(download_paths({'a.b': b'1', 'a': {'c': b'2'}})) == ['a.b', 'a.c']
+
+
 def test_a_base_href_that_starts_at_the_server_root_stands():
     assert normalized_base_href('/') == '/'
     assert normalized_base_href('/v//tok/') == '/v//tok/'

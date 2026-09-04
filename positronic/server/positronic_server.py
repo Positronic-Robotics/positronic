@@ -272,7 +272,12 @@ def normalized_base_href(value: str) -> str:
 def configure_pages(
     *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False
 ) -> None:
-    """Set where the pages are served and what they show; see `main` for what each value does."""
+    """Set where the pages are served and what they show.
+
+    `base_href` is the path at the server root every page link and API call resolves against. `title` is
+    the header text, the dataset root when empty. `show_paths` says whether a page reports where the
+    dataset lives. `static_export` makes the pages read the files a static export writes.
+    """
     app_state['pages'] = PageConfig(
         base_href=normalized_base_href(base_href), title=title, show_paths=show_paths, static_export=static_export
     )
@@ -310,16 +315,31 @@ def is_download(value: object) -> bool:
     return isinstance(value, bytes) or (isinstance(value, str) and len(value) > 1024)
 
 
-def download_paths(value: object, path: str = '') -> Iterator[str]:
-    """The field path of every static value an episode page links as a download; a list item by its index."""
+def _downloads(value: object, path: str) -> Iterator[tuple[str, object]]:
     if is_download(value):
-        yield path
+        yield path, value
     elif isinstance(value, dict):
         for key, item in value.items():
-            yield from download_paths(item, f'{path}.{key}' if path else key)
+            yield from _downloads(item, f'{path}.{key}' if path else key)
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            yield from download_paths(item, f'{path}.{index}' if path else str(index))
+            yield from _downloads(item, f'{path}.{index}' if path else str(index))
+
+
+def download_paths(static: dict) -> Iterator[str]:
+    """The field path of every static value an episode page links as a download; a list item by its index.
+
+    A path the download route does not lead back to its value is refused: an empty key, or a nested
+    value whose path a dotted top-level key also spells.
+    """
+    for path, value in _downloads(static, ''):
+        try:
+            found = _static_field(static, path)
+        except HTTPException:
+            found = None
+        if found is not value:
+            raise ValueError(f'a static value named {path!r} has no link the download route reads back')
+        yield path
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -336,13 +356,11 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
+    links = {path: download_link(episode_id, path) for path in download_paths(episode.static)}
+
     def _make_serializable(obj, path=''):
         if is_download(obj):
-            return {
-                DOWNLOAD_LINK: download_link(episode_id, path),
-                'size': len(obj),
-                'type': 'bytes' if isinstance(obj, bytes) else 'text',
-            }
+            return {DOWNLOAD_LINK: links[path], 'size': len(obj), 'type': 'bytes' if isinstance(obj, bytes) else 'text'}
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
@@ -662,36 +680,48 @@ async def api_episode_static_field(episode_id: int, field_path: str):
     raise HTTPException(status_code=400, detail=f'Field {field_path} is not downloadable')
 
 
-@app.get('/api/episode_rrd/{episode_id}')
-@require_dataset
-async def api_episode_rrd(episode_id: int):
+def _recording_cache_path(episode_id: int) -> Path:
+    return _get_rrd_cache_path(episode_id, cast(float, app_state['max_hz']), cast(int, app_state['max_resolution']))
+
+
+def _recording_chunks_cached(episode_id: int, cache_path: Path) -> Iterator[bytes]:
+    """The recording's chunks as they are built, written to `cache_path`; the path names a complete file only."""
     ds = cast(Dataset, app_state['dataset'])
     max_hz = cast(float, app_state['max_hz'])
     max_resolution = cast(int, app_state['max_resolution'])
-    cache_path = _get_rrd_cache_path(episode_id, max_hz, max_resolution)
+    fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
+    partial = Path(name)
+    published = False
+    try:
+        with os.fdopen(fd, 'wb') as cache_file:
+            for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
+                cache_file.write(chunk)
+                yield chunk
+        os.replace(partial, cache_path)
+        published = True
+    finally:
+        if not published:
+            partial.unlink(missing_ok=True)
 
+
+def episode_rrd_path(episode_id: int) -> Path:
+    """The file the recording route serves for `episode_id`, built when the cache holds none."""
+    cache_path = _recording_cache_path(episode_id)
+    if not cache_path.exists():
+        for _ in _recording_chunks_cached(episode_id, cache_path):
+            pass
+    return cache_path
+
+
+@app.get('/api/episode_rrd/{episode_id}')
+@require_dataset
+async def api_episode_rrd(episode_id: int):
+    cache_path = _recording_cache_path(episode_id)
     if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
-
-    def _stream_and_cache():
-        # The final cache path denotes a complete file.
-        fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
-        partial = Path(name)
-        published = False
-        try:
-            with os.fdopen(fd, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
-                    cache_file.write(chunk)
-                    yield chunk
-            os.replace(partial, cache_path)
-            published = True
-        finally:
-            if not published:
-                partial.unlink(missing_ok=True)
-
     return StreamingResponse(
-        _stream_and_cache(),
+        _recording_chunks_cached(episode_id, cache_path),
         media_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
     )
@@ -815,9 +845,13 @@ def configure_tables(
     max_resolution: int,
     max_hz: float,
 ) -> None:
-    """Set what the tables show and how a recording is built; see `main` for what each value does.
+    """Set what the tables show and how a recording is built.
 
-    A table response cached under the previous settings is dropped.
+    `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
+    each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
+    A recording's videos are re-encoded down to `max_resolution` on the long side, and its numeric signals
+    are thinned to `max_hz`; 0 keeps every sample. `root` is the dataset path the pages report, and the
+    recordings are cached under `cache_dir`. A table response cached under the previous settings is dropped.
     """
     for name in group_tables or {}:
         if not name or name in ('.', '..') or quote(name, safe='') != name:
