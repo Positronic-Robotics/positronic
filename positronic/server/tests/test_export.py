@@ -391,10 +391,10 @@ def test_a_short_key_and_a_slashed_key_that_share_a_prefix_are_written_apart(tmp
     assert (out / 'api/episode/0/static/a%2Fb').read_bytes() == b'2'
 
 
-def test_a_cache_inside_the_output_directory_is_refused(dataset, tmp_path):
+def test_a_cache_and_an_output_directory_that_overlap_are_refused(dataset, tmp_path):
     out = tmp_path / 'out'
 
-    for cache in (out, out / 'cache'):
+    for cache in (out, out / 'cache', tmp_path):
         with pytest.raises(ValueError, match='outside'):
             an_export(dataset, out, cache_dir=cache)
     assert not out.exists()

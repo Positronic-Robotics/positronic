@@ -325,8 +325,12 @@ def export_static(
     refused, as the directory holds the first.
     """
     out = _Output(Path(out_dir))
-    if cache_dir is not None and Path(cache_dir).resolve().is_relative_to(out.directory.resolve()):
-        raise ValueError(f'cache_dir {cache_dir} lies inside {out.directory}; the cache stays outside the export')
+    if cache_dir is not None:
+        cache, output = Path(cache_dir).resolve(), out.directory.resolve()
+        if cache.is_relative_to(output) or output.is_relative_to(cache):
+            raise ValueError(
+                f'cache_dir {cache_dir} and out_dir {out.directory} overlap; the cache stays outside the export'
+            )
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)

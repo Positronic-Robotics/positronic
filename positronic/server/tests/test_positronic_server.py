@@ -19,6 +19,7 @@ from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
+    _MAX_DOWNLOAD_PATH_BYTES,
     FILTER_VALUES,
     GROUP_FILTERS,
     ColumnConfig,
@@ -29,7 +30,9 @@ from positronic.server.positronic_server import (
     _get_rrd_cache_path,
     _is_loopback,
     _path_component,
+    _route,
     _served_addresses,
+    api_dataset_status,
     app,
     app_state,
     app_state_restored,
@@ -452,6 +455,35 @@ def test_a_key_within_a_file_name_s_limit_once_encoded_keeps_its_link():
 
     assert list(download_paths({key: b'x'})) == [(key,)]
     assert download_link(0, (key,)) == f'api/episode/0/static/{key}'
+
+
+def test_a_path_past_a_host_s_key_limit_once_encoded_gets_no_link():
+    deep = {'k' * _MAX_COMPONENT_BYTES: b'x'}
+    for _ in range(_MAX_DOWNLOAD_PATH_BYTES // _MAX_COMPONENT_BYTES):
+        deep = {'k' * _MAX_COMPONENT_BYTES: deep}
+
+    with pytest.raises(ValueError, match='no link'):
+        list(download_paths(deep))
+
+
+def test_a_path_within_a_host_s_key_limit_once_encoded_keeps_its_link():
+    keys_ = ('k' * _MAX_COMPONENT_BYTES,) * (_MAX_DOWNLOAD_PATH_BYTES // (_MAX_COMPONENT_BYTES + 1))
+
+    assert download_link(0, keys_).startswith('api/episode/0/static/')
+    assert len('/'.join(keys_).encode()) <= _MAX_DOWNLOAD_PATH_BYTES
+
+
+def test_the_page_script_names_the_dataset_status_route_the_server_declares():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert f"const DATASET_STATUS_ROUTE = '{_route(api_dataset_status)}';" in app_js
+    assert "apiUrl('api/dataset_status')" not in app_js
+
+
+def test_the_flat_table_takes_a_url_filter_only_for_a_value_some_row_carries():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert 'if (state.filtersData[key].includes(value)) state.filters[key] = value;' in app_js
 
 
 def test_a_dotted_key_and_a_nested_value_that_spell_alike_each_keep_their_own_link():
