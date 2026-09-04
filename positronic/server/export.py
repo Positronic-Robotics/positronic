@@ -47,6 +47,7 @@ from positronic.server.positronic_server import (
     filter_spelling,
     group_api_link,
     group_link,
+    has_download,
     install_dataset,
     normalized_base_href,
 )
@@ -116,8 +117,8 @@ class _PortableTree:
     """
 
     def __init__(self):
-        self._files: set[str] = set()
-        self._directories: set[str] = set()
+        self._files: set[PurePosixPath] = set()
+        self._directories: set[PurePosixPath] = set()
 
     def add(self, path: str) -> None:
         if len(path.encode()) > MAX_PATH_BYTES:
@@ -126,11 +127,11 @@ class _PortableTree:
         for part in folded.parts:
             if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
                 raise ValueError(f'{path!r} has a component Windows reads as a device or trims, {part!r}')
-        directories = [str(parent) for parent in folded.parents if str(parent) != '.']
-        taken = str(folded) in self._files or str(folded) in self._directories
+        directories = [parent for parent in folded.parents if parent.parts]
+        taken = folded in self._files or folded in self._directories
         if taken or any(directory in self._files for directory in directories):
             raise ValueError(f'{path!r} is one file with another the export writes on a filesystem that folds case')
-        self._files.add(str(folded))
+        self._files.add(folded)
         self._directories.update(directories)
 
 
@@ -323,7 +324,7 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
                 f'full_dataset episode {index} has uid {full_episode.meta[META_UID]!r} and dataset has '
                 f'{shown_episode.meta[META_UID]!r}'
             )
-        missing = set(download_paths(shown_episode.static)) - set(download_paths(full_episode.static))
+        missing = [path for path in download_paths(shown_episode.static) if not has_download(full_episode.static, path)]
         if missing:
             path = '/'.join(min(missing))
             raise ValueError(f'full_dataset episode {index} has no download at {path!r}, which dataset links')

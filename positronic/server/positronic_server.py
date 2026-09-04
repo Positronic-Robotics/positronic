@@ -354,6 +354,19 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
         yield key_path
 
 
+def has_download(static: dict, key_path: tuple[str, ...]) -> bool:
+    """Whether `static` holds a value a page links as a download at `key_path`, a list item by its index."""
+    value: object = static
+    for key in key_path:
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        elif isinstance(value, list) and key.isdigit() and str(int(key)) == key and int(key) < len(value):
+            value = value[int(key)]
+        else:
+            return False
+    return is_download(value)
+
+
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
 @require_dataset
 async def episode_viewer(request: Request, episode_id: int):
