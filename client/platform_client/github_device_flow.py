@@ -27,6 +27,7 @@ from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, res
 from platform_client.errors import PlatformError
 from platform_client.requests import RegisterRequest
 from platform_client.responses import RegisterResponse
+from pydantic import ValidationError
 
 DEVICE_CODE_URL = 'https://github.com/login/device/code'
 ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token'
@@ -312,6 +313,11 @@ def main() -> None:
             raise SystemExit(f'the platform at {base_url} is unreachable: {exc}') from exc
         except (DeviceFlowError, PlatformError) as exc:
             raise SystemExit(str(exc)) from exc
+        except ValidationError as exc:
+            # A 2xx whose body is not a registration: a proxy page, or a gateway of another version.
+            raise SystemExit(
+                f'the platform at {base_url} answered with no registration: {exc.error_count()} field(s) off'
+            ) from exc
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:

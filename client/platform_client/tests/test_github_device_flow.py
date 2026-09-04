@@ -420,6 +420,32 @@ def test_the_command_refuses_a_platform_that_would_show_the_token():
     assert 'https' in str(raised.value) and reached == []
 
 
+def test_a_success_that_is_no_registration_exits_with_one_line():
+    """A 2xx from a proxy page or another gateway version ends the command without a traceback."""
+    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    gateway = ScriptedGateway(body={'unexpected': 'page'})
+    flow, _ = _flow(github)  # built before the patch below, so GitHub keeps its own transport
+
+    def flow_for(client_id: str, http: httpx.Client) -> GitHubDeviceFlow:
+        return flow
+
+    real_client = httpx.Client
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'GitHubDeviceFlow', flow_for)
+        # Every client main opens answers as the gateway; the GitHub one is replaced above.
+        patch.setattr(
+            httpx,
+            'Client',
+            lambda **kwargs: real_client(**{**kwargs, 'transport': httpx.MockTransport(gateway.handle)}),
+        )
+        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.main()
+
+    assert 'no registration' in str(raised.value)
+
+
 def test_the_user_is_shown_the_code_before_the_poll_starts(capsys):
     """Only the short code has to reach the user while the flow runs."""
     github = ScriptedGitHub(polls=[dict(GRANTED)])
