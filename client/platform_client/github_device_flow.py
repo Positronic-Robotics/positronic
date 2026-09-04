@@ -17,6 +17,7 @@ import ipaddress
 import math
 import os
 import shlex
+import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -275,7 +276,8 @@ def register_with_github(
 ) -> RegisterResponse:
     """Run the whole flow: show the code, poll for the token, register with it as the credential."""
     authorization = flow.start_device_authorization()
-    print(f'open {authorization.verification_uri} and enter {authorization.user_code}', flush=True)
+    # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
+    print(f'open {authorization.verification_uri} and enter {authorization.user_code}', file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     return platform.register(RegisterRequest(credential=token, alias=alias, rotate=rotate))
 

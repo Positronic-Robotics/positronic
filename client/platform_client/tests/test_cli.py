@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -321,3 +322,56 @@ def test_an_id_that_is_not_hex_is_refused_before_any_request(config, gateway):
     with pytest.raises(SystemExit, match='not a request id'):
         cli.main(['requests', 'get', 'zz'])
     assert gateway.requests == []
+
+
+def test_an_empty_transaction_key_is_refused_rather_than_dropped(config, gateway):
+    _registered(config)
+    with pytest.raises(SystemExit, match='transaction_key'):
+        cli.main([
+            'requests',
+            'create',
+            '--tasks',
+            'stack-the-cubes',
+            '--endpoints',
+            'gyros',
+            '--episodes-per-endpoint',
+            '1',
+            '--transaction-key=',
+        ])
+    assert gateway.requests == []
+
+
+def test_register_leaves_only_the_answer_on_stdout(config, monkeypatch, capsys):
+    """The device-flow prompt goes to stderr, so a caller parses stdout as one JSON document."""
+
+    def prompting(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
+        print('open https://github.com/login/device and enter WDJB-MJHT', file=sys.stderr)
+        return RegisterResponse.model_validate({
+            'user_id': 'a1',
+            'artifact_location': 's3://artifacts/a1',
+            'api_key': KEY,
+            'key_status': 'created',
+        })
+
+    monkeypatch.setattr(github_device_flow, 'run_registration', prompting)
+    cli.main(['register', '--client-id=x', f'--platform-url={PLATFORM}'])
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['user_id'] == 'a1' and 'WDJB-MJHT' in captured.err
+
+
+def test_a_key_that_did_land_is_kept_when_the_platform_file_does_not(config, monkeypatch):
+    """The pair is written key first, so a minted key is never lost to a failed second write."""
+    _registered(config)
+    real_replace = cli._replace
+
+    def failing(path: Path, content: str, mode: int) -> None:
+        if path.name == PLATFORM_URL_FILENAME:
+            raise OSError('disk full')
+        real_replace(path, content, mode)
+
+    monkeypatch.setattr(cli, '_replace', failing)
+    with pytest.raises(OSError):
+        cli.write_config(config, api_key=ApiKey('pk_live_new'), platform_url='https://other.example')
+    assert (config / API_KEY_FILENAME).read_text() == 'pk_live_new\n'
+    assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
+    assert not list(config.glob('.*'))  # no staged file is left behind by a write that landed

@@ -75,15 +75,24 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None) -> str |
     return _read_line(config_dir(env) / PLATFORM_URL_FILENAME)
 
 
+def _replace(path: Path, content: str, mode: int) -> None:
+    """Write `content` beside `path` and rename it into place, so a reader sees the old file or the new one."""
+    staged = path.with_name(f'.{path.name}.{os.getpid()}')
+    with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), 'w') as staged_file:
+        staged_file.write(content)
+    os.replace(staged, path)
+
+
 def write_config(directory: Path, *, api_key: ApiKey, platform_url: str) -> None:
-    """Record a key and the platform it belongs to, as one pair. The key file is mode 0600."""
+    """Record a key and the platform it belongs to, as one pair. The key file is mode 0600.
+
+    The key lands first: a key the platform minted and this side did not write is lost, while a
+    platform file that did not land leaves the old platform beside a new key, which the next call
+    reports as `unauthorized` and `register --rotate` repairs.
+    """
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (directory / PLATFORM_URL_FILENAME).write_text(f'{platform_url}\n')
-    key_path = directory / API_KEY_FILENAME
-    with os.fdopen(os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as key_file:
-        key_file.write(f'{api_key}\n')
-    # A file that already existed keeps the mode it had through `os.open`.
-    key_path.chmod(0o600)
+    _replace(directory / API_KEY_FILENAME, f'{api_key}\n', 0o600)
+    _replace(directory / PLATFORM_URL_FILENAME, f'{platform_url}\n', 0o644)
 
 
 def _one_line(exc: ValidationError) -> str:
@@ -154,7 +163,7 @@ def ask_from_args(args: argparse.Namespace) -> RequestCreate:
             policy_preset=args.preset,
             scene=scene_from_pairs(args.scene),
             slug=args.slug,
-            transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,
+            transaction_key=TransactionKey(args.transaction_key) if args.transaction_key is not None else None,
         )
     except ValidationError as exc:
         raise SystemExit(_one_line(exc)) from exc
