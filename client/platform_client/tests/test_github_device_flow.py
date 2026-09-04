@@ -601,16 +601,17 @@ def test_a_success_that_is_no_registration_exits_with_one_line():
     assert 'no registration' in str(raised.value)
 
 
-def test_the_user_is_shown_the_code_before_the_poll_starts(capsys):
-    """Only the short code has to reach the user while the flow runs."""
+def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
+    """Only the short code has to reach the user while the flow runs, and it leaves stdout to the answer."""
     github = ScriptedGitHub(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
         register_with_github(platform, flow)
 
-    shown = capsys.readouterr().out
-    assert str(DEVICE_ANSWER['user_code']) in shown and str(DEVICE_ANSWER['verification_uri']) in shown
+    captured = capsys.readouterr()
+    assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
+    assert captured.out == ''
 
 
 def test_the_registration_keeps_the_key_the_gateway_minted():
