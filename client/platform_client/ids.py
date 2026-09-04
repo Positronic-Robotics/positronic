@@ -1,9 +1,9 @@
 """Platform id types: 64-bit ints in Python, bare lowercase hex on the wire.
 
-`UserId` and `SubmissionId` are distinct `Id64` subclasses, so a transposed argument fails a
-typecheck rather than reaching the database; a service with ids of its own subclasses it too. Range
-is `0 < value < 2**63`, and the wire form is never a JSON number — a full int64 does not survive
-JavaScript's 2**53. `TransactionKey` / `ApiKey` are opaque tokens, not ids.
+`UserId`, `SubmissionId` and `RequestId` are distinct `Id64` subclasses, so a transposed argument
+fails a typecheck rather than reaching the database; a service with ids of its own subclasses it
+too. Range is `0 < value < 2**63`, and the wire form is never a JSON number — a full int64 does not
+survive JavaScript's 2**53. `TransactionKey` / `ApiKey` are opaque tokens, not ids.
 """
 
 from __future__ import annotations
@@ -74,6 +74,12 @@ class UserId(Id64):
 
 class SubmissionId(Id64):
     """One user's run request, as the gateway records it."""
+
+    __slots__ = ()
+
+
+class RequestId(Id64):
+    """One customer's rollout request, as the gateway records it."""
 
     __slots__ = ()
 

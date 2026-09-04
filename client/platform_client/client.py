@@ -20,11 +20,14 @@ import httpx
 from platform_client import routes
 from platform_client.boards import BoardRef
 from platform_client.errors import PlatformError
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, RequestId, SubmissionId
 from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
+    RequestCreate,
+    RequestGetQuery,
+    RequestListQuery,
     SubmissionCreateRequest,
     SubmissionGetQuery,
 )
@@ -34,6 +37,9 @@ from platform_client.responses import (
     MeResponse,
     RankingsResponse,
     RegisterResponse,
+    RequestCreated,
+    RequestListResponse,
+    RequestView,
     SubmissionCreateResponse,
     SubmissionListResponse,
     SubmissionView,
@@ -179,6 +185,18 @@ class PlatformClient:
     def list_boards(self) -> BoardListResponse:
         """The boards this caller can read: the public ones, plus their tenant's once a key is set."""
         return self._get(routes.RANKINGS_LIST, BoardListResponse, auth=Auth.OPTIONAL)
+
+    def requests_create(self, request: RequestCreate) -> RequestCreated:
+        """File one rollout request. Needs a customer grant: a key without one is refused `forbidden`."""
+        return self._post(routes.REQUESTS_CREATE, request, RequestCreated)
+
+    def requests_get(self, request_id: RequestId) -> RequestView:
+        return self._get(routes.REQUESTS_GET, RequestView, query=RequestGetQuery(id=request_id))
+
+    def requests_list(self, *, after: RequestId | None = None, limit: int | None = None) -> RequestListResponse:
+        """One page of the caller's requests, oldest first. Pass a page's `next` as `after` for the page after it."""
+        query = RequestListQuery(after=after, limit=limit)
+        return self._get(routes.REQUESTS_LIST, RequestListResponse, query=query)
 
     # --- plumbing ----------------------------------------------------------------------------
 

@@ -10,9 +10,17 @@ from __future__ import annotations
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import (
+    BoardVisibility,
+    KeyStatus,
+    OnExhausted,
+    QuotaSubject,
+    ReasonCode,
+    RequestStatus,
+    SubmissionStatus,
+)
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, UserId
+from platform_client.ids import ApiKey, RequestId, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
@@ -294,3 +302,61 @@ class RankingsResponse(BaseModel):
     eval: EvalRef
     primary_metric: str
     rankings: list[RankingRow] = Field(default_factory=list)
+
+
+class RequestCreated(BaseModel):
+    """`requests.create` — a fresh request, or the one an earlier create under the same key made."""
+
+    request_id: RequestId
+    status: Slugged[RequestStatus]
+
+
+class EpisodeCounts(BaseModel):
+    """What a request asked for and where it stands: `total` is fixed at create; the other two move as episodes land."""
+
+    total: int = Field(ge=0)
+    done: int = Field(ge=0)
+    outstanding: int = Field(ge=0)
+
+
+class RunSummary(BaseModel):
+    """One launch that served the request.
+
+    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
+    """
+
+    run_tag: str
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
+
+
+class RequestView(BaseModel):
+    """`requests.get`, and one row of `requests.list`.
+
+    `slug` names the request once the coordinator files it. `artifacts` is the prefix the episodes
+    land under, once one exists. `error` says why an `errored` request stopped.
+    """
+
+    request_id: RequestId
+    status: Slugged[RequestStatus]
+    slug: str | None = None
+    episodes: EpisodeCounts
+    runs: list[RunSummary] = Field(default_factory=list)
+    artifacts: str | None = None
+    error: str | None = None
+
+    @model_validator(mode='after')
+    def _an_error_means_it_errored(self) -> Self:
+        if self.error is not None and self.status is not RequestStatus.errored:
+            raise ValueError(f'an error on a {self.status.name} request')
+        return self
+
+
+class RequestListResponse(BaseModel):
+    """`requests.list` — one page, oldest first.
+
+    `next` is the cursor for the page after it, and is absent on the last page.
+    """
+
+    requests: list[RequestView] = Field(default_factory=list)
+    next: RequestId | None = None

@@ -1,8 +1,8 @@
 """The envelope every endpoint fails with, and the exception a client raises for it.
 
-Agents parse `code`, humans read `message`. `details` is open-ended per error, with three fixed
+Agents parse `code`, humans read `message`. `details` is open-ended per error, with four fixed
 keys: `reason_code` behind a caller-fault rejection, `quota` behind `quota_exceeded`, and `evals`
-carrying the names on offer when the one asked for is not among them.
+or `tasks` carrying the names on offer when the one asked for is not among them.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 REASON_CODE_DETAIL = 'reason_code'
 QUOTA_DETAIL = 'quota'
 EVALS_DETAIL = 'evals'
+TASKS_DETAIL = 'tasks'
 
 
 class ApiErrorBody(BaseModel):
@@ -91,6 +92,19 @@ class PlatformError(Exception):
         if EVALS_DETAIL not in self.details:
             return None
         return self._EVAL_LIST.validate_python(self.details[EVALS_DETAIL])
+
+    _TASK_LIST: ClassVar[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+
+    @property
+    def tasks(self) -> list[str] | None:
+        """The task ids the rollouts catalogue holds, when the failure is that the one asked for is not one.
+
+        Absent means absent. A present value that is not a list of ids raises, for the reason
+        `evals` gives.
+        """
+        if TASKS_DETAIL not in self.details:
+            return None
+        return self._TASK_LIST.validate_python(self.details[TASKS_DETAIL])
 
     @classmethod
     def from_payload(cls, http_status: int, payload: object) -> PlatformError:

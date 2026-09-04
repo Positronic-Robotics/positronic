@@ -301,8 +301,8 @@ def platform_url_is_allowed(base_url: str, *, plaintext_http: bool) -> bool:
         return False
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """The flags a registration takes, on this command and on `positronic-platform register`."""
     parser.add_argument('--alias', default=None, help='the display name for this account')
     parser.add_argument(
         '--rotate', action='store_true', help='mint a new key for an account that is already registered'
@@ -316,13 +316,13 @@ def main() -> None:
         default=os.environ.get(GITHUB_CLIENT_ID_ENV, DEFAULT_GITHUB_CLIENT_ID),
         help=f'the OAuth app to register through, else {GITHUB_CLIENT_ID_ENV}, else the platform app',
     )
-    args = parser.parse_args()
-    if not args.client_id:
-        # GitHub answers an empty id with an error that names nothing, so an empty override stops here.
-        raise SystemExit(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
+
+
+def allowed_platform_url(platform_url: str | None, *, plaintext_http: bool) -> str:
+    """The platform to register with, or a `SystemExit` naming why the URL cannot carry the token."""
     try:
-        base_url = resolve_base_url(args.platform_url)
-        allowed = platform_url_is_allowed(base_url, plaintext_http=args.plaintext_http)
+        base_url = resolve_base_url(platform_url)
+        allowed = platform_url_is_allowed(base_url, plaintext_http=plaintext_http)
     except (ValueError, httpx.InvalidURL) as exc:
         # An empty, relative or malformed platform URL is an argument fault, so it reads like the line above.
         raise SystemExit(str(exc)) from exc
@@ -331,15 +331,20 @@ def main() -> None:
             f'{base_url} would carry the GitHub token in the clear: '
             'use https, a loopback address, or pass --plaintext-http on a link you trust'
         )
+    return base_url
 
+
+def run_registration(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
+    """Register with `base_url` through GitHub's device flow, or a `SystemExit` with one line saying what stopped it."""
+    if not client_id:
+        # GitHub answers an empty id with an error that names nothing, so an empty override stops here.
+        raise SystemExit(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
     github = httpx.Client(timeout=REQUEST_TIMEOUT)
     # An environment proxy would carry a plain-http token off the machine, past the URL gate above.
     gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT, trust_env=httpx.URL(base_url).scheme == 'https')
     with github, gateway, PlatformClient(client=gateway) as platform:
         try:
-            response = register_with_github(
-                platform, GitHubDeviceFlow(args.client_id, github), alias=args.alias, rotate=args.rotate
-            )
+            return register_with_github(platform, GitHubDeviceFlow(client_id, github), alias=alias, rotate=rotate)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # The GitHub half wraps its own transport failures, so one arriving here dialled the
             # gateway. httpx names the cause and not the host, which is the half a reader needs.
@@ -357,6 +362,14 @@ def main() -> None:
             raise SystemExit(
                 f'the platform at {base_url} answered with no registration: {exc.error_count()} field(s) off'
             ) from exc
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_arguments(parser)
+    args = parser.parse_args()
+    base_url = allowed_platform_url(args.platform_url, plaintext_http=args.plaintext_http)
+    response = run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
