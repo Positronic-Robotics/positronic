@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,7 +22,7 @@ from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import EpisodeTransform
+from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.server import positronic_server
 from positronic.server.export import (
     GROUP_INDEX_FILE,
@@ -193,19 +194,44 @@ def test_without_a_build_id_the_large_files_sit_at_their_routes(dataset, tmp_pat
     assert {'api/episode_rrd/0', 'api/episode_rrd/1', 'api/episode/0/static/notes'} <= written
 
 
-def test_a_recording_is_copied_from_the_cache_file_and_not_read_through_the_client(dataset, tmp_path, monkeypatch):
+def test_a_recording_is_copied_from_the_file_built_under_the_scratch_dir_and_not_read_through_the_client(
+    dataset, tmp_path, monkeypatch
+):
     def fetch_no_recording(client, path, params=None):
         assert 'episode_rrd' not in path, path
         return _fetch(client, path, params)
 
+    copied: dict[Path, Path] = {}
+    copyfile = shutil.copyfile
+
+    def copy_recording(source, target):
+        copied[Path(target)] = Path(source)
+        return copyfile(source, target)
+
     monkeypatch.setattr('positronic.server.export._fetch', fetch_no_recording)
-    cache = tmp_path / 'cache'
+    monkeypatch.setattr(shutil, 'copyfile', copy_recording)
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
 
-    files = an_export(dataset, tmp_path / 'out', cache_dir=cache)
+    files = an_export(dataset, tmp_path / 'out', scratch_dir=scratch)
 
-    cached = {path.read_bytes() for path in cache.rglob('*.rrd')}
-    written = {(tmp_path / 'out' / path).read_bytes() for path in paths_of(files) if 'episode_rrd' in path}
-    assert len(written) == 2 and written == cached
+    recordings = [tmp_path / 'out' / path for path in paths_of(files) if 'episode_rrd' in path]
+    assert len(recordings) == 2
+    assert all(copied[target].is_relative_to(scratch) and copied[target].suffix == '.rrd' for target in recordings)
+    assert not any(scratch.iterdir())
+
+
+def test_two_views_of_one_dataset_through_one_scratch_dir_each_get_their_own_recording(dataset, tmp_path):
+    """A transformed view keeps the dataset's root and its uids, so nothing but the export tells the two apart."""
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+    whole = paths_of(an_export(dataset, tmp_path / 'whole', scratch_dir=scratch))
+    without_joints = TransformedDataset(dataset, Identity(remove=[keys.JOINTS]))
+    thinned = paths_of(an_export(dataset, tmp_path / 'thinned', scratch_dir=scratch, full_dataset=without_joints))
+
+    recording = next(path for path in whole if 'episode_rrd/0' in path)
+    assert recording in thinned
+    assert (tmp_path / 'whole' / recording).stat().st_size > (tmp_path / 'thinned' / recording).stat().st_size
 
 
 def test_a_recording_is_built_from_the_full_dataset(dataset, tmp_path):
@@ -391,13 +417,16 @@ def test_a_short_key_and_a_slashed_key_that_share_a_prefix_are_written_apart(tmp
     assert (out / 'api/episode/0/static/a%2Fb').read_bytes() == b'2'
 
 
-def test_a_cache_and_an_output_directory_that_overlap_are_refused(dataset, tmp_path):
+def test_a_scratch_dir_inside_the_output_is_refused_and_one_holding_the_output_stands(dataset, tmp_path):
     out = tmp_path / 'out'
 
-    for cache in (out, out / 'cache', tmp_path):
-        with pytest.raises(ValueError, match='outside'):
-            an_export(dataset, out, cache_dir=cache)
+    for scratch in (out, out / 'scratch'):
+        with pytest.raises(ValueError, match='inside'):
+            an_export(dataset, out, scratch_dir=scratch)
     assert not out.exists()
+
+    assert an_export(dataset, out, scratch_dir=tmp_path)
+    assert set(tmp_path.iterdir()) >= {out, tmp_path / 'dataset'} and len(list(tmp_path.iterdir())) == 2
 
 
 def test_the_assets_go_with_the_root_base_href_only(dataset, tmp_path):
@@ -573,6 +602,39 @@ def test_a_group_name_that_is_not_one_url_path_segment_is_refused(dataset, tmp_p
         with pytest.raises(ValueError, match='group name'):
             an_export(dataset, tmp_path / 'out', group_tables={name: GROUPS['outcomes']})
     assert not (tmp_path / 'out').exists()
+
+
+def test_two_group_names_that_are_one_name_on_a_filesystem_folding_case_are_refused_before_a_write(dataset, tmp_path):
+    tables = {'Results': GROUPS['outcomes'], 'results': GROUPS['attempts']}
+    with pytest.raises(ValueError, match='folds case'):
+        an_export(dataset, tmp_path / 'out', group_tables=tables)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_two_group_names_that_differ_past_their_case_are_both_written(dataset, tmp_path):
+    tables = {'results': GROUPS['outcomes'], 'result': GROUPS['attempts']}
+    files = paths_of(an_export(dataset, tmp_path / 'out', group_tables=tables))
+    assert {'groups/results/index.html', 'groups/result/index.html'} <= files
+
+
+def test_two_downloads_of_one_episode_that_are_one_file_on_a_filesystem_folding_case_stop_the_export(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {'Notes': 'n' * 2000, 'notes': 'm' * 2000})
+    with pytest.raises(ValueError, match='folds case'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_download_and_the_directory_of_another_that_fold_to_one_name_stop_the_export(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {'Scene': {'mesh': 'n' * 2000}, 'scene': 'm' * 2000})
+    with pytest.raises(ValueError, match='folds case'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_downloads_of_two_episodes_that_differ_in_case_alone_are_written_apart(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {'Notes': 'n' * 2000}, {'notes': 'm' * 2000})
+    files = paths_of(export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    assert {'api/episode/0/static/Notes', 'api/episode/1/static/notes'} <= files
 
 
 def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):
