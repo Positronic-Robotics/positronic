@@ -23,6 +23,7 @@ from positronic.server.positronic_server import (
     GROUP_FILTERS,
     ColumnConfig,
     GroupTableConfig,
+    PageConfig,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -276,7 +277,7 @@ def test_a_viewer_at_the_server_root_says_so(viewer, page):
 
 @pytest.mark.parametrize('page', _PAGES)
 def test_a_viewer_under_a_prefix_pins_no_page_link_to_the_server_root(viewer, monkeypatch, page):
-    monkeypatch.setitem(app_state, 'base_href', '/v/tok/')
+    monkeypatch.setitem(app_state, 'pages', PageConfig(base_href='/v/tok/'))
 
     body = viewer.get(page).text
 
@@ -284,20 +285,21 @@ def test_a_viewer_under_a_prefix_pins_no_page_link_to_the_server_root(viewer, mo
     assert _server_rooted_urls(body, '/v/tok/') == []
 
 
-def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'base_href', '/v/tok')
+def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer):
+    with app_state_restored():
+        configure_pages(base_href='/v/tok')
 
-    assert '<base href="/v/tok/" />' in viewer.get('/').text
+        assert '<base href="/v/tok/" />' in viewer.get('/').text
 
 
 def test_a_static_export_tells_the_page_to_read_the_files_it_wrote(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'static_export', True)
+    monkeypatch.setitem(app_state, 'pages', PageConfig(static_export=True))
 
     assert 'window.STATIC_EXPORT = true;' in viewer.get('/').text
 
 
 def test_a_title_stands_in_for_the_dataset_root(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'title', 'Runway rollouts, 29 August')
+    monkeypatch.setitem(app_state, 'pages', PageConfig(title='Runway rollouts, 29 August'))
 
     for page in ['/', '/episode/0']:
         body = viewer.get(page).text
@@ -309,7 +311,7 @@ def test_the_header_falls_back_to_the_dataset_root(viewer):
 
 
 def test_an_episode_page_hides_where_the_episode_lives(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'show_paths', False)
+    monkeypatch.setitem(app_state, 'pages', PageConfig(show_paths=False))
 
     body = viewer.get('/episode/0').text
 
@@ -318,7 +320,7 @@ def test_an_episode_page_hides_where_the_episode_lives(viewer, monkeypatch):
 
 
 def test_an_episode_keeps_its_size_where_the_page_hides_paths(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'show_paths', False)
+    monkeypatch.setitem(app_state, 'pages', PageConfig(show_paths=False))
 
     assert '12.50 MB' in viewer.get('/episode/0').text
 
@@ -338,7 +340,7 @@ def test_an_episode_page_shows_where_the_episode_lives_by_default(viewer):
 
 
 def test_the_api_reports_no_dataset_root_when_the_viewer_hides_paths(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, 'show_paths', False)
+    monkeypatch.setitem(app_state, 'pages', PageConfig(show_paths=False))
 
     assert viewer.get('/api/dataset_info').json()['root'] == ''
     assert viewer.get('/api/dataset_status').json()['repo_id'] == ''
@@ -454,13 +456,11 @@ def test_a_base_href_whose_segment_only_contains_dots_stands():
 
 
 def test_configure_pages_checks_what_it_is_given_and_fills_the_state(monkeypatch):
-    for key in ('base_href', 'title', 'show_paths', 'static_export'):
-        monkeypatch.setitem(app_state, key, app_state[key])
+    monkeypatch.setitem(app_state, 'pages', app_state['pages'])
 
     configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True)
 
-    assert app_state['base_href'] == '/v/tok/'
-    assert (app_state['title'], app_state['show_paths'], app_state['static_export']) == ('A run', False, True)
+    assert app_state['pages'] == PageConfig(base_href='/v/tok/', title='A run', show_paths=False, static_export=True)
     with pytest.raises(ValueError, match='server root'):
         configure_pages(base_href='v/tok')
 

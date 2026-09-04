@@ -94,11 +94,15 @@ class _Output:
         self.directory = directory
         self.files: list[ExportedFile] = []
 
-    def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
+    def target(self, path: str) -> Path:
+        """The file `path` is written to; a path that would land outside the directory is refused."""
         relative = PurePosixPath(path)
         if relative.is_absolute() or '\\' in path or '..' in relative.parts:
             raise ValueError(f'{path!r} would land outside {self.directory}')
-        target = self.directory.joinpath(*relative.parts)
+        return self.directory.joinpath(*relative.parts)
+
+    def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
+        target = self.target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
         written = ExportedFile(PurePosixPath(path), content_type, len(body))
@@ -165,14 +169,13 @@ def _episode_links(dataset: Dataset, index: int) -> list[str]:
 
 def _write_pages(
     client: TestClient, out: _Output, group_names: list[str], episode_links: list[list[str]], build_id: str
-) -> list[str]:
-    """Write every page, and give back the recording and download links the episode pages held."""
+) -> None:
+    """Write every page; an episode page carries its links moved under the build."""
     body, content_type = _fetch(client, '/')
     out.write(PAGE_FILE, body, content_type)
     for route in (episodes_link(), *(group_link(name) for name in group_names)):
         body, content_type = _fetch(client, f'/{route}')
         out.write(f'{route}/{PAGE_FILE}', body, content_type)
-    links = []
     for index, page_links in enumerate(episode_links):
         body, content_type = _fetch(client, f'/{episode_link(index)}')
         page = body.decode()
@@ -180,8 +183,6 @@ def _write_pages(
             raise RuntimeError(f'episode page {index} does not carry every link the export expects')
         moved = large_file_links_under(page, page_links, build_id)
         out.write(f'{episode_link(index)}/{PAGE_FILE}', moved.encode(), content_type)
-        links.extend(page_links)
-    return links
 
 
 def _write_group(client: TestClient, out: _Output, name: str, sets: Iterable[dict[str, str]]) -> None:
@@ -264,18 +265,23 @@ def export_static(
     episode's robot model out of its static values. `assets` writes the app's own scripts, styles and viewer
     under `static/`, which the pages request at the host root, so it goes with the root base href
     only; an export under a prefix shares the host's copy. An export holds the app's state for its
-    duration, so a second export in the process waits for it.
+    duration, so a second export in the process waits for it; one into the same directory is then
+    refused, as the directory holds the first.
     """
     out = _Output(Path(out_dir))
-    if out.directory.exists() and any(out.directory.iterdir()):
-        raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episode_links = [_episode_links(shown, index) for index in range(len(shown))]
+    large_files = [(link, _large_file_path(unquote(link), build_id)) for links in episode_links for link in links]
+    for _, path in large_files:
+        out.target(path)  # a name the writer refuses stops the export before a page is written
     with app_state_restored(), tempfile.TemporaryDirectory() as scratch:
+        # Under the lock, so a second export into the directory of a running one finds it full.
+        if out.directory.exists() and any(out.directory.iterdir()):
+            raise ValueError(f'{out.directory} is not empty; an export goes into a new or an empty directory')
         configure_tables(
             root=get_dataset_root(dataset) or 'unknown_dataset',
             cache_dir=Path(cache_dir) if cache_dir else Path(scratch),
@@ -290,7 +296,7 @@ def export_static(
         client = TestClient(app)
         group_names = list(group_tables or {})
 
-        links = _write_pages(client, out, group_names, episode_links, build_id)
+        _write_pages(client, out, group_names, episode_links, build_id)
         for route in _whole_api_routes():
             body, content_type = _fetch(client, f'/{route}')
             out.write(f'{route}.json', body, content_type)
@@ -298,9 +304,9 @@ def export_static(
             _write_group(client, out, name, filter_sets(_filter_values(shown, cfg.group_filter_keys)))
 
         install_dataset(full)
-        for link in links:
+        for link, path in large_files:
             body, content_type = _fetch(client, f'/{link}')
-            out.write(_large_file_path(unquote(link), build_id), body, content_type)
+            out.write(path, body, content_type)
     if assets:
         _write_assets(out)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
