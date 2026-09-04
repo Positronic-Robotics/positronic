@@ -155,9 +155,10 @@ def test_a_boolean_interval_is_a_bad_answer():
 
 
 @pytest.mark.parametrize('field', ['interval', 'expires_in'])
-@pytest.mark.parametrize('value', [-1, 0, float('nan'), float('inf')])
+@pytest.mark.parametrize('value', [-1, 0, float('nan'), float('inf'), 1e100, 10**1000])
 def test_a_timing_field_that_is_no_length_of_time_is_a_bad_answer(field: str, value: float):
-    """A negative or NaN value raises inside `time.sleep`. Zero polls in a tight loop, and infinity never returns."""
+    """A negative or NaN value raises inside `time.sleep`, zero polls in a tight loop, and a value past a day
+    overflows `time.sleep` or `float` itself."""
     # `json` writes NaN and Infinity, which httpx's own encoder refuses, so the body is written here.
     body = json.dumps(dict(DEVICE_ANSWER) | {field: value})
 
@@ -171,7 +172,7 @@ def test_a_timing_field_that_is_no_length_of_time_is_a_bad_answer(field: str, va
         flow.start_device_authorization()
 
 
-@pytest.mark.parametrize('value', [5, 5.0, 0.5, 3600])
+@pytest.mark.parametrize('value', [5, 5.0, 0.5, 3600, 24 * 60 * 60])
 def test_a_positive_interval_is_taken_as_github_sent_it(value: float):
     """The guard above refuses nothing GitHub can have meant, whole seconds or a fraction of one."""
     flow, _ = _flow(ScriptedGitHub(device=dict(DEVICE_ANSWER) | {'interval': value}))

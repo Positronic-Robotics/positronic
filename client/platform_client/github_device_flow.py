@@ -53,6 +53,10 @@ DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_EXPIRES_IN_S = 900.0
 
 
+# A device code lives minutes (RFC 8628 gives 15 min as the example); a day bounds what a poll may sleep.
+_LONGEST_DURATION_S = 24 * 60 * 60
+
+
 class DeviceFlowError(Exception):
     """GitHub refused the flow, answered something this code cannot read, or is unreachable."""
 
@@ -145,9 +149,10 @@ class GitHubDeviceFlow:
 
     @staticmethod
     def _optional_duration_s(payload: Mapping[str, object], field: str, default: float) -> float:
-        """A number of seconds GitHub may omit. Absent takes the default; present must be finite and above zero.
+        """A number of seconds GitHub may omit. Absent takes the default; present must be above zero and sleepable.
 
-        A negative or NaN value raises inside `time.sleep`, and a zero one polls until the code expires.
+        A negative or NaN value raises inside `time.sleep`, a zero one polls until the code expires, and a
+        value past `_LONGEST_DURATION_S` overflows `time.sleep` or `float` itself.
         """
         if field not in payload:
             return default
@@ -155,8 +160,11 @@ class GitHubDeviceFlow:
         # `bool` is an `int`, so `True` would pass as an interval of one second.
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise DeviceFlowError(f'GitHub answered with an unreadable {field}')
-        seconds = float(value)
-        if not math.isfinite(seconds) or seconds <= 0:
+        try:
+            seconds = float(value)
+        except OverflowError:  # an integer past what a float holds is as unsleepable as infinity
+            seconds = math.inf
+        if not math.isfinite(seconds) or seconds <= 0 or seconds > _LONGEST_DURATION_S:
             raise DeviceFlowError(f'GitHub answered with {field}={seconds}, which is no length of time')
         return seconds
 
