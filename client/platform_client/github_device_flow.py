@@ -7,6 +7,7 @@ Usage
   export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
   platform-register --alias='<display name>'
   platform-register --client-id=<id> --platform-url=http://127.0.0.1:8080
+  platform-register --platform-url=http://staging.internal:8080 --plaintext-http  # a plain http link
   platform-register --rotate  # mint a new key for an account that is already registered
 """
 
@@ -268,23 +269,25 @@ def register_with_github(
     return platform.register(RegisterRequest(credential=token, alias=alias, rotate=rotate))
 
 
-# A tailnet address is as private as loopback: the WireGuard link encrypts what `http://` sends
-# over it, and staging is reached that way with no TLS of its own (services/ops/staging).
-_TAILNET = ipaddress.ip_network('100.64.0.0/10')
+def platform_url_is_allowed(base_url: str, *, plaintext_http: bool) -> bool:
+    """https anywhere, http to a loopback address, and any other http only under `plaintext_http`.
 
-
-def token_travels_encrypted(base_url: str) -> bool:
-    """https anywhere, or http to loopback or a tailnet address. Any other http shows the token."""
+    An http platform that is not loopback shows the GitHub token to every host on the path, so the
+    caller names the link it trusts.
+    """
     url = httpx.URL(base_url)
     if url.scheme == 'https':
         return True
     if url.scheme != 'http':
         return False
+    if plaintext_http:
+        return True
+    if url.host == 'localhost':
+        return True
     try:
-        address = ipaddress.ip_address(url.host)
+        return ipaddress.ip_address(url.host).is_loopback
     except ValueError:
-        return url.host == 'localhost'
-    return address.is_loopback or (address.version == 4 and address in _TAILNET)
+        return False
 
 
 def main() -> None:
@@ -294,6 +297,9 @@ def main() -> None:
         '--rotate', action='store_true', help='mint a new key for an account that is already registered'
     )
     parser.add_argument('--platform-url', default=None, help=f'the platform to register with, else {API_URL_ENV}')
+    parser.add_argument(
+        '--plaintext-http', action='store_true', help='reach an http platform that is not loopback, on a link you trust'
+    )
     parser.add_argument('--client-id', default=os.environ.get(GITHUB_CLIENT_ID_ENV), help=GITHUB_CLIENT_ID_ENV)
     args = parser.parse_args()
     if not args.client_id:
@@ -303,9 +309,10 @@ def main() -> None:
     except ValueError as exc:
         # An empty or relative platform URL is an argument fault, so it reads like the line above.
         raise SystemExit(str(exc)) from exc
-    if not token_travels_encrypted(base_url):
+    if not platform_url_is_allowed(base_url, plaintext_http=args.plaintext_http):
         raise SystemExit(
-            f'{base_url} would carry the GitHub token in the clear: use https, or a loopback or tailnet address'
+            f'{base_url} would carry the GitHub token in the clear: '
+            'use https, a loopback address, or pass --plaintext-http on a link you trust'
         )
 
     github = httpx.Client(timeout=REQUEST_TIMEOUT)

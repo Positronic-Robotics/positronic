@@ -40,7 +40,8 @@ cannot read back the key it issued. `platform-register --rotate` mints a fresh o
 a machine that no longer holds the key gets one.
 
 `POSITRONIC_PLATFORM_URL` and `--platform-url` name a platform other than the default one, as
-everywhere else in this package.
+everywhere else in this package. The command refuses a plain `http` platform that is not loopback;
+the tailnet carries staging with no TLS, so a staging user passes `--plaintext-http`.
 
 ## From the command line
 

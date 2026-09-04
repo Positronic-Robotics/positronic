@@ -388,23 +388,40 @@ def test_the_command_asks_for_rotation_only_when_the_flag_is_given(flag: list[st
 
 
 @pytest.mark.parametrize(
-    ('base_url', 'encrypted'),
+    ('base_url', 'allowed'),
     [
         ('https://gateway.example', True),
         ('http://127.0.0.1:8080', True),
+        ('http://127.1.2.3:8080', True),
+        ('http://[::1]:8080', True),
         ('http://localhost:8080', True),
-        ('http://100.64.7.9:8080', True),
+        ('http://100.64.7.9:8080', False),
         ('http://203.0.113.5:8080', False),
         ('http://gateway.example', False),
         ('http://10.0.0.5:8080', False),
+        ('ftp://gateway.example', False),
     ],
 )
-def test_the_token_travels_only_over_https_loopback_or_the_tailnet(base_url: str, encrypted: bool):
-    assert github_device_flow.token_travels_encrypted(base_url) is encrypted
+def test_only_https_and_a_loopback_address_pass_without_the_flag(base_url: str, allowed: bool):
+    assert github_device_flow.platform_url_is_allowed(base_url, plaintext_http=False) is allowed
+
+
+@pytest.mark.parametrize(
+    ('base_url', 'allowed'),
+    [
+        ('http://100.64.7.9:8080', True),
+        ('http://203.0.113.5:8080', True),
+        ('http://gateway.example', True),
+        ('https://gateway.example', True),
+        ('ftp://gateway.example', False),
+    ],
+)
+def test_the_flag_admits_any_http_and_no_other_scheme(base_url: str, allowed: bool):
+    assert github_device_flow.platform_url_is_allowed(base_url, plaintext_http=True) is allowed
 
 
 def test_the_command_refuses_a_platform_that_would_show_the_token():
-    """A public http address never sees the GitHub token: the command stops before the device code."""
+    """A shared-address http platform never sees the GitHub token: the command stops before the code."""
     reached: list[object] = []
 
     def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
@@ -418,7 +435,25 @@ def test_the_command_refuses_a_platform_that_would_show_the_token():
         with pytest.raises(SystemExit) as raised:
             github_device_flow.main()
 
-    assert 'https' in str(raised.value) and reached == []
+    assert '--plaintext-http' in str(raised.value) and reached == []
+
+
+def test_the_flag_admits_a_platform_the_command_would_otherwise_refuse():
+    """A staging user reaches an http platform off this machine, so the flow runs."""
+    reached: list[object] = []
+
+    def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
+        reached.append(flow)
+        return RegisterResponse.model_validate(ScriptedGateway().body)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'register_with_github', record)
+        argv = ['platform-register', '--client-id=x', '--platform-url=http://203.0.113.5:8080', '--plaintext-http']
+        patch.setattr(sys, 'argv', argv)
+
+        github_device_flow.main()
+
+    assert len(reached) == 1
 
 
 def test_a_success_that_is_no_registration_exits_with_one_line():
