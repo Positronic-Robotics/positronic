@@ -330,6 +330,37 @@ def test_the_registration_carries_the_access_token_as_the_credential():
     assert response.api_key == MINTED_KEY
 
 
+def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
+    """The account exists and this machine no longer holds its key, so a fresh one is minted."""
+    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    flow, _ = _flow(github)
+    gateway = ScriptedGateway()
+
+    with PlatformClient(client=gateway.client()) as platform:
+        register_with_github(platform, flow, rotate=True)
+
+    assert json.loads(gateway.requests[0].content)['rotate'] is True
+
+
+@pytest.mark.parametrize(('flag', 'expected'), [(['--rotate'], True), ([], False)])
+def test_the_command_asks_for_rotation_only_when_the_flag_is_given(flag: list[str], expected: bool):
+    """Without the flag the command registers as it always did, and the account keeps its key."""
+    asked: list[bool] = []
+
+    def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
+        asked.append(rotate)
+        return RegisterResponse.model_validate(ScriptedGateway().body)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'register_with_github', record)
+        argv = ['platform-register', '--client-id=x', '--platform-url=https://gateway.example', *flag]
+        patch.setattr(sys, 'argv', argv)
+
+        github_device_flow.main()
+
+    assert asked == [expected]
+
+
 def test_the_user_is_shown_the_code_before_the_poll_starts(capsys):
     """Only the short code has to reach the user while the flow runs."""
     github = ScriptedGitHub(polls=[dict(GRANTED)])

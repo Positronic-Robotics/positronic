@@ -7,6 +7,7 @@ Usage
   export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
   platform-register --alias='<display name>'
   platform-register --client-id=<id> --platform-url=http://127.0.0.1:8080
+  platform-register --rotate  # mint a new key for an account that is already registered
 """
 
 from __future__ import annotations
@@ -241,18 +242,21 @@ def _optional_float(payload: Mapping[str, object], field: str, default: float) -
 
 
 def register_with_github(
-    platform: PlatformClient, flow: GitHubDeviceFlow, *, alias: str | None = None
+    platform: PlatformClient, flow: GitHubDeviceFlow, *, alias: str | None = None, rotate: bool = False
 ) -> RegisterResponse:
     """Run the whole flow: show the code, poll for the token, register with it as the credential."""
     authorization = flow.start_device_authorization()
     print(f'open {authorization.verification_uri} and enter {authorization.user_code}', flush=True)
     token = flow.poll_for_token(authorization)
-    return platform.register(RegisterRequest(credential=token, alias=alias))
+    return platform.register(RegisterRequest(credential=token, alias=alias, rotate=rotate))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--alias', default=None, help='the display name for this account')
+    parser.add_argument(
+        '--rotate', action='store_true', help='mint a new key for an account that is already registered'
+    )
     parser.add_argument('--platform-url', default=None, help=f'the platform to register with, else {API_URL_ENV}')
     parser.add_argument('--client-id', default=os.environ.get(GITHUB_CLIENT_ID_ENV), help=GITHUB_CLIENT_ID_ENV)
     args = parser.parse_args()
@@ -268,7 +272,9 @@ def main() -> None:
     gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT)
     with github, gateway, PlatformClient(client=gateway) as platform:
         try:
-            response = register_with_github(platform, GitHubDeviceFlow(args.client_id, github), alias=args.alias)
+            response = register_with_github(
+                platform, GitHubDeviceFlow(args.client_id, github), alias=args.alias, rotate=args.rotate
+            )
         except httpx.HTTPError as exc:
             # The GitHub half wraps its own transport failures, so one arriving here dialled the
             # gateway. httpx names the cause and not the host, which is the half a reader needs.
@@ -278,7 +284,7 @@ def main() -> None:
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
-        print('no key issued: one is minted on a first registration')
+        print('no key issued: one is minted on a first registration, or by --rotate')
     else:
         # The key is opaque, so it may hold whitespace or shell metacharacters; an unquoted export
         # line would either mangle it or run the rest of it.

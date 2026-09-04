@@ -35,6 +35,10 @@ export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
 The token GitHub mints carries `read:user user:email`, so it reads your profile and your verified
 email. The platform reads the account once, mints a key, and keeps no GitHub token.
 
+A second run of the command returns the same account and mints no key, because the platform
+cannot read back the key it issued. `platform-register --rotate` mints a fresh one, which is how
+a machine that no longer holds the key gets one.
+
 `POSITRONIC_PLATFORM_URL` and `--platform-url` name a platform other than the default one, as
 everywhere else in this package.
 
