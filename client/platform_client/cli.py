@@ -25,9 +25,9 @@ from pathlib import Path
 import httpx
 from platform_client import github_device_flow
 from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient
-from platform_client.enums import CameraVantage, Placement
+from platform_client.enums import CameraVantage, KeyStatus, Placement
 from platform_client.errors import PlatformError
-from platform_client.ids import ApiKey, RequestId, TransactionKey
+from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
 from platform_client.requests import EndpointAsk, RequestCreate, SceneAsk, TaskAsk
 from platform_client.slug import Slugged, slug_of
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -75,12 +75,10 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None) -> str |
     return _read_line(config_dir(env) / PLATFORM_URL_FILENAME)
 
 
-def write_config(directory: Path, *, api_key: ApiKey | None, platform_url: str) -> None:
-    """Record the platform and, when one was issued, the key that belongs to it. The key file is mode 0600."""
+def write_config(directory: Path, *, api_key: ApiKey, platform_url: str) -> None:
+    """Record a key and the platform it belongs to, as one pair. The key file is mode 0600."""
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     (directory / PLATFORM_URL_FILENAME).write_text(f'{platform_url}\n')
-    if api_key is None:
-        return
     key_path = directory / API_KEY_FILENAME
     with os.fdopen(os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as key_file:
         key_file.write(f'{api_key}\n')
@@ -127,9 +125,17 @@ def scene_from_pairs(pairs: Sequence[str]) -> SceneAsk | None:
 
 def ask_from_args(args: argparse.Namespace) -> RequestCreate:
     """The request `requests create` files: the whole of `--from`, or one built from the flags."""
-    from_flags = any((args.tasks, args.endpoints, args.episodes_per_endpoint, args.cap, args.preset, args.scene))
+    flags = (
+        args.tasks,
+        args.endpoints,
+        args.episodes_per_endpoint,
+        args.cap,
+        args.preset,
+        args.slug,
+        args.transaction_key,
+    )
     if args.from_file is not None:
-        if from_flags or args.slug or args.transaction_key:
+        if any(flag is not None for flag in flags) or args.scene:
             raise SystemExit('--from carries the whole request; give it alone')
         try:
             return RequestCreate.model_validate_json(Path(args.from_file).read_bytes())
@@ -168,19 +174,32 @@ def _show(model: BaseModel) -> None:
     print(model.model_dump_json(indent=2))
 
 
+class Registered(BaseModel):
+    """What `register` prints: the account, the platform, and where the key went. The key itself stays out."""
+
+    user_id: UserId
+    key_status: Slugged[KeyStatus]
+    platform_url: str
+    # The file holding the key this run minted, or None where none was issued: a repeat registration
+    # mints none, and the pair already on disk stays as it is.
+    api_key_file: Path | None = None
+
+
 def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
     base_url = github_device_flow.allowed_platform_url(
         platform_url_from(env, args.platform_url), plaintext_http=args.plaintext_http
     )
     response = github_device_flow.run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
-    directory = config_dir(env)
-    write_config(directory, api_key=response.api_key, platform_url=base_url)
-    print(f'user {response.user_id} ({response.key_status.name}) on {base_url}')
-    key_path = directory / API_KEY_FILENAME
-    if response.api_key is None:
-        print(f'no key issued: one is minted on a first registration, or by --rotate; {key_path} is unchanged')
-    else:
-        print(f'key written to {key_path}')
+    key_path: Path | None = None
+    if response.api_key is not None:
+        # The key and the platform are one pair: written together, or not at all.
+        key_path = config_dir(env) / API_KEY_FILENAME
+        write_config(config_dir(env), api_key=response.api_key, platform_url=base_url)
+    _show(
+        Registered(
+            user_id=response.user_id, key_status=response.key_status, platform_url=base_url, api_key_file=key_path
+        )
+    )
 
 
 def _create(args: argparse.Namespace, env: Mapping[str, str]) -> None:
