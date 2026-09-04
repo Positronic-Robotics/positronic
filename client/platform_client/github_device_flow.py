@@ -13,6 +13,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import math
 import os
 import shlex
@@ -258,6 +259,25 @@ def register_with_github(
     return platform.register(RegisterRequest(credential=token, alias=alias, rotate=rotate))
 
 
+# A tailnet address is as private as loopback: the WireGuard link encrypts what `http://` sends
+# over it, and staging is reached that way with no TLS of its own (services/ops/staging).
+_TAILNET = ipaddress.ip_network('100.64.0.0/10')
+
+
+def token_travels_encrypted(base_url: str) -> bool:
+    """https anywhere, or http to loopback or a tailnet address. Any other http shows the token."""
+    url = httpx.URL(base_url)
+    if url.scheme == 'https':
+        return True
+    if url.scheme != 'http':
+        return False
+    try:
+        address = ipaddress.ip_address(url.host)
+    except ValueError:
+        return url.host == 'localhost'
+    return address.is_loopback or (address.version == 4 and address in _TAILNET)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--alias', default=None, help='the display name for this account')
@@ -274,6 +294,10 @@ def main() -> None:
     except ValueError as exc:
         # An empty or relative platform URL is an argument fault, so it reads like the line above.
         raise SystemExit(str(exc)) from exc
+    if not token_travels_encrypted(base_url):
+        raise SystemExit(
+            f'{base_url} would carry the GitHub token in the clear: use https, or a loopback or tailnet address'
+        )
 
     github = httpx.Client(timeout=REQUEST_TIMEOUT)
     gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT)

@@ -386,6 +386,40 @@ def test_the_command_asks_for_rotation_only_when_the_flag_is_given(flag: list[st
     assert asked == [expected]
 
 
+@pytest.mark.parametrize(
+    ('base_url', 'encrypted'),
+    [
+        ('https://gateway.example', True),
+        ('http://127.0.0.1:8080', True),
+        ('http://localhost:8080', True),
+        ('http://100.64.7.9:8080', True),
+        ('http://203.0.113.5:8080', False),
+        ('http://gateway.example', False),
+        ('http://10.0.0.5:8080', False),
+    ],
+)
+def test_the_token_travels_only_over_https_loopback_or_the_tailnet(base_url: str, encrypted: bool):
+    assert github_device_flow.token_travels_encrypted(base_url) is encrypted
+
+
+def test_the_command_refuses_a_platform_that_would_show_the_token():
+    """A public http address never sees the GitHub token: the command stops before the device code."""
+    reached: list[object] = []
+
+    def record(platform: object, flow: object, *, alias: str | None = None, rotate: bool = False) -> RegisterResponse:
+        reached.append(flow)
+        return RegisterResponse.model_validate(ScriptedGateway().body)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(github_device_flow, 'register_with_github', record)
+        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=http://203.0.113.5:8080'])
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.main()
+
+    assert 'https' in str(raised.value) and reached == []
+
+
 def test_the_user_is_shown_the_code_before_the_poll_starts(capsys):
     """Only the short code has to reach the user while the flow runs."""
     github = ScriptedGitHub(polls=[dict(GRANTED)])
