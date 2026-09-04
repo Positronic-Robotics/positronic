@@ -162,6 +162,7 @@ function syncURL() {
 function readFiltersFromURL(serverFilterKeys, columns, episodes) {
   const params = new URLSearchParams(window.location.search);
   for (const [key, value] of params.entries()) {
+    if (!value) continue;  // the server reads an empty value as no filter; so does the page
     if (serverFilterKeys.has(key)) {
       state.serverFilters[key] = value;
       continue;
@@ -262,10 +263,15 @@ async function initEpisodesTable() {
 // Filtering & sorting
 // ---------------------------------------------------------------------------
 
+// A formatted cell is `[raw, formatted]`; a filter value is the raw one, as the server spells it in a query.
+function rawValue(entity) {
+  return Array.isArray(entity) ? entity[0] : entity;
+}
+
 function columnValues(episodes, index) {
   const values = new Set();
   for (const [, episodeData] of episodes) {
-    const v = episodeData[index];
+    const v = rawValue(episodeData[index]);
     if (v !== null && v !== undefined) values.add(String(v));
   }
   return Array.from(values);
@@ -285,7 +291,7 @@ function getFilteredEpisodes(columns) {
   let result = state.episodes.filter(([, episodeData]) =>
     Object.entries(filters).every(([filterKey, value]) => {
       const colIdx = columns.findIndex((c) => c.key === filterKey);
-      return String(episodeData[colIdx]) === value;
+      return String(rawValue(episodeData[colIdx])) === value;
     })
   );
 
