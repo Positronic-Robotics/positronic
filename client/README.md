@@ -15,40 +15,38 @@ platform installs it on its own, at the exact version it was written against:
 uv add "positronic-platform-client==0.4.0"
 ```
 
-`platform_client` never imports `positronic`. Registration ships here (below); the commands that
-drive an eval — `positronic eval run` and `positronic account` — ship with `positronic`, which
-depends on this package rather than the other way round.
+`platform_client` never imports `positronic`. The `platform-register` command ships here. The
+commands that drive an eval, `positronic eval run` and `positronic account`, ship with `positronic`,
+which depends on this package.
 
 ## Registering
 
-This package carries one command, `platform-register`, and it mints the API key everything else
-needs. It runs GitHub's device flow: it prints a short code and a URL, waits while you authorize it
-in a browser, and registers the account GitHub then names. Installing the package above puts it on
-your path.
+`platform-register` mints the API key that every other call needs. It runs GitHub's device flow:
+it prints a short code and a URL, waits while you authorize the app in a browser, and registers
+the GitHub account that authorized it. The package install above puts the command on your path.
 
 ```bash
 export POSITRONIC_PLATFORM_GITHUB_CLIENT_ID=<the OAuth app's public client id>
 platform-register --alias=<display name>
-export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
+export POSITRONIC_PLATFORM_API_KEY=<the key the command printed>
 ```
 
-The token GitHub mints carries `read:user user:email`, so it reads your profile and your verified
-email. The platform reads the account once, mints a key, and keeps no GitHub token.
+The GitHub token carries the scopes `read:user` and `user:email`. The platform reads the account
+once, mints a key, and stores no GitHub token.
 
-A second run of the command returns the same account and mints no key, because the platform
-cannot read back the key it issued. `platform-register --rotate` mints a fresh one, which is how
-a machine that no longer holds the key gets one.
+A second run returns the same account and no key: the platform cannot read back a key it issued.
+Run `platform-register --rotate` to mint a new key on a machine that lost it.
 
-`POSITRONIC_PLATFORM_URL` and `--platform-url` name a platform other than the default one, as
-everywhere else in this package. The command refuses a plain `http` platform that is not loopback;
-the tailnet carries staging with no TLS, so a staging user passes `--plaintext-http`.
+`--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
+refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
+tailnet: pass `--plaintext-http` to reach it.
 
 ## From the command line
 
-The rest of the user-facing side is `positronic`, and from a checkout it needs no installation step
-at all. `eval run` runs an eval here when given a policy, and on the platform when given a policy
-image. `account register` registers with a credential you already hold, where `platform-register`
-mints one from GitHub:
+`positronic` carries the other commands, and a checkout needs no installation step. `eval run`
+runs an eval here when given a policy, and on the platform when given a policy image.
+`account register` registers with a credential you already hold; `platform-register` mints one
+from GitHub:
 
 ```bash
 export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
