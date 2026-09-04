@@ -63,6 +63,19 @@ GROUP_INDEX_FILE = 'index.json'
 UNFILTERED_FILE = 'all.json'
 # A group table is one file per filter set some episode satisfies, up to 2^k per episode for k filter keys.
 MAX_FILTER_KEYS_PER_GROUP = 6
+# Each file of a group table is one read of the whole dataset.
+MAX_FILTER_SETS_PER_GROUP = 1024
+# The object key limit of an S3-style host; with an output directory in front it stays within a filesystem's path limit.
+MAX_PATH_BYTES = 1024
+# Windows reads these as devices, with or without a suffix, and trims a trailing dot off a name.
+_WINDOWS_DEVICES = frozenset([
+    'con',
+    'prn',
+    'aux',
+    'nul',
+    *(f'com{n}' for n in range(1, 10)),
+    *(f'lpt{n}' for n in range(1, 10)),
+])
 # The app's own assets, at the server root, so every export a host serves shares one copy.
 ASSET_DIR = 'static'
 
@@ -94,11 +107,12 @@ class GroupFile:
     file: str
 
 
-class _CaseInsensitiveTree:
-    """The paths written so far, as a filesystem that folds case holds them.
+class _PortableTree:
+    """The paths written so far, as any host or filesystem the tree lands on holds them.
 
-    A path that folds onto a file written before, or onto a directory above one, or whose own directory folds
-    onto a file, is refused: the export writes one tree, whatever filesystem it lands on.
+    A path past a host's key limit is refused. So is a component Windows reads as a device or trims, and a
+    path that folds onto a file written before, or onto a directory above one, or whose own directory folds
+    onto a file: the export writes one tree, wherever it lands.
     """
 
     def __init__(self):
@@ -106,7 +120,12 @@ class _CaseInsensitiveTree:
         self._directories: set[str] = set()
 
     def add(self, path: str) -> None:
+        if len(path.encode()) > MAX_PATH_BYTES:
+            raise ValueError(f'{path!r} is past the {MAX_PATH_BYTES}-byte key limit of a host')
         folded = PurePosixPath(path.casefold())
+        for part in folded.parts:
+            if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
+                raise ValueError(f'{path!r} has a component Windows reads as a device or trims, {part!r}')
         directories = [str(parent) for parent in folded.parents if str(parent) != '.']
         taken = str(folded) in self._files or str(folded) in self._directories
         if taken or any(directory in self._files for directory in directories):
@@ -119,11 +138,11 @@ class _Output:
     def __init__(self, directory: Path):
         self.directory = directory
         self.files: list[ExportedFile] = []
-        self._tree = _CaseInsensitiveTree()
+        self._tree = _PortableTree()
 
     def target(self, path: str) -> Path:
-        """The file `path` is written to; a path that would land outside the directory, or on another file
-        once case is folded, is refused."""
+        """The file `path` is written to; a path that would land outside the directory, or that a host or a
+        filesystem the tree lands on does not hold as it is, is refused."""
         relative = PurePosixPath(path)
         if relative.is_absolute() or '\\' in path or '..' in relative.parts:
             raise ValueError(f'{path!r} would land outside {self.directory}')
@@ -311,21 +330,34 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
-def _check_filter_keys(group_tables: dict[str, GroupTableConfig] | None) -> None:
+def _filter_sets_by_group(
+    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
+) -> dict[str, list[dict[str, str]]]:
+    """The filter sets each group table gets a file for; a group past either bound is refused before a write."""
+    sets_by_group: dict[str, list[dict[str, str]]] = {}
     for name, cfg in (group_tables or {}).items():
         if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
             raise ValueError(
                 f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
                 f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
             )
+        sets = filter_sets(_filter_values(dataset, cfg.group_filter_keys))
+        if len(sets) > MAX_FILTER_SETS_PER_GROUP:
+            raise ValueError(
+                f'group table {name!r} has {len(sets)} filter sets and an export reads the dataset once per set, '
+                f'so a group table takes at most {MAX_FILTER_SETS_PER_GROUP}; a filter key with a value per episode '
+                f'is the usual cause'
+            )
+        sets_by_group[name] = sets
+    return sets_by_group
 
 
-def _refuse_folded_collisions(group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str) -> None:
-    """Refuse a group directory or a large file that another folds onto, before a write.
+def _refuse_unportable_paths(group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str) -> None:
+    """Refuse a group directory or a large file that a host or a filesystem does not hold as it is, before a write.
 
     Past `configure_tables`, every group name is one segment the route builder spells.
     """
-    named = _CaseInsensitiveTree()
+    named = _PortableTree()
     for name in group_names:
         named.add(group_link(name))
     for files in episodes:
@@ -371,8 +403,8 @@ def export_static(
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
-    _check_filter_keys(group_tables)
     shown = CachedDataset(dataset)
+    sets_by_group = _filter_sets_by_group(shown, group_tables)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
@@ -389,7 +421,7 @@ def export_static(
             max_hz=max_hz,
         )
         configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
-        _refuse_folded_collisions(group_tables or {}, episodes, build_id)
+        _refuse_unportable_paths(group_tables or {}, episodes, build_id)
         install_dataset(shown)
         client = TestClient(app)
         group_names = list(group_tables or {})
@@ -398,8 +430,8 @@ def export_static(
         for route in _whole_api_routes():
             body, content_type = _fetch(client, f'/{route}')
             out.write(f'{route}.json', body, content_type)
-        for name, cfg in (group_tables or {}).items():
-            _write_group(client, out, name, filter_sets(_filter_values(shown, cfg.group_filter_keys)))
+        for name, sets in sets_by_group.items():
+            _write_group(client, out, name, sets)
 
         install_dataset(full)
         for files in episodes:

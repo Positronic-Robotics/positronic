@@ -23,7 +23,7 @@ from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
-from positronic.server import positronic_server
+from positronic.server import export, positronic_server
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
@@ -44,6 +44,7 @@ from positronic.server.positronic_server import (
     GroupTableConfig,
     TableConfig,
     app_state,
+    download_link,
 )
 
 OUTCOME = 'eval.outcome'
@@ -635,6 +636,79 @@ def test_downloads_of_two_episodes_that_differ_in_case_alone_are_written_apart(t
     dataset = a_dataset(tmp_path / 'dataset', {'Notes': 'n' * 2000}, {'notes': 'm' * 2000})
     files = paths_of(export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
     assert {'api/episode/0/static/Notes', 'api/episode/1/static/notes'} <= files
+
+
+def test_a_group_named_as_a_windows_device_is_refused_before_a_write(dataset, tmp_path):
+    with pytest.raises(ValueError, match='Windows'):
+        an_export(dataset, tmp_path / 'out', group_tables={'CON': GROUPS['outcomes']})
+    assert not (tmp_path / 'out').exists()
+
+
+@pytest.mark.parametrize('key', ['CON', 'nul.txt', 'report.'])
+def test_a_download_named_as_a_windows_device_or_with_a_trailing_dot_stops_the_export_before_it_writes(tmp_path, key):
+    dataset = a_dataset(tmp_path / 'dataset', {key: 'n' * 2000})
+    with pytest.raises(ValueError, match='Windows'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_download_named_past_a_windows_device_name_is_written(tmp_path):
+    dataset = a_dataset(tmp_path / 'dataset', {'console': 'n' * 2000, 'aux2': 'm' * 2000, 'lpt': 'o' * 2000})
+    files = paths_of(export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    assert {'api/episode/0/static/console', 'api/episode/0/static/aux2', 'api/episode/0/static/lpt'} <= files
+
+
+def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]]:
+    """A static dict with one download whose path on disk is `total_bytes` long, and that download's key path."""
+    stem = len(export._on_disk(download_link(0, ('k',)), build_id)) - 1
+    length = total_bytes - stem
+    count = -(-(length + 1) // (MAX_COMPONENT_BYTES + 1))
+    letters = length - (count - 1)
+    sizes = [letters // count + (1 if index < letters % count else 0) for index in range(count)]
+    keys = tuple(chr(ord('a') + index) * size for index, size in enumerate(sizes))
+    value: object = 'n' * 2000
+    for key in reversed(keys):
+        value = {key: value}
+    return cast(dict, value), keys
+
+
+def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_export_before_it_writes(tmp_path):
+    build_id = 'b' * MAX_COMPONENT_BYTES
+    static, keys = _download_at(export.MAX_PATH_BYTES + 1, build_id)
+    assert len(export._on_disk(download_link(0, keys), build_id)) == export.MAX_PATH_BYTES + 1
+    dataset = a_dataset(tmp_path / 'dataset', static)
+
+    with pytest.raises(ValueError, match='key limit'):
+        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id=build_id)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_download_whose_path_on_disk_is_at_a_host_s_key_limit_is_written(tmp_path):
+    build_id = 'b' * MAX_COMPONENT_BYTES
+    static, keys = _download_at(export.MAX_PATH_BYTES, build_id)
+    dataset = a_dataset(tmp_path / 'dataset', static)
+
+    files = export_static(
+        dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id=build_id
+    )
+
+    assert export._on_disk(download_link(0, keys), build_id) in paths_of(files)
+
+
+def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):
+    monkeypatch.setattr(export, 'MAX_FILTER_SETS_PER_GROUP', 6)
+    with pytest.raises(ValueError, match='filter sets'):
+        an_export(dataset, tmp_path / 'out', group_tables={'pairs': GROUPS['pairs']})
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_group_table_at_the_filter_set_bound_is_written(dataset, tmp_path, monkeypatch):
+    monkeypatch.setattr(export, 'MAX_FILTER_SETS_PER_GROUP', 7)
+    out = tmp_path / 'out'
+
+    an_export(dataset, out, group_tables={'pairs': GROUPS['pairs']})
+
+    assert len(json.loads((out / 'api/groups/pairs' / GROUP_INDEX_FILE).read_text())) == 7
 
 
 def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):
