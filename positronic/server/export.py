@@ -60,6 +60,8 @@ BUILD_DIR = 'build'
 # A group table is one file per filter set, and the index beside them says which file holds which.
 GROUP_INDEX_FILE = 'index.json'
 UNFILTERED_FILE = 'all.json'
+# A group table is one file per filter set some episode satisfies, up to 2^k per episode for k filter keys.
+MAX_FILTER_KEYS_PER_GROUP = 6
 # The app's own assets, at the server root, so every export a host serves shares one copy.
 ASSET_DIR = 'static'
 
@@ -267,15 +269,30 @@ def _whole_api_routes() -> list[str]:
 
 
 def _aligned(full: Dataset, shown: Dataset) -> Dataset:
-    """`full`, once it holds the episodes of `shown` at the same indexes, by uid."""
+    """`full`, once it holds the episodes of `shown` at the same indexes, by uid, with every download `shown` links."""
     if len(full) != len(shown):
         raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(shown)}')
     for index in range(len(shown)):
-        full_uid = cast(Episode, full[index]).meta[META_UID]
-        shown_uid = cast(Episode, shown[index]).meta[META_UID]
-        if full_uid != shown_uid:
-            raise ValueError(f'full_dataset episode {index} has uid {full_uid!r} and dataset has {shown_uid!r}')
+        full_episode, shown_episode = cast(Episode, full[index]), cast(Episode, shown[index])
+        if full_episode.meta[META_UID] != shown_episode.meta[META_UID]:
+            raise ValueError(
+                f'full_dataset episode {index} has uid {full_episode.meta[META_UID]!r} and dataset has '
+                f'{shown_episode.meta[META_UID]!r}'
+            )
+        missing = set(download_paths(shown_episode.static)) - set(download_paths(full_episode.static))
+        if missing:
+            path = '/'.join(min(missing))
+            raise ValueError(f'full_dataset episode {index} has no download at {path!r}, which dataset links')
     return full
+
+
+def _check_filter_keys(group_tables: dict[str, GroupTableConfig] | None) -> None:
+    for name, cfg in (group_tables or {}).items():
+        if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
+            raise ValueError(
+                f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
+                f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
+            )
 
 
 def export_static(
@@ -313,6 +330,7 @@ def export_static(
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
+    _check_filter_keys(group_tables)
     shown = CachedDataset(dataset)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_files(shown, index) for index in range(len(shown))]

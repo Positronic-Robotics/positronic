@@ -174,16 +174,26 @@ def episode_rrd_link(episode_id: int) -> str:
     return _route(api_episode_rrd, episode_id=str(episode_id))
 
 
+def _download_segment(key: str) -> str:
+    """`key` as one segment of a download link: percent-encoded, and within any filesystem's name limit.
+
+    A browser rewrites a segment that is empty or all dots, and a filesystem refuses a name past its
+    limit, so such a key has no link.
+    """
+    if key in ('', '.', '..'):
+        raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
+    encoded = quote(key, safe='')
+    if len(encoded.encode()) > _MAX_COMPONENT_BYTES:
+        raise ValueError(
+            f'a static value with a key of {len(encoded.encode())} encoded bytes has no link a file is named by'
+        )
+    return encoded
+
+
 def download_link(episode_id: int, field_path: tuple[str, ...]) -> str:
     """The download's path: one percent-encoded segment per key, so a `.`, `/`, `?` or space inside a key
-    stays in its segment and two static values never share a link.
-
-    A browser rewrites a segment that is empty or all dots, so a key that is `''`, `.` or `..` is refused.
-    """
-    for key in field_path:
-        if key in ('', '.', '..'):
-            raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
-    encoded = '/'.join(quote(key, safe='') for key in field_path)
+    stays in its segment and two static values never share a link."""
+    encoded = '/'.join(_download_segment(key) for key in field_path)
     return _route(api_episode_static_field, episode_id=str(episode_id), field_path=encoded)
 
 
@@ -332,13 +342,12 @@ def _downloads(value: object, prefix: tuple[str, ...]) -> Iterator[tuple[tuple[s
 def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
     """The key path of every static value an episode page links as a download; a list item by its index.
 
-    Each key is one URL segment, so distinct paths never share a link. A key a browser rewrites in a path
-    — empty, `.` or `..` — is refused.
+    Each key is one URL segment, so distinct paths never share a link. A key that makes no segment —
+    empty, `.`, `..`, or past a file name's limit once encoded — is refused.
     """
     for key_path, _ in _downloads(static, ()):
         for key in key_path:
-            if key in ('', '.', '..'):
-                raise ValueError(f'a static value with a key {key!r} has no link a browser keeps')
+            _download_segment(key)
         yield key_path
 
 
