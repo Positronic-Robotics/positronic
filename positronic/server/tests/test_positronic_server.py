@@ -488,7 +488,7 @@ def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
     names = json.loads(written.group(1))
     params, file = (field.name for field in fields(GroupFile))
 
-    assert names.pop('episode_page_prefix') + '3' == episode_link(3)
+    assert names.pop('episode_page_before') + '3' + names.pop('episode_page_after') == episode_link(3)
     assert names == {
         'dataset_status': _route(api_dataset_status),
         'dataset_info': _route(api_dataset_info),

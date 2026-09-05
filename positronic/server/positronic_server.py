@@ -28,6 +28,7 @@ import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -223,20 +224,23 @@ def group_api_link(name: str) -> str:
     return _route(api_groups, suffix=name)
 
 
-def _episode_page_prefix() -> str:
-    """What every episode page's link opens with; the page adds the episode's index to it."""
-    placeholder = 'INDEX'
-    return _route(episode_viewer, episode_id=placeholder).removesuffix(placeholder)
+def _episode_page_affixes() -> tuple[str, str]:
+    """What an episode page's link carries before and after the episode's index, read off the route's path."""
+    route = next(r for r in app.routes if isinstance(r, APIRoute) and r.name == episode_viewer.__name__)
+    before, _, rest = route.path.removeprefix('/').partition('{')
+    return before, rest.partition('}')[2]
 
 
 def _server_names() -> dict[str, str]:
     """Every name the page reads from the server rather than spelling it again: a route, a file, a field."""
     params, file = (field.name for field in fields(GroupFile))
+    before_index, after_index = _episode_page_affixes()
     return {
         'dataset_status': _route(api_dataset_status),
         'dataset_info': _route(api_dataset_info),
         'episodes_api': _route(api_episodes),
-        'episode_page_prefix': _episode_page_prefix(),
+        'episode_page_before': before_index,
+        'episode_page_after': after_index,
         'group_index_file': GROUP_INDEX_FILE,
         'entry_params': params,
         'entry_file': file,

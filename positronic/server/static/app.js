@@ -476,7 +476,7 @@ function populateTable(columns) {
       const episodesUrl = window.EPISODES_URL || '.';
       viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
-      viewLink.href = appUrl(`${NAMES.episode_page_prefix}${episodeIndex}`);
+      viewLink.href = appUrl(`${NAMES.episode_page_before}${episodeIndex}${NAMES.episode_page_after}`);
     }
     viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);
