@@ -251,3 +251,4 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 dreamzero_layers = layers.video_context_layers.override(
     history_frames=23, stride=8, keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 )
+dreamzero_layers_3cam = dreamzero_layers.override(keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2))

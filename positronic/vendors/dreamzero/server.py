@@ -385,7 +385,7 @@ joints_ik = pipeline.override(codec=codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
 # The public pretrained DROID checkpoint on the wan2.1 backbone. Asserts 320x180 frames.
 droid = pipeline.override(codec=codecs.droid, height=180, **{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})
-droid_3cam = droid.override(codec=codecs.droid_3cam)
+droid_3cam = droid.override(codec=codecs.droid_3cam, local=codecs.dreamzero_layers_3cam)
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
