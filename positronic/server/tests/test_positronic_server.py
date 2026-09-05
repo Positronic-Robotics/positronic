@@ -404,6 +404,10 @@ def test_a_list_index_the_route_cannot_parse_is_a_missing_field(viewer, monkeypa
         assert viewer.get(f'/api/episode/0/static/many/{segment}').status_code == 404
     assert viewer.get('/api/episode/0/static/many/0').content == b'x'
 
+    monkeypatch.setattr(_StubEpisode, 'static', {'many': [b'x'] * 10})
+    assert viewer.get('/api/episode/0/static/many/01').status_code == 404
+    assert viewer.get('/api/episode/0/static/many/1').content == b'x'
+
 
 def test_a_download_link_carries_each_key_encoded_and_the_route_answers_it(viewer, monkeypatch):
     monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/b': b'nested'})

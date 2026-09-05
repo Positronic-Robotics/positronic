@@ -135,7 +135,7 @@ def _path_length(path: Path) -> int:
 class _Output:
     """The files the export writes under `directory`, as any host or filesystem holds them.
 
-    Every path is planned before the first write, and `plan` refuses:
+    Every path is planned before the first write, a write of a path outside the plan is refused, and `plan` refuses:
     - a key past a host's limit, with `key_prefix`, the base href, in front;
     - a local path past the filesystem's limit, with `directory` in front;
     - a component Windows reads as a device or trims;
@@ -148,6 +148,7 @@ class _Output:
         self._key_prefix = key_prefix
         self.files: list[ExportedFile] = []
         self._path_max = _path_max(self.directory)
+        self._planned: set[PurePosixPath] = set()
         self._folded_files: set[PurePosixPath] = set()
         self._folded_directories: set[PurePosixPath] = set()
 
@@ -159,7 +160,7 @@ class _Output:
             key = self._key_prefix + str(path)
             if len(key.encode()) > MAX_KEY_BYTES:
                 raise ValueError(f'{key} is past the {MAX_KEY_BYTES}-byte key limit of a host')
-            local = self._target(path)
+            local = self.directory.joinpath(*path.parts)
             if _path_length(local) >= self._path_max:
                 raise ValueError(f'{local} is past the path limit of its filesystem, {self._path_max}')
             folded = PurePosixPath(str(path).casefold())
@@ -172,6 +173,7 @@ class _Output:
                 raise ValueError(f'{path} is one file with another the export writes on a filesystem that folds case')
             self._folded_files.add(folded)
             self._folded_directories.update(directories)
+            self._planned.add(path)
 
     def write(self, path: PurePosixPath, body: bytes, content_type: str) -> ExportedFile:
         target = self._target(path)
@@ -187,6 +189,8 @@ class _Output:
         return self._record(path, asset_content_type(source), target.stat().st_size)
 
     def _target(self, path: PurePosixPath) -> Path:
+        if path not in self._planned:
+            raise ValueError(f'{path} is not in the export plan')
         return self.directory.joinpath(*path.parts)
 
     def _record(self, path: PurePosixPath, content_type: str, size: int) -> ExportedFile:

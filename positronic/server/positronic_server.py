@@ -409,11 +409,11 @@ _MISSING = object()
 
 
 def _list_index(key: str, items: list) -> int | None:
-    """The index `key` names into `items`: ASCII digits, no more of them than the length has; None otherwise."""
+    """The index `key` names into `items`, spelled as `str` spells it and within the length; None otherwise."""
     if not (key.isascii() and key.isdigit() and len(key) <= len(str(len(items)))):
         return None
     index = int(key)
-    return index if index < len(items) else None
+    return index if key == str(index) and index < len(items) else None
 
 
 def _value_at(static: dict, key_path: Sequence[str]) -> object:
