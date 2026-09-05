@@ -130,6 +130,11 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: 
     return record.platform_url if record else None
 
 
+def same_platform(one: str, other: str) -> bool:
+    """Whether two URLs name one platform: parsed, and read without a trailing slash."""
+    return httpx.URL(one.removesuffix('/')) == httpx.URL(other.removesuffix('/'))
+
+
 def record_if_needed(env: Mapping[str, str], api_key_file: Path | None, platform_url: str | None) -> Config | None:
     """The saved record, read only where the caller leaves the key or the platform to it."""
     if key_is_given(env, api_key_file) and platform_is_given(env, platform_url):
@@ -223,7 +228,11 @@ def _client(args: argparse.Namespace, env: Mapping[str, str]) -> PlatformClient:
         base_url = resolve_base_url(platform_url_from(env, args.platform_url, record))
     except (ValueError, httpx.InvalidURL) as exc:
         raise SystemExit(str(exc)) from exc
-    if record is not None and not key_is_given(env, args.api_key_file) and base_url != record.platform_url:
+    if (
+        record is not None
+        and not key_is_given(env, args.api_key_file)
+        and not same_platform(base_url, record.platform_url)
+    ):
         raise SystemExit(
             f'the saved key belongs to {record.platform_url}, and this command names {base_url}: pass '
             f'--api-key-file with a key for that platform, or register there with '
