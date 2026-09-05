@@ -174,6 +174,28 @@ def test_the_flags_win_over_the_environment(config, gateway, monkeypatch, tmp_pa
     assert sent.headers['authorization'] == 'Bearer pk_live_env'
 
 
+def test_the_platform_comes_from_the_environment_the_caller_supplies(config):
+    """The mapping the function takes is the one it reads; nothing falls back to the process environment."""
+    record = Config(platform_url=PLATFORM, api_key=KEY)
+    env = {API_URL_ENV: 'https://env.example'}
+
+    assert cli.platform_url_from(env, None, record) == 'https://env.example'
+    assert cli.platform_url_from(env, 'https://flag.example', record) == 'https://flag.example'
+    assert cli.platform_url_from({}, None, record) == PLATFORM
+    assert cli.platform_url_from({}, None, None) is None
+
+
+def test_an_empty_platform_in_the_environment_is_refused_rather_than_read_as_unset(config, gateway, monkeypatch):
+    """An empty variable names a platform, so falling through would send the run to the production one."""
+    _registered(config)
+    monkeypatch.setenv(API_URL_ENV, '')
+
+    with pytest.raises(SystemExit, match='is empty'):
+        cli.main(['requests', 'get', '2a'])
+
+    assert gateway.requests == []
+
+
 def test_a_key_file_is_read_before_the_record(config, gateway, tmp_path):
     _registered(config)
     key_file = tmp_path / 'other_key'
@@ -537,6 +559,19 @@ def test_a_malformed_record_is_refused_with_one_line_naming_the_file(config, gat
     message = str(raised.value)
     assert str(config / CONFIG_FILENAME) in message and 'register' in message
     assert 'pk_live_secret' not in message and gateway.requests == []
+
+
+def test_a_record_whose_platform_does_not_parse_is_refused_naming_the_file(config, gateway):
+    """A URL the client cannot parse ends the command with the record's own line, not a traceback."""
+    config.mkdir()
+    (config / CONFIG_FILENAME).write_text(json.dumps({'platform_url': 'http://host:bad', 'api_key': KEY}))
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a', f'--platform-url={PLATFORM}'])
+
+    message = str(raised.value)
+    assert str(config / CONFIG_FILENAME) in message and 'register' in message
+    assert KEY not in message and gateway.requests == []
 
 
 def test_a_record_a_command_needs_nothing_from_is_not_read(config, gateway, monkeypatch, tmp_path):
