@@ -56,7 +56,6 @@ def benchmarks(
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     proxy = RemoteEnvControlSystem(MolmoAdapter(), serve_molmo_spaces())
-    # MolmoSpaces drives a Franka DROID rig.
     embodiment = remote_franka_embodiment(
         proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
@@ -86,6 +85,5 @@ def benchmarks(
 bench_v1 = benchmarks.override(suite='molmospaces-bench-v1')
 bench_v2 = benchmarks.override(suite='molmospaces-bench-v2')
 
-# The v1 pick benchmark, and its first episode as a smoke target.
 pick_v1 = bench_v1.override(task_config='FrankaPickDroidMiniBench')
 first_episode = pick_v1.override(episodes=0)

@@ -1,11 +1,8 @@
 """End-to-end check that the MolmoSpaces env server works over the socket + the adapter maps its payload.
 
-The mapping/adapter unit tests exercise the transforms in-process; this drives the **real boundary**: the
-launcher spawns the env-server subprocess in MolmoSpaces' own venv, and a client resets + steps it over the
-actual socket, then feeds the wire payload through ``MolmoAdapter`` — validating the launcher, the wire
-protocol, ``env.py``'s task drive, and the observation mapping together. A hold command holds the arm, so a
-healthy server keeps the joints steady and reports frames of the right shape; a wrong obs key, quaternion
-order, or a broken wire codec fails the mapping.
+The mapping/adapter unit tests exercise the transforms in-process; this drives the real boundary: the launcher
+spawns the env-server subprocess, and a client resets + steps it over the socket, then feeds the wire payload
+through ``MolmoAdapter``. A wrong obs key, quaternion order, or a broken wire codec fails the mapping.
 
 Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``MUJOCO_GL``; a GPU-less box uses
 mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run on a box with those::
@@ -37,13 +34,11 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
     return sim_state
 
 
-def run(
-    bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5, task_horizon_steps: int | None = None
-) -> None:
+def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5) -> None:
     """Reset + step the first ``episodes`` episodes the server lists for ``bench`` (every benchmark when
     ``None``) over the socket, mapping each frame with the adapter."""
     adapter = MolmoAdapter()
-    with serve_molmo_spaces(task_horizon_steps=task_horizon_steps) as (host, port):
+    with serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
             for record in conn.tasks(bench._asdict() if bench is not None else {})[:episodes]:
@@ -83,11 +78,8 @@ def main() -> None:
     )
     parser.add_argument('--episodes', type=int, default=1)
     parser.add_argument('--steps', type=int, default=5)
-    parser.add_argument(
-        '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
-    )
     args = parser.parse_args()
-    run(args.benchmark, episodes=args.episodes, steps=args.steps, task_horizon_steps=args.task_horizon_steps)
+    run(args.benchmark, episodes=args.episodes, steps=args.steps)
 
 
 if __name__ == '__main__':

@@ -63,11 +63,6 @@ import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPAT
 # venv's PYTHONPATH), so the symbols read as unknown here.
 from server import EnvProtocol, EnvServer  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
 
-# Imported for its import-time ``_assert_data_versions_match()``: MolmoSpaces pins the asset versions a
-# benchmark may be evaluated against, and this is the only place upstream enforces it. Driving the sampler
-# directly skips the native entrypoint, so without this a run on mismatched asset packs would score where
-# MolmoSpaces itself refuses to.
-import molmo_spaces.evaluation.eval_main  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits  # pyright: ignore[reportMissingImports]
 from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -79,6 +74,9 @@ from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright:
 )
 from molmo_spaces.evaluation.configs.evaluation_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     JsonBenchmarkEvalConfig,
+)
+from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    determine_task_horizon,
 )
 from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     JsonEvalTaskSampler,
@@ -141,23 +139,19 @@ class MolmoSpacesEnv(EnvProtocol):
     and reports MolmoSpaces' ``is_done``/``judge_success``.
     """
 
-    def __init__(self, assets_dir: Path, task_horizon_steps: int | None = None) -> None:
+    def __init__(self, assets_dir: Path) -> None:
         self._assets_dir = assets_dir
         self._found = mapping.discover_benchmarks(assets_dir)
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}  # a benchmark's specs, loaded on first use
-        self._task_horizon_override = task_horizon_steps
         self._sampler: Any = None
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
-        # The episode's enforced horizon in sim-seconds (``task_horizon`` steps x the control period), reported
-        # at reset.
         self._horizon_sec: float | None = None
         self._meta: dict[str, Any] | None = None
-        self._camera_names: list[str] = []  # The RGB camera keys the current episode renders, emitted every frame.
-        # Scratch ``MjData`` the kinematics probes (``_fk``/``_ik``) run on, allocated once per episode and
-        # refreshed from the live buffer per call — a Cartesian policy solves IK every control step, so the
-        # allocation stays out of the loop. Rebuilt in ``_build``, since it is sized by the episode's model.
+        self._camera_names: list[str] = []
+        # Scratch ``MjData`` the IK probes run on: a Cartesian policy solves IK every control step, so the
+        # allocation stays out of the loop. Sized by the episode's model, so ``_build`` drops it.
         self._scratch: Any = None
 
     def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
@@ -181,7 +175,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The horizon is the
         # benchmark's, not an episode's.
-        cfg.task_horizon = mapping.resolve_task_horizon_steps(episodes, cfg.policy_dt_ms, self._task_horizon_override)
+        cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
@@ -214,8 +208,7 @@ class MolmoSpacesEnv(EnvProtocol):
             out_of_range = [i for i in indices if not 0 <= i < count]
             if out_of_range:
                 raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
-            steps = mapping.resolve_task_horizon_steps(episodes, cfg.policy_dt_ms, self._task_horizon_override)
-            horizon_sec = steps * cfg.policy_dt_ms / 1000.0
+            horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
             records += [
                 {
                     **bench._asdict(),
@@ -252,11 +245,6 @@ class MolmoSpacesEnv(EnvProtocol):
             mapping.MOLMO_ARM_GROUP: arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
-        # The trial ends on the task's judged success, on a MolmoSpaces terminal, or on horizon expiry — the
-        # latter two through ``is_done``. ``success`` is ORed in for end-on-success, the benchmark's scoring
-        # semantics: without it a successful rollout that kept sending joint commands would idle to the horizon.
-        # It stays ``judge_success()`` alone, so a horizon expiry ends the trial with ``success=False``, as
-        # native scoring has it.
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {
@@ -280,28 +268,13 @@ class MolmoSpacesEnv(EnvProtocol):
     def _scratch_data(self, move_group: Any) -> Any:
         """The scratch ``MjData``, refreshed from the live one, for off-sim kinematics probing.
 
-        A fresh ``MjData`` seeded with ``qpos`` alone is NOT equivalent: MolmoSpaces places the robot in a scene
-        whose pose also rides on state outside ``qpos`` (mocap bodies among it), which a fresh buffer resets to
-        the model defaults — the grasp site then resolves metres away from the live one. Copying the whole
-        struct keeps every such field, so the probe differs from the live scene only in the joints the caller
-        sets, and copying into a retained buffer keeps the per-step allocation out of the control loop.
+        The whole struct is copied: a scene's robot pose also rides on state outside ``qpos`` (mocap bodies
+        among it), which a fresh buffer resets to the model defaults, resolving the grasp site metres away.
         """
         if self._scratch is None:
             self._scratch = mujoco.MjData(move_group.mj_model)  # pyright: ignore[reportAttributeAccessIssue]
         mujoco.mj_copyData(self._scratch, move_group.mj_model, move_group.mj_data)  # pyright: ignore[reportAttributeAccessIssue]
         return self._scratch
-
-    def _fk(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """The grasp-site world pose a candidate arm configuration reaches.
-
-        Evaluated on a scratch ``MjData`` seeded from the live scene (objects intact), so the live sim is never
-        perturbed: set the arm joints, propagate, read the leaf frame. The inverse of ``_ik``.
-        """
-        arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-        data = self._scratch_data(arm)
-        data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
-        mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
-        return _leaf_pose(arm, data)
 
     # !!!!! Does the Molmo space accept the cartesian commands? Can we use it, instead of implementing
     # IK again and again?
@@ -309,10 +282,8 @@ class MolmoSpacesEnv(EnvProtocol):
         """Absolute world grasp-site target -> the arm joint targets that reach it.
 
         Damped-least-squares differential IK on MuJoCo's own leaf-frame Jacobian, mirroring the LIBERO rig's
-        solver. It iterates on a scratch ``MjData`` seeded from the live scene (objects intact), so probing
-        candidate joint configurations never perturbs the sim being stepped. Joint targets stay inside the
-        move group's limits, and a target the arm cannot reach yields the closest configuration the iteration
-        reached rather than raising — an unreachable waypoint holds near the limit instead of aborting a trial.
+        solver. An unreachable target yields the closest configuration the iteration reached, clipped to the
+        joint limits, so a waypoint out of the workspace holds near the limit instead of aborting a trial.
         """
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         model = arm.mj_model
@@ -350,8 +321,8 @@ class MolmoSpacesEnv(EnvProtocol):
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
         """The raw observation payload for one env frame: measured joints, the eef world pose, grip, camera frames.
 
-        MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read
-        from the arm move group's grasp-site frame, since obs exposes only a robot-relative tcp pose.
+        The eef *world* pose is read from the arm move group's grasp-site frame, since MolmoSpaces' obs exposes
+        only a robot-relative tcp pose.
         """
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
@@ -367,7 +338,6 @@ class MolmoSpacesEnv(EnvProtocol):
             mapping.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
-            # The full MuJoCo generalized state: every body's pose + velocity, objects included.
             mapping.OBS_SIM_STATE: self._full_physics_state(),
         }
         for name in self._camera_names:
@@ -376,9 +346,8 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def _full_physics_state(self) -> np.ndarray:
         """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
-        MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
-        mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
-        recompute success. Positions start at index 1, after the scalar time."""
+        MuJoCo sim restores from to reproduce its forward trajectory. Object poses in it let analysis recompute
+        success. Positions start at index 1, after the scalar time."""
         data = self._robot_view.mj_data
         model = data.model
         spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
@@ -424,17 +393,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
     parser.add_argument(protocol.OPT_HOST, default='localhost')
     parser.add_argument(protocol.OPT_PORT, type=int, required=True)
-    parser.add_argument(
-        mapping.OPT_TASK_HORIZON_STEPS,
-        type=int,
-        default=None,
-        help='override the benchmark horizon (steps per episode)',
-    )
     args = parser.parse_args()
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets), args.task_horizon_steps)
+    env = MolmoSpacesEnv(Path(assets))
     EnvServer(env, args.host, args.port).serve_forever()
 
 

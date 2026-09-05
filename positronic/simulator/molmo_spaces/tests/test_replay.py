@@ -6,12 +6,9 @@ real pi05 rollout emitted, open-loop from the benchmark's own seed, and asserts 
 trajectory step for step.
 
 It reproduces because the recorded commands are absolute joint targets, so no observation feeds back into the
-stream: the replay depends only on the sim rollout and the env-server path between positronic and it. MuJoCo
-CPU physics is deterministic for a pinned build, and the render nondeterminism ``exp-004`` found never reaches
-an open-loop replay, which reads no images. Same-host replay of the pinned ``_MOLMO_COMMIT`` reproduces the
-fixture's ``sim_state`` *exactly* — zero deviation across every replayed step of both fixtures — so a
-divergence here is a real change in the integration (command mapping, horizon, the wire, scene selection),
-not sim noise.
+stream. Same-host replay of the pinned ``_MOLMO_COMMIT`` reproduces the fixture's ``sim_state`` exactly, so a
+divergence here is a real change in the integration (command mapping, horizon, the wire, scene selection), not
+sim noise.
 
 The rollout stops where the recording stops pinning it: an eval episode's command signals end before its
 observations do, so the last few steps of every recording apply commands that were never written down

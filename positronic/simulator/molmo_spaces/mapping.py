@@ -9,9 +9,9 @@ only the framework-independent arithmetic lives here.
 """
 
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NamedTuple, TypeAlias
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -22,12 +22,7 @@ try:
 except ImportError:
     import protocol  # pyright: ignore[reportMissingImports]
 
-# The DROID rig runs 7 Franka arm joints; the reset token's per-move-group action names them 'arm'/'gripper'.
-NUM_ARM_JOINTS = 7
-
-# An absolute world target ``(translation, 3x3 rotation)`` -> the arm joint targets that reach it. Supplied
-# by ``env.py``, which holds the model this module deliberately does not.
-IkSolver: TypeAlias = Callable[[np.ndarray, np.ndarray], Any]
+# The move groups a reset token's action names on the DROID rig.
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
@@ -92,10 +87,6 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
     return selected
 
 
-# The env-server subprocess CLI, spelled by the launcher building the command and by ``env.py``'s parser
-# declaring it — two interpreters, so a rename that misses one fails at spawn rather than at import.
-OPT_TASK_HORIZON_STEPS = '--task_horizon_steps'
-
 # MuJoCo's backend selector, and the backend this adoption asks for. MuJoCo validates the value against the
 # host platform and raises on one it does not offer there, so the default follows the platform: EGL is the
 # headless-GPU path on Linux, CGL the only context macOS has. A GPU-less Linux box overrides with osmesa.
@@ -115,10 +106,6 @@ META_HOUSE_INDEX = 'house_index'
 # gripper closure is read from.
 MOLMO_OBS_QPOS = 'qpos'
 
-# The benchmark episode spec's task definition, and the horizon it declares in sim-seconds.
-MOLMO_EPISODE_TASK = 'task'
-MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
-
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
@@ -132,7 +119,6 @@ OBS_SIM_STATE = 'sim_state'
 GRIPPER_QPOS_CLOSED = 0.824033
 
 # The Robotiq gripper actuator is a single command, 0 fully open .. 255 fully closed (franka_droid_view.py:43).
-ROBOTIQ_OPEN = 0.0
 ROBOTIQ_CLOSED = 255.0
 
 
@@ -142,10 +128,9 @@ def is_rgb_frame(value: Any) -> bool:
     return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
 
 
-def normalize_grip_qpos(gripper_qpos: Any, gripper_qpos_closed: float = GRIPPER_QPOS_CLOSED) -> float:
+def normalize_grip_qpos(gripper_qpos: Any) -> float:
     """A Robotiq finger qpos -> the [0, 1] closure the observation reports (0 open, 1 closed)."""
-    value = float(np.asarray(gripper_qpos).reshape(-1)[0])
-    return float(np.clip(value / gripper_qpos_closed, 0.0, 1.0))
+    return float(np.clip(np.asarray(gripper_qpos).reshape(-1)[0] / GRIPPER_QPOS_CLOSED, 0.0, 1.0))
 
 
 def grip_command_to_actuator(grip: float) -> float:
@@ -181,15 +166,12 @@ def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: A
     )
 
 
-def _require_ik(ik: IkSolver | None, kind: str) -> IkSolver:
-    """The caller's IK solver, or a loud failure — a Cartesian target is unresolvable without the live model."""
-    if ik is None:
-        raise ValueError(f'command {kind!r} needs an ik solver; none was supplied')
-    return ik
-
-
 def wire_command_to_arm_action(
-    command: dict[str, Any], current_q: Any, *, ik: IkSolver | None = None, current_eef: tuple[Any, Any] | None = None
+    command: dict[str, Any],
+    current_q: Any,
+    *,
+    ik: Callable[[np.ndarray, np.ndarray], Any],
+    current_eef: tuple[Any, Any],
 ) -> np.ndarray:
     """A tagged wire command + the live measured arm joints -> the 7 absolute joint targets molmo steps.
 
@@ -198,9 +180,9 @@ def wire_command_to_arm_action(
     ``joint_vel`` integrates the per-step delta onto the measured joints (positronic applies ``JointDelta`` as
     ``q + dq``), and ``hold`` re-commands the measured joints.
 
-    The Cartesian pair needs the live model, which this module deliberately does not hold: the caller passes
-    ``ik`` (an absolute world target ``(pos, rot)`` -> joint targets) and, for ``cartesian_delta``, the measured
-    ``current_eef`` pose the delta composes onto. Both are supplied by ``env.py``, which owns the sim.
+    The Cartesian pair needs the live model, which this module deliberately does not hold: ``env.py`` supplies
+    ``ik`` (an absolute world target ``(pos, rot)`` -> joint targets) and the measured ``current_eef`` pose a
+    delta composes onto.
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
@@ -214,15 +196,11 @@ def wire_command_to_arm_action(
         case protocol.HOLD:
             target = current
         case protocol.CARTESIAN:
-            solver = _require_ik(ik, protocol.CARTESIAN)
-            target = np.asarray(solver(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
+            target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
-            solver = _require_ik(ik, protocol.CARTESIAN_DELTA)
-            if current_eef is None:
-                raise ValueError(f'command {protocol.CARTESIAN_DELTA!r} needs the measured eef pose; none supplied')
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
             target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
-            target = np.asarray(solver(target_pos, target_rot), dtype=np.float32).reshape(-1)
+            target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(
                 f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
@@ -241,51 +219,3 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
         return int(override_seed)
     spec_seed = getattr(episode, 'seed', None)
     return int(spec_seed) if spec_seed is not None else int(episode_index)
-
-
-def declared_task_horizon_sec(declared: Iterable[float | None]) -> float:
-    """The one horizon a benchmark declares, in sim-seconds, over every episode's ``task_horizon_sec``.
-
-    The horizon belongs to the benchmark, not to an episode within it, so a benchmark that declares none, one
-    that disagrees with itself, and one that declares a non-positive span all have no horizon to run at.
-    Callers pass the values already read from their own representation of the specs: parsed episode objects in
-    the molmo venv, raw JSON on the positronic side.
-    """
-    horizons = set()
-    for value in declared:
-        if value is None:
-            raise ValueError(
-                f'benchmark episodes carry no {MOLMO_TASK_HORIZON_SEC} in their task dict — the horizon is part '
-                'of the task definition; add it to the benchmark'
-            )
-        if value <= 0:
-            raise ValueError(f'benchmark declares a non-positive {MOLMO_TASK_HORIZON_SEC} of {value}s')
-        horizons.add(value)
-    if len(horizons) != 1:
-        raise ValueError(f'benchmark declares inconsistent {MOLMO_TASK_HORIZON_SEC} values {sorted(horizons)}')
-    return float(horizons.pop())
-
-
-def resolve_task_horizon_steps(episodes: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
-    """A benchmark's enforced horizon in policy steps, mirroring MolmoSpaces' own resolution.
-
-    Upstream's ``determine_task_horizon`` (``evaluation/eval_main.py``, the entrypoint its README documents)
-    resolves in this order and nothing else: an explicit ``--task_horizon_steps`` override, then the benchmark's
-    own ``task_horizon_sec`` from the episodes' task dicts, converted with ``round(sec * 1000 / policy_dt_ms)``.
-    It raises when any episode declares none, and again when the episodes disagree. This reproduces all three,
-    raises included: ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default upstream
-    overwrites before the runner ever sees it. A horizon that resolves below one step is refused on either
-    path, so no route reaches the task with a budget it expires inside.
-    """
-    if override_steps is not None:
-        if override_steps < 1:
-            raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
-        return override_steps
-    sec = declared_task_horizon_sec(episode.task.get(MOLMO_TASK_HORIZON_SEC) for episode in episodes)
-    steps = round(sec * 1000.0 / policy_dt_ms)
-    if steps < 1:
-        raise ValueError(
-            f'benchmark {MOLMO_TASK_HORIZON_SEC} of {sec}s rounds to {steps} steps at a {policy_dt_ms}ms policy '
-            'period — the episode would expire before its first action'
-        )
-    return steps
