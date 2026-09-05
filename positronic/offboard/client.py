@@ -2,6 +2,7 @@ import logging
 import ssl
 import time
 import urllib.parse
+from collections.abc import Callable
 from enum import Enum
 from http import HTTPStatus
 from typing import Any
@@ -21,41 +22,62 @@ logger = logging.getLogger(__name__)
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
+# How long ``infer`` may spend rebuilding a dropped connection, across every attempt of one reconnect.
+# FOOTGUN: the arm holds its last setpoint throughout, and an attended trial (``timeout_sec=None``) has no
+# episode deadline behind this one to end that stall.
+DEFAULT_RECONNECT_DEADLINE = 45.0
+
+
+def _handshake(websocket: Connection, timeout_per_message: float = 30.0) -> dict[str, Any]:
+    """Receive status updates until server is ready.
+
+    The server must send an update at least every ``timeout_per_message`` seconds.
+    """
+    try:
+        while True:
+            response = deserialise(websocket.recv(timeout=timeout_per_message))
+            if protocol.ERROR in response:
+                raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+            try:
+                status = protocol.ServerStatus(response.get(protocol.STATUS))
+            except ValueError:
+                raise RuntimeError(f'Unexpected server response: {response}') from None
+
+            if status is protocol.ServerStatus.READY:
+                return response[protocol.META]
+            if status is protocol.ServerStatus.ERROR:
+                raise RuntimeError('Server error: Unknown error')
+
+            message = response.get(protocol.MESSAGE, status)
+            logger.info(f'Server status: [{status}] {message}')
+
+    except TimeoutError:
+        raise TimeoutError(
+            f'Server did not send status update within {timeout_per_message}s. '
+            f'Server may have crashed or model loading is taking too long without progress updates.'
+        ) from None
+
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+    """One websocket to one served session, carrying observations out and trajectories back.
+
+    ``reopen`` returns a fresh socket whose handshake has reached ready, and makes a dropped connection
+    recoverable: an ``infer`` that loses the socket reconnects through it and sends the same observation
+    again. A session without one raises on a drop, which is all a caller owning no way to reconnect can do.
+    """
+
+    def __init__(
+        self,
+        websocket: Connection,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        *,
+        metadata: dict[str, Any] | None = None,
+        reopen: Callable[[], Connection] | None = None,
+    ):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
-        self._metadata = self._handshake()
-
-    def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
-        """Receive status updates until server is ready.
-
-        The server must send an update at least every ``timeout_per_message`` seconds.
-        """
-        try:
-            while True:
-                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
-                if protocol.ERROR in response:
-                    raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
-                try:
-                    status = protocol.ServerStatus(response.get(protocol.STATUS))
-                except ValueError:
-                    raise RuntimeError(f'Unexpected server response: {response}') from None
-
-                if status is protocol.ServerStatus.READY:
-                    return response[protocol.META]
-                if status is protocol.ServerStatus.ERROR:
-                    raise RuntimeError('Server error: Unknown error')
-
-                message = response.get(protocol.MESSAGE, status)
-                logger.info(f'Server status: [{status}] {message}')
-
-        except TimeoutError:
-            raise TimeoutError(
-                f'Server did not send status update within {timeout_per_message}s. '
-                f'Server may have crashed or model loading is taking too long without progress updates.'
-            ) from None
+        self._reopen = reopen
+        self._metadata = _handshake(websocket) if metadata is None else metadata
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -67,10 +89,34 @@ class InferenceSession:
         ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
+
+        A dropped socket reconnects and sends the observation once more, within
+        ``DEFAULT_RECONNECT_DEADLINE``. Every other failure reaches the caller as it is.
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+        try:
+            return self._round_trip(serialised)
+        # The server may still be computing this observation, so a second send doubles the work on a backend
+        # already too slow to answer the first.
+        except TimeoutError:
+            raise
+        # A container recycling under a backend that scales to zero drops the socket, on the send or the recv,
+        # as ``ConnectionClosed`` or a bare ``OSError`` (TLS included). Neither says anything about the
+        # observation, so it goes again on a new socket.
+        except (ConnectionClosed, OSError) as e:
+            if self._reopen is None:
+                raise
+            logger.warning('Inference connection dropped (%s); reconnecting and sending the observation again', e)
+            self._websocket.close()
+            # The URL pins the model, so the session keeps the metadata it opened under: the episode records
+            # that meta once, and it describes the whole episode.
+            self._websocket = self._reopen()
+            # The server built this session a moment ago, so it holds none of the dropped one's state. A second
+            # drop is a backend that cannot serve this observation at all, and reaches the caller.
+            return self._round_trip(serialised)
 
+    def _round_trip(self, serialised: bytes) -> Any:
         self._websocket.send(serialised)
         try:
             response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
@@ -152,8 +198,10 @@ class InferenceClient:
     out of the URL, which is meant to be safe to hand around.
 
     The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
-    handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and
-    ``infer_timeout`` one inference round trip.
+    handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries,
+    ``infer_timeout`` one inference round trip, and ``reconnect_deadline`` how long a session may spend
+    rebuilding a socket dropped mid-inference. The last is much the shortest, because it is spent with the
+    caller's robot live — see ``DEFAULT_RECONNECT_DEADLINE``.
     """
 
     def __init__(
@@ -164,6 +212,7 @@ class InferenceClient:
         open_timeout: float = 10.0,
         connect_deadline: float = 900.0,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        reconnect_deadline: float = DEFAULT_RECONNECT_DEADLINE,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
         if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
@@ -187,10 +236,26 @@ class InferenceClient:
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
+        self.reconnect_deadline = reconnect_deadline
 
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
-        deadline = time.monotonic() + self.connect_deadline
+        ws, metadata = self._open(self.connect_deadline)
+        return InferenceSession(
+            ws,
+            infer_timeout=self.infer_timeout,
+            metadata=metadata,
+            # A drop mid-inference reconnects through the same cold-start retries, on the shorter deadline
+            # a live robot can afford.
+            reopen=lambda: self._open(self.reconnect_deadline)[0],
+        )
+
+    def _open(self, deadline_sec: float) -> tuple[Connection, dict[str, Any]]:
+        """A connected socket whose status handshake has reached ready, and the metadata that handshake read.
+
+        Retries a backend that is not up yet, until ``deadline_sec`` of wall clock has passed.
+        """
+        deadline = time.monotonic() + deadline_sec
         backoff = 1.0
         retries = _ConnectRetries()
         while True:
@@ -205,25 +270,25 @@ class InferenceClient:
                     additional_headers=self.headers,
                     ping_interval=20.0,
                 )
-                return InferenceSession(ws, infer_timeout=self.infer_timeout)
+                return ws, _handshake(ws)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
-            # A cold backend fails before the session is ready in several ways: the connect times out, the edge
-            # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
-            # 502/503 while the backend boots), or it accepts the socket and then drops or stalls the status
-            # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
-            # yet", so retry within the deadline instead of letting one kill the run.
+            # Each of these is a backend not up yet — a timed-out connect, a TLS reset at the edge, a 502/503
+            # on the upgrade, a status handshake dropped or stalled — so retry within the deadline.
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
                 if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
-                if time.monotonic() >= deadline:
+                # The sleep is clipped to what is left, so the deadline bounds the wall clock spent here and
+                # not merely the instant the last attempt starts at.
+                pause = min(backoff, deadline - time.monotonic())
+                if pause <= 0:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
-                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
-                time.sleep(backoff)
+                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, pause)
+                time.sleep(pause)
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
