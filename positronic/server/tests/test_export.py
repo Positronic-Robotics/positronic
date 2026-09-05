@@ -32,7 +32,6 @@ from positronic.server.export import (
     GroupFile,
     _fetch,
     _Output,
-    _PortableTree,
     asset_content_type,
     export_static,
     filter_sets,
@@ -276,10 +275,10 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
 
 
-def test_every_filter_set_an_episode_satisfies_is_listed_once_with_the_empty_one_first():
+def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
     episodes = [{'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 
-    assert filter_sets(episodes) == [{}, {'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+    assert filter_sets(episodes) == [{'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 
 
 def test_a_filter_set_no_episode_satisfies_gets_no_file(dataset, tmp_path):
@@ -373,15 +372,6 @@ def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(t
     for path in ('../index.html', '..\\..\\index.html', '/index.html'):
         with pytest.raises(ValueError, match='outside'):
             out.plan([PurePosixPath(path)])
-    assert not (tmp_path / 'out').exists()
-
-
-def test_a_write_the_plan_does_not_name_is_refused(tmp_path):
-    out = _Output(tmp_path / 'out')
-    out.plan([PurePosixPath('index.html')])
-
-    with pytest.raises(ValueError, match='plan'):
-        out.write(PurePosixPath('episodes/index.html'), b'', 'text/html')
     assert not (tmp_path / 'out').exists()
 
 
@@ -754,12 +744,12 @@ def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_expo
 def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused(monkeypatch):
     """The local limit is lifted: on macOS it equals the key limit, so no directory in front leaves room."""
     monkeypatch.setattr(export, '_path_max', lambda directory: 1 << 16)
-    tree = _PortableTree(Path('out'))
+    out = _Output(Path('out'))
     stem = '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/'
-    tree.add(PurePosixPath(stem + 'b' * (export.MAX_PATH_BYTES - len(stem))))
+    out.plan([PurePosixPath(stem + 'b' * (export.MAX_PATH_BYTES - len(stem)))])
 
     with pytest.raises(ValueError, match='key limit'):
-        tree.add(PurePosixPath(stem + 'c' * (export.MAX_PATH_BYTES + 1 - len(stem))))
+        out.plan([PurePosixPath(stem + 'c' * (export.MAX_PATH_BYTES + 1 - len(stem)))])
 
 
 def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):

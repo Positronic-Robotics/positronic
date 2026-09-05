@@ -358,17 +358,32 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
         yield key_path
 
 
+_MISSING = object()
+
+
+def _value_at(static: dict, key_path: Sequence[str]) -> object:
+    """The value each key of `key_path` names in turn into `static`, or `_MISSING`.
+
+    Every key is one path segment, so a key holding a dot (`link0.stl`) is one step; a list is walked by
+    an index.
+    """
+    value: object = static
+    for key in key_path:
+        if isinstance(value, list):
+            if not key.isdigit() or int(key) >= len(value):
+                return _MISSING
+            value = value[int(key)]
+        elif isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return _MISSING
+    return value
+
+
 def download_at(static: dict, key_path: tuple[str, ...]) -> bytes | str | None:
     """The value a page links as a download at `key_path` into `static`, a list item by its index; None where
     `static` holds no download there."""
-    value: object = static
-    for key in key_path:
-        if isinstance(value, dict) and key in value:
-            value = value[key]
-        elif isinstance(value, list) and key.isdigit() and str(int(key)) == key and int(key) < len(value):
-            value = value[int(key)]
-        else:
-            return None
+    value = _value_at(static, key_path)
     return cast(bytes | str, value) if is_download(value) else None
 
 
@@ -405,12 +420,9 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
-    links = {path: download_link(episode_id, path) for path in download_paths(episode.static)}
-
     def _make_serializable(obj, key_path=()):
         if is_download(obj):
-            link = links[key_path]
-            return {DOWNLOAD_LINK: link, **asdict(download_metadata(obj))}
+            return {DOWNLOAD_LINK: download_link(episode_id, key_path), **asdict(download_metadata(obj))}
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
@@ -669,21 +681,10 @@ async def api_dataset_status():
 
 
 def _static_at(static: dict, key_path: Sequence[str]) -> object:
-    """The value each key of `key_path` names in turn into `static`, or an HTTP 404.
-
-    Every key is one path segment, so a key holding a dot (`link0.stl`) is one step; a list is walked by
-    an index.
-    """
-    value: object = static
-    for key in key_path:
-        if isinstance(value, list):
-            if not key.isdigit() or int(key) >= len(value):
-                raise HTTPException(status_code=404, detail=f'Field not found: {"/".join(key_path)}')
-            value = value[int(key)]
-        elif isinstance(value, dict) and key in value:
-            value = value[key]
-        else:
-            raise HTTPException(status_code=404, detail=f'Field not found: {"/".join(key_path)}')
+    """The value `key_path` names into `static`, or an HTTP 404 where `static` holds none there."""
+    value = _value_at(static, key_path)
+    if value is _MISSING:
+        raise HTTPException(status_code=404, detail=f'Field not found: {"/".join(key_path)}')
     return value
 
 

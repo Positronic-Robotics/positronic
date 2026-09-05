@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -121,57 +121,43 @@ def _path_max(directory: Path) -> int:
     return os.pathconf(existing, 'PC_PATH_MAX')
 
 
-class _PortableTree:
-    """The paths the export writes under `directory`, as any host or filesystem the tree lands on holds them.
-
-    A path past a host's key limit is refused, and so is one past the local filesystem's path limit with
-    `directory` in front. So is a component Windows reads as a device or trims, and a path that folds onto
-    a file added before, or onto a directory above one, or whose own directory folds onto a file.
-    """
-
-    def __init__(self, directory: Path):
-        self._directory = directory
-        self._path_max = _path_max(directory)
-        self._files: set[PurePosixPath] = set()
-        self._directories: set[PurePosixPath] = set()
-
-    def add(self, path: PurePosixPath) -> None:
-        if len(str(path).encode()) > MAX_PATH_BYTES:
-            raise ValueError(f'{path} is past the {MAX_PATH_BYTES}-byte key limit of a host')
-        local = self._directory.joinpath(*path.parts)
-        if len(os.fsencode(local)) >= self._path_max:
-            raise ValueError(f'{local} is past the {self._path_max}-byte path limit of its filesystem')
-        folded = PurePosixPath(str(path).casefold())
-        for part in folded.parts:
-            if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
-                raise ValueError(f'{path} has a component Windows reads as a device or trims, {part!r}')
-        directories = [parent for parent in folded.parents if parent.parts]
-        taken = folded in self._files or folded in self._directories
-        if taken or any(directory in self._files for directory in directories):
-            raise ValueError(f'{path} is one file with another the export writes on a filesystem that folds case')
-        self._files.add(folded)
-        self._directories.update(directories)
-
-
 class _Output:
-    """The files the export writes under `directory`: every path is planned before the first write, and a write
-    of a path outside the plan is refused."""
+    """The files the export writes under `directory`, as any host or filesystem holds them.
+
+    Every path is planned before the first write. A path past a host's key limit is refused, and so is one
+    past the local filesystem's path limit with `directory` in front. So is a component Windows reads as a
+    device or trims, and a path that folds onto a file planned before, or onto a directory above one, or
+    whose own directory folds onto a file.
+    """
 
     def __init__(self, directory: Path):
         # Absolute, so a path is measured with the working directory in front, as the filesystem measures it.
         self.directory = directory.absolute()
         self.files: list[ExportedFile] = []
-        self._tree = _PortableTree(self.directory)
-        self._planned: set[PurePosixPath] = set()
+        self._path_max = _path_max(self.directory)
+        self._folded_files: set[PurePosixPath] = set()
+        self._folded_directories: set[PurePosixPath] = set()
 
     def plan(self, paths: Iterable[PurePosixPath]) -> None:
-        """Register every path the export writes; one that would land outside the directory, or that a host or a
-        filesystem the tree lands on does not hold as it is, is refused here, before a write."""
+        """Register every path the export writes, before the first write."""
         for path in paths:
             if path.is_absolute() or '\\' in str(path) or '..' in path.parts:
                 raise ValueError(f'{path} would land outside {self.directory}')
-            self._tree.add(path)
-            self._planned.add(path)
+            if len(str(path).encode()) > MAX_PATH_BYTES:
+                raise ValueError(f'{path} is past the {MAX_PATH_BYTES}-byte key limit of a host')
+            local = self._target(path)
+            if len(os.fsencode(local)) >= self._path_max:
+                raise ValueError(f'{local} is past the {self._path_max}-byte path limit of its filesystem')
+            folded = PurePosixPath(str(path).casefold())
+            for part in folded.parts:
+                if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
+                    raise ValueError(f'{path} has a component Windows reads as a device or trims, {part!r}')
+            directories = [parent for parent in folded.parents if parent.parts]
+            taken = folded in self._folded_files or folded in self._folded_directories
+            if taken or any(directory in self._folded_files for directory in directories):
+                raise ValueError(f'{path} is one file with another the export writes on a filesystem that folds case')
+            self._folded_files.add(folded)
+            self._folded_directories.update(directories)
 
     def write(self, path: PurePosixPath, body: bytes, content_type: str) -> ExportedFile:
         target = self._target(path)
@@ -187,8 +173,6 @@ class _Output:
         return self._record(path, asset_content_type(source), target.stat().st_size)
 
     def _target(self, path: PurePosixPath) -> Path:
-        if path not in self._planned:
-            raise ValueError(f'{path} is not in the export plan')
         return self.directory.joinpath(*path.parts)
 
     def _record(self, path: PurePosixPath, content_type: str, size: int) -> ExportedFile:
@@ -230,7 +214,7 @@ def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
 
 
 def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
-    """Every filter set some episode satisfies, the empty one first.
+    """Every non-empty filter set some episode satisfies, the shortest first.
 
     An episode satisfies each subset of its own values, so k filter keys give at most 2^k sets per
     episode, and a set no episode satisfies gets no file.
@@ -238,21 +222,14 @@ def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, s
     satisfied: set[tuple[tuple[str, str], ...]] = set()
     for values in episode_values:
         items = sorted(values.items())
-        satisfied.update(chosen for n in range(len(items) + 1) for chosen in itertools.combinations(items, n))
+        satisfied.update(chosen for n in range(1, len(items) + 1) for chosen in itertools.combinations(items, n))
     return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
-
-
-def _filter_values(dataset: Dataset, keys: Iterable[str]) -> Iterator[dict[str, str]]:
-    """Each episode's values on the filter `keys`, as a filter spells them; an absent value is left out."""
-    for episode in dataset:
-        spelled = ((key, filter_spelling(cast(Episode, episode).static.get(key))) for key in keys)
-        yield {key: value for key, value in spelled if value is not None}
 
 
 def _filter_sets_by_group(
     dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
 ) -> dict[str, list[dict[str, str]]]:
-    """The filter sets each group table gets a file for; a group past either bound is refused before a write."""
+    """The non-empty filter sets each group table gets a file for; a group past either bound is refused."""
     sets_by_group: dict[str, list[dict[str, str]]] = {}
     for name, cfg in (group_tables or {}).items():
         if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
@@ -260,10 +237,19 @@ def _filter_sets_by_group(
                 f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
                 f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
             )
-        sets = filter_sets(_filter_values(dataset, cfg.group_filter_keys))
-        if len(sets) > MAX_FILTER_SETS_PER_GROUP:
+        # Each episode's values on the group's filter keys, as a filter spells them; an absent value is left out.
+        episode_values = (
+            {
+                key: spelling
+                for key in cfg.group_filter_keys
+                if (spelling := filter_spelling(cast(Episode, episode).static.get(key))) is not None
+            }
+            for episode in dataset
+        )
+        sets = filter_sets(episode_values)
+        if len(sets) + 1 > MAX_FILTER_SETS_PER_GROUP:
             raise ValueError(
-                f'group table {name!r} has {len(sets)} filter sets and an export reads the dataset once per set, '
+                f'group table {name!r} has {len(sets) + 1} filter sets and an export reads the dataset once per set, '
                 f'so a group table takes at most {MAX_FILTER_SETS_PER_GROUP}; a filter key with a value per episode '
                 f'is the usual cause'
             )
@@ -350,8 +336,7 @@ def _page_plans(
 def _group_plans(client: TestClient, reads: Dataset, name: str, sets: Iterable[dict[str, str]]) -> list[_Planned]:
     """The plans to write one file per filter set of the group table `name`, and the index naming them."""
     route = PurePosixPath(group_api_link(name))
-    filtered = (chosen for chosen in sets if chosen)
-    index = [GroupFile({}, UNFILTERED_FILE), *(GroupFile(params, f'{n}.json') for n, params in enumerate(filtered, 1))]
+    index = [GroupFile({}, UNFILTERED_FILE), *(GroupFile(params, f'{n}.json') for n, params in enumerate(sets, 1))]
     listing = json.dumps([asdict(entry) for entry in index]).encode()
     return [
         *(_planned_fetch(client, f'/{route}', route / entry.file, reads, entry.params) for entry in index),
