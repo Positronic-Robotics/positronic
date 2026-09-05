@@ -33,15 +33,14 @@ class Rollout:
     serves the policy's functions to that session, and the path the episode records into.
 
     Whoever asks opens it, and so decides which model runs the trial and where the recording lands. An
-    ``output_path`` of ``None`` records nothing. The Harness closes it: the episode it ran, or the ask it refused.
+    ``output_path`` of ``None`` records nothing. Whoever asks closes it, once its call has answered.
     """
 
     def __init__(self, task: Task, policy: Policy, output_path: Path | None):
         self.task = task
         self.output_path = output_path
-        # The Harness closes this runtime before the session, and charges the trial for the model's time
-        # through it. TODO(#661): the framework takes over closing the chain, and only the charge keeps a
-        # runtime here.
+        # The Harness charges the trial for the model's time through this runtime. TODO(#661): the framework
+        # takes over the chain, and only the charge keeps a runtime here.
         self.rt = Executor(policy.functions)
         try:
             self.session = policy.new_session(rt=self.rt)
@@ -99,9 +98,6 @@ class _EpisodeInference:
         # answers must not also keep the world from coming down.
         while self._rollout.rt.in_flight and not should_stop.value:
             self._rollout.rt.wait(POLL_PERIOD_SEC)
-
-    def close(self) -> None:
-        self._rollout.close()
 
 
 class _EpisodeTelemetry:
@@ -188,8 +184,6 @@ class Harness(pimm.ControlSystem):
         self._inference: _EpisodeInference | None = None
         # The call this episode answers when it ends.
         self._call: pimm.calls.Call[Rollout, dict[str, Any]] | None = None
-        # An inference let go of with a function still running.
-        self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
         self._deadline_ns: int | None = None
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
@@ -240,11 +234,9 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = self._task.instruction
         return meta
 
-    def _emit(self, action: dict[str, Any]) -> None:
-        for name, value in action.items():
-            self.commands[name].emit(value)
-
-    def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
+    def _ready(
+        self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, args: dict[str, Any]
+    ) -> Generator[pimm.Command, None, None]:
         """Ask each device in ``args`` for the value it names, and come back once every one has answered."""
         unknown = sorted(set(args) - set(self.prepare))
         if unknown:
@@ -252,11 +244,9 @@ class Harness(pimm.ControlSystem):
             raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
         ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
-            yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
-        # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
-        if not ready.done():
-            raise RuntimeError('The world stopped before every device was ready')
-        ready.result()
+            yield self._pace(clock)
+        if ready.done():
+            ready.result()
 
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
         """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
@@ -269,17 +259,6 @@ class Harness(pimm.ControlSystem):
             return pimm.Sleep(POLL_PERIOD_SEC)
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
-    def _retire_inference(self) -> None:
-        """Let go of this episode's inference, keeping it for ``_reap_inference``: the recording stops and the
-        rig goes back without waiting for a model that hangs."""
-        if self._inference is not None:
-            self._retired, self._inference = self._inference, None
-
-    def _reap_inference(self) -> None:
-        if self._retired is not None:
-            self._retired.close()
-            self._retired = None
-
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
@@ -290,14 +269,13 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
             schedule.clear()
-        self._retire_inference()
+        self._inference = None
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
-        # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
-        # last-value-wins would drop one) and before the next trial's prepare, so the moves it asks for stay
-        # out of the recording.
+        # The recorder reads only the last ``ds_command`` value. This round lets it read the STOP before the next START.
         yield self._pace(clock)
-        # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
-        # producer stepping in that shared round charges ≤ one control period to the closing episode.
+        # The episode span must still be open while the recorder writes the STOP, so that write is timed
+        # inside the episode. The other control systems run in that round as well, and the episode is timed
+        # with their work too. The error is not more than one control period.
         self._telemetry.end(virtual_now)
 
     def _set_deadline(self, deadline_ns: int | None) -> None:
@@ -317,7 +295,7 @@ class Harness(pimm.ControlSystem):
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
-            yield from self._ready(should_stop, self._task.prepare_args)
+            yield from self._ready(should_stop, clock, self._task.prepare_args)
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
@@ -328,44 +306,14 @@ class Harness(pimm.ControlSystem):
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
     ) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize the recording, put the rig back, close the session, and hand the
-        terminal back to whoever asked for the episode.
-
-        The session is closed after the rig has moved, so a model still inside its function costs the
-        recording and the move nothing.
-        """
+        """Close the live episode: finalize the recording, put the rig back, return the terminal to the caller"""
         yield from self._finalize_recording(clock, payload)
-        # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
-        # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
-        # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
-        # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE})
-        # The answer waits until the model is out of this episode's function. An in-process policy is one
-        # model across every episode, so the session that the next ask opens must not overtake it. The move
-        # back above gives the function that time.
-        self._reap_inference()
+        yield from self._ready(  # Move robot back to ready state
+            should_stop, clock, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
+        )
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
-
-    def _fail_call(self, exc: BaseException) -> None:
-        """Raise to whoever asked for the live episode, in place of the terminal it will never get."""
-        if self._call is not None:
-            self._call.set_exception(exc)
-            self._call = None
-
-    def _advance_episode(
-        self,
-        inference: _EpisodeInference,
-        done: pimm.Message[dict] | None,
-        clock: pimm.Clock,
-        should_stop: pimm.SignalReceiver,
-    ) -> Generator[pimm.Command, None, None]:
-        """One round of the live episode: end it if it is out of budget or done, else run one inference round."""
-        if (terminal := self._trial_terminal(done, clock)) is not None:
-            yield from self._end_episode(clock, should_stop, terminal)
-        else:
-            self._infer(inference, clock, should_stop)
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
         """Read every observation channel and assemble the policy input dict.
@@ -412,10 +360,6 @@ class Harness(pimm.ControlSystem):
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
         by the scheduling layer against the harness clock.
         """
-        if self._deadline_ns is not None and clock.now_ns() >= self._deadline_ns:
-            # The world reached the deadline while the function was in flight, so its chunk is dropped rather
-            # than placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
-            return
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
         # Layers time actions in float seconds; the schedules and every pimm channel are in ns.
@@ -423,12 +367,8 @@ class Harness(pimm.ControlSystem):
             schedule.clear()
             schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
 
-    def _play(self, clock: pimm.Clock) -> None:
-        """Emit each channel's command due this round, and nothing on a channel with none.
-
-        A channel with several waypoints due emits the last: exact for an absolute setpoint, lossy for a
-        relative one. Pacing keeps one due per round wherever a round is shorter than the waypoint spacing.
-        """
+    def _issue_due_commands(self, clock: pimm.Clock) -> None:
+        """Emit each channel's due command. Nothing on a channel with none. Last on a channel with multiple."""
         now_ns = clock.now_ns()
         for name, schedule in self._schedules.items():
             value = None
@@ -440,10 +380,7 @@ class Harness(pimm.ControlSystem):
     def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if the live trial has ended this round, else ``None``.
 
-        The deadline is hard: a truthy ``done`` within budget records ``eval.terminated`` True plus its
-        payload, the budget passing records False, and a terminal past the deadline is a timeout rather than
-        a late success. A task without a timeout has no budget and ends on ``done`` alone. Only a truthy
-        ``done`` counts, so a producer can clear a stale terminal off the wire with an empty payload.
+        A ``done`` that arrives after the deadline is a timeout, not a late success.
         """
         deadline_ns = self._deadline_ns
         if done is not None and done.data and (deadline_ns is None or done.ts <= deadline_ns):
@@ -456,46 +393,38 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
-            # Seal the open span before the exception reaches ``bind``'s exit flush: an unended span never
-            # exports, orphaning its finished children and charging the episode's wall to between_episodes.
             self._telemetry.seal(clock.now())
-            self._fail_call(exc)
+            if self._call is not None:
+                self._call.set_exception(exc)
+                self._call = None
             raise
         finally:
-            # A no-op once the block above has answered: the world coming down under a live episode is the
-            # one way a call goes unanswered, and it is the caller's to hear about.
-            self._fail_call(RuntimeError('The world stopped before the episode ended'))
-            # An episode abandoned by a raise never reaches ``_finalize_recording``, and would leave a
-            # deadline standing that nothing will ever meet.
-            self._set_deadline(None)
-            self._retire_inference()
-            self._reap_inference()
-            # An ask this loop never reached still carries a live session, and the Harness closes what it is
-            # handed. The world answers what is left queued, so these calls are answered here as well.
+            # The world stops under a live episode, so nothing sends its call the terminal it waits for, and
+            # an ask this loop never reached gets no episode at all. Both hear the same stop.
+            if self._call is not None:
+                self._call.set_exception(pimm.calls.HandlerStopped())
             for call in self.perform_task.incoming():
-                call.request.close()
                 call.set_exception(pimm.calls.HandlerStopped())
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
-            # One action per round: start the episode a call asks for, finish one that is out of budget or
-            # done, or run one inference round.
             call = next(self.perform_task.incoming(), None)
-            # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
+            # Consume commands during trial, so only non-trial ones are handled
             manual = pimm.value_updated(self.manual_command)
-            # Read every round for the same reason: a terminal landing between episodes belongs to none of
-            # them, and left on the wire it would end the next one on its first round.
             done = pimm.read_updated(self.done)
             if self._inference is not None:
-                if call is not None:  # the live episode is the one that finishes; a second ask is refused
-                    call.request.close()  # the session came with the ask, and nothing here will run it
+                if call is not None:
                     call.set_exception(RuntimeError('An episode is already running'))
-                yield from self._advance_episode(self._inference, done, clock, should_stop)
+                if (terminal := self._trial_terminal(done, clock)) is not None:
+                    yield from self._end_episode(clock, should_stop, terminal)
+                else:
+                    self._infer(self._inference, clock, should_stop)
             elif call is not None:
                 yield from self._begin_episode(clock, should_stop, call)
             elif manual is not None:
-                self._emit(manual)
-            self._play(clock)
+                for name, value in manual.items():
+                    self.commands[name].emit(value)
+            self._issue_due_commands(clock)
             yield self._pace(clock)
 
         if self._inference is not None:

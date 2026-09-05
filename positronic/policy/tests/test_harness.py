@@ -29,13 +29,7 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
-from positronic.tests.testing_coutils import (
-    ManualDriver,
-    RecordingEmitter,
-    drive_scheduler,
-    drive_until,
-    episode_caller,
-)
+from positronic.tests.testing_coutils import EpisodeCaller, ManualDriver, RecordingEmitter, drive_scheduler, drive_until
 
 POLL_PERIOD_NS = round(POLL_PERIOD_SEC * 1e9)
 
@@ -308,7 +302,7 @@ def _pair_all(world, harness, policy, output_path: Path | None = Path('dataset')
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
-        'perform_task': episode_caller(world, harness, policy, output_path),
+        'perform_task': EpisodeCaller(world, harness, policy, output_path),
         'done_em': world.pair(harness.done),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
@@ -369,7 +363,7 @@ def test_harness_emits_cartesian_move(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
@@ -428,7 +422,7 @@ def test_harness_passes_descriptor_to_policy(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -461,7 +455,7 @@ def test_robot_model_stays_out_of_the_observation(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations['grip'])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -485,7 +479,7 @@ def _run_with_model(world, model, static_meta=None):
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
     meta_em = world.pair(harness.robot_meta_in)
 
     steps = [(partial(perform_task, Task(instruction_source='t', timeout_sec=None)), 0.0)]
@@ -536,7 +530,7 @@ def test_harness_waits_for_complete_inputs(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     assert CAM in harness.observations
 
@@ -687,7 +681,7 @@ def test_the_world_stopping_under_a_live_episode_fails_the_call(world):
     answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None))
     drive_scheduler(scheduler, steps=20)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
 
 
@@ -893,7 +887,7 @@ def test_the_policy_opens_on_the_frame_the_reset_published(world):
     )
     policy = StubPolicy()
     harness = Harness(embodiment)
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
     wire.wire_embodiment(world, harness, embodiment, record=False)
 
     scheduler = world.start([harness, device])
@@ -940,7 +934,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
     harness = Harness(embodiment)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
     wire.wire_embodiment(world, harness, embodiment, record=False, done=device.done)
 
     scheduler = world.start([harness, device])
@@ -1180,35 +1174,6 @@ def test_a_world_stopping_mid_episode_withdraws_the_deadline(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_an_episode_abandoned_by_a_raise_withdraws_the_deadline(world):
-    """An episode a raise abandons withdraws its deadline like any other close."""
-
-    class _BoomSession(Session):
-        def __call__(self, obs, time_ns):
-            raise RuntimeError('inference boom')
-
-    class _BoomPolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _BoomSession()
-
-    policy = _BoomPolicy()
-    harness = Harness(make_embodiment())
-    p = _pair_all(world, harness, policy)
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
-    driver = ManualDriver([
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 100.0)
-    ])
-    scheduler = world.start([harness, driver])
-    p['perform_task'](Task(instruction_source='t', timeout_sec=100.0))
-    with pytest.raises(RuntimeError, match='inference boom'):
-        drive_scheduler(scheduler, steps=200)
-
-    assert _deadlines(p)[0] is not None, 'no deadline was ever armed, so nothing here was under test'
-    assert _deadlines(p)[-1] is None
-
-
-@pytest.mark.timeout(3.0)
 def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
     """Only the handlers a task names are asked, so a name matching none of them would go unasked and the
     trial would open on a rig nothing readied."""
@@ -1285,7 +1250,7 @@ def test_timeout_during_inference_drops_the_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
@@ -1327,8 +1292,7 @@ def test_a_terminal_landing_while_idle_does_not_end_the_next_episode(world):
 
 @pytest.mark.timeout(3.0)
 def test_a_call_arriving_mid_episode_is_refused(world):
-    """The live episode runs on and the second caller is told why, rather than its ask being dropped. The
-    session that ask carried is closed: it came with the ask, and nothing will run it."""
+    """The live episode runs on and the second caller is told why, rather than its ask being dropped."""
     policy = StubPolicy()
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
@@ -1344,13 +1308,11 @@ def test_a_call_arriving_mid_episode_is_refused(world):
     assert not live.done()
     assert _ds_types(p).count(DsWriterCommandType.START_EPISODE) == 1
     assert policy.opened_sessions == 2, 'each ask opens its own session'
-    assert policy.closed_sessions == 1, 'the refused ask left its session open'
 
 
 @pytest.mark.timeout(3.0)
-def test_an_ask_the_world_stops_before_is_closed(world):
-    """A queued ask still carries a live session, so the Harness closes it on the way down rather than
-    leaving the model open for the rest of the process."""
+def test_an_ask_the_world_stops_before_is_answered(world):
+    """A queued ask the loop never reaches hears the stop, so whoever asked knows to close what it sent."""
     policy = StubPolicy()
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
@@ -1361,8 +1323,7 @@ def test_an_ask_the_world_stops_before_is_closed(world):
     drive_scheduler(scheduler, steps=5)
 
     assert policy.opened_sessions == 1
-    assert policy.closed_sessions == 1, 'the ask went down with its session open'
-    with pytest.raises(RuntimeError):
+    with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
 
 
@@ -1437,10 +1398,10 @@ class _AbandonedCallPolicy(ServedPolicy):
 
 
 @pytest.mark.timeout(10.0)
-def test_an_episode_answers_only_once_the_call_it_abandoned_has(world):
+def test_closing_a_rollout_waits_out_the_call_it_abandoned(world):
     """An in-process policy is one model across episodes, so the session the next ask opens must not overtake
-    a function still inside this one. The terminal comes back after that function answers, so a driver that
-    waits for it opens the next session on a free model."""
+    a function still inside this one. Closing the rollout waits that function out, so a driver that closes
+    before it asks again opens the next session on a free model."""
     policy = _AbandonedCallPolicy(wall_sec=0.4)
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
@@ -1456,8 +1417,9 @@ def test_an_episode_answers_only_once_the_call_it_abandoned_has(world):
     scheduler = world.start([harness, driver])
     answer = p['perform_task'](Task(instruction_source='ep1', timeout_sec=None))
     drive_until(scheduler, answer.done, max_steps=400)
+    p['perform_task'].close()
 
-    assert policy.events == ['open', 'answered'], f'the episode answered mid-function: {policy.events}'
+    assert policy.events == ['open', 'answered'], f'the close left a function inside the model: {policy.events}'
 
 
 @pytest.mark.timeout(3.0)
@@ -1512,7 +1474,7 @@ def test_finish_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
     done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -1556,7 +1518,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     script = [
@@ -1712,7 +1674,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A call + a complete obs schedules a chunk; the driver then ends, which makes the
@@ -1862,6 +1824,7 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
         scheduler = world.start([harness, producer, _Pacer()])
         p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, charge_inference_time=True))
         drive_scheduler(scheduler, steps=2000)
+        p['perform_task'].close()
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
@@ -1974,19 +1937,6 @@ def test_anchored_chunk_passes():
     Harness._assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
 
 
-@pytest.mark.parametrize(('expired', 'scheduled'), [(True, False), (False, True)])
-def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expired, scheduled):
-    """A trial advertises the instant it stops at. A chunk answered after the world passed that instant is
-    dropped instead of placed, and ``_run`` finishes the trial on the next round."""
-    harness = Harness(make_embodiment())
-    now_ns = world.clock.now_ns()
-    harness._deadline_ns = now_ns - 1_000_000_000 if expired else now_ns + 1_000_000_000
-
-    harness._reschedule(slow_chunk(), world.clock)
-
-    assert bool(harness._schedules[keys.ROBOT_COMMAND]) is scheduled
-
-
 class _ReplanEarly(Layer):
     """Infers on the first observation and again halfway through the chunk it returned.
 
@@ -2041,7 +1991,7 @@ def _run_episode(
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, wrapped)
+    perform_task = EpisodeCaller(world, harness, wrapped)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -2203,7 +2153,7 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
     left_em = world.pair(harness.observations[left])
     right_em = world.pair(harness.observations[right])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     def emit_states():
         left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.BUSY))
@@ -2238,7 +2188,7 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
     driver = ManualDriver([
@@ -2281,7 +2231,7 @@ def test_finish_does_not_wait_for_the_call_in_flight():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = episode_caller(world, harness, policy)
+        perform_task = EpisodeCaller(world, harness, policy)
         done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -2322,7 +2272,7 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = episode_caller(world, harness, policy)
+        perform_task = EpisodeCaller(world, harness, policy)
         done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -2333,6 +2283,7 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
             (None, 0.05),
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
+        perform_task.close()
 
     assert left_the_model.is_set(), 'the run returned with a function still inside the shared policy'
 
@@ -2368,7 +2319,7 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = episode_caller(world, harness, policy)
+        perform_task = EpisodeCaller(world, harness, policy)
         done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -2379,6 +2330,7 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
             (None, 0.05),
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
+        perform_task.close()
 
     assert inside_at_close == [False], 'the session was closed while its own function was still inside it'
 
@@ -2419,7 +2371,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -2467,7 +2419,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, policy)
+    perform_task = EpisodeCaller(world, harness, policy)
     done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])

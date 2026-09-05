@@ -57,8 +57,7 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
 
 
 class _EpisodeStub(pimm.ControlSystem):
-    """Stands in for the harness: records the task it was asked for, closes the session that came with it,
-    and answers a round later."""
+    """Stands in for the harness: records the task it was asked for, and answers a round later."""
 
     def __init__(self):
         self.asked: list[Task] = []
@@ -70,7 +69,6 @@ class _EpisodeStub(pimm.ControlSystem):
                 self.asked.append(call.request.task)
                 yield pimm.Sleep(0.01)  # an episode takes a round to run
                 assert not list(self.perform_task.incoming()), 'a task was asked for while one was running'
-                call.request.close()
                 call.set_result({})
             yield pimm.Sleep(0.01)
 
