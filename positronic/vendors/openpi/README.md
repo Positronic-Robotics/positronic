@@ -144,6 +144,26 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
+### Serving More Than One Policy On One GPU
+
+The server starts its OpenPI subprocess with `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so JAX allocates on
+demand. JAX otherwise takes ~75% of the device at its first use, and a second server on that GPU then fails
+with `RESOURCE_EXHAUSTED` while `nvidia-smi` reports the device almost free.
+
+With no preallocation, `XLA_PYTHON_CLIENT_MEM_FRACTION` is a hard cap on what one server allocates. Set it
+per container when you co-host N policies. Leave it unset for one policy: a cap that is too low makes a large
+model fail with the same `RESOURCE_EXHAUSTED`. Three policies held 30.4 GB together on an 80 GB H100 with
+`XLA_PYTHON_CLIENT_MEM_FRACTION=.25`.
+
+The `openpi-server-8001` service is a second server on the same machine, on host port 8001:
+
+```bash
+docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
+  -v ~/checkpoints:/checkpoints openpi-server-8001 ee \
+  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v2/ \
+  --pipeline.ee_frame=None
+```
+
 ### API Endpoints
 
 The server exposes the following endpoints:
