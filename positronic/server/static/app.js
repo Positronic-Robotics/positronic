@@ -612,7 +612,7 @@ function initSidebar() {
   }
 
   function setSidebarWidth(width) {
-    sidebarState.sidebarWidth = Math.max(100, width);
+    sidebarState.sidebarWidth = clampSidebarWidth(width);
     sidebar.style.width = `${sidebarState.sidebarWidth}px`;
   }
 
@@ -632,10 +632,38 @@ function initSidebar() {
   }
 }
 
+const SIDEBAR_STATE_DEFAULTS = { isExpanded: false, sidebarWidth: 300, keyColumnWidth: 150, scrollTop: 0 };
+const MIN_SIDEBAR_WIDTH = 100;
+
+// Keep a stored measurement only when it is a real number. `${NaN}px` is invalid CSS, so the
+// browser drops the declaration and the sidebar keeps the 0px width the stylesheet gives it.
+function storedNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function clampSidebarWidth(width) {
+  return Math.max(MIN_SIDEBAR_WIDTH, storedNumber(width, SIDEBAR_STATE_DEFAULTS.sidebarWidth));
+}
+
+// The sidebar reads back whatever an earlier session left in localStorage, so that string is input.
 function loadSidebarState() {
-  const defaults = { isExpanded: false, sidebarWidth: 300, keyColumnWidth: 150, scrollTop: 0 };
-  const saved = JSON.parse(localStorage.getItem('sidebarState'));
-  return { ...defaults, ...saved };
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem('sidebarState'));
+  } catch (error) {
+    // Unreadable text, or a browser that blocks storage. Both mean the same here: no usable
+    // preference, and the sidebar must still open.
+    console.error('Discarding the stored sidebar state:', error);
+    saved = null;
+  }
+  const state = { ...SIDEBAR_STATE_DEFAULTS, ...(typeof saved === 'object' ? saved : null) };
+  return {
+    isExpanded: Boolean(state.isExpanded),
+    sidebarWidth: clampSidebarWidth(state.sidebarWidth),
+    keyColumnWidth: storedNumber(state.keyColumnWidth, SIDEBAR_STATE_DEFAULTS.keyColumnWidth),
+    scrollTop: storedNumber(state.scrollTop, SIDEBAR_STATE_DEFAULTS.scrollTop),
+  };
 }
 
 // ---------------------------------------------------------------------------
