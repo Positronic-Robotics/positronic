@@ -32,7 +32,9 @@ from positronic.server.positronic_server import (
     _path_component,
     _route,
     _served_addresses,
+    api_dataset_info,
     api_dataset_status,
+    api_episodes,
     app,
     app_state,
     app_state_restored,
@@ -371,6 +373,14 @@ def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_e
     )
 
 
+def test_a_download_name_holding_a_slash_is_percent_encoded_in_the_header(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'café/mesh': b'a mesh'})
+
+    assert viewer.get(f'/{download_link(0, ("café/mesh",))}').headers['content-disposition'] == (
+        "attachment; filename*=utf-8''caf%C3%A9%2Fmesh"
+    )
+
+
 def test_a_download_link_carries_each_key_encoded_and_the_route_answers_it(viewer, monkeypatch):
     monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/b': b'nested'})
 
@@ -464,11 +474,16 @@ def test_a_path_of_any_depth_keeps_its_link_on_the_live_server():
     assert download_link(0, keys_).startswith('api/episode/0/static/')
 
 
-def test_the_page_script_names_the_dataset_status_route_the_server_declares():
+def test_the_page_script_names_each_api_route_once_as_the_server_declares_it():
     app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
 
-    assert f"const DATASET_STATUS_ROUTE = '{_route(api_dataset_status)}';" in app_js
-    assert "apiUrl('api/dataset_status')" not in app_js
+    for name, endpoint in (
+        ('DATASET_STATUS_ROUTE', api_dataset_status),
+        ('DATASET_INFO_ROUTE', api_dataset_info),
+        ('EPISODES_ROUTE', api_episodes),
+    ):
+        assert f"const {name} = '{_route(endpoint)}';" in app_js
+        assert app_js.count(f"'{_route(endpoint)}'") == 1
 
 
 def test_the_flat_table_takes_a_url_filter_only_for_a_value_some_row_carries():
