@@ -134,6 +134,8 @@ app = FastAPI(lifespan=lifespan)
 
 # The app's own scripts, styles and viewer, served at the host root, so every export a host serves shares one copy.
 ASSET_ROUTE = 'static'
+# Every API route sits under this segment; a static export writes each response a page reads whole under it.
+API_ROUTE = 'api'
 app.mount(f'/{ASSET_ROUTE}', StaticFiles(directory=_pkg_path(ASSET_ROUTE)), name=ASSET_ROUTE)
 templates = Jinja2Templates(directory=_pkg_path('templates'))
 
@@ -504,7 +506,7 @@ async def episode_viewer(request: Request, episode_id: int):
     )
 
 
-@app.get('/api/dataset_info')
+@app.get(f'/{API_ROUTE}/dataset_info')
 @require_dataset
 async def api_dataset_info():
     ds = cast(Dataset, app_state['dataset'])
@@ -623,7 +625,7 @@ def filter_spelling(value: object) -> str | None:
     return None if value is None else str(value)
 
 
-@app.get('/api/episodes')
+@app.get(f'/{API_ROUTE}/episodes')
 @require_dataset
 async def api_episodes(request: Request):
     cache_key = ('episodes', tuple(sorted(request.query_params.items())))
@@ -670,7 +672,7 @@ def _grouped(
     return offered, groups
 
 
-@app.get('/api/groups/{suffix}')
+@app.get(f'/{API_ROUTE}' + '/groups/{suffix}')
 @require_dataset
 async def api_groups(request: Request, suffix: str):
     cache_key = ('groups', suffix, tuple(sorted(request.query_params.items())))
@@ -727,7 +729,7 @@ async def grouped_view(request: Request, suffix: str):
     )
 
 
-@app.get('/api/dataset_status')
+@app.get(f'/{API_ROUTE}/dataset_status')
 async def api_dataset_status():
     return {
         'loading': app_state['loading_state'],
@@ -753,7 +755,7 @@ def _content_disposition(disposition: str, filename: str) -> str:
     return f"{disposition}; filename*=utf-8''{encoded}"
 
 
-@app.get('/api/episode/{episode_id}/static/{field_path:path}')
+@app.get(f'/{API_ROUTE}' + '/episode/{episode_id}/static/{field_path:path}')
 @require_dataset
 async def api_episode_static_field(episode_id: int, field_path: str, request: Request):
     ds = app_state.get('dataset')
@@ -816,7 +818,7 @@ def episode_rrd_path(episode_id: int) -> Path:
     return cache_path
 
 
-@app.get('/api/episode_rrd/{episode_id}')
+@app.get(f'/{API_ROUTE}' + '/episode_rrd/{episode_id}')
 @require_dataset
 async def api_episode_rrd(episode_id: int):
     cache_path = _recording_cache_path(episode_id)

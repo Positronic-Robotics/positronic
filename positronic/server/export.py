@@ -31,6 +31,7 @@ from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
+    API_ROUTE,
     ASSET_ROUTE,
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
@@ -62,7 +63,6 @@ logger = logging.getLogger(__name__)
 
 # A page is a directory with an index file, so a static host answers `episode/3` with it.
 PAGE_FILE = 'index.html'
-API_DIR = 'api'
 # The recordings and the downloads sit under `build/<build_id>/`, a path a rebuild never rewrites.
 BUILD_DIR = 'build'
 # The file of a group table read with no filter, beside the index that names it.
@@ -105,15 +105,6 @@ class ExportedFile:
     size: int
 
 
-def _path_max(directory: Path) -> int:
-    """The longest path, its end mark included, the filesystem under `directory` takes: read off the nearest
-    ancestor that exists where the platform reports it, and Windows' `MAX_PATH` where it does not."""
-    if not hasattr(os, 'pathconf'):
-        return _WINDOWS_PATH_MAX
-    existing = next(candidate for candidate in (directory, *directory.parents) if candidate.exists())
-    return os.pathconf(existing, 'PC_PATH_MAX')
-
-
 # `mimetypes` answers for neither on every box.
 _CONTENT_TYPE_BY_SUFFIX = {'.wasm': 'application/wasm', '.rrd': 'application/octet-stream'}
 
@@ -123,6 +114,15 @@ def asset_content_type(path: Path) -> str:
     if path.suffix in _CONTENT_TYPE_BY_SUFFIX:
         return _CONTENT_TYPE_BY_SUFFIX[path.suffix]
     return mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
+
+
+def _path_max(directory: Path) -> int:
+    """The longest path, its end mark included, the filesystem under `directory` takes: read off the nearest
+    ancestor that exists where the platform reports it, and Windows' `MAX_PATH` where it does not."""
+    if not hasattr(os, 'pathconf'):
+        return _WINDOWS_PATH_MAX
+    existing = next(candidate for candidate in (directory, *directory.parents) if candidate.exists())
+    return os.pathconf(existing, 'PC_PATH_MAX')
 
 
 class _Output:
@@ -366,14 +366,14 @@ def _asset_files() -> list[tuple[PurePosixPath, Path]]:
 
 
 def _whole_api_routes() -> list[str]:
-    """The API routes a page reads whole: every GET under `api/` that takes no path parameter.
+    """The API routes a page reads whole: every GET under the API segment that takes no path parameter.
 
     The flat episode table is one of them; a static page filters it in the browser.
     """
     return [
         route.path.removeprefix('/')
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith(f'/{API_DIR}/') and not route.param_convertors
+        if isinstance(route, APIRoute) and route.path.startswith(f'/{API_ROUTE}/') and not route.param_convertors
     ]
 
 
