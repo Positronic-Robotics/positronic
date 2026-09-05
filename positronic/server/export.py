@@ -67,7 +67,7 @@ API_DIR = 'api'
 BUILD_DIR = 'build'
 # The file of a group table read with no filter, beside the index that names it.
 UNFILTERED_FILE = 'all.json'
-# A group table is one file per filter set some episode satisfies, up to 2^k per episode for k filter keys.
+# An episode satisfies up to 2^k filter sets for k filter keys.
 MAX_FILTER_KEYS_PER_GROUP = 6
 # Each file of a group table is one read of the whole dataset.
 MAX_FILTER_SETS_PER_GROUP = 1024

@@ -155,7 +155,7 @@ async def cache_rerun_assets(request: Request, call_next):
 # holding its values.
 GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
-# A static export holds a group table as one file per filter set, and this index beside them.
+# A static export holds a group table as one file per filter set some episode satisfies, and this index beside them.
 GROUP_INDEX_FILE = 'index.json'
 # A static export holds an API response read whole at the route's path with this suffix.
 API_FILE_SUFFIX = '.json'

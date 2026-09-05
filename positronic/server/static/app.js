@@ -95,11 +95,9 @@ function baseScopedKey(name) {
   return `${name}:${document.baseURI}`;
 }
 
-// A static export holds a group table as one file per filter set some episode satisfies, listed in
-// the index file beside them; the unfiltered flat table is one file, filtered in the browser.
+// Each group table's index, read once; the unfiltered flat table is one file, filtered in the browser.
 const groupIndexes = new Map();
 
-// Every name the server and the page agree on: a route, a file an export writes, a response field.
 const NAMES = window.SERVER_NAMES;
 
 function episodePageUrl(index) {
