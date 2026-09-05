@@ -72,8 +72,10 @@ MAX_FILTER_KEYS_PER_GROUP = 6
 # Each file of a group table is one read of the whole dataset.
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
-MAX_PATH_BYTES = 1024
-# Windows holds a path within `MAX_PATH` characters, its end mark included, unless a machine opts into long paths.
+MAX_KEY_BYTES = 1024
+# A platform that reports no path limit is Windows, whose `MAX_PATH` counts UTF-16 units, the end mark included,
+# unless a machine opts into long paths.
+_REPORTS_PATH_MAX = hasattr(os, 'pathconf')
 _WINDOWS_PATH_MAX = 260
 # Windows reads these as devices, with or without a suffix, and trims a trailing dot off a name.
 _WINDOWS_DEVICES = frozenset([
@@ -119,10 +121,15 @@ def asset_content_type(path: Path) -> str:
 def _path_max(directory: Path) -> int:
     """The longest path, its end mark included, the filesystem under `directory` takes: read off the nearest
     ancestor that exists where the platform reports it, and Windows' `MAX_PATH` where it does not."""
-    if not hasattr(os, 'pathconf'):
+    if not _REPORTS_PATH_MAX:
         return _WINDOWS_PATH_MAX
     existing = next(candidate for candidate in (directory, *directory.parents) if candidate.exists())
     return os.pathconf(existing, 'PC_PATH_MAX')
+
+
+def _path_length(path: Path) -> int:
+    """`path` as its filesystem's limit counts it: bytes, or UTF-16 units under Windows' `MAX_PATH`."""
+    return len(os.fsencode(path)) if _REPORTS_PATH_MAX else len(str(path).encode('utf-16-le')) // 2
 
 
 class _Output:
@@ -150,11 +157,11 @@ class _Output:
             if path.is_absolute() or '\\' in str(path) or '..' in path.parts:
                 raise ValueError(f'{path} would land outside {self.directory}')
             key = self._key_prefix + str(path)
-            if len(key.encode()) > MAX_PATH_BYTES:
-                raise ValueError(f'{key} is past the {MAX_PATH_BYTES}-byte key limit of a host')
+            if len(key.encode()) > MAX_KEY_BYTES:
+                raise ValueError(f'{key} is past the {MAX_KEY_BYTES}-byte key limit of a host')
             local = self._target(path)
-            if len(os.fsencode(local)) >= self._path_max:
-                raise ValueError(f'{local} is past the {self._path_max}-byte path limit of its filesystem')
+            if _path_length(local) >= self._path_max:
+                raise ValueError(f'{local} is past the path limit of its filesystem, {self._path_max}')
             folded = PurePosixPath(str(path).casefold())
             for part in folded.parts:
                 if part.partition('.')[0] in _WINDOWS_DEVICES or part.endswith('.'):
@@ -256,10 +263,10 @@ def _filter_sets_by_group(
     return sets_by_group
 
 
-def _large_file_path(link: str, build_id: str) -> str:
+def _large_file_path(link: str, build_id: str) -> PurePosixPath:
     """Where the file a large-file `link` names is written: its segments as a directory tree, each keeping the
     encoded spelling the browser asks it by, under the build."""
-    return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
+    return PurePosixPath(BUILD_DIR, build_id, link) if build_id else PurePosixPath(link)
 
 
 def _page_spelling(link: str) -> str:
@@ -283,7 +290,7 @@ def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> st
     """`html` with each of `links`, in the nodes a page carries them, moved under `build/<build_id>/` and
     spelled as a static host resolves them to the files on disk."""
     for link in links:
-        moved = _host_spelling(_large_file_path(link, build_id))
+        moved = _host_spelling(str(_large_file_path(link, build_id)))
         for node, moved_node in zip(_link_nodes(link), _link_nodes(moved), strict=True):
             html = html.replace(node, moved_node)
     return html
@@ -350,8 +357,8 @@ def _group_plans(client: TestClient, reads: Dataset, name: str, sets: Iterable[d
 def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, build_id: str) -> list[_Planned]:
     """The plans to write the recording and the downloads of one episode, under the build; the recording is copied
     from the file the app builds, the downloads are read through the client."""
-    recording = PurePosixPath(_large_file_path(links.recording_link, build_id))
-    downloads = [(link, PurePosixPath(_large_file_path(link, build_id))) for link in links.download_links]
+    recording = _large_file_path(links.recording_link, build_id)
+    downloads = [(link, _large_file_path(link, build_id)) for link in links.download_links]
     return [
         _Planned(recording, reads, lambda out: out.copy(recording, episode_rrd_path(links.index))),
         *(_planned_fetch(client, f'/{link}', path, reads) for link, path in downloads),

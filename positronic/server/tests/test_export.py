@@ -383,7 +383,7 @@ def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(t
 
 def test_the_path_limit_is_measured_with_the_working_directory_in_front_of_a_relative_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(export, '_path_max', lambda directory: len(os.fsencode(tmp_path / 'out' / 'index.html')))
+    monkeypatch.setattr(export, '_path_max', lambda directory: export._path_length(tmp_path / 'out' / 'index.html'))
 
     with pytest.raises(ValueError, match='path limit'):
         _Output(Path('out')).plan([PurePosixPath('index.html')])
@@ -724,7 +724,7 @@ def test_a_download_named_past_a_windows_device_name_is_written(tmp_path):
 
 def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]]:
     """A static dict with one download whose path on disk is `total_bytes` long, and that download's key path."""
-    stem = len(export._large_file_path(download_link(0, ('k',)), build_id)) - 1
+    stem = len(str(export._large_file_path(download_link(0, ('k',)), build_id))) - 1
     length = total_bytes - stem
     count = -(-(length + 1) // (MAX_COMPONENT_BYTES + 1))
     letters = length - (count - 1)
@@ -738,8 +738,8 @@ def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]
 
 def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_export_before_it_writes(tmp_path):
     build_id = 'b' * MAX_COMPONENT_BYTES
-    static, keys = _download_at(export.MAX_PATH_BYTES + 1, build_id)
-    assert len(export._large_file_path(download_link(0, keys), build_id)) == export.MAX_PATH_BYTES + 1
+    static, keys = _download_at(export.MAX_KEY_BYTES + 1, build_id)
+    assert len(str(export._large_file_path(download_link(0, keys), build_id))) == export.MAX_KEY_BYTES + 1
     dataset = a_dataset(tmp_path / 'dataset', static)
 
     with pytest.raises(ValueError, match='key limit'):
@@ -752,10 +752,10 @@ def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused(monkeyp
     monkeypatch.setattr(export, '_path_max', lambda directory: 1 << 16)
     out = _Output(Path('out'))
     stem = '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/'
-    out.plan([PurePosixPath(stem + 'b' * (export.MAX_PATH_BYTES - len(stem)))])
+    out.plan([PurePosixPath(stem + 'b' * (export.MAX_KEY_BYTES - len(stem)))])
 
     with pytest.raises(ValueError, match='key limit'):
-        out.plan([PurePosixPath(stem + 'c' * (export.MAX_PATH_BYTES + 1 - len(stem)))])
+        out.plan([PurePosixPath(stem + 'c' * (export.MAX_KEY_BYTES + 1 - len(stem)))])
 
 
 def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):
@@ -779,7 +779,7 @@ def test_a_local_path_at_the_filesystem_s_limit_is_refused_before_a_write_and_on
 ):
     out = tmp_path / 'out'
     probe = paths_of(an_export(dataset, tmp_path / 'probe'))
-    longest = max(len(os.fsencode(out.joinpath(*PurePosixPath(path).parts))) for path in probe)
+    longest = max(export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe)
 
     monkeypatch.setattr(export, '_path_max', lambda directory: longest)
     with pytest.raises(ValueError, match='path limit'):
@@ -790,10 +790,15 @@ def test_a_local_path_at_the_filesystem_s_limit_is_refused_before_a_write_and_on
     assert paths_of(an_export(dataset, out)) == probe
 
 
-def test_the_path_limit_is_windows_s_where_the_platform_reports_none(monkeypatch):
-    monkeypatch.delattr(os, 'pathconf')
+def test_where_the_platform_reports_no_path_limit_windows_s_holds_and_a_path_is_measured_in_utf_16_units(monkeypatch):
+    monkeypatch.setattr(export, '_REPORTS_PATH_MAX', False)
 
     assert export._path_max(Path('out')) == export._WINDOWS_PATH_MAX
+    assert export._path_length(Path('\u00e9' * 10)) == 10 and export._path_length(Path('\U0001d11e')) == 2
+
+
+def test_where_the_platform_reports_a_path_limit_a_path_is_measured_in_bytes():
+    assert export._path_length(Path('\u00e9' * 10)) == len(os.fsencode('\u00e9' * 10))
 
 
 def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_before_it_writes(tmp_path, monkeypatch):
@@ -802,7 +807,7 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down'})
     out = tmp_path / 'out'
     probe = paths_of(export_static(dataset, tmp_path / 'probe', ep_table_cfg=TABLE, max_resolution=64, assets=False))
-    local = {path: len(os.fsencode(out.joinpath(*PurePosixPath(path).parts))) for path in probe}
+    local = {path: export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe}
     longest = max(local.values())
     assert local['api/episode_rrd/0'] < longest
 
@@ -814,7 +819,7 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
 
 def test_a_base_href_that_leaves_no_room_for_a_key_stops_the_export_before_it_writes(dataset, tmp_path):
     with pytest.raises(ValueError, match='key limit'):
-        an_export(dataset, tmp_path / 'out', base_href='/' + 'p' * (export.MAX_PATH_BYTES - 10) + '/')
+        an_export(dataset, tmp_path / 'out', base_href='/' + 'p' * (export.MAX_KEY_BYTES - 10) + '/')
     assert not (tmp_path / 'out').exists()
 
 
