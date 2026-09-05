@@ -1,3 +1,6 @@
+import socket
+import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager, nullcontext
@@ -25,9 +28,10 @@ from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
-from positronic.simulator.env_server.launcher import free_port
+from positronic.simulator.env_server.launcher import free_port, serve_subprocess
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -80,6 +84,26 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
         np.testing.assert_array_equal(a['sim_state'][key], b['sim_state'][key])
 
 
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_reports_a_server_that_dies_before_binding():
+    """A server that raises during startup never binds, so its port stays closed exactly as a slow boot's
+    does."""
+    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])  # noqa: E731
+    with pytest.raises(RuntimeError, match='status 3'), serve_subprocess(spawn, 'localhost'):
+        pass
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_yields_once_the_port_accepts():
+    script = (
+        'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
+    )
+    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', script, str(port)])  # noqa: E731
+    with serve_subprocess(spawn, 'localhost') as (host, port):
+        with socket.create_connection((host, port), timeout=1.0):
+            pass
+
+
 @pytest.mark.timeout(60.0)
 def test_transport_is_transparent(env_server):
     """The wire round-trips faithfully: the same seed + action sequence through the env in-process and
@@ -89,8 +113,17 @@ def test_transport_is_transparent(env_server):
 
     direct = make_mujoco_env(list(CAMERAS.values()))
     direct_reset = direct.reset(seed)
-    base = np.asarray(direct_reset['obs']['q'])
-    actions = [{'command': {'type': 'joint_pos', 'q': base + 0.03 * i}, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
+    base = np.asarray(direct_reset[protocol.FRAME_OBS]['q'])
+    actions = [
+        {
+            protocol.ACTION_COMMAND: {
+                protocol.COMMAND_TYPE: protocol.JOINT_POS,
+                protocol.COMMAND_JOINT_POS: base + 0.03 * i,
+            },
+            protocol.ACTION_GRIP: 0.2 * (i % 2),
+        }
+        for i in range(1, 6)
+    ]
     direct_steps = [direct.step(action) for action in actions]
     direct.close()
 
@@ -99,12 +132,12 @@ def test_transport_is_transparent(env_server):
     socket_steps = [conn.step(action) for action in actions]
     conn.close()
 
-    assert direct_reset['control_dt'] == socket_reset['control_dt']
-    _assert_obs_equal(direct_reset['obs'], socket_reset['obs'])
+    assert direct_reset[protocol.FRAME_CONTROL_DT] == socket_reset[protocol.FRAME_CONTROL_DT]
+    _assert_obs_equal(direct_reset[protocol.FRAME_OBS], socket_reset[protocol.FRAME_OBS])
     for direct_step, socket_step in zip(direct_steps, socket_steps, strict=True):
-        _assert_obs_equal(direct_step['obs'], socket_step['obs'])
-        assert direct_step['done'] == socket_step['done']
-        assert direct_step['control_dt'] == socket_step['control_dt']
+        _assert_obs_equal(direct_step[protocol.FRAME_OBS], socket_step[protocol.FRAME_OBS])
+        assert direct_step[protocol.FRAME_DONE] == socket_step[protocol.FRAME_DONE]
+        assert direct_step[protocol.FRAME_CONTROL_DT] == socket_step[protocol.FRAME_CONTROL_DT]
 
 
 @pytest.mark.timeout(60.0)
@@ -154,24 +187,23 @@ def test_close_gives_up_on_a_peer_that_never_answers():
         assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
 
 
-_HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
+_HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
 
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
-    env.step(action)
-    out = {'obs': None}
+    out = env.step(action)
     for _ in range(steps):
         out = env.step(_HOLD)
-    return np.asarray(out['obs']['ee_pos'])
+    return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
 def test_a_pinned_control_mode_rides_the_wire():
     """Honoring a mode is the env's, so the adapter delivers it rather than deciding for every env."""
     mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
     wired = _wire_command(roboarm_command.JointPosition(np.zeros(7), mode=mode))
-    assert wired['mode'] == roboarm_command.to_wire(mode)
-    assert 'mode' not in _wire_command(roboarm_command.JointPosition(np.zeros(7)))
+    assert wired[protocol.COMMAND_MODE] == roboarm_command.to_wire(mode)
+    assert protocol.COMMAND_MODE not in _wire_command(roboarm_command.JointPosition(np.zeros(7)))
 
 
 class TestEnvControlFrame:
@@ -187,13 +219,13 @@ class TestEnvControlFrame:
     def test_an_absolute_pose_arrives_in_the_env_frame(self):
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
-        np.testing.assert_allclose(wired['pose'], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_already_in_the_env_frame_wires_bare(self):
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
         wired = _wire_command(_in_env_control_frame(cmd, self.frame))
-        np.testing.assert_allclose(wired['delta'], delta.as_vector(self.rotmat), atol=1e-12)
+        np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
 
     def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
         """The frame a command is measured in has nothing to do with the law that drives to it."""
@@ -236,15 +268,28 @@ def test_cartesian_delta_matches_absolute_target():
 
     abs_env = make_mujoco_env(list(CAMERAS.values()))
     reset = abs_env.reset(seed)
-    ee0 = np.asarray(reset['obs']['ee_pos'])
-    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset['obs']['ee_quat']))
-    ee_abs = _settle(abs_env, {'command': {'type': 'cartesian', 'pose': target.as_vector(rotmat)}, 'grip': 0.0}, settle)
+    ee0 = np.asarray(reset[protocol.FRAME_OBS]['ee_pos'])
+    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset[protocol.FRAME_OBS]['ee_quat']))
+    absolute = {
+        protocol.ACTION_COMMAND: {
+            protocol.COMMAND_TYPE: protocol.CARTESIAN,
+            protocol.COMMAND_POSE: target.as_vector(rotmat),
+        },
+        protocol.ACTION_GRIP: 0.0,
+    }
+    ee_abs = _settle(abs_env, absolute, settle)
     abs_env.close()
 
     delta_env = make_mujoco_env(list(CAMERAS.values()))
     delta_env.reset(seed)
     delta = geom.Transform3D(lift, geom.Rotation.identity)
-    delta_action = {'command': {'type': 'cartesian_delta', 'delta': delta.as_vector(rotmat)}, 'grip': 0.0}
+    delta_action = {
+        protocol.ACTION_COMMAND: {
+            protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
+            protocol.COMMAND_DELTA: delta.as_vector(rotmat),
+        },
+        protocol.ACTION_GRIP: 0.0,
+    }
     ee_delta = _settle(delta_env, delta_action, settle)
     ee_idle = _settle(delta_env, _HOLD, 50)  # the delta already fired; idling must not re-compose it
     delta_env.close()
@@ -279,16 +324,20 @@ class _CountdownEnv(EnvProtocol):
         self._steps = 0
         meta = {'task': _COUNTDOWN}  # scene meta the env reports only at reset; ``step`` omits it
         return {
-            'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
-            'meta': meta,
-            'robot_meta': {},
-            'control_dt': self._control_dt,
+            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
+            protocol.FRAME_META: meta,
+            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
     def step(self, action):
         self._steps += 1
         done = self._done_after is not None and self._steps >= self._done_after
-        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'done': done, 'control_dt': self._control_dt}
+        return {
+            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
+            protocol.FRAME_DONE: done,
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
     def close(self):
         pass
@@ -311,7 +360,7 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {eval_keys.SUCCESS: True} if result['done'] else None
+        return {eval_keys.SUCCESS: True} if result[protocol.FRAME_DONE] else None
 
 
 @pytest.mark.timeout(60.0)
@@ -395,6 +444,21 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
 
 
+def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
+    """``protocol`` owns the contract and ``_wire_command`` is the only thing that writes it, so pinning the two
+    against each other keeps the set an env adoption must cover equal to the set a policy can actually emit."""
+    pose = geom.Transform3D(np.zeros(3), geom.Rotation.identity)
+    commands = [
+        roboarm_command.CartesianPosition(pose),
+        roboarm_command.CartesianDelta(pose),
+        roboarm_command.JointPosition(np.zeros(7)),
+        roboarm_command.JointDelta(np.zeros(7)),
+        None,  # nothing held: the arm holds where it is
+    ]
+    tags = {_wire_command(command)[protocol.COMMAND_TYPE] for command in commands}
+    assert tags == set(protocol.CANONICAL_COMMAND_TYPES)
+
+
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
@@ -469,7 +533,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     ``chunk_len`` control periods apart."""
     host, port = env_server
     probe = make_mujoco_env([])
-    control_dt = probe.reset(0)['control_dt']
+    control_dt = probe.reset(0)[protocol.FRAME_CONTROL_DT]
     probe.close()
 
     chunk_len = 5
@@ -503,7 +567,9 @@ def test_server_failure_crosses_as_error_frame(env_server):
     conn = EnvConnection(host, port)
     conn.reset(7)
     with pytest.raises(RuntimeError, match='bogus'):
-        conn.step({'command': {'type': 'bogus'}, 'grip': 0.0})
+        conn.step({protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: 'bogus'}, protocol.ACTION_GRIP: 0.0})
     # The socket is still usable after a delivered failure.
-    assert 'obs' in conn.step({'command': {'type': 'joint_pos', 'q': np.zeros(7)}, 'grip': 0.0})
+    joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(7)}
+    step = conn.step({protocol.ACTION_COMMAND: joints, protocol.ACTION_GRIP: 0.0})
+    assert protocol.FRAME_OBS in step
     conn.close()

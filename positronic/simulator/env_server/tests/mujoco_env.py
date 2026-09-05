@@ -22,6 +22,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Eval, Observation, Task
 from positronic.eval import keys as eval_keys
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
@@ -118,36 +119,46 @@ class MujocoEnv(EnvProtocol):
         self._sim.reset(token)
         self._gen = self._sim.run(_NeverStop(), self._clock)
         next(self._gen)  # loop setup + first control-period sleep
+        robot_meta = self._robot_meta_recv.read()
+        assert robot_meta is not None, 'the sim publishes robot_meta as it resets, before the sleep stepped above'
         # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
         # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
         return {
-            'obs': self._read_obs(),
-            'meta': {},
-            'robot_meta': dict(self._robot_meta_recv.read().data),
-            'control_dt': self._timestep,
+            protocol.FRAME_OBS: self._read_obs(),
+            protocol.FRAME_META: {},
+            protocol.FRAME_ROBOT_META: dict(robot_meta.data),
+            protocol.FRAME_CONTROL_DT: self._timestep,
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        command = action['command']
-        match command['type']:
-            case 'hold':
+        command = action[protocol.ACTION_COMMAND]
+        match command[protocol.COMMAND_TYPE]:
+            case protocol.HOLD:
                 cmd = None
-            case 'joint_pos':
-                cmd = roboarm_command.JointPosition(np.asarray(command['q'], dtype=np.float64))
-            case 'joint_vel':
-                cmd = roboarm_command.JointDelta(np.asarray(command['dq'], dtype=np.float64))
-            case 'cartesian':
-                cmd = roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command['pose'], _ROTMAT))
-            case 'cartesian_delta':
-                cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
+            case protocol.JOINT_POS:
+                q = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float64)
+                cmd = roboarm_command.JointPosition(q)
+            case protocol.JOINT_VEL:
+                dq = np.asarray(command[protocol.COMMAND_JOINT_VEL], dtype=np.float64)
+                cmd = roboarm_command.JointDelta(dq)
+            case protocol.CARTESIAN:
+                pose = geom.Transform3D.from_vector(command[protocol.COMMAND_POSE], _ROTMAT)
+                cmd = roboarm_command.CartesianPosition(pose)
+            case protocol.CARTESIAN_DELTA:
+                delta = geom.Transform3D.from_vector(command[protocol.COMMAND_DELTA], _ROTMAT)
+                cmd = roboarm_command.CartesianDelta(delta)
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
         if cmd is not None:
             self._cmd_emit.emit(cmd)
-        self._grip_emit.emit(float(action['grip']))
+        self._grip_emit.emit(float(action[protocol.ACTION_GRIP]))
         self._advance(self._timestep)
-        return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
+        return {
+            protocol.FRAME_OBS: self._read_obs(),
+            protocol.FRAME_DONE: False,
+            protocol.FRAME_CONTROL_DT: self._timestep,
+        }
 
     def close(self) -> None:
         if self._gen is not None:

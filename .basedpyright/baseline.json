@@ -5724,52 +5724,6 @@
                 }
             }
         ],
-        "./positronic/simulator/env_server/client.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 33,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 50,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/simulator/env_server/proxy.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 28,
-                    "endColumn": 32,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/simulator/env_server/server.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 40,
-                    "endColumn": 60,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 28,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/simulator/env_server/tests/mujoco_env.py": [
             {
                 "code": "reportArgumentType",
@@ -5820,14 +5774,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 60,
-                    "endColumn": 64,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 22,
@@ -5837,14 +5783,6 @@
             }
         ],
         "./positronic/simulator/env_server/tests/test_remote_env.py": [
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 32,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
@@ -6456,16 +6394,6 @@
                 "range": {
                     "startColumn": 37,
                     "endColumn": 41,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/simulator/robolab/launcher.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 24,
-                    "endColumn": 42,
                     "lineCount": 1
                 }
             }

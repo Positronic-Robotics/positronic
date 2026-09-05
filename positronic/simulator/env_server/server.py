@@ -12,7 +12,7 @@ may even vary its control period per step. Heavy construction is the env's own c
 
 Protocol (msgpack frames, see ``protocol``):
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
-  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt', 'horizon'?}``
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Any command whose handling raises returns ``{'error': str}`` instead, which the client re-raises.
@@ -28,8 +28,10 @@ from websockets.sync.server import ServerConnection, serve
 # (importing ``positronic.*`` would run the package's installed-version lookup and fail there).
 # Relative when they land as a package, top-level when copied in flat.
 try:
+    from . import protocol
     from .protocol import decode, encode
 except ImportError:
+    import protocol  # pyright: ignore[reportMissingImports]
     from protocol import decode, encode
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,10 @@ class EnvProtocol(ABC):
         from (the language goal, scene ids); ``robot_meta`` is the robot model identity (URDF / joint names /
         control frame) recorded into the episode. Either is ``{}`` when the client owns that side — a static
         instruction, or an embodiment that ships its own model.
+
+        ``horizon`` (optional) is the sim-enforced episode deadline in sim-seconds — the env's own time limit,
+        which it delivers as a terminal ``done`` on expiry. It is reported for observability, so a run can be
+        checked against the horizon the env actually resolved; omit it when the env enforces none.
         """
 
     @abstractmethod
@@ -101,20 +107,20 @@ class EnvServer:
         for raw in connection:
             msg = decode(raw)
             try:
-                match msg['cmd']:
-                    case 'close':
-                        connection.send(encode({'ok': True}))
+                match msg[protocol.REQUEST_CMD]:
+                    case protocol.CMD_CLOSE:
+                        connection.send(encode({protocol.RESPONSE_OK: True}))
                         return
-                    case 'tasks':
-                        result = {'tasks': self._env.tasks(msg['spec'])}
-                    case 'reset':
-                        result = self._env.reset(msg['token'])
-                    case 'step':
-                        result = self._env.step(msg['action'])
+                    case protocol.CMD_TASKS:
+                        result = {protocol.RESPONSE_TASKS: self._env.tasks(msg[protocol.REQUEST_SPEC])}
+                    case protocol.CMD_RESET:
+                        result = self._env.reset(msg[protocol.REQUEST_TOKEN])
+                    case protocol.CMD_STEP:
+                        result = self._env.step(msg[protocol.REQUEST_ACTION])
                     case other:
                         raise ValueError(f'Unknown command: {other!r}')
             except Exception as e:
-                result = {'error': f'{type(e).__name__}: {e}'}
+                result = {protocol.RESPONSE_ERROR: f'{type(e).__name__}: {e}'}
             connection.send(encode(result))
 
     def serve_forever(self) -> None:

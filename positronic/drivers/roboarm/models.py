@@ -3,7 +3,7 @@ viewer, the sim ``robot_meta``, and offline IK, plus the Robotiq 2F-85 graft sha
 real arm and the live franka driver."""
 
 import xml.etree.ElementTree as ET
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -81,6 +81,12 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
     ]
 
 
+GRASP_SITE_LINK = 'gripper_grasp_site'
+# The 2F-85's grasp point — where the closed pads meet — 155mm along the flange approach axis, sharing the
+# flange's orientation. MuJoCo Menagerie's own 2F-85 places its ``grasp_site`` here, and a MuJoCo rig driving
+# this gripper measures and accepts poses at that site rather than at the arm's flange.
+_2F85_GRASP_XYZ = '0 0 0.155'
+
 # Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh | None, visual xyz | None).
 # A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
 # ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
@@ -89,6 +95,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
+    (GRASP_SITE_LINK, FLANGE_LINK, None, _2F85_GRASP_XYZ, '0 0 0', None, None, None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
@@ -156,19 +163,21 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     return gripper[roboarm_keys.GRIPPER]
 
 
-@lru_cache(maxsize=1)
-def bundled_franka_model() -> dict:
+@cache
+def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
     """The bundled real franka arm + Robotiq 2F-85 for the 3D viewer: the FR3 URDF and its collision
     meshes with the 2F-85 grafted onto the flange, plus the canonical joint names and control frame.
 
-    Backfills real-robot datasets recorded before they stored their own model.
+    Backfills real-robot datasets recorded before they stored their own model. ``default_frame_at`` names the
+    link ``DEFAULT_FRAME`` is declared on: a rig that measures and drives at the gripper's grasp point passes
+    ``GRASP_SITE_LINK``, so it publishes poses in the frame it drives rather than at the franka EE.
     """
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
     mesh_dir = here.parents[2] / 'assets' / 'fr3_collision'
     meshes = {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))}
     gripper = attach_robotiq_2f85(arm_root, meshes)
-    add_default_frame(arm_root, EE_LINK)
+    add_default_frame(arm_root, default_frame_at)
     return {
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         'meshes': meshes,
