@@ -1,10 +1,11 @@
 """`positronic-platform` — register, then file and read rollout requests, from a terminal or an agent.
 
-The key is never an argument. It is read from `POSITRONIC_PLATFORM_API_KEY`, else from the file
-`--api-key-file` names, else from `api_key` under the config directory, which `register` writes.
-The platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else `platform_url` under the
-config directory, else production. The config directory is `POSITRONIC_PLATFORM_CONFIG_DIR`, else
-`~/.config/positronic-platform`. Every command prints its answer as JSON.
+The key is never an argument. `register` writes `config.json` under the config directory, mode
+0600, holding the platform URL and the key together; every command reads it. The key is read from
+`POSITRONIC_PLATFORM_API_KEY`, else from the file `--api-key-file` names, else from that record; the
+platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else that record, else production. The
+config directory is `POSITRONIC_PLATFORM_CONFIG_DIR`, else `~/.config/positronic-platform`. Every
+command prints its answer as JSON.
 
 Usage
   positronic-platform register --alias='<display name>'
@@ -30,12 +31,11 @@ from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
 from platform_client.requests import EndpointAsk, RequestCreate, SceneAsk, TaskAsk
 from platform_client.slug import Slugged, slug_of
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 CONFIG_DIR_ENV = 'POSITRONIC_PLATFORM_CONFIG_DIR'
 DEFAULT_CONFIG_DIR = Path('~/.config/positronic-platform')
-API_KEY_FILENAME = 'api_key'
-PLATFORM_URL_FILENAME = 'platform_url'
+CONFIG_FILENAME = 'config.json'
 
 # What `--scene` takes: `tote_placement=<side>`, `camera_vantage=<vantage>`, and `camera.<mount>=<side>`.
 SCENE_TOTE = 'tote_placement'
@@ -46,53 +46,58 @@ _PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
 _VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
 
 
+class Config(BaseModel):
+    """What `register` records and every command reads: the platform, and the key that belongs to it."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    platform_url: str
+    api_key: ApiKey
+
+
 def config_dir(env: Mapping[str, str]) -> Path:
     return Path(env.get(CONFIG_DIR_ENV) or DEFAULT_CONFIG_DIR).expanduser()
 
 
-def _read_line(path: Path) -> str | None:
-    """The file's content, stripped, or None where there is no such file."""
+def read_config(directory: Path) -> Config | None:
+    """The record `register` wrote under `directory`, or None where there is none."""
     try:
-        return path.read_text().strip()
+        return Config.model_validate_json((directory / CONFIG_FILENAME).read_bytes())
     except FileNotFoundError:
         return None
 
 
-def api_key_from(env: Mapping[str, str], api_key_file: str | None) -> ApiKey | None:
-    """The key to call with: the environment's, else the named file's, else the config directory's."""
-    from_env = env.get(API_KEY_ENV)
-    if from_env:
-        return ApiKey(from_env)
-    path = Path(api_key_file) if api_key_file else config_dir(env) / API_KEY_FILENAME
-    value = _read_line(path)
-    return ApiKey(value) if value else None
-
-
-def platform_url_from(env: Mapping[str, str], platform_url: str | None) -> str | None:
-    """What the client resolves the platform from: the flag, else the file — unless the environment names one."""
-    if platform_url is not None or env.get(API_URL_ENV) is not None:
-        return platform_url
-    return _read_line(config_dir(env) / PLATFORM_URL_FILENAME)
-
-
-def _replace(path: Path, content: str, mode: int) -> None:
-    """Write `content` beside `path` and rename it into place, so a reader sees the old file or the new one."""
+def write_config(directory: Path, config: Config) -> None:
+    """Record the pair as one file, mode 0600, by rename: a reader sees the previous record or this one."""
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / CONFIG_FILENAME
     staged = path.with_name(f'.{path.name}.{os.getpid()}')
-    with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), 'w') as staged_file:
-        staged_file.write(content)
+    with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as staged_file:
+        staged_file.write(config.model_dump_json(indent=2))
     os.replace(staged, path)
 
 
-def write_config(directory: Path, *, api_key: ApiKey, platform_url: str) -> None:
-    """Record a key and the platform it belongs to, as one pair. The key file is mode 0600.
+def api_key_from(env: Mapping[str, str], api_key_file: Path | None) -> ApiKey | None:
+    """The key to call with: the environment's, else the named file's, else the record's."""
+    from_env = env.get(API_KEY_ENV)
+    if from_env:
+        return ApiKey(from_env)
+    if api_key_file is not None:
+        try:
+            value = api_key_file.read_text().strip()
+        except FileNotFoundError:
+            return None
+        return ApiKey(value) if value else None
+    config = read_config(config_dir(env))
+    return config.api_key if config else None
 
-    The key lands first: a key the platform minted and this side did not write is lost, while a
-    platform file that did not land leaves the old platform beside a new key, which the next call
-    reports as `unauthorized` and `register --rotate` repairs.
-    """
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _replace(directory / API_KEY_FILENAME, f'{api_key}\n', 0o600)
-    _replace(directory / PLATFORM_URL_FILENAME, f'{platform_url}\n', 0o644)
+
+def platform_url_from(env: Mapping[str, str], platform_url: str | None) -> str | None:
+    """What the client resolves the platform from: the flag, else the record — unless the environment names one."""
+    if platform_url is not None or env.get(API_URL_ENV) is not None:
+        return platform_url
+    config = read_config(config_dir(env))
+    return config.platform_url if config else None
 
 
 def _one_line(exc: ValidationError) -> str:
@@ -147,7 +152,7 @@ def ask_from_args(args: argparse.Namespace) -> RequestCreate:
         if any(flag is not None for flag in flags) or args.scene:
             raise SystemExit('--from carries the whole request; give it alone')
         try:
-            return RequestCreate.model_validate_json(Path(args.from_file).read_bytes())
+            return RequestCreate.model_validate_json(args.from_file.read_bytes())
         except OSError as exc:
             raise SystemExit(f'--from {args.from_file}: {exc.strerror}') from exc
         except ValidationError as exc:
@@ -189,9 +194,9 @@ class Registered(BaseModel):
     user_id: UserId
     key_status: Slugged[KeyStatus]
     platform_url: str
-    # The file holding the key this run minted, or None where none was issued: a repeat registration
-    # mints none, and the pair already on disk stays as it is.
-    api_key_file: Path | None = None
+    # The record holding the key this run minted, or None where none was issued: a repeat
+    # registration mints none, and the record already on disk stays as it is.
+    config_file: Path | None = None
 
 
 def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
@@ -199,14 +204,13 @@ def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
         platform_url_from(env, args.platform_url), plaintext_http=args.plaintext_http
     )
     response = github_device_flow.run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
-    key_path: Path | None = None
+    config_file: Path | None = None
     if response.api_key is not None:
-        # The key and the platform are one pair: written together, or not at all.
-        key_path = config_dir(env) / API_KEY_FILENAME
-        write_config(config_dir(env), api_key=response.api_key, platform_url=base_url)
+        config_file = config_dir(env) / CONFIG_FILENAME
+        write_config(config_dir(env), Config(platform_url=base_url, api_key=response.api_key))
     _show(
         Registered(
-            user_id=response.user_id, key_status=response.key_status, platform_url=base_url, api_key_file=key_path
+            user_id=response.user_id, key_status=response.key_status, platform_url=base_url, config_file=config_file
         )
     )
 
@@ -264,7 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     calling = argparse.ArgumentParser(add_help=False)
     calling.add_argument('--platform-url', default=None, help=f'the platform to call, else {API_URL_ENV}')
-    calling.add_argument('--api-key-file', default=None, help=f'the file holding the key, else {API_KEY_ENV}')
+    calling.add_argument(
+        '--api-key-file', type=Path, default=None, help=f'a file holding the key alone, else {API_KEY_ENV}'
+    )
 
     requests = commands.add_parser('requests', help='file and read rollout requests')
     verbs = requests.add_subparsers(dest='verb', required=True)
@@ -288,7 +294,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create.add_argument('--slug', default=None, help='a short name for the request')
     create.add_argument('--transaction-key', default=None, help='a key that makes a retry return the same request')
-    create.add_argument('--from', dest='from_file', default=None, metavar='FILE', help='the whole request, as JSON')
+    create.add_argument(
+        '--from', dest='from_file', type=Path, default=None, metavar='FILE', help='the whole request, as JSON'
+    )
     create.set_defaults(run=_create)
 
     get = verbs.add_parser('get', parents=[calling], help='one request, by id')

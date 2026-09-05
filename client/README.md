@@ -67,13 +67,12 @@ override is filed; the flags cover the common round. `--scene` takes `tote_place
 or `none`. Every command prints its answer as JSON, so an agent reads it back as the models in
 `platform_client.responses`.
 
-`register` runs the same GitHub device flow as `platform-register` and then writes the key to
-`~/.config/positronic-platform/api_key`, mode 0600, with the platform's URL beside it in
-`platform_url`. The key never appears on a command line: a command reads it from
-`POSITRONIC_PLATFORM_API_KEY`, else from the file `--api-key-file` names, else from that file.
-The platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else `platform_url` under the
-config directory, else the default below. `POSITRONIC_PLATFORM_CONFIG_DIR` names another config
-directory.
+`register` runs the same GitHub device flow as `platform-register` and then writes
+`~/.config/positronic-platform/config.json`, mode 0600, holding the platform's URL and the key
+together. The key never appears on a command line: a command reads it from
+`POSITRONIC_PLATFORM_API_KEY`, else from the file `--api-key-file` names, else from that record.
+The platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else that record, else the default
+below. `POSITRONIC_PLATFORM_CONFIG_DIR` names another config directory.
 
 From Python, `PlatformClient.requests_create`, `.requests_get` and `.requests_list` take and answer
 the same models; `requests_list` pages oldest first, and a page's `next` is the `after` of the page
