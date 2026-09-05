@@ -10,7 +10,11 @@ from positronic.simulator.robolab.launcher import serve_robolab
 
 
 @cfn.config(
-    camera_dict={keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera', keys.WRIST_IMAGE: 'wrist_cam'},
+    camera_dict={
+        keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera',
+        keys.EXTERIOR_RIGHT_IMAGE: 'over_shoulder_right_camera',
+        keys.WRIST_IMAGE: 'wrist_cam',
+    },
     instruction_type='default',
     trial_count=1,
     timeout=None,
