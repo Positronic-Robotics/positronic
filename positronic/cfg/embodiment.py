@@ -12,14 +12,7 @@ from positronic.eval import keys as eval_keys
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
-    cameras={
-        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.zed_m.override(
-            view='left', resolution='hd720', fps=30, image_enhancement=True
-        ),
-        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(
-            view='left', resolution='hd720', fps=30, image_enhancement=True
-        ),
-    },
+    cameras=positronic.cfg.hardware.camera.droid,
 )
 def droid(robot_arm, gripper, cameras):
     """Real single-arm Franka (DROID) + Robotiq gripper + ZED cameras."""
@@ -42,6 +35,9 @@ def droid(robot_arm, gripper, cameras):
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )
+
+
+droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
 
 
 @cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
