@@ -185,6 +185,27 @@ def test_a_key_file_is_read_before_the_record(config, gateway, tmp_path):
     assert sent.headers['authorization'] == 'Bearer pk_live_file' and sent.url.host == 'gateway.example'
 
 
+def test_a_key_file_that_is_missing_or_empty_ends_the_command_naming_it(config, gateway, tmp_path):
+    missing = tmp_path / 'no_such_key'
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a', f'--api-key-file={missing}'])
+    assert str(missing) in str(raised.value) and 'No such file' in str(raised.value)
+
+    empty = tmp_path / 'empty_key'
+    empty.write_text('\n')
+    with pytest.raises(SystemExit, match='holds no key'):
+        cli.main(['requests', 'get', '2a', f'--api-key-file={empty}'])
+    assert gateway.requests == []
+
+
+def test_an_unreadable_record_ends_the_command_naming_the_file(config, gateway):
+    (config / CONFIG_FILENAME).mkdir(parents=True)
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a'])
+    assert str(config / CONFIG_FILENAME) in str(raised.value) and 'cannot be read' in str(raised.value)
+    assert gateway.requests == []
+
+
 def test_no_key_anywhere_ends_the_command_naming_register(config, gateway):
     with pytest.raises(SystemExit) as raised:
         cli.main(['requests', 'get', '2a'])
@@ -384,6 +405,9 @@ def test_a_torn_write_leaves_the_previous_record_whole(config, monkeypatch):
     with pytest.raises(OSError):
         cli.write_config(config, Config(platform_url='https://other.example', api_key=ApiKey('pk_live_new')))
     assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
+    # The staged file went with the failure: no key sits beside the record.
+    assert not list(config.glob('.*'))
+    assert 'pk_live_new' not in ''.join(p.read_text() for p in config.iterdir())
 
 
 def test_a_path_planted_beside_the_record_is_not_written_through(config):
