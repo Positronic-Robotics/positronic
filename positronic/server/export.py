@@ -158,50 +158,51 @@ class _Output:
     of a path outside the plan is refused."""
 
     def __init__(self, directory: Path):
-        self.directory = directory
+        # Absolute, so a path is measured with the working directory in front, as the filesystem measures it.
+        self.directory = directory.absolute()
         self.files: list[ExportedFile] = []
-        self._tree = _PortableTree(directory)
-        self._planned: set[str] = set()
+        self._tree = _PortableTree(self.directory)
+        self._planned: set[PurePosixPath] = set()
 
-    def plan(self, paths: Iterable[str]) -> None:
+    def plan(self, paths: Iterable[PurePosixPath]) -> None:
         """Register every path the export writes; one that would land outside the directory, or that a host or a
         filesystem the tree lands on does not hold as it is, is refused here, before a write."""
         for path in paths:
-            relative = PurePosixPath(path)
-            if relative.is_absolute() or '\\' in path or '..' in relative.parts:
-                raise ValueError(f'{path!r} would land outside {self.directory}')
-            self._tree.add(relative)
+            if path.is_absolute() or '\\' in str(path) or '..' in path.parts:
+                raise ValueError(f'{path} would land outside {self.directory}')
+            self._tree.add(path)
             self._planned.add(path)
 
-    def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
+    def write(self, path: PurePosixPath, body: bytes, content_type: str) -> ExportedFile:
         target = self._target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
         return self._record(path, content_type, len(body))
 
-    def copy(self, path: str, source: Path) -> ExportedFile:
+    def copy(self, path: PurePosixPath, source: Path) -> ExportedFile:
         """Copy the file at `source` to `path` without holding it in memory."""
         target = self._target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         return self._record(path, asset_content_type(source), target.stat().st_size)
 
-    def _target(self, path: str) -> Path:
+    def _target(self, path: PurePosixPath) -> Path:
         if path not in self._planned:
-            raise ValueError(f'{path!r} is not in the export plan')
-        return self.directory.joinpath(*PurePosixPath(path).parts)
+            raise ValueError(f'{path} is not in the export plan')
+        return self.directory.joinpath(*path.parts)
 
-    def _record(self, path: str, content_type: str, size: int) -> ExportedFile:
-        written = ExportedFile(PurePosixPath(path), content_type, size)
+    def _record(self, path: PurePosixPath, content_type: str, size: int) -> ExportedFile:
+        written = ExportedFile(path, content_type, size)
         self.files.append(written)
         return written
 
 
 @dataclass(frozen=True)
 class _Planned:
-    """One file the export writes at `path`; `write` writes it, once the app serves the dataset it reads."""
+    """One file the export writes at `path`; `write` writes it while the app serves `reads`."""
 
-    path: str
+    path: PurePosixPath
+    reads: Dataset
     write: Callable[[_Output], ExportedFile]
 
 
@@ -211,14 +212,21 @@ def _fetch(client: TestClient, path: str, params: dict[str, str] | None = None) 
     return response.content, response.headers.get('content-type', '')
 
 
-def _fetched(client: TestClient, route: str, path: str, params: dict[str, str] | None = None) -> _Planned:
-    """The response of `route`, read with `params`, written at `path`."""
-    return _Planned(path, lambda out: out.write(path, *_fetch(client, route, params)))
+def _planned_fetch(
+    client: TestClient, route: str, path: PurePosixPath, reads: Dataset, params: dict[str, str] | None = None
+) -> _Planned:
+    """The plan to write the response of `route`, read with `params` while the app serves `reads`, at `path`."""
+    return _Planned(path, reads, lambda out: out.write(path, *_fetch(client, route, params)))
 
 
-def _copied(path: str, source: Path) -> _Planned:
-    """The file at `source`, copied to `path`."""
-    return _Planned(path, lambda out: out.copy(path, source))
+def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
+    """Write each of `plans` with the app serving the dataset it reads."""
+    serving: Dataset | None = None
+    for planned in plans:
+        if planned.reads is not serving:
+            install_dataset(planned.reads)
+            serving = planned.reads
+        planned.write(out)
 
 
 def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
@@ -311,10 +319,10 @@ def _episode_links(dataset: Dataset, index: int) -> _EpisodeLinks:
     return _EpisodeLinks(index, episode_rrd_link(index), downloads)
 
 
-def _episode_page(client: TestClient, links: _EpisodeLinks, build_id: str) -> _Planned:
-    """The page of one episode, with its links moved under the build."""
+def _episode_page(client: TestClient, reads: Dataset, links: _EpisodeLinks, build_id: str) -> _Planned:
+    """The plan to write the page of one episode, with its links moved under the build."""
     route = episode_link(links.index)
-    path = f'{route}/{PAGE_FILE}'
+    path = PurePosixPath(route) / PAGE_FILE
     every = [links.recording_link, *links.download_links]
 
     def write(out: _Output) -> ExportedFile:
@@ -324,43 +332,45 @@ def _episode_page(client: TestClient, links: _EpisodeLinks, build_id: str) -> _P
             raise RuntimeError(f'episode page {links.index} does not carry every link the export expects')
         return out.write(path, large_file_links_under(page, every, build_id).encode(), content_type)
 
-    return _Planned(path, write)
+    return _Planned(path, reads, write)
 
 
-def _page_writes(
-    client: TestClient, group_names: Iterable[str], episodes: Iterable[_EpisodeLinks], build_id: str
+def _page_plans(
+    client: TestClient, reads: Dataset, group_names: Iterable[str], episodes: Iterable[_EpisodeLinks], build_id: str
 ) -> list[_Planned]:
-    """Every page."""
+    """The plans to write every page."""
     routes = [episodes_link(), *(group_link(name) for name in group_names)]
     return [
-        _fetched(client, '/', PAGE_FILE),
-        *(_fetched(client, f'/{route}', f'{route}/{PAGE_FILE}') for route in routes),
-        *(_episode_page(client, links, build_id) for links in episodes),
+        _planned_fetch(client, '/', PurePosixPath(PAGE_FILE), reads),
+        *(_planned_fetch(client, f'/{route}', PurePosixPath(route) / PAGE_FILE, reads) for route in routes),
+        *(_episode_page(client, reads, links, build_id) for links in episodes),
     ]
 
 
-def _group_writes(client: TestClient, name: str, sets: Iterable[dict[str, str]]) -> list[_Planned]:
-    """One file per filter set of the group table `name`, and the index naming them."""
-    route = group_api_link(name)
+def _group_plans(client: TestClient, reads: Dataset, name: str, sets: Iterable[dict[str, str]]) -> list[_Planned]:
+    """The plans to write one file per filter set of the group table `name`, and the index naming them."""
+    route = PurePosixPath(group_api_link(name))
     filtered = (chosen for chosen in sets if chosen)
     index = [GroupFile({}, UNFILTERED_FILE), *(GroupFile(params, f'{n}.json') for n, params in enumerate(filtered, 1))]
     listing = json.dumps([asdict(entry) for entry in index]).encode()
     return [
-        *(_fetched(client, f'/{route}', f'{route}/{entry.file}', entry.params) for entry in index),
+        *(_planned_fetch(client, f'/{route}', route / entry.file, reads, entry.params) for entry in index),
         _Planned(
-            f'{route}/{GROUP_INDEX_FILE}',
-            lambda out: out.write(f'{route}/{GROUP_INDEX_FILE}', listing, 'application/json'),
+            route / GROUP_INDEX_FILE,
+            reads,
+            lambda out: out.write(route / GROUP_INDEX_FILE, listing, 'application/json'),
         ),
     ]
 
 
-def _large_file_writes(client: TestClient, links: _EpisodeLinks, build_id: str) -> list[_Planned]:
-    """The recording and the downloads of one episode, under the build; the recording is copied from the file the
-    app builds, the downloads are read through the client."""
-    recording = _large_file_path(links.recording_link, build_id)
+def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, build_id: str) -> list[_Planned]:
+    """The plans to write the recording and the downloads of one episode, under the build; the recording is copied
+    from the file the app builds, the downloads are read through the client."""
+    recording = PurePosixPath(_large_file_path(links.recording_link, build_id))
+    downloads = [(link, PurePosixPath(_large_file_path(link, build_id))) for link in links.download_links]
     return [
-        _Planned(recording, lambda out: out.copy(recording, episode_rrd_path(links.index))),
-        *(_fetched(client, f'/{link}', _large_file_path(link, build_id)) for link in links.download_links),
+        _Planned(recording, reads, lambda out: out.copy(recording, episode_rrd_path(links.index))),
+        *(_planned_fetch(client, f'/{link}', path, reads) for link, path in downloads),
     ]
 
 
@@ -375,11 +385,11 @@ def asset_content_type(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
 
 
-def _asset_writes() -> list[_Planned]:
-    """The app's own scripts, styles and viewer, under `static/`."""
+def _asset_files() -> list[tuple[PurePosixPath, Path]]:
+    """The app's own scripts, styles and viewer, each with its path under `static/`."""
     static_dir = Path(__file__).resolve().parent / ASSET_DIR
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
-    return [_copied(f'{ASSET_DIR}/{file.relative_to(static_dir).as_posix()}', file) for file in files]
+    return [(PurePosixPath(ASSET_DIR) / file.relative_to(static_dir).as_posix(), file) for file in files]
 
 
 def _whole_api_routes() -> list[str]:
@@ -479,25 +489,22 @@ def export_static(
         configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
         client = TestClient(app)
         # Past `configure_tables`, every group name is one segment the route builders spell.
-        pages = [
-            *_page_writes(client, sets_by_group, episodes, build_id),
-            *(_fetched(client, f'/{route}', f'{route}.json') for route in _whole_api_routes()),
-            *itertools.chain.from_iterable(_group_writes(client, name, sets) for name, sets in sets_by_group.items()),
+        plans = [
+            *_page_plans(client, shown, sets_by_group, episodes, build_id),
+            *(
+                _planned_fetch(client, f'/{route}', PurePosixPath(f'{route}.json'), shown)
+                for route in _whole_api_routes()
+            ),
+            *itertools.chain.from_iterable(
+                _group_plans(client, shown, name, sets) for name, sets in sets_by_group.items()
+            ),
+            *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
         ]
-        large_files = list(
-            itertools.chain.from_iterable(_large_file_writes(client, links, build_id) for links in episodes)
-        )
-        asset_files = _asset_writes() if assets else []
-        out.plan(planned.path for planned in (*pages, *large_files, *asset_files))
-
-        install_dataset(shown)
-        for planned in pages:
-            planned.write(out)
-        install_dataset(full)
-        for planned in large_files:
-            planned.write(out)
-    for planned in asset_files:
-        planned.write(out)
+        asset_files = _asset_files() if assets else []
+        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in asset_files)))
+        _write_serving(out, plans)
+    for path, file in asset_files:
+        out.copy(path, file)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
     return out.files
 

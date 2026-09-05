@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from functools import wraps
 from pathlib import Path
 from typing import Any, cast
@@ -371,16 +372,23 @@ def download_at(static: dict, key_path: tuple[str, ...]) -> bytes | str | None:
     return cast(bytes | str, value) if is_download(value) else None
 
 
+class DownloadKind(StrEnum):
+    """What a download is, as the page tells them apart."""
+
+    BYTES = 'bytes'
+    TEXT = 'text'
+
+
 @dataclass(frozen=True)
 class DownloadMetadata:
-    """What a page says about a download beside its link: `bytes` or `text`, and its size."""
+    """What a page says about a download beside its link: its kind, and its size."""
 
-    type: str
+    type: DownloadKind
     size: int
 
 
 def download_metadata(value: bytes | str) -> DownloadMetadata:
-    return DownloadMetadata('bytes' if isinstance(value, bytes) else 'text', len(value))
+    return DownloadMetadata(DownloadKind.BYTES if isinstance(value, bytes) else DownloadKind.TEXT, len(value))
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)

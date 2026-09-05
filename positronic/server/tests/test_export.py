@@ -372,16 +372,25 @@ def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(t
 
     for path in ('../index.html', '..\\..\\index.html', '/index.html'):
         with pytest.raises(ValueError, match='outside'):
-            out.plan([path])
+            out.plan([PurePosixPath(path)])
     assert not (tmp_path / 'out').exists()
 
 
 def test_a_write_the_plan_does_not_name_is_refused(tmp_path):
     out = _Output(tmp_path / 'out')
-    out.plan(['index.html'])
+    out.plan([PurePosixPath('index.html')])
 
     with pytest.raises(ValueError, match='plan'):
-        out.write('episodes/index.html', b'', 'text/html')
+        out.write(PurePosixPath('episodes/index.html'), b'', 'text/html')
+    assert not (tmp_path / 'out').exists()
+
+
+def test_the_path_limit_is_measured_with_the_working_directory_in_front_of_a_relative_output(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(export, '_path_max', lambda directory: len(os.fsencode(tmp_path / 'out' / 'index.html')))
+
+    with pytest.raises(ValueError, match='path limit'):
+        _Output(Path('out')).plan([PurePosixPath('index.html')])
     assert not (tmp_path / 'out').exists()
 
 

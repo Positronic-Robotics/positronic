@@ -94,9 +94,8 @@ function baseScopedKey(name) {
   return `${name}:${document.baseURI}`;
 }
 
-// A static export holds one file per filter set of a group table that some episode satisfies, and
-// `index.json` beside them says which file holds which set. The unfiltered flat table is one file,
-// filtered in the browser.
+// A static export holds a group table as one file per filter set some episode satisfies, listed in
+// `index.json` beside them; the unfiltered flat table is one file, filtered in the browser.
 const groupIndexes = new Map();
 
 // A group's index: a file beside the group's files, listing {params, file} entries, one per filter set.
