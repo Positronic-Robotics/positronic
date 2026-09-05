@@ -552,6 +552,7 @@ def test_requests_create_posts_the_ask_and_parses_the_id():
         'url': 'wss://gyros.example/ws',
         'provider': None,
         'spec': None,
+        'episodes_per_endpoint': None,
     }
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
 

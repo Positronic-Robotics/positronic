@@ -47,9 +47,11 @@ tailnet: pass `--plaintext-http` to reach it.
 ## Rollout requests
 
 A customer files a rollout request: the catalogue tasks to run, the policies to run them on, and
-the episodes each policy takes on each task. The platform records it, the rollouts coordinator
-files it and runs it, and the request's status reads back through the same key. A key needs a
-customer grant for these calls; a key without one is refused `forbidden`.
+the episodes each policy takes on each task. The count is stated once on the request; a task states
+its own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
+request. The platform records it, the rollouts coordinator files it and runs it, and the request's
+status reads back through the same key. A key needs a customer grant for these calls; a key without
+one is refused `forbidden`.
 
 ```bash
 positronic-platform register --alias='<display name>'
@@ -61,8 +63,8 @@ positronic-platform requests get <hex id>
 positronic-platform requests list --after <hex id> --limit 50
 ```
 
-`--from` takes a whole `RequestCreate` as JSON, which is how a served endpoint or a per-task
-override is filed; the flags cover the common round. `--scene` takes `tote_placement=<side>`,
+`--from` takes a whole `RequestCreate` as JSON, which is how a served endpoint, a per-task override
+or a per-endpoint count is filed; the flags cover the common round. `--scene` takes `tote_placement=<side>`,
 `camera_vantage=<vantage>` and `camera.<mount>=<side>`, where a side is `left`, `right`, `random`
 or `none`. Every command prints its answer as JSON, so an agent reads it back as the models in
 `platform_client.responses`.

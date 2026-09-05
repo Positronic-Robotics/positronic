@@ -603,6 +603,34 @@ def test_a_request_counts_every_episode_it_asks_for():
     assert [entry.name for entry in ASK.task_endpoints(ASK.tasks[1])] == ['gyros', 'ours']
 
 
+def test_an_endpoint_s_own_count_wins_and_one_without_takes_the_nearest_level():
+    # The request runs `own` at 3 and `bare` at its own 10. The task runs `bare` by label at the
+    # task's 5, since the definition states none; `two` at its own 2; `five` at the task's 5.
+    ask = RequestCreate(
+        tasks=[
+            TaskAsk(task_id=TaskRef('a')),
+            TaskAsk(
+                task_id=TaskRef('b'),
+                episodes_per_endpoint=5,
+                endpoints=[
+                    EndpointAsk(name='bare'),
+                    EndpointAsk(name='two', url='wss://two.example/ws', episodes_per_endpoint=2),
+                    EndpointAsk(name='five', url='wss://five.example/ws'),
+                ],
+            ),
+        ],
+        endpoints=[EndpointAsk(name='own', episodes_per_endpoint=3), EndpointAsk(name='bare')],
+        episodes_per_endpoint=10,
+    )
+    first, second = ask.tasks
+    assert [ask.episodes_on(first, entry) for entry in ask.task_endpoints(first)] == [3, 10]
+    assert [ask.episodes_on(second, entry) for entry in ask.task_endpoints(second)] == [5, 2, 5]
+    assert ask.episodes_total == 25
+    # The count leaves on the wire under its own name, and comes back.
+    sent = ask.endpoints[0].model_dump(mode='json')
+    assert sent['episodes_per_endpoint'] == 3 and EndpointAsk.model_validate(sent) == ask.endpoints[0]
+
+
 def test_a_served_endpoint_names_its_bring_up_and_no_address():
     with pytest.raises(ValidationError, match='no provider or no spec'):
         EndpointAsk(name='pi05', kind=EndpointKind.served)
@@ -661,6 +689,8 @@ def test_a_count_below_one_is_refused_at_every_level():
         RequestCreate(tasks=[TaskAsk(task_id=TaskRef('a'))], endpoints=[EndpointAsk(name='e')], episodes_per_endpoint=0)
     with pytest.raises(ValidationError):
         TaskAsk(task_id=TaskRef('a'), episodes_per_endpoint=0)
+    with pytest.raises(ValidationError):
+        EndpointAsk(name='e', episodes_per_endpoint=0)
     with pytest.raises(ValidationError):
         RequestListQuery(limit=0)
 

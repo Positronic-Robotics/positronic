@@ -92,6 +92,7 @@ class EndpointAsk(BaseModel):
     url: str | None = Field(default=None, min_length=1)
     provider: str | None = Field(default=None, min_length=1)
     spec: str | None = Field(default=None, min_length=1)
+    episodes_per_endpoint: int | None = Field(default=None, ge=1)
 
     @model_validator(mode='after')
     def _the_kind_carries_its_own_locator(self) -> Self:
@@ -154,8 +155,9 @@ class TaskAsk(BaseModel):
 class RequestCreate(BaseModel):
     """`requests.create` — one round: the tasks, the endpoints each task runs, and the count per endpoint.
 
-    A task level overrides the request's own values for itself. The request carries no client:
-    the key names the customer, and the gateway reads the client off their grant.
+    A task overrides the request's values for itself, and an endpoint overrides its own count. The
+    request carries no client: the key names the customer, and the gateway reads the client off
+    their grant.
     """
 
     model_config = _FORBID_EXTRA
@@ -203,13 +205,22 @@ class RequestCreate(BaseModel):
         """The endpoints `task` runs on: its own list, else the request's."""
         return self.endpoints if task.endpoints is None else task.endpoints
 
+    def episodes_on(self, task: TaskAsk, entry: EndpointAsk) -> int:
+        """The episodes `entry` takes for `task`.
+
+        Its own count, else its definition's, else the task's, else the request's. The definition is
+        the request's entry of that name, for an entry that names no locator.
+        """
+        definition = None
+        if not entry.names_a_locator:
+            definition = next((defined for defined in self.endpoints if defined.name == entry.name), None)
+        stated = (level.episodes_per_endpoint for level in (entry, definition, task) if level is not None)
+        return next((count for count in stated if count is not None), self.episodes_per_endpoint)
+
     @property
     def episodes_total(self) -> int:
-        """Every episode this request asks for: per task, its endpoints times its count per endpoint."""
-        return sum(
-            len(self.task_endpoints(task)) * (task.episodes_per_endpoint or self.episodes_per_endpoint)
-            for task in self.tasks
-        )
+        """Every episode this request asks for: per task, the count of each endpoint it runs on."""
+        return sum(self.episodes_on(task, entry) for task in self.tasks for entry in self.task_endpoints(task))
 
 
 class RequestGetQuery(BaseModel):
