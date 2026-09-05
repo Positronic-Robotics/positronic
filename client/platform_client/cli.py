@@ -328,7 +328,12 @@ def _list(args: argparse.Namespace, env: Mapping[str, str]) -> None:
 def _refusal(exc: PlatformError) -> str:
     """The refusal as one line, with the task catalogue when the platform sent it back."""
     line = f'{slug_of(exc.code)}: {exc.message}'
-    tasks = exc.tasks
+    try:
+        tasks = exc.tasks
+    except ValidationError:
+        # Reading the catalogue validates it, and this runs inside `main`'s handler, where a
+        # sibling `except` cannot reach. A mangled catalogue costs the catalogue, not the refusal.
+        return line
     if tasks is not None:
         line += f'\nthe catalogue holds: {", ".join(tasks)}'
     return line

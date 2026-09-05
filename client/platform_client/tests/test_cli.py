@@ -382,6 +382,20 @@ def test_list_sends_the_cursor_and_prints_the_page(config, gateway, capsys):
     assert json.loads(capsys.readouterr().out)['next'] == '2a'
 
 
+def test_a_refusal_survives_a_catalogue_the_platform_mangled(config, gateway):
+    """Reading the catalogue validates it, and that read runs inside the handler for this refusal."""
+    _registered(config)
+    gateway.status = 400
+    gateway.payload = {
+        'error': {'code': 'bad_request', 'message': "unknown task 'nope'", 'details': {TASKS_DETAIL: {'not': 'a list'}}}
+    }
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'create', '--tasks', 'nope', '--endpoints', 'gyros', '--episodes-per-endpoint', '1'])
+
+    assert str(raised.value) == "bad_request: unknown task 'nope'"
+
+
 def test_a_refusal_ends_the_command_with_the_code_and_the_catalogue(config, gateway):
     _registered(config)
     gateway.status = 400
