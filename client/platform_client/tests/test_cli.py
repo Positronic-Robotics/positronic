@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import cli, github_device_flow, routes
-from platform_client.cli import API_KEY_FILENAME, CONFIG_DIR_ENV, PLATFORM_URL_FILENAME
+from platform_client.cli import CONFIG_DIR_ENV, CONFIG_FILENAME, Config
 from platform_client.client import API_KEY_ENV, API_URL_ENV
 from platform_client.enums import CameraVantage, Placement
 from platform_client.errors import TASKS_DETAIL
@@ -68,7 +69,11 @@ def gateway(monkeypatch) -> Gateway:
 
 
 def _registered(config: Path) -> None:
-    cli.write_config(config, api_key=KEY, platform_url=PLATFORM)
+    cli.write_config(config, Config(platform_url=PLATFORM, api_key=KEY))
+
+
+def _record(config: Path) -> dict[str, str]:
+    return json.loads((config / CONFIG_FILENAME).read_text())
 
 
 # --- register ---------------------------------------------------------------------------------
@@ -90,22 +95,21 @@ def test_register_writes_the_key_by_path_and_the_platform_beside_it(config, monk
     cli.main(['register', '--client-id=x', f'--platform-url={PLATFORM}', '--alias=demo'])
 
     assert asked == [('x', PLATFORM, 'demo', False)]
-    key_path = config / API_KEY_FILENAME
-    assert key_path.read_text() == f'{KEY}\n'
-    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
-    assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
+    record_path = config / CONFIG_FILENAME
+    assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
+    assert stat.S_IMODE(record_path.stat().st_mode) == 0o600
     shown = capsys.readouterr().out
     assert json.loads(shown) == {
         'user_id': 'a1',
         'key_status': 'created',
         'platform_url': PLATFORM,
-        'api_key_file': str(key_path),
+        'config_file': str(record_path),
     }
     assert KEY not in shown
 
 
 def test_a_registration_that_issues_no_key_leaves_the_saved_pair_alone(config, monkeypatch, capsys):
-    """The key on disk belongs to the platform beside it; a registration elsewhere that mints none moves neither."""
+    """The record pairs a key with its platform; a registration elsewhere that mints none changes neither."""
     _registered(config)
 
     def existing(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
@@ -118,9 +122,8 @@ def test_a_registration_that_issues_no_key_leaves_the_saved_pair_alone(config, m
     monkeypatch.setattr(github_device_flow, 'run_registration', existing)
     cli.main(['register', '--client-id=x', '--platform-url=https://other.example'])
 
-    assert (config / API_KEY_FILENAME).read_text() == f'{KEY}\n'
-    assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
-    assert json.loads(capsys.readouterr().out)['api_key_file'] is None
+    assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
+    assert json.loads(capsys.readouterr().out)['config_file'] is None
 
 
 def test_register_refuses_a_platform_that_would_show_the_token(config, monkeypatch):
@@ -131,7 +134,7 @@ def test_register_refuses_a_platform_that_would_show_the_token(config, monkeypat
         cli.main(['register', '--client-id=x', '--platform-url=http://203.0.113.5:8080'])
 
     assert '--plaintext-http' in str(raised.value) and reached == []
-    assert not (config / PLATFORM_URL_FILENAME).exists()
+    assert not (config / CONFIG_FILENAME).exists()
 
 
 # --- where the key and the platform come from -------------------------------------------------
@@ -169,6 +172,17 @@ def test_the_flags_win_over_the_environment(config, gateway, monkeypatch, tmp_pa
     assert sent.url.host == 'gateway.example'
     # The environment names a key, so the flag's file is read only when the environment names none.
     assert sent.headers['authorization'] == 'Bearer pk_live_env'
+
+
+def test_a_key_file_is_read_before_the_record(config, gateway, tmp_path):
+    _registered(config)
+    key_file = tmp_path / 'other_key'
+    key_file.write_text('pk_live_file\n')
+
+    cli.main(['requests', 'get', '2a', f'--api-key-file={key_file}'])
+
+    sent = gateway.request()
+    assert sent.headers['authorization'] == 'Bearer pk_live_file' and sent.url.host == 'gateway.example'
 
 
 def test_no_key_anywhere_ends_the_command_naming_register(config, gateway):
@@ -359,22 +373,37 @@ def test_register_leaves_only_the_answer_on_stdout(config, monkeypatch, capsys):
     assert json.loads(captured.out)['user_id'] == 'a1' and 'WDJB-MJHT' in captured.err
 
 
-def test_a_key_that_did_land_is_kept_when_the_platform_file_does_not(config, monkeypatch):
-    """The pair is written key first, so a minted key is never lost to a failed second write."""
+def test_a_torn_write_leaves_the_previous_record_whole(config, monkeypatch):
+    """The record is staged beside its path and renamed in, so a write that dies leaves the pair as it was."""
     _registered(config)
-    real_replace = cli._replace
 
-    def failing(path: Path, content: str, mode: int) -> None:
-        if path.name == PLATFORM_URL_FILENAME:
-            raise OSError('disk full')
-        real_replace(path, content, mode)
+    def dying(staged: str | Path, path: str | Path) -> None:
+        raise OSError('disk full')
 
-    monkeypatch.setattr(cli, '_replace', failing)
+    monkeypatch.setattr(os, 'replace', dying)
     with pytest.raises(OSError):
-        cli.write_config(config, api_key=ApiKey('pk_live_new'), platform_url='https://other.example')
-    assert (config / API_KEY_FILENAME).read_text() == 'pk_live_new\n'
-    assert (config / PLATFORM_URL_FILENAME).read_text() == f'{PLATFORM}\n'
-    assert not list(config.glob('.*'))  # no staged file is left behind by a write that landed
+        cli.write_config(config, Config(platform_url='https://other.example', api_key=ApiKey('pk_live_new')))
+    assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
+
+
+def test_a_fresh_registration_replaces_the_record_whole(config, monkeypatch, capsys):
+    """Both halves move together: the new key never sits beside the old platform."""
+    _registered(config)
+
+    def minted(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
+        return RegisterResponse.model_validate({
+            'user_id': 'b2',
+            'artifact_location': 's3://artifacts/b2',
+            'api_key': 'pk_live_new',
+            'key_status': 'created',
+        })
+
+    monkeypatch.setattr(github_device_flow, 'run_registration', minted)
+    cli.main(['register', '--client-id=x', '--platform-url=https://other.example'])
+
+    assert _record(config) == {'platform_url': 'https://other.example', 'api_key': 'pk_live_new'}
+    assert not list(config.glob('.*'))  # the staged file was renamed in, not left beside the record
+    assert 'pk_live_new' not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('limit', ['0', '-1', 'ten'])
