@@ -9,15 +9,12 @@ same shape of check ``simulator/libero/validate.py`` runs for the LIBERO rig.
 Four properties. The kinematic three read the arm's grasp site (the frame the env observes in, so command and
 observation share a frame); the fourth is the adoption's coverage of the command contract:
 
-- **FK identity** — the scratch-``MjData`` recompute of the measured joints reproduces the live grasp-site read,
-  confirming the scratch evaluation is seeded correctly and reads the same frame.
+- **FK identity** — the scratch-``MjData`` recompute of the measured joints reproduces the live grasp-site read.
 - **IK round-trip** — for reachable targets sampled by perturbing the measured joints, ``_fk(_ik(pose))``
-  recovers the pose. This is the property a Cartesian policy depends on; the sampling stays near the measured
-  configuration so every target is reachable and the check tests the solver, not the workspace.
+  recovers the pose. This is the property a Cartesian policy depends on.
 - **Cartesian hold** — commanding the pose the arm already holds resolves to the joints it already holds, which
-  is what makes an absolute Cartesian setpoint stable when a policy re-sends it.
-- **Command contract** — every canonical command type converts to joint targets through the live IK. The
-  contract is total, so this is where the adoption's coverage of it is verified rather than asserted.
+  makes an absolute Cartesian setpoint stable when a policy re-sends it.
+- **Command contract** — every canonical command type converts to joint targets through the live IK.
 
 Runs in MolmoSpaces' venv, flat off ``PYTHONPATH`` like ``parity_native.py`` (positronic-free: ``molmo_spaces``
 plus this package's ``mapping``/``env``), so positronic's interpreter cannot import it. Needs the asset packs
@@ -46,6 +43,7 @@ from pathlib import Path
 # validates that exact solver, not a re-derivation of it.
 import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
+import mujoco  # noqa: E402
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports] -- flat on PYTHONPATH beside ``server``, see ``launcher``
 
@@ -69,8 +67,21 @@ def _ori_error(target_rot: np.ndarray, rot: np.ndarray) -> float:
     return float(np.linalg.norm(env._pose_error(np.zeros(3), target_rot, np.zeros(3), rot)[3:]))
 
 
+def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The grasp-site world pose a candidate arm configuration reaches — the inverse of the rig's ``_ik``.
+
+    Runs on the rig's own scratch ``MjData``, seeded from the live scene, so the checks below probe candidate
+    joints without perturbing the sim.
+    """
+    arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+    data = sim_env._scratch_data(arm)
+    data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
+    mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    return env._leaf_pose(arm, data)
+
+
 def _check_fk_identity(sim_env) -> None:
-    pos_fk, rot_fk = sim_env._fk(sim_env._measured_arm_q())
+    pos_fk, rot_fk = _fk(sim_env, sim_env._measured_arm_q())
     pos_live, rot_live = sim_env._measured_eef_pose()
     assert np.allclose(pos_fk, pos_live, atol=_FK_ATOL), f'fk pos {pos_fk} vs live {pos_live}'
     assert np.allclose(rot_fk, rot_live, atol=_FK_ATOL), f'fk rot {rot_fk} vs live {rot_live}'
@@ -80,8 +91,9 @@ def _check_fk_identity(sim_env) -> None:
 def _check_ik_roundtrip(sim_env) -> None:
     measured = np.asarray(sim_env._measured_arm_q(), dtype=np.float64)
     for _ in range(_IK_SAMPLES):
-        target_pos, target_rot = sim_env._fk(measured + np.random.uniform(-_JOINT_JITTER, _JOINT_JITTER, measured.size))
-        pos, rot = sim_env._fk(sim_env._ik(target_pos, target_rot))
+        jitter = np.random.uniform(-_JOINT_JITTER, _JOINT_JITTER, measured.size)
+        target_pos, target_rot = _fk(sim_env, measured + jitter)
+        pos, rot = _fk(sim_env, sim_env._ik(target_pos, target_rot))
         ang = _ori_error(target_rot, rot)
         assert np.allclose(pos, target_pos, atol=_POS_ATOL), f'ik pos off by {pos - target_pos}'
         assert ang < _ORI_ATOL, f'ik orientation off by {ang} rad'
@@ -93,7 +105,9 @@ def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     # the property that makes an absolute Cartesian setpoint stable when a policy re-sends it.
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
-    target = env.mapping.wire_command_to_arm_action(command, sim_env._measured_arm_q(), ik=sim_env._ik)
+    target = env.mapping.wire_command_to_arm_action(
+        command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=(pos, rot)
+    )
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
     assert drift.max() < 1e-3, f'holding the measured pose moved the joints by {drift.max()} rad'
     print(f'  cartesian hold: OK (max joint drift {drift.max():.2e} rad)')
@@ -143,14 +157,10 @@ def main() -> None:
     )
     parser.add_argument('--episode_index', type=int, default=0)
     parser.add_argument('--seed', type=int, default=0)
-    # These checks are pure kinematics — they never step the sim, so the episode horizon is irrelevant to them.
-    # The override keeps a benchmark that declares no ``task_horizon_sec`` (the checked-in test benchmark is one)
-    # usable as a scene here, instead of failing the build over a field this run never reads.
-    parser.add_argument('--task_horizon_steps', type=int, default=1)
     args = parser.parse_args()
     np.random.seed(0)
 
-    sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]), args.task_horizon_steps)
+    sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]))
     token = {**args.benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: args.episode_index, mapping.TOKEN_SEED: args.seed}
     sim_env.reset(token)
     print(f'molmo_spaces episode {args.episode_index} (seed {args.seed})')

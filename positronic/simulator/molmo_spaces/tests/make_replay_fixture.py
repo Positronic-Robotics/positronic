@@ -11,19 +11,13 @@ replaying them here. The commands are what the recording pins; the checkpoints p
 trajectory, so a later run that drifts from it fails. Regenerate them together whenever the recorded
 ``sim_state`` changes shape or the pinned MolmoSpaces commit moves.
 
-Two properties make the distillation exact. The recorded commands are *absolute* joint targets, so the
-replay never reads the measured state back — it is genuinely open-loop, and the only thing under test is the
-sim rollout plus the env-server path. And the proxy applies whichever command was last received when it
-steps, so sampling the command signal at each observation frame's timestamp (``Signal.time`` — the same
-last-value-at-or-before semantics a pimm receiver has) reconstructs the stream the sim saw, unchanged
-commands included.
+Two properties make the distillation exact. The recorded commands are *absolute* joint targets, so the replay
+is open-loop. And the proxy applies the last command received when it steps, so sampling the command signal at
+each observation frame's timestamp reconstructs the stream the sim saw.
 
-It reconstructs that stream only as far as the recording pins it: an episode's command signals stop before
-its observations do (internal#130), so the fixture keeps the prefix up to the final recorded command and
-counts the rest as the recording's gap.
-
-Commands are stored as float32, the dtype ``env.py`` casts them to, so the fixture holds the bits the sim
-actually applied rather than the float64 the recorder wrote.
+An episode's command signals stop before its observations do (internal#130), so the fixture keeps the prefix up
+to the final recorded command and counts the rest as the recording's gap. Commands are stored as float32, the
+dtype ``env.py`` casts them to.
 
 Run (needs positronic for the dataset reader, and the MolmoSpaces assets for the replay — hence
 ``--locked``, not ``--no-project``)::

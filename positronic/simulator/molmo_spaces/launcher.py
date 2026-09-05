@@ -93,25 +93,20 @@ def molmo_subprocess_env() -> dict[str, str]:
     }
 
 
-def _spawn(host: str, port: int, task_horizon_steps: int | None) -> subprocess.Popen:
+def _spawn(host: str, port: int) -> subprocess.Popen:
     # env.py exits on this before it binds the port. Check it here, where the failure can name the missing
     # precondition instead of reaching the caller as a bare pre-bind exit status.
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
     command = [str(python), str(_ENV_SCRIPT), protocol.OPT_HOST, host, protocol.OPT_PORT, str(port)]
-    if task_horizon_steps is not None:
-        command += [mapping.OPT_TASK_HORIZON_STEPS, str(task_horizon_steps)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
-def serve_molmo_spaces(
-    host: str = 'localhost', task_horizon_steps: int | None = None
-) -> AbstractContextManager[tuple[str, int]]:
+def serve_molmo_spaces(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
     """The MolmoSpaces env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     The server holds every benchmark under the asset packs; the reset token selects the benchmark and the
-    episode within it, so one server serves every trial. ``task_horizon_steps`` optionally overrides the
-    benchmarks' own horizon (mirroring MolmoSpaces' ``--task_horizon_steps``); ``None`` reads it per benchmark.
+    episode within it, so one server serves every trial.
     """
-    return serve_subprocess(lambda host, port: _spawn(host, port, task_horizon_steps), host)
+    return serve_subprocess(_spawn, host)

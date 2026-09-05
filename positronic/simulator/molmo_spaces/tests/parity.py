@@ -8,12 +8,9 @@ the raw payload the ``MolmoAdapter`` maps) — feeding the *same* scripted actio
 asserts they agree byte-for-byte.
 
 MolmoSpaces benchmark episodes are exact-pose deterministic, so the strong fidelity form applies: identical call
-sequence (same step count, same terminating step) and byte-identical outcomes modulo wire format (joint
-positions/velocities, eef pose, gripper closure and success verdict equal at every step; camera frames equal by
-content hash). Holding the arm never succeeds, so the episode runs out its horizon — exercising the horizon case
-explicitly: both stacks terminate at exactly the native ``task_horizon`` step, via the wire ``done``, with
-``success=False``. The two rollouts run in separate MuJoCo processes, so equality also confirms the render path is
-deterministic across processes.
+sequence and byte-identical outcomes modulo wire format (joint positions/velocities, eef pose, gripper closure
+and success verdict equal at every step; camera frames equal by content hash). Holding the arm never succeeds,
+so the episode runs out its horizon, which exercises the horizon case too.
 
 This asserts fidelity against the pinned ``_MOLMO_COMMIT`` (``launcher.py``); re-run it on any bump of that pin
 before merge — a sim version change can silently shift the horizon or the rollout.
