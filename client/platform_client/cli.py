@@ -72,6 +72,8 @@ def read_config(directory: Path) -> Config | None:
         return Config.model_validate_json(path.read_bytes())
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise SystemExit(f'{path} cannot be read: {exc.strerror}') from exc
     except ValidationError as exc:
         raise SystemExit(f'{path} is not a config record: delete it and run `positronic-platform register`') from exc
 
@@ -80,14 +82,19 @@ def write_config(directory: Path, config: Config) -> None:
     """Record the pair as one file, mode 0600, by rename: a reader sees the previous record or this one.
 
     The staged file is created for this write alone, under a name of its own, so a path planted
-    beside the record is not written through.
+    beside the record is not written through; a write that fails removes it, so no key stays
+    beside the record.
     """
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / CONFIG_FILENAME
     descriptor, staged = tempfile.mkstemp(dir=directory, prefix=f'.{CONFIG_FILENAME}.')
-    with os.fdopen(descriptor, 'w') as staged_file:
-        staged_file.write(config.model_dump_json(indent=2))
-    os.replace(staged, path)
+    try:
+        with os.fdopen(descriptor, 'w') as staged_file:
+            staged_file.write(config.model_dump_json(indent=2))
+        os.replace(staged, path)
+    except BaseException:
+        os.unlink(staged)
+        raise
 
 
 def key_is_given(env: Mapping[str, str], api_key_file: Path | None) -> bool:
@@ -103,9 +110,11 @@ def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Conf
     if api_key_file is not None:
         try:
             value = api_key_file.read_text().strip()
-        except FileNotFoundError:
-            return None
-        return ApiKey(value) if value else None
+        except OSError as exc:
+            raise SystemExit(f'--api-key-file {api_key_file}: {exc.strerror}') from exc
+        if not value:
+            raise SystemExit(f'--api-key-file {api_key_file} holds no key')
+        return ApiKey(value)
     return record.api_key if record else None
 
 
