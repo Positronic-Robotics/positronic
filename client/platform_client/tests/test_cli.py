@@ -491,6 +491,32 @@ def test_a_malformed_record_is_refused_with_one_line_naming_the_file(config, gat
     assert 'pk_live_secret' not in message and gateway.requests == []
 
 
+def test_a_record_a_command_needs_nothing_from_is_not_read(config, gateway, monkeypatch, tmp_path):
+    """The key and the platform both come from the caller, so the malformed record stays unread."""
+    config.mkdir()
+    (config / CONFIG_FILENAME).write_text('{"platform_url": "https://gateway.example", "api_key": pk_live_secret')
+    monkeypatch.setenv(API_KEY_ENV, 'pk_live_env')
+    monkeypatch.setenv(API_URL_ENV, 'https://env.example')
+
+    cli.main(['requests', 'get', '2a'])
+    assert gateway.request().url.host == 'env.example'
+
+    # A key of the caller's own with no platform of their own still needs the record's platform.
+    monkeypatch.delenv(API_URL_ENV)
+    with pytest.raises(SystemExit, match='not a config record'):
+        cli.main(['requests', 'get', '2a'])
+
+
+def test_an_empty_after_is_refused_as_an_id_rather_than_read_as_no_cursor(config, gateway):
+    _registered(config)
+    with pytest.raises(SystemExit, match='not a request id'):
+        cli.main(['requests', 'list', '--after='])
+    assert gateway.requests == []
+
+    cli.main(['requests', 'list'])
+    assert 'after' not in gateway.request().url.params
+
+
 def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(config, gateway):
     _registered(config)
     with pytest.raises(SystemExit, match='not a task id'):
