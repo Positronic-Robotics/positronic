@@ -50,8 +50,9 @@ A customer files a rollout request: the catalogue tasks to run, the policies to 
 the episodes each policy takes on each task. The count is stated once on the request; a task states
 its own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
 request. The platform records it, the rollouts coordinator files it and runs it, and the request's
-status reads back through the same key. A key needs a customer grant for these calls; a key without
-one is refused `forbidden`.
+status reads back through the same key. A `blocked` request waits on what its `error` names, and a
+later report moves it on. A key needs a customer grant for these calls; a key without one is
+refused `forbidden`.
 
 ```bash
 positronic-platform register --alias='<display name>'

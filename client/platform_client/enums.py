@@ -140,8 +140,9 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 class RequestStatus(IntEnum):
     """A customer request's lifecycle: received -> filed -> running -> done|cancelled|errored.
 
-    `received` is the gateway's own row. `filed` is the coordinator holding it; every later status
-    is what the coordinator reports back.
+    `received` is the gateway's own row, and every status from `filed` on is what the coordinator
+    reports. `blocked` is a stop and not an end: the request waits on what `error` names, and a
+    later report moves it on.
     """
 
     INVALID = 0
@@ -151,6 +152,7 @@ class RequestStatus(IntEnum):
     done = 4
     cancelled = 5
     errored = 6
+    blocked = 7
 
 
 @unique
@@ -191,3 +193,6 @@ REQUEST_TERMINAL_STATUSES: frozenset[RequestStatus] = frozenset({
     RequestStatus.cancelled,
     RequestStatus.errored,
 })
+
+# A request that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
+REQUEST_STOPPED_STATUSES: frozenset[RequestStatus] = frozenset({RequestStatus.blocked, RequestStatus.errored})
