@@ -11,6 +11,7 @@ from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
 from platform_client.enums import (
+    REQUEST_STOPPED_STATUSES,
     BoardVisibility,
     KeyStatus,
     OnExhausted,
@@ -334,7 +335,8 @@ class RequestView(BaseModel):
     """`requests.get`, and one row of `requests.list`.
 
     `slug` names the request once the coordinator files it. `artifacts` is the prefix the episodes
-    land under, once one exists. `error` says why an `errored` request stopped.
+    land under, once one exists. `error` says why a `blocked` request waits, or why an `errored` one
+    stopped.
     """
 
     request_id: RequestId
@@ -346,8 +348,8 @@ class RequestView(BaseModel):
     error: str | None = None
 
     @model_validator(mode='after')
-    def _an_error_means_it_errored(self) -> Self:
-        if self.error is not None and self.status is not RequestStatus.errored:
+    def _an_error_travels_with_a_stopped_status(self) -> Self:
+        if self.error is not None and self.status not in REQUEST_STOPPED_STATUSES:
             raise ValueError(f'an error on a {self.status.name} request')
         return self
 

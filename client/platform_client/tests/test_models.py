@@ -695,14 +695,12 @@ def test_a_count_below_one_is_refused_at_every_level():
         RequestListQuery(limit=0)
 
 
-def test_a_view_carries_an_error_only_when_it_errored():
+def test_a_view_carries_an_error_only_when_it_stopped():
+    stopped = {'request_id': '2a', 'episodes': {'total': 1, 'done': 0, 'outstanding': 1}, 'error': 'x'}
+    assert RequestView.model_validate({**stopped, 'status': 'blocked'}).status is RequestStatus.blocked
+    assert RequestView.model_validate({**stopped, 'status': 'errored'}).error == 'x'
     with pytest.raises(ValidationError, match='an error on a running request'):
-        RequestView.model_validate({
-            'request_id': '2a',
-            'status': 'running',
-            'episodes': {'total': 1, 'done': 0, 'outstanding': 1},
-            'error': 'x',
-        })
+        RequestView.model_validate({**stopped, 'status': 'running'})
 
 
 def test_the_scene_leaves_as_slugs():
