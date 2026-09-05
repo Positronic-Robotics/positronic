@@ -493,6 +493,15 @@ def test_a_platform_flag_naming_the_records_platform_reads_the_record(config, ga
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
 
 
+def test_a_trailing_slash_names_the_same_platform_and_another_path_does_not(config, gateway):
+    cli.write_config(config, Config(platform_url=f'{PLATFORM}/', api_key=KEY))
+    cli.main(['requests', 'get', '2a', f'--platform-url={PLATFORM}'])
+    assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a', f'--platform-url={PLATFORM}/other'])
+    assert f'{PLATFORM}/other' in str(raised.value) and len(gateway.requests) == 1
+
+
 # --- a minted key that could not be saved, and a record that cannot be read -------------------
 
 
