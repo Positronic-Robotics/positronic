@@ -502,6 +502,20 @@ def test_a_malformed_eval_list_raises_rather_than_reading_as_no_list():
         _ = caught.value.evals
 
 
+def test_the_catalogue_reads_back_as_task_ids_and_a_malformed_one_raises():
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['a-task']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    tasks = caught.value.tasks
+    assert tasks is not None and tasks == ['a-task'] and all(isinstance(task_id, TaskRef) for task_id in tasks)
+
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['Not A Key']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    with pytest.raises(ValidationError):
+        _ = caught.value.tasks
+
+
 def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
     gateway = Gateway(429, {'error': {'code': 'quota_exceeded', 'message': 'x', 'details': {'quota': 'all of it'}}})
     with pytest.raises(PlatformError) as caught:

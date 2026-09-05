@@ -13,6 +13,7 @@ from platform_client.enums import ErrorCode, ReasonCode
 from platform_client.evals import EvalRef
 from platform_client.responses import QuotaLimit
 from platform_client.slug import Slugged, members_by_slug
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 # The `details` keys the gateway writes and this module reads.
@@ -96,10 +97,10 @@ class PlatformError(Exception):
             return None
         return self._EVAL_LIST.validate_python(self.details[EVALS_DETAIL])
 
-    _TASK_LIST: ClassVar[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+    _TASK_LIST: ClassVar[TypeAdapter[list[TaskRef]]] = TypeAdapter(list[TaskRef])
 
     @property
-    def tasks(self) -> list[str] | None:
+    def tasks(self) -> list[TaskRef] | None:
         """The task ids the rollouts catalogue holds, when the failure is that the one asked for is not one.
 
         Absent means absent. A present value that is not a list of ids raises, for the reason
