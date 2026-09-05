@@ -134,3 +134,65 @@ TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
 # Decided, and there will never be a result to read. Derived, so a fourth terminal status joins it
 # by being terminal rather than by every caller remembering to name it.
 NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {SubmissionStatus.finished}
+
+
+@unique
+class RequestStatus(IntEnum):
+    """A customer request's lifecycle: received -> filed -> running -> done|cancelled|errored.
+
+    `received` is the gateway's own row, and every status from `filed` on is what the coordinator
+    reports. `blocked` is a stop and not an end: the request waits on what `error` names, and a
+    later report moves it on.
+    """
+
+    INVALID = 0
+    received = 1
+    filed = 2
+    running = 3
+    done = 4
+    cancelled = 5
+    errored = 6
+    blocked = 7
+
+
+@unique
+class EndpointKind(IntEnum):
+    """Where a request's policy comes from: an address the caller holds up, or a checkpoint the platform serves."""
+
+    INVALID = 0
+    remote = 1
+    served = 2
+
+
+@unique
+class Placement(IntEnum):
+    """Which side of the rig a piece of the scene sits on.
+
+    `random` draws a side per run; `none` states the piece is absent.
+    """
+
+    INVALID = 0
+    left = 1
+    right = 2
+    random = 3
+    none = 4
+
+
+@unique
+class CameraVantage(IntEnum):
+    """How steeply the external camera looks down: each value names the dataset whose geometry the rig matches."""
+
+    INVALID = 0
+    droid = 1
+    phail = 2
+
+
+# A request the coordinator has finished with, one way or another.
+REQUEST_TERMINAL_STATUSES: frozenset[RequestStatus] = frozenset({
+    RequestStatus.done,
+    RequestStatus.cancelled,
+    RequestStatus.errored,
+})
+
+# A request that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
+REQUEST_STOPPED_STATUSES: frozenset[RequestStatus] = frozenset({RequestStatus.blocked, RequestStatus.errored})

@@ -9,23 +9,33 @@ import pytest
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
+    CameraVantage,
+    EndpointKind,
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    Placement,
     QuotaSubject,
     ReasonCode,
+    RequestStatus,
     SubmissionStatus,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, RequestId, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
+    EndpointAsk,
     RankingsQuery,
     RegisterRequest,
+    RequestCreate,
+    RequestGetQuery,
+    RequestListQuery,
+    SceneAsk,
     SubmissionCreateRequest,
     SubmissionGetQuery,
+    TaskAsk,
 )
 from platform_client.responses import (
     ID_FIELD,
@@ -37,6 +47,7 @@ from platform_client.responses import (
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    EpisodeCounts,
     ErroredSubmissionView,
     FinishedSubmissionView,
     MeResponse,
@@ -45,7 +56,11 @@ from platform_client.responses import (
     RankingRow,
     RankingsResponse,
     RegisterResponse,
+    RequestCreated,
+    RequestListResponse,
+    RequestView,
     RunningSubmissionView,
+    RunSummary,
     Scores,
     SubmissionCreateResponse,
     SubmissionListResponse,
@@ -53,6 +68,7 @@ from platform_client.responses import (
     SubmissionView,
 )
 from platform_client.slug import slug_of
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -86,6 +102,45 @@ CREDITS = QuotaLimit(
     used=630,
     resets_at=None,
     on_exhausted=OnExhausted.meter,
+)
+
+REQUEST = RequestId(0x2A)
+
+SCENE = SceneAsk(
+    tote_placement=Placement.random, camera_vantage=CameraVantage.phail, external_cameras={'side': Placement.left}
+)
+
+ASK = RequestCreate(
+    tasks=[
+        TaskAsk(task_id=TaskRef('eight-spoons-into-grey-tote')),
+        TaskAsk(
+            task_id=TaskRef('stack-the-cubes'),
+            episodes_per_endpoint=2,
+            cap_per_episode_sec=90,
+            policy_preset='other',
+            scene=SCENE,
+            endpoints=[EndpointAsk(name='gyros'), EndpointAsk(name='ours', url='wss://ours.example/ws')],
+        ),
+    ],
+    endpoints=[
+        EndpointAsk(name='gyros', url='wss://gyros.example/ws'),
+        EndpointAsk(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05'),
+    ],
+    episodes_per_endpoint=10,
+    cap_per_episode_sec=180,
+    policy_preset='runway_ziyi',
+    scene=SceneAsk(tote_placement=Placement.left),
+    slug='ziyi',
+    transaction_key=TransactionKey('round-1'),
+)
+
+VIEW = RequestView(
+    request_id=REQUEST,
+    status=RequestStatus.running,
+    slug='2026-09-04-runway-ziyi',
+    episodes=EpisodeCounts(total=24, done=3, outstanding=21),
+    runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
+    artifacts='s3://inference/runway/040926/ziyi-0/',
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
@@ -158,6 +213,23 @@ MODELS: list[BaseModel] = [
         ]
     ),
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
+    ASK,
+    RequestCreate(
+        tasks=[TaskAsk(task_id=TaskRef('stack-the-cubes'))], endpoints=[EndpointAsk(name='a')], episodes_per_endpoint=1
+    ),
+    RequestGetQuery(id=REQUEST),
+    RequestListQuery(after=REQUEST, limit=50),
+    RequestListQuery(),
+    RequestCreated(request_id=REQUEST, status=RequestStatus.received),
+    VIEW,
+    RequestView(
+        request_id=REQUEST,
+        status=RequestStatus.errored,
+        episodes=EpisodeCounts(total=1, done=0, outstanding=1),
+        error='no task named it',
+    ),
+    RequestListResponse(requests=[VIEW], next=REQUEST),
+    RequestListResponse(),
 ]
 
 
@@ -519,3 +591,123 @@ def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel],
 @pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])
 def test_every_status_a_caller_can_see_is_kept(status: str):
     assert SubmissionCreateResponse.model_validate({'submission_id': 'ff', 'status': status}).status.name == status
+
+
+# --- the request models' own rules -----------------------------------------------------------
+
+
+def test_a_request_counts_every_episode_it_asks_for():
+    # Task one inherits: two request endpoints, ten each. Task two states its own: two endpoints, two each.
+    assert ASK.episodes_total == 2 * 10 + 2 * 2
+    assert [entry.name for entry in ASK.task_endpoints(ASK.tasks[0])] == ['gyros', 'pi05']
+    assert [entry.name for entry in ASK.task_endpoints(ASK.tasks[1])] == ['gyros', 'ours']
+
+
+def test_an_endpoint_s_own_count_wins_and_one_without_takes_the_nearest_level():
+    # The request runs `own` at 3 and `bare` at its own 10. The task runs `bare` by label at the
+    # task's 5, since the definition states none; `two` at its own 2; `five` at the task's 5.
+    ask = RequestCreate(
+        tasks=[
+            TaskAsk(task_id=TaskRef('a')),
+            TaskAsk(
+                task_id=TaskRef('b'),
+                episodes_per_endpoint=5,
+                endpoints=[
+                    EndpointAsk(name='bare'),
+                    EndpointAsk(name='two', url='wss://two.example/ws', episodes_per_endpoint=2),
+                    EndpointAsk(name='five', url='wss://five.example/ws'),
+                ],
+            ),
+        ],
+        endpoints=[EndpointAsk(name='own', episodes_per_endpoint=3), EndpointAsk(name='bare')],
+        episodes_per_endpoint=10,
+    )
+    first, second = ask.tasks
+    assert [ask.episodes_on(first, entry) for entry in ask.task_endpoints(first)] == [3, 10]
+    assert [ask.episodes_on(second, entry) for entry in ask.task_endpoints(second)] == [5, 2, 5]
+    assert ask.episodes_total == 25
+    # The count leaves on the wire under its own name, and comes back.
+    sent = ask.endpoints[0].model_dump(mode='json')
+    assert sent['episodes_per_endpoint'] == 3 and EndpointAsk.model_validate(sent) == ask.endpoints[0]
+
+
+def test_a_served_endpoint_names_its_bring_up_and_no_address():
+    with pytest.raises(ValidationError, match='no provider or no spec'):
+        EndpointAsk(name='pi05', kind=EndpointKind.served)
+    with pytest.raises(ValidationError, match='names a url'):
+        EndpointAsk(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05', url='wss://x/ws')
+    with pytest.raises(ValidationError, match='only a served endpoint carries'):
+        EndpointAsk(name='gyros', provider='droid_cohost')
+
+
+def test_an_endpoint_says_whether_it_names_a_locator():
+    assert EndpointAsk(name='gyros').names_a_locator is False
+    assert EndpointAsk(name='gyros', url='wss://x/ws').names_a_locator is True
+    assert EndpointAsk(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05').names_a_locator
+
+
+def test_a_request_names_each_task_and_each_endpoint_once():
+    with pytest.raises(ValidationError, match='more than once'):
+        RequestCreate(
+            tasks=[TaskAsk(task_id=TaskRef('a')), TaskAsk(task_id=TaskRef('a'))],
+            endpoints=[EndpointAsk(name='e')],
+            episodes_per_endpoint=1,
+        )
+    with pytest.raises(ValidationError, match='more than once'):
+        RequestCreate(
+            tasks=[TaskAsk(task_id=TaskRef('a'))],
+            endpoints=[EndpointAsk(name='e'), EndpointAsk(name='e')],
+            episodes_per_endpoint=1,
+        )
+    with pytest.raises(ValidationError, match='more than once'):
+        TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='e'), EndpointAsk(name='e')])
+
+
+def test_a_task_endpoint_naming_no_locator_names_one_the_request_defines():
+    with pytest.raises(ValidationError, match='name no endpoint the request defines'):
+        RequestCreate(
+            tasks=[TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='elsewhere')])],
+            endpoints=[EndpointAsk(name='e')],
+            episodes_per_endpoint=1,
+        )
+    # An entry that carries its own address needs no definition.
+    RequestCreate(
+        tasks=[TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='elsewhere', url='wss://x/ws')])],
+        episodes_per_endpoint=1,
+    )
+
+
+def test_every_task_runs_on_at_least_one_endpoint():
+    with pytest.raises(ValidationError, match='runs on no endpoint'):
+        RequestCreate(tasks=[TaskAsk(task_id=TaskRef('a'))], episodes_per_endpoint=1)
+    with pytest.raises(ValidationError):
+        TaskAsk(task_id=TaskRef('a'), endpoints=[])
+
+
+def test_a_count_below_one_is_refused_at_every_level():
+    with pytest.raises(ValidationError):
+        RequestCreate(tasks=[TaskAsk(task_id=TaskRef('a'))], endpoints=[EndpointAsk(name='e')], episodes_per_endpoint=0)
+    with pytest.raises(ValidationError):
+        TaskAsk(task_id=TaskRef('a'), episodes_per_endpoint=0)
+    with pytest.raises(ValidationError):
+        EndpointAsk(name='e', episodes_per_endpoint=0)
+    with pytest.raises(ValidationError):
+        RequestListQuery(limit=0)
+
+
+def test_a_view_carries_an_error_only_when_it_stopped():
+    stopped = {'request_id': '2a', 'episodes': {'total': 1, 'done': 0, 'outstanding': 1}, 'error': 'x'}
+    assert RequestView.model_validate({**stopped, 'status': 'blocked'}).status is RequestStatus.blocked
+    assert RequestView.model_validate({**stopped, 'status': 'errored'}).error == 'x'
+    with pytest.raises(ValidationError, match='an error on a running request'):
+        RequestView.model_validate({**stopped, 'status': 'running'})
+
+
+def test_the_scene_leaves_as_slugs():
+    assert SCENE.model_dump(mode='json') == {
+        'tote_placement': 'random',
+        'camera_vantage': 'phail',
+        'external_cameras': {'side': 'left'},
+    }
+    with pytest.raises(ValidationError):
+        SceneAsk.model_validate({'tote_placement': 'middle'})

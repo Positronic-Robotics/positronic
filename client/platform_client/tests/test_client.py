@@ -24,13 +24,21 @@ from platform_client.enums import (
     OnExhausted,
     QuotaSubject,
     ReasonCode,
+    RequestStatus,
     SubmissionStatus,
 )
-from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, PlatformError
+from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, RequestId, SubmissionId
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
+from platform_client.requests import (
+    CancelRequest,
+    EndpointAsk,
+    RegisterRequest,
+    RequestCreate,
+    SubmissionCreateRequest,
+    TaskAsk,
+)
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     BoardListResponse,
@@ -39,9 +47,13 @@ from platform_client.responses import (
     PendingSubmissionView,
     RankingsResponse,
     RegisterResponse,
+    RequestCreated,
+    RequestListResponse,
+    RequestView,
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
+from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 BASE = 'http://gateway.test'
@@ -432,6 +444,9 @@ def test_every_endpoint_has_exactly_one_method():
         'cancel_submission',
         'rankings',
         'list_boards',
+        'requests_create',
+        'requests_get',
+        'requests_list',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))
@@ -487,9 +502,114 @@ def test_a_malformed_eval_list_raises_rather_than_reading_as_no_list():
         _ = caught.value.evals
 
 
+def test_the_catalogue_reads_back_as_task_ids_and_a_malformed_one_raises():
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['a-task']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    tasks = caught.value.tasks
+    assert tasks is not None and tasks == ['a-task'] and all(isinstance(task_id, TaskRef) for task_id in tasks)
+
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['Not A Key']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    with pytest.raises(ValidationError):
+        _ = caught.value.tasks
+
+
 def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
     gateway = Gateway(429, {'error': {'code': 'quota_exceeded', 'message': 'x', 'details': {'quota': 'all of it'}}})
     with pytest.raises(PlatformError) as caught:
         make_client(gateway).list_submissions()
     with pytest.raises(ValidationError):
         _ = caught.value.quota
+
+
+# --- requests -----------------------------------------------------------------------------------
+
+ASK = RequestCreate(
+    tasks=[TaskAsk(task_id=TaskRef('eight-spoons-into-grey-tote'))],
+    endpoints=[EndpointAsk(name='gyros', url='wss://gyros.example/ws')],
+    episodes_per_endpoint=10,
+)
+
+REQUEST_VIEW = {
+    'request_id': '2a',
+    'status': 'filed',
+    'slug': '2026-09-04-runway-ziyi',
+    'episodes': {'total': 10, 'done': 0, 'outstanding': 10},
+    'runs': [],
+}
+
+
+def test_requests_create_posts_the_ask_and_parses_the_id():
+    gateway = Gateway(200, {'request_id': '2a', 'status': 'received'})
+    response = make_client(gateway).requests_create(ASK)
+
+    assert isinstance(response, RequestCreated)
+    assert response.request_id == RequestId(0x2A) and response.status is RequestStatus.received
+    assert gateway.request().url.path == routes.REQUESTS_CREATE
+    assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
+    body = gateway.body()
+    assert body['tasks'] == [
+        {
+            'task_id': 'eight-spoons-into-grey-tote',
+            'episodes_per_endpoint': None,
+            'cap_per_episode_sec': None,
+            'policy_preset': None,
+            'scene': None,
+            'endpoints': None,
+        }
+    ]
+    assert body['endpoints'][0] == {
+        'name': 'gyros',
+        'kind': 'remote',
+        'url': 'wss://gyros.example/ws',
+        'provider': None,
+        'spec': None,
+        'episodes_per_endpoint': None,
+    }
+    assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
+
+
+def test_requests_get_sends_the_hex_id_and_parses_the_view():
+    gateway = Gateway(200, REQUEST_VIEW)
+    view = make_client(gateway).requests_get(RequestId(0x2A))
+
+    assert isinstance(view, RequestView)
+    assert view.status is RequestStatus.filed and view.episodes.outstanding == 10
+    assert gateway.request().url.path == routes.REQUESTS_GET
+    assert dict(gateway.request().url.params) == {'id': '2a'}
+
+
+def test_requests_list_sends_the_cursor_and_parses_the_next():
+    gateway = Gateway(200, {'requests': [REQUEST_VIEW], 'next': '2a'})
+    page = make_client(gateway).requests_list(after=RequestId(0x1F), limit=1)
+
+    assert isinstance(page, RequestListResponse)
+    assert [row.request_id for row in page.requests] == [RequestId(0x2A)] and page.next == RequestId(0x2A)
+    assert gateway.request().url.path == routes.REQUESTS_LIST
+    assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
+
+
+def test_requests_list_asks_for_the_first_page_with_nothing_in_the_query():
+    gateway = Gateway(200, {'requests': []})
+    page = make_client(gateway).requests_list()
+    assert page.requests == [] and page.next is None
+    assert dict(gateway.request().url.params) == {}
+
+
+def test_an_unknown_task_comes_back_carrying_the_catalogue():
+    gateway = Gateway(
+        400,
+        {
+            'error': {
+                'code': 'bad_request',
+                'message': "unknown task 'nope'",
+                'details': {TASKS_DETAIL: ['eight-spoons-into-grey-tote', 'stack-the-cubes']},
+            }
+        },
+    )
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).requests_create(ASK)
+    assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
+    assert caught.value.evals is None
