@@ -5422,14 +5422,6 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 59,
-                    "endColumn": 61,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 52,
                     "endColumn": 58,
                     "lineCount": 1
@@ -5456,22 +5448,6 @@
                 "range": {
                     "startColumn": 98,
                     "endColumn": 102,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalIterable",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportGeneralTypeIssues",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 21,
                     "lineCount": 1
                 }
             },
