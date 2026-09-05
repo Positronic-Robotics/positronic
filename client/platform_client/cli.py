@@ -25,12 +25,13 @@ from pathlib import Path
 
 import httpx
 from platform_client import github_device_flow
-from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient
+from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, resolve_base_url
 from platform_client.enums import CameraVantage, KeyStatus, Placement
 from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
 from platform_client.requests import EndpointAsk, RequestCreate, SceneAsk, TaskAsk
 from platform_client.slug import Slugged, slug_of
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 CONFIG_DIR_ENV = 'POSITRONIC_PLATFORM_CONFIG_DIR'
@@ -60,11 +61,18 @@ def config_dir(env: Mapping[str, str]) -> Path:
 
 
 def read_config(directory: Path) -> Config | None:
-    """The record `register` wrote under `directory`, or None where there is none."""
+    """The record `register` wrote under `directory`, or None where there is none.
+
+    A file that is not a record ends the command with one line naming it: the traceback would
+    print the file, and the file may hold a key.
+    """
+    path = directory / CONFIG_FILENAME
     try:
-        return Config.model_validate_json((directory / CONFIG_FILENAME).read_bytes())
+        return Config.model_validate_json(path.read_bytes())
     except FileNotFoundError:
         return None
+    except ValidationError as exc:
+        raise SystemExit(f'{path} is not a config record: delete it and run `positronic-platform register`') from exc
 
 
 def write_config(directory: Path, config: Config) -> None:
@@ -77,7 +85,12 @@ def write_config(directory: Path, config: Config) -> None:
     os.replace(staged, path)
 
 
-def api_key_from(env: Mapping[str, str], api_key_file: Path | None) -> ApiKey | None:
+def key_is_given(env: Mapping[str, str], api_key_file: Path | None) -> bool:
+    """Whether the caller names a key of their own — the environment or a key file — over the record's."""
+    return bool(env.get(API_KEY_ENV)) or api_key_file is not None
+
+
+def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Config | None) -> ApiKey | None:
     """The key to call with: the environment's, else the named file's, else the record's."""
     from_env = env.get(API_KEY_ENV)
     if from_env:
@@ -88,16 +101,14 @@ def api_key_from(env: Mapping[str, str], api_key_file: Path | None) -> ApiKey | 
         except FileNotFoundError:
             return None
         return ApiKey(value) if value else None
-    config = read_config(config_dir(env))
-    return config.api_key if config else None
+    return record.api_key if record else None
 
 
-def platform_url_from(env: Mapping[str, str], platform_url: str | None) -> str | None:
+def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: Config | None) -> str | None:
     """What the client resolves the platform from: the flag, else the record — unless the environment names one."""
     if platform_url is not None or env.get(API_URL_ENV) is not None:
         return platform_url
-    config = read_config(config_dir(env))
-    return config.platform_url if config else None
+    return record.platform_url if record else None
 
 
 def _one_line(exc: ValidationError) -> str:
@@ -161,7 +172,7 @@ def ask_from_args(args: argparse.Namespace) -> RequestCreate:
         raise SystemExit('name --tasks and --episodes-per-endpoint, or give the whole request with --from')
     try:
         return RequestCreate(
-            tasks=[TaskAsk(task_id=task_id) for task_id in args.tasks],
+            tasks=[TaskAsk(task_id=TaskRef(task_id)) for task_id in args.tasks],
             endpoints=[_endpoint(spec) for spec in args.endpoints or []],
             episodes_per_endpoint=args.episodes_per_endpoint,
             cap_per_episode_sec=args.cap,
@@ -172,16 +183,27 @@ def ask_from_args(args: argparse.Namespace) -> RequestCreate:
         )
     except ValidationError as exc:
         raise SystemExit(_one_line(exc)) from exc
+    except ValueError as exc:  # a `TaskRef` that could never be a catalogue key
+        raise SystemExit(str(exc)) from exc
 
 
 def _client(args: argparse.Namespace, env: Mapping[str, str]) -> PlatformClient:
-    api_key = api_key_from(env, args.api_key_file)
+    """The client to call with. The record's key reaches the record's platform and no other."""
+    record = read_config(config_dir(env))
+    api_key = api_key_from(env, args.api_key_file, record)
     if api_key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, pass --api-key-file, or run `positronic-platform register`')
     try:
-        return PlatformClient(platform_url_from(env, args.platform_url), api_key=api_key)
+        base_url = resolve_base_url(platform_url_from(env, args.platform_url, record))
     except (ValueError, httpx.InvalidURL) as exc:
         raise SystemExit(str(exc)) from exc
+    if record is not None and not key_is_given(env, args.api_key_file) and base_url != record.platform_url:
+        raise SystemExit(
+            f'the saved key belongs to {record.platform_url}, and this command names {base_url}: pass '
+            f'--api-key-file with a key for that platform, or register there with '
+            f'`positronic-platform register --platform-url={base_url}`'
+        )
+    return PlatformClient(base_url, api_key=api_key)
 
 
 def _show(model: BaseModel) -> None:
@@ -201,13 +223,21 @@ class Registered(BaseModel):
 
 def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
     base_url = github_device_flow.allowed_platform_url(
-        platform_url_from(env, args.platform_url), plaintext_http=args.plaintext_http
+        platform_url_from(env, args.platform_url, read_config(config_dir(env))), plaintext_http=args.plaintext_http
     )
     response = github_device_flow.run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
     config_file: Path | None = None
     if response.api_key is not None:
         config_file = config_dir(env) / CONFIG_FILENAME
-        write_config(config_dir(env), Config(platform_url=base_url, api_key=response.api_key))
+        try:
+            write_config(config_dir(env), Config(platform_url=base_url, api_key=response.api_key))
+        except OSError as exc:
+            # The key is out and cannot be read back, so the message says what to do and never shows it.
+            raise SystemExit(
+                f'the platform issued a key for user {response.user_id}, and writing {config_file} failed: '
+                f'{exc.strerror or exc}. The key is not shown, and the platform refuses a rotation today: '
+                'contact the operator to reset the account, then run `positronic-platform register` again.'
+            ) from exc
     _show(
         Registered(
             user_id=response.user_id, key_status=response.key_status, platform_url=base_url, config_file=config_file

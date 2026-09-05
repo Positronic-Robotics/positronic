@@ -53,6 +53,7 @@ from platform_client.responses import (
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
+from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 BASE = 'http://gateway.test'
@@ -512,7 +513,7 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 # --- requests -----------------------------------------------------------------------------------
 
 ASK = RequestCreate(
-    tasks=[TaskAsk(task_id='eight-spoons-into-grey-tote')],
+    tasks=[TaskAsk(task_id=TaskRef('eight-spoons-into-grey-tote'))],
     endpoints=[EndpointAsk(name='gyros', url='wss://gyros.example/ws')],
     episodes_per_endpoint=10,
 )

@@ -412,3 +412,96 @@ def test_a_limit_that_is_not_a_positive_integer_ends_at_the_parser(config, gatew
     with pytest.raises(SystemExit) as raised:
         cli.main(['requests', 'list', '--limit', limit])
     assert raised.value.code == 2 and gateway.requests == []
+
+
+# --- the record's key reaches the record's platform and no other ------------------------------
+
+
+@pytest.mark.parametrize('how', ['flag', 'env'])
+def test_a_saved_key_is_not_sent_to_another_platform(config, gateway, monkeypatch, how: str):
+    _registered(config)
+    argv = ['requests', 'get', '2a']
+    if how == 'flag':
+        argv.append('--platform-url=https://other.example')
+    else:
+        monkeypatch.setenv(API_URL_ENV, 'https://other.example')
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+
+    assert PLATFORM in str(raised.value) and 'https://other.example' in str(raised.value)
+    assert gateway.requests == []
+
+
+def test_a_key_given_for_another_platform_reaches_it(config, gateway, monkeypatch, tmp_path):
+    """The refusal guards the record's key alone: a key file or an environment key is the caller's own."""
+    _registered(config)
+    key_file = tmp_path / 'other_key'
+    key_file.write_text('pk_live_other\n')
+
+    cli.main(['requests', 'get', '2a', '--platform-url=https://other.example', f'--api-key-file={key_file}'])
+    sent = gateway.request()
+    assert sent.url.host == 'other.example' and sent.headers['authorization'] == 'Bearer pk_live_other'
+
+    monkeypatch.setenv(API_KEY_ENV, 'pk_live_env')
+    cli.main(['requests', 'get', '2a', '--platform-url=https://other.example'])
+    assert gateway.request().headers['authorization'] == 'Bearer pk_live_env'
+
+
+def test_a_platform_flag_naming_the_records_platform_reads_the_record(config, gateway):
+    _registered(config)
+    cli.main(['requests', 'get', '2a', f'--platform-url={PLATFORM}'])
+    assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
+
+
+# --- a minted key that could not be saved, and a record that cannot be read -------------------
+
+
+def test_a_failed_save_after_a_minted_key_says_what_to_do_and_shows_no_key(config, monkeypatch, capsys):
+    def minted(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
+        return RegisterResponse.model_validate({
+            'user_id': 'a1',
+            'artifact_location': 's3://artifacts/a1',
+            'api_key': 'pk_live_new',
+            'key_status': 'created',
+        })
+
+    def unwritable(directory: Path, record: Config) -> None:
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(github_device_flow, 'run_registration', minted)
+    monkeypatch.setattr(cli, 'write_config', unwritable)
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['register', '--client-id=x', f'--platform-url={PLATFORM}'])
+
+    message = str(raised.value)
+    assert 'issued a key' in message and str(config / CONFIG_FILENAME) in message and 'operator' in message
+    assert 'pk_live_new' not in message and 'pk_live_new' not in capsys.readouterr().out
+
+
+def test_a_malformed_record_is_refused_with_one_line_naming_the_file(config, gateway):
+    config.mkdir()
+    (config / CONFIG_FILENAME).write_text('{"platform_url": "https://gateway.example", "api_key": pk_live_secret')
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a'])
+
+    message = str(raised.value)
+    assert str(config / CONFIG_FILENAME) in message and 'register' in message
+    assert 'pk_live_secret' not in message and gateway.requests == []
+
+
+def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(config, gateway):
+    _registered(config)
+    with pytest.raises(SystemExit, match='not a task id'):
+        cli.main([
+            'requests',
+            'create',
+            '--tasks',
+            'Eight Spoons',
+            '--endpoints',
+            'gyros',
+            '--episodes-per-endpoint',
+            '1',
+        ])
+    assert gateway.requests == []

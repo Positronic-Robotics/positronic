@@ -14,6 +14,7 @@ from platform_client.evals import EvalRef
 from platform_client.ids import RequestId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
@@ -137,7 +138,7 @@ class TaskAsk(BaseModel):
 
     model_config = _FORBID_EXTRA
 
-    task_id: str = Field(min_length=1)
+    task_id: TaskRef
     episodes_per_endpoint: int | None = Field(default=None, ge=1)
     cap_per_episode_sec: int | None = Field(default=None, ge=1)
     policy_preset: str | None = Field(default=None, min_length=1)

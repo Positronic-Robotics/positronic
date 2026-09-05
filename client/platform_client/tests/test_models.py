@@ -68,6 +68,7 @@ from platform_client.responses import (
     SubmissionView,
 )
 from platform_client.slug import slug_of
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -111,9 +112,9 @@ SCENE = SceneAsk(
 
 ASK = RequestCreate(
     tasks=[
-        TaskAsk(task_id='eight-spoons-into-grey-tote'),
+        TaskAsk(task_id=TaskRef('eight-spoons-into-grey-tote')),
         TaskAsk(
-            task_id='stack-the-cubes',
+            task_id=TaskRef('stack-the-cubes'),
             episodes_per_endpoint=2,
             cap_per_episode_sec=90,
             policy_preset='other',
@@ -214,7 +215,7 @@ MODELS: list[BaseModel] = [
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
     ASK,
     RequestCreate(
-        tasks=[TaskAsk(task_id='stack-the-cubes')], endpoints=[EndpointAsk(name='a')], episodes_per_endpoint=1
+        tasks=[TaskAsk(task_id=TaskRef('stack-the-cubes'))], endpoints=[EndpointAsk(name='a')], episodes_per_endpoint=1
     ),
     RequestGetQuery(id=REQUEST),
     RequestListQuery(after=REQUEST, limit=50),
@@ -620,46 +621,46 @@ def test_an_endpoint_says_whether_it_names_a_locator():
 def test_a_request_names_each_task_and_each_endpoint_once():
     with pytest.raises(ValidationError, match='more than once'):
         RequestCreate(
-            tasks=[TaskAsk(task_id='a'), TaskAsk(task_id='a')],
+            tasks=[TaskAsk(task_id=TaskRef('a')), TaskAsk(task_id=TaskRef('a'))],
             endpoints=[EndpointAsk(name='e')],
             episodes_per_endpoint=1,
         )
     with pytest.raises(ValidationError, match='more than once'):
         RequestCreate(
-            tasks=[TaskAsk(task_id='a')],
+            tasks=[TaskAsk(task_id=TaskRef('a'))],
             endpoints=[EndpointAsk(name='e'), EndpointAsk(name='e')],
             episodes_per_endpoint=1,
         )
     with pytest.raises(ValidationError, match='more than once'):
-        TaskAsk(task_id='a', endpoints=[EndpointAsk(name='e'), EndpointAsk(name='e')])
+        TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='e'), EndpointAsk(name='e')])
 
 
 def test_a_task_endpoint_naming_no_locator_names_one_the_request_defines():
     with pytest.raises(ValidationError, match='name no endpoint the request defines'):
         RequestCreate(
-            tasks=[TaskAsk(task_id='a', endpoints=[EndpointAsk(name='elsewhere')])],
+            tasks=[TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='elsewhere')])],
             endpoints=[EndpointAsk(name='e')],
             episodes_per_endpoint=1,
         )
     # An entry that carries its own address needs no definition.
     RequestCreate(
-        tasks=[TaskAsk(task_id='a', endpoints=[EndpointAsk(name='elsewhere', url='wss://x/ws')])],
+        tasks=[TaskAsk(task_id=TaskRef('a'), endpoints=[EndpointAsk(name='elsewhere', url='wss://x/ws')])],
         episodes_per_endpoint=1,
     )
 
 
 def test_every_task_runs_on_at_least_one_endpoint():
     with pytest.raises(ValidationError, match='runs on no endpoint'):
-        RequestCreate(tasks=[TaskAsk(task_id='a')], episodes_per_endpoint=1)
+        RequestCreate(tasks=[TaskAsk(task_id=TaskRef('a'))], episodes_per_endpoint=1)
     with pytest.raises(ValidationError):
-        TaskAsk(task_id='a', endpoints=[])
+        TaskAsk(task_id=TaskRef('a'), endpoints=[])
 
 
 def test_a_count_below_one_is_refused_at_every_level():
     with pytest.raises(ValidationError):
-        RequestCreate(tasks=[TaskAsk(task_id='a')], endpoints=[EndpointAsk(name='e')], episodes_per_endpoint=0)
+        RequestCreate(tasks=[TaskAsk(task_id=TaskRef('a'))], endpoints=[EndpointAsk(name='e')], episodes_per_endpoint=0)
     with pytest.raises(ValidationError):
-        TaskAsk(task_id='a', episodes_per_endpoint=0)
+        TaskAsk(task_id=TaskRef('a'), episodes_per_endpoint=0)
     with pytest.raises(ValidationError):
         RequestListQuery(limit=0)
 
