@@ -126,6 +126,9 @@ def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Conf
             value = api_key_file.read_text().strip()
         except OSError as exc:
             raise SystemExit(f'--api-key-file {api_key_file}: {exc.strerror}') from exc
+        except UnicodeDecodeError as exc:
+            # The decoder's own message quotes the offending bytes, which are part of the key.
+            raise SystemExit(f'--api-key-file {api_key_file} is not UTF-8 text') from exc
         if not value:
             raise SystemExit(f'--api-key-file {api_key_file} holds no key')
         return ApiKey(value)
@@ -401,6 +404,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(_refusal(exc)) from exc
     except httpx.HTTPError as exc:
         raise SystemExit(f'the platform did not answer: {exc}') from exc
+    except ValidationError as exc:
+        raise SystemExit(f'the platform answered in a form this client does not know: {_one_line(exc)}') from exc
 
 
 if __name__ == '__main__':

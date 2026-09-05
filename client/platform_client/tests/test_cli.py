@@ -220,6 +220,31 @@ def test_a_key_file_that_is_missing_or_empty_ends_the_command_naming_it(config, 
     assert gateway.requests == []
 
 
+def test_a_key_file_that_is_not_utf8_ends_the_command_naming_it(config, gateway, tmp_path):
+    """The refusal names the file and quotes no byte of it: those bytes are the key."""
+    binary = tmp_path / 'binary_key'
+    binary.write_bytes(b'\xff\xfepk_live_secret')
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a', f'--api-key-file={binary}'])
+
+    message = str(raised.value)
+    assert str(binary) in message and 'UTF-8' in message
+    assert 'pk_live' not in message
+    assert gateway.requests == []
+
+
+def test_a_reply_this_client_cannot_read_ends_the_command_with_one_line(config, gateway):
+    """A gateway ahead of the client answers 200 with a body the response model refuses."""
+    _registered(config)
+    gateway.payload = {'request_id': '2a', 'status': 'received'}
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a'])
+
+    assert 'episodes' in str(raised.value)
+
+
 def test_an_unreadable_record_ends_the_command_naming_the_file(config, gateway):
     (config / CONFIG_FILENAME).mkdir(parents=True)
     with pytest.raises(SystemExit) as raised:
