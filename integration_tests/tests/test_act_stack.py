@@ -7,9 +7,8 @@ from integration_tests.act_stack import (
     CUBE_POSES,
     EPISODE_SECONDS,
     FINGER_BODIES,
-    GREEN_BODY,
     RECORDED_SIGNALS,
-    RED_BODY,
+    REFERENCE_FILENAME,
     SUPPORTED,
     TIME_SUFFIX,
     capture,
@@ -18,8 +17,10 @@ from integration_tests.act_stack import (
     checkpoint_url,
     compare_trace,
     is_supported_stack,
+    write_npz,
 )
 from positronic import keys
+from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 
@@ -40,6 +41,7 @@ def recorded_signals(monkeypatch, tmp_path):
             CUBE_POSES: np.zeros((len(times), 2, 7)),
             CUBE_POSES + TIME_SUFFIX: times - episode.start_ts,
             SUPPORTED: np.ones(len(times), dtype=bool),
+            SUPPORTED + TIME_SUFFIX: times - episode.start_ts,
         },
     )
     monkeypatch.setattr(act_stack, 'read_episode', lambda output, seed: EpisodeContainer(signals))
@@ -63,11 +65,75 @@ def test_incomplete_observations_fail_success_check_and_capture(recorded_signals
     reference = tmp_path / 'reference'
     with pytest.raises(ValueError, match=f'{name}: expected one observation'):
         capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
-    assert not list(reference.glob('*.npz'))
+    assert not reference.exists()
 
 
 def test_complete_observations_and_sparse_commands_can_be_captured(recorded_signals, tmp_path):
     reference = tmp_path / 'reference'
+    capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    check_episode(tmp_path, 4, reference, success_only=False)
+
+
+def test_failed_validation_leaves_capture_retryable(recorded_signals, monkeypatch, tmp_path):
+    reference = tmp_path / 'reference'
+
+    def invalid_second_seed(output, seed):
+        if seed == 8:
+            raise ValueError('incomplete recording')
+        return EpisodeContainer(recorded_signals)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(act_stack, 'read_episode', invalid_second_seed)
+        with pytest.raises(ValueError, match='incomplete recording'):
+            capture(output_dir=str(tmp_path), reference_dir=str(reference))
+    assert not reference.exists()
+    capture(output_dir=str(tmp_path), reference_dir=str(reference))
+    for seed in (4, 8):
+        check_episode(tmp_path, seed, reference, success_only=False)
+
+
+def test_failed_write_leaves_capture_retryable(recorded_signals, monkeypatch, tmp_path):
+    reference = tmp_path / 'reference'
+
+    def fail_second_write(path, trace):
+        write_npz(path, trace)
+        if path.name == REFERENCE_FILENAME.format(seed=8):
+            raise OSError('write failed')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(act_stack, 'write_npz', fail_second_write)
+        with pytest.raises(OSError, match='write failed'):
+            capture(output_dir=str(tmp_path), reference_dir=str(reference))
+    assert not reference.exists()
+    capture(output_dir=str(tmp_path), reference_dir=str(reference))
+    for seed in (4, 8):
+        check_episode(tmp_path, seed, reference, success_only=False)
+
+
+def test_capture_preserves_a_destination_created_during_writing(recorded_signals, monkeypatch, tmp_path):
+    reference = tmp_path / 'reference'
+
+    def concurrent_destination(path, trace):
+        write_npz(path, trace)
+        reference.mkdir()
+
+    monkeypatch.setattr(act_stack, 'write_npz', concurrent_destination)
+    with pytest.raises(FileExistsError):
+        capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    assert reference.is_dir() and not list(reference.iterdir())
+
+
+def test_failed_publication_leaves_capture_retryable(recorded_signals, monkeypatch, tmp_path):
+    reference = tmp_path / 'reference'
+
+    def fail_rename(source, destination):
+        raise OSError('rename failed')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(reference), 'rename', fail_rename)
+        with pytest.raises(OSError, match='rename failed'):
+            capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    assert not reference.exists()
     capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
     check_episode(tmp_path, 4, reference, success_only=False)
 
@@ -79,8 +145,8 @@ def test_complete_observations_and_sparse_commands_can_be_captured(recorded_sign
 def test_stacking_requires_cube_contact_and_release(height, green_x, finger_x, expected):
     model = mj.MjModel.from_xml_string(f'''
         <mujoco><worldbody>
-          <body name="{RED_BODY}" pos="0 0 0.01"><geom type="box" size="0.02 0.02 0.01"/></body>
-          <body name="{GREEN_BODY}" pos="{green_x} 0 {height}">
+          <body name="{STACK_RED_CUBE.body_name}" pos="0 0 0.01"><geom type="box" size="0.02 0.02 0.01"/></body>
+          <body name="{STACK_GREEN_CUBE.body_name}" pos="{green_x} 0 {height}">
             <freejoint/><geom type="box" size="0.02 0.02 0.01"/>
           </body>
           <body name="{FINGER_BODIES[0]}" pos="{finger_x} 0 0.03">
@@ -92,7 +158,11 @@ def test_stacking_requires_cube_contact_and_release(height, green_x, finger_x, e
     mj.mj_forward(model, data)
     assert (
         is_supported_stack(
-            model, data, model.body(RED_BODY).id, model.body(GREEN_BODY).id, {model.body(FINGER_BODIES[0]).id}
+            model,
+            data,
+            model.body(STACK_RED_CUBE.body_name).id,
+            model.body(STACK_GREEN_CUBE.body_name).id,
+            {model.body(FINGER_BODIES[0]).id},
         )
         == expected
     )
@@ -103,7 +173,7 @@ def test_brief_or_interrupted_support_does_not_count_as_success():
     supported = np.zeros(len(times), dtype=bool)
     supported[10:15] = True
     supported[16:21] = True
-    trace = {CUBE_POSES + TIME_SUFFIX: times, SUPPORTED: supported}
+    trace = {SUPPORTED + TIME_SUFFIX: times, SUPPORTED: supported}
     with pytest.raises(ValueError, match='never rested'):
         check_stacking(trace)
     supported[15] = True
@@ -113,7 +183,23 @@ def test_brief_or_interrupted_support_does_not_count_as_success():
 def test_an_early_recording_cannot_pass_by_already_having_stacked():
     times = np.arange(0, 1_000_000_000, 100_000_000)
     with pytest.raises(ValueError, match='full episode'):
-        check_stacking({CUBE_POSES + TIME_SUFFIX: times, SUPPORTED: np.ones(len(times), dtype=bool)})
+        check_stacking({SUPPORTED + TIME_SUFFIX: times, SUPPORTED: np.ones(len(times), dtype=bool)})
+
+
+def test_stacking_uses_support_timestamps():
+    trace = {
+        CUBE_POSES + TIME_SUFFIX: np.array([0, 1_000_000_000, 2_000_000_000, 15_000_000_000]),
+        SUPPORTED + TIME_SUFFIX: np.array([0, 250_000_000, 500_000_000, 15_000_000_000]),
+        SUPPORTED: np.array([True, True, True, False]),
+    }
+    assert check_stacking(trace) == 0.5
+
+
+def test_support_comparison_reports_its_own_timestamp():
+    expected = {SUPPORTED: np.array([False, True]), SUPPORTED + TIME_SUFFIX: np.array([0, 2_000_000_000])}
+    actual = {**expected, SUPPORTED: np.array([False, False])}
+    with pytest.raises(ValueError, match=f'{SUPPORTED}: first difference at 2.000000000s'):
+        compare_trace(actual, expected)
 
 
 @pytest.mark.parametrize(

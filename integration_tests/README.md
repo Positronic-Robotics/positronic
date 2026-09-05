@@ -80,8 +80,10 @@ uv run --locked python integration_tests/act_stack.py capture \
 ```
 
 Capture requires successful, complete recordings and refuses to overwrite an existing reference
-directory. Review the trajectories and repeatability, then replace the two fixture files and update
-`provenance.json` with the code revision, checkpoint and environments that produced them. The normal
+directory. It publishes the directory after every selected seed validates and writes successfully;
+a failed capture can be retried with the same destination. Review the trajectories and repeatability,
+then replace the two fixture files and update `provenance.json` with the code revision, checkpoint
+and environments that produced them. The normal
 run never updates its own expectations. Fixtures use NumPy's `.npz` format with lossless LZMA ZIP
 compression to stay below the repository's file-size limit.
 

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit, urlunsplit
 from zipfile import ZIP_LZMA, ZipFile
 
@@ -12,6 +13,7 @@ import mujoco as mj
 import numpy as np
 
 from positronic import keys
+from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.eval import keys as eval_keys
@@ -29,14 +31,14 @@ CHECKPOINT_PATH = (
 EPISODE_SECONDS = 15
 HOLD_NS = 500_000_000
 STATE_SPEC = mj.mjtState.mjSTATE_INTEGRATION
-RED_BODY = 'box_0_body'
-GREEN_BODY = 'box_1_body'
 FINGER_BODIES = ('left_finger_ph', 'right_finger_ph')
 CUBE_POSES = 'cube_poses'
 SUPPORTED = 'stack_supported'
 TIME_SUFFIX = '.time_ns'
 ROBOT_OBSERVATIONS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 RECORDED_SIGNALS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP, *ROBOT_OBSERVATIONS)
+SEED_DIRECTORY = 'seed_{seed}'
+REFERENCE_FILENAME = SEED_DIRECTORY + '.npz'
 
 
 def checkpoint_url(url: str) -> str:
@@ -102,7 +104,7 @@ def cube_trace(
     spec, _ = load_spec(episode.static[scene_key], Path(package_assets_path('assets/mujoco')))
     model = spec.compile()
     data = mj.MjData(model)
-    red, green = model.body(RED_BODY).id, model.body(GREEN_BODY).id
+    red, green = model.body(STACK_RED_CUBE.body_name).id, model.body(STACK_GREEN_CUBE.body_name).id
     fingers = {model.body(name).id for name in FINGER_BODIES}
     state_signal = episode[state_key]
     times = np.asarray(list(state_signal.keys()), dtype=np.int64) - episode.start_ts
@@ -118,7 +120,7 @@ def cube_trace(
         poses[i, :, :3] = data.xpos[[red, green]]
         poses[i, :, 3:] = data.xquat[[red, green]]
         supported[i] = is_supported_stack(model, data, red, green, fingers)
-    return {CUBE_POSES: poses, CUBE_POSES + TIME_SUFFIX: times, SUPPORTED: supported}
+    return {CUBE_POSES: poses, CUBE_POSES + TIME_SUFFIX: times, SUPPORTED: supported, SUPPORTED + TIME_SUFFIX: times}
 
 
 def read_trace(episode: Episode) -> dict[str, np.ndarray]:
@@ -139,7 +141,7 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
 
 
 def check_stacking(trace: Mapping[str, np.ndarray]) -> float:
-    times = trace[CUBE_POSES + TIME_SUFFIX]
+    times = trace[SUPPORTED + TIME_SUFFIX]
     supported = trace[SUPPORTED]
     if not len(times) or len(times) != len(supported):
         raise ValueError('Stacking check needs a nonempty support signal with matching timestamps')
@@ -171,8 +173,6 @@ def compare_trace(actual: Mapping[str, np.ndarray], expected: Mapping[str, np.nd
         if differing.size:
             index = tuple(int(i) for i in differing[0])
             time_key = name if name.endswith(TIME_SUFFIX) else name + TIME_SUFFIX
-            if name == SUPPORTED:
-                time_key = CUBE_POSES + TIME_SUFFIX
             time = expected[time_key][index[0]] / 1e9
             raise ValueError(
                 f'{name}: first difference at {time:.9f}s, index {index}: {got[index]!r}, expected {want[index]!r}'
@@ -183,7 +183,7 @@ def check_episode(output: Path, seed: int, reference: Path, success_only: bool) 
     trace = read_trace(read_episode(output, seed))
     completed_at = check_stacking(trace)
     if not success_only:
-        with np.load(reference / f'seed_{seed}.npz', allow_pickle=False) as expected:
+        with np.load(reference / REFERENCE_FILENAME.format(seed=seed), allow_pickle=False) as expected:
             compare_trace(trace, expected)
     result = 'stacking passed' if success_only else 'stacking and exact trace passed'
     print(f'Seed {seed}: {result}; stacked by {completed_at:.3f}s', flush=True)
@@ -204,7 +204,7 @@ def run(url: str, output_dir: str, seeds: Sequence[int], reference_dir: str, suc
     output_root, reference = Path(output_dir).expanduser().resolve(), Path(reference_dir).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=False)
     for seed in seeds:
-        output = output_root / f'seed_{seed}'
+        output = output_root / SEED_DIRECTORY.format(seed=seed)
         run_episode(url, output, seed, wall_timeout)
         check_episode(output, seed, reference, success_only)
 
@@ -215,7 +215,14 @@ def check(output_dir: str, seeds: Sequence[int], reference_dir: str, success_onl
     check_seeds(seeds)
     output_root, reference = Path(output_dir).expanduser(), Path(reference_dir).expanduser()
     for seed in seeds:
-        check_episode(output_root / f'seed_{seed}', seed, reference, success_only)
+        check_episode(output_root / SEED_DIRECTORY.format(seed=seed), seed, reference, success_only)
+
+
+def write_npz(path: Path, trace: Mapping[str, np.ndarray]) -> None:
+    with ZipFile(path, 'w', compression=ZIP_LZMA) as archive:
+        for name, values in trace.items():
+            with archive.open(f'{name}.npy', 'w') as stream:
+                np.save(stream, values, allow_pickle=False)
 
 
 @cfn.config(seeds=SEEDS)
@@ -223,13 +230,21 @@ def capture(output_dir: str, reference_dir: str, seeds: Sequence[int]):
     """Capture successful recorded behavior into a new reference directory."""
     check_seeds(seeds)
     output_root, reference = Path(output_dir).expanduser(), Path(reference_dir).expanduser()
-    reference.mkdir(parents=True, exist_ok=False)
-    for seed in seeds:
-        trace = check_episode(output_root / f'seed_{seed}', seed, reference, success_only=True)
-        with ZipFile(reference / f'seed_{seed}.npz', 'w', compression=ZIP_LZMA) as archive:
-            for name, values in trace.items():
-                with archive.open(f'{name}.npy', 'w') as stream:
-                    np.save(stream, values, allow_pickle=False)
+    if reference.exists() or reference.is_symlink():
+        raise FileExistsError(reference)
+    reference.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=reference.parent, prefix=f'.{reference.name}-') as staging_dir:
+        staging = Path(staging_dir)
+        for seed in seeds:
+            trace = check_episode(output_root / SEED_DIRECTORY.format(seed=seed), seed, reference, success_only=True)
+            write_npz(staging / REFERENCE_FILENAME.format(seed=seed), trace)
+        # rename can replace an empty directory; mkdir reserves a new destination.
+        reference.mkdir()
+        try:
+            staging.rename(reference)
+        except OSError:
+            reference.rmdir()
+            raise
     print(f'References written to {reference}; record their provenance before committing them.')
 
 
