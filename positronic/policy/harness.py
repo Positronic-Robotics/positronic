@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
@@ -335,14 +336,18 @@ class Harness(pimm.ControlSystem):
         recording and the move nothing.
         """
         yield from self._finalize_recording(clock, payload)
-        # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
-        # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
-        # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
-        # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE})
-        # The answer waits until the model is out of this episode's function. An in-process policy is one
-        # model across every episode, so the session that the next ask opens must not overtake it. The move
-        # back above gives the function that time.
+        # A powered arm holds the policy's last setpoint, so every device the trial placed goes back with the
+        # trial's own args, not a fresh draw. The scene is a person's to set up, and is not asked again. The
+        # terminal waits on the move: the next trial's scene draw would rebuild the model mid-travel.
+        back_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
+        # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
+        # A raise here costs the recorded episode its answer, and the run every episode it has left.
+        try:
+            yield from self._ready(should_stop, back_args)
+        except Exception as exc:
+            logging.error(f'The rig failed to go back after the episode: {exc}')
+        # One in-process model serves every episode, so the next ask's session must not overtake this
+        # episode's function. The move back above gives it that time.
         self._reap_inference()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
