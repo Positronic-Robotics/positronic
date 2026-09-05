@@ -5095,7 +5095,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d826
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
