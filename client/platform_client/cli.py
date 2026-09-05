@@ -23,17 +23,18 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Annotated
 
 import httpx
 from platform_client import github_device_flow
-from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, resolve_base_url
+from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, require_absolute_url, resolve_base_url
 from platform_client.enums import CameraVantage, KeyStatus, Placement
 from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
 from platform_client.requests import EndpointAsk, RequestCreate, SceneAsk, TaskAsk
 from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 CONFIG_DIR_ENV = 'POSITRONIC_PLATFORM_CONFIG_DIR'
 DEFAULT_CONFIG_DIR = Path('~/.config/positronic-platform')
@@ -48,12 +49,25 @@ _PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
 _VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
 
 
+def checked_platform_url(value: str) -> str:
+    """The record's platform, or a `ValueError` that `read_config` reports as a malformed record.
+
+    `same_platform` and the client both parse this value, so a record holding `http://host:bad`
+    would otherwise end the command with an `httpx.InvalidURL` traceback naming no file.
+    """
+    try:
+        require_absolute_url(value, 'platform_url')
+    except httpx.InvalidURL as exc:
+        raise ValueError(f'platform_url does not parse as a URL: {exc}') from exc
+    return value
+
+
 class Config(BaseModel):
     """What `register` records and every command reads: the platform, and the key that belongs to it."""
 
     model_config = ConfigDict(extra='forbid')
 
-    platform_url: str
+    platform_url: Annotated[str, AfterValidator(checked_platform_url)]
     api_key: ApiKey
 
 
@@ -124,9 +138,12 @@ def platform_is_given(env: Mapping[str, str], platform_url: str | None) -> bool:
 
 
 def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: Config | None) -> str | None:
-    """What the client resolves the platform from: the flag, else the record — unless the environment names one."""
-    if platform_is_given(env, platform_url):
+    """What the client resolves the platform from: the flag, else `env`, else the record."""
+    if platform_url is not None:
         return platform_url
+    from_env = env.get(API_URL_ENV)
+    if from_env is not None:
+        return from_env
     return record.platform_url if record else None
 
 
