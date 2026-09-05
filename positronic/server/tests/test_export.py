@@ -276,7 +276,15 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
 def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
     episodes = [{'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 
-    assert filter_sets(episodes) == [{'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+    assert filter_sets(episodes, most=10) == [{'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+
+
+def test_filter_sets_past_the_bound_are_refused_before_every_episode_is_read():
+    endless = ({'k': str(n)} for n in range(10_000))
+
+    with pytest.raises(ValueError, match='more than 5 filter sets'):
+        filter_sets(endless, most=5)
+    assert next(endless) == {'k': '6'}  # the sixth value passed the count; the rest were never read
 
 
 def test_a_filter_set_no_episode_satisfies_gets_no_file(dataset, tmp_path):

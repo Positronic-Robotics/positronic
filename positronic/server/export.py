@@ -114,6 +114,17 @@ def _path_max(directory: Path) -> int:
     return os.pathconf(existing, 'PC_PATH_MAX')
 
 
+# `mimetypes` answers for neither on every box.
+_CONTENT_TYPE_BY_SUFFIX = {'.wasm': 'application/wasm', '.rrd': 'application/octet-stream'}
+
+
+def asset_content_type(path: Path) -> str:
+    """The `Content-Type` an asset file is served under."""
+    if path.suffix in _CONTENT_TYPE_BY_SUFFIX:
+        return _CONTENT_TYPE_BY_SUFFIX[path.suffix]
+    return mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
+
+
 class _Output:
     """The files the export writes under `directory`, as any host or filesystem holds them.
 
@@ -199,8 +210,9 @@ def _planned_fetch(
     return _Planned(path, reads, lambda out: out.write(path, *_fetch(client, route, params)))
 
 
-def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
-    """Every non-empty filter set some episode satisfies, the shortest first.
+def filter_sets(episode_values: Iterable[Mapping[str, str]], most: int) -> list[dict[str, str]]:
+    """Every non-empty filter set some episode satisfies, the shortest first; more than `most` of them is
+    refused at the episode that passes the count, before the rest are read.
 
     An episode satisfies each subset of its own values, so k filter keys give at most 2^k sets per
     episode, and a set no episode satisfies gets no file.
@@ -209,6 +221,8 @@ def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, s
     for values in episode_values:
         items = sorted(values.items())
         satisfied.update(chosen for n in range(1, len(items) + 1) for chosen in itertools.combinations(items, n))
+        if len(satisfied) > most:
+            raise ValueError(f'more than {most} filter sets; a filter key with a value per episode is the usual cause')
     return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
 
 
@@ -232,14 +246,13 @@ def _filter_sets_by_group(
             }
             for episode in dataset
         )
-        sets = filter_sets(episode_values)
-        if len(sets) + 1 > MAX_FILTER_SETS_PER_GROUP:
+        try:
+            # One of the files is the unfiltered one.
+            sets_by_group[name] = filter_sets(episode_values, MAX_FILTER_SETS_PER_GROUP - 1)
+        except ValueError as past_bound:
             raise ValueError(
-                f'group table {name!r} has {len(sets) + 1} filter sets and an export reads the dataset once per set, '
-                f'so a group table takes at most {MAX_FILTER_SETS_PER_GROUP}; a filter key with a value per episode '
-                f'is the usual cause'
-            )
-        sets_by_group[name] = sets
+                f'group table {name!r} has {past_bound}; an export reads the dataset once per set'
+            ) from None
     return sets_by_group
 
 
@@ -343,17 +356,6 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
         _Planned(recording, reads, lambda out: out.copy(recording, episode_rrd_path(links.index))),
         *(_planned_fetch(client, f'/{link}', path, reads) for link, path in downloads),
     ]
-
-
-# `mimetypes` answers for neither on every box.
-_CONTENT_TYPE_BY_SUFFIX = {'.wasm': 'application/wasm', '.rrd': 'application/octet-stream'}
-
-
-def asset_content_type(path: Path) -> str:
-    """The `Content-Type` an asset file is served under."""
-    if path.suffix in _CONTENT_TYPE_BY_SUFFIX:
-        return _CONTENT_TYPE_BY_SUFFIX[path.suffix]
-    return mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
 
 
 def _asset_files() -> list[tuple[PurePosixPath, Path]]:
