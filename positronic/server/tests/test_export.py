@@ -372,7 +372,16 @@ def test_a_path_with_a_parent_segment_or_a_backslash_is_refused_before_a_write(t
 
     for path in ('../index.html', '..\\..\\index.html', '/index.html'):
         with pytest.raises(ValueError, match='outside'):
-            out.write(path, b'', 'text/html')
+            out.plan([path])
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_write_the_plan_does_not_name_is_refused(tmp_path):
+    out = _Output(tmp_path / 'out')
+    out.plan(['index.html'])
+
+    with pytest.raises(ValueError, match='plan'):
+        out.write('episodes/index.html', b'', 'text/html')
     assert not (tmp_path / 'out').exists()
 
 
@@ -533,6 +542,39 @@ def test_a_full_dataset_without_a_download_the_shown_dataset_links_is_refused_be
     assert not (tmp_path / 'out').exists()
 
 
+class _WithStatic(EpisodeTransform):
+    def __init__(self, **static):
+        self._static = static
+
+    def __call__(self, episode: Episode) -> Episode:
+        return EpisodeContainer({**episode.signals, **episode.static, **self._static}, meta=episode.meta)
+
+
+@pytest.mark.parametrize('shown_notes', ['n' * 2000, b'n' * 1500], ids=['type', 'size'])
+def test_a_full_dataset_whose_download_differs_from_the_shown_one_in_type_or_size_is_refused_before_a_write(
+    tmp_path, shown_notes
+):
+    """The page reports the shown value's type and size beside a link the full value answers."""
+    full = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down', 'notes': b'n' * 2000})
+    shown_only = TransformedDataset(full, _WithStatic(notes=shown_notes))
+
+    with pytest.raises(ValueError, match="at 'notes'"):
+        export_static(
+            shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full
+        )
+    assert not (tmp_path / 'out').exists()
+
+
+def test_a_full_dataset_whose_download_matches_the_shown_one_in_type_and_size_answers_the_link(tmp_path):
+    full = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down', 'notes': 'm' * 2000})
+    shown_only = TransformedDataset(full, _WithStatic(notes='n' * 2000))
+    out = tmp_path / 'out'
+
+    export_static(shown_only, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full)
+
+    assert (out / 'api/episode/0/static/notes').read_bytes() == b'm' * 2000
+
+
 def test_a_hidden_download_of_the_full_dataset_under_a_key_no_link_carries_is_left_alone(tmp_path):
     """The export links the shown dataset's downloads; the full dataset only has to hold those."""
     full = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down', 'notes': 'n' * 2000, '': 'h' * 2000})
@@ -677,7 +719,7 @@ def test_a_download_named_past_a_windows_device_name_is_written(tmp_path):
 
 def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]]:
     """A static dict with one download whose path on disk is `total_bytes` long, and that download's key path."""
-    stem = len(export._on_disk(download_link(0, ('k',)), build_id)) - 1
+    stem = len(export._large_file_path(download_link(0, ('k',)), build_id)) - 1
     length = total_bytes - stem
     count = -(-(length + 1) // (MAX_COMPONENT_BYTES + 1))
     letters = length - (count - 1)
@@ -692,7 +734,7 @@ def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]
 def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_export_before_it_writes(tmp_path):
     build_id = 'b' * MAX_COMPONENT_BYTES
     static, keys = _download_at(export.MAX_PATH_BYTES + 1, build_id)
-    assert len(export._on_disk(download_link(0, keys), build_id)) == export.MAX_PATH_BYTES + 1
+    assert len(export._large_file_path(download_link(0, keys), build_id)) == export.MAX_PATH_BYTES + 1
     dataset = a_dataset(tmp_path / 'dataset', static)
 
     with pytest.raises(ValueError, match='key limit'):
@@ -741,6 +783,28 @@ def test_a_local_path_at_the_filesystem_s_limit_is_refused_before_a_write_and_on
 
     monkeypatch.setattr(export, '_path_max', lambda directory: longest + 1)
     assert paths_of(an_export(dataset, out)) == probe
+
+
+def test_the_path_limit_is_windows_s_where_the_platform_reports_none(monkeypatch):
+    monkeypatch.delattr(os, 'pathconf')
+
+    assert export._path_max(Path('out')) == export._WINDOWS_PATH_MAX
+
+
+def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_before_it_writes(tmp_path, monkeypatch):
+    """Every path is planned before a write, the large files alone are not: here the recording fits and the
+    longest path does not."""
+    dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down'})
+    out = tmp_path / 'out'
+    probe = paths_of(export_static(dataset, tmp_path / 'probe', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    local = {path: len(os.fsencode(out.joinpath(*PurePosixPath(path).parts))) for path in probe}
+    longest = max(local.values())
+    assert local['api/episode_rrd/0'] < longest
+
+    monkeypatch.setattr(export, '_path_max', lambda directory: longest)
+    with pytest.raises(ValueError, match='path limit'):
+        export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False)
+    assert not out.exists()
 
 
 def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):

@@ -103,8 +103,10 @@ const groupIndexes = new Map();
 const GROUP_INDEX_FILE = 'index.json';
 const ENTRY_PARAMS = 'params';
 const ENTRY_FILE = 'file';
-// The route the dataset's loading status is read from.
+// The routes a page reads whole: the dataset's loading status, its description, and the flat episode table.
 const DATASET_STATUS_ROUTE = 'api/dataset_status';
+const DATASET_INFO_ROUTE = 'api/dataset_info';
+const EPISODES_ROUTE = 'api/episodes';
 
 async function groupIndex(path) {
   if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${GROUP_INDEX_FILE}`)));
@@ -137,7 +139,7 @@ async function fetchJSON(url) {
 }
 
 async function loadDatasetInfo() {
-  const data = await fetchJSON(await apiUrl('api/dataset_info'));
+  const data = await fetchJSON(await apiUrl(DATASET_INFO_ROUTE));
   if (!data) return;
   document.getElementById('dataset-stats').innerHTML =
     `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
@@ -145,7 +147,7 @@ async function loadDatasetInfo() {
 
 async function loadEpisodes(filters = {}) {
   const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
-  const url = await apiUrl(window.API_ENDPOINT || 'api/episodes', perFilterSet ? filters : null);
+  const url = await apiUrl(window.API_ENDPOINT || EPISODES_ROUTE, perFilterSet ? filters : null);
   if (!url) return { columns: state.columns, episodes: [] };
   return fetchJSON(url);
 }

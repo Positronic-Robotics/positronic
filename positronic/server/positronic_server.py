@@ -357,8 +357,9 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
         yield key_path
 
 
-def has_download(static: dict, key_path: tuple[str, ...]) -> bool:
-    """Whether `static` holds a value a page links as a download at `key_path`, a list item by its index."""
+def download_at(static: dict, key_path: tuple[str, ...]) -> bytes | str | None:
+    """The value a page links as a download at `key_path` into `static`, a list item by its index; None where
+    `static` holds no download there."""
     value: object = static
     for key in key_path:
         if isinstance(value, dict) and key in value:
@@ -366,8 +367,20 @@ def has_download(static: dict, key_path: tuple[str, ...]) -> bool:
         elif isinstance(value, list) and key.isdigit() and str(int(key)) == key and int(key) < len(value):
             value = value[int(key)]
         else:
-            return False
-    return is_download(value)
+            return None
+    return cast(bytes | str, value) if is_download(value) else None
+
+
+@dataclass(frozen=True)
+class DownloadMetadata:
+    """What a page says about a download beside its link: `bytes` or `text`, and its size."""
+
+    type: str
+    size: int
+
+
+def download_metadata(value: bytes | str) -> DownloadMetadata:
+    return DownloadMetadata('bytes' if isinstance(value, bytes) else 'text', len(value))
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -389,7 +402,7 @@ async def episode_viewer(request: Request, episode_id: int):
     def _make_serializable(obj, key_path=()):
         if is_download(obj):
             link = links[key_path]
-            return {DOWNLOAD_LINK: link, 'size': len(obj), 'type': 'bytes' if isinstance(obj, bytes) else 'text'}
+            return {DOWNLOAD_LINK: link, **asdict(download_metadata(obj))}
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
@@ -667,8 +680,9 @@ def _static_at(static: dict, key_path: Sequence[str]) -> object:
 
 
 def _content_disposition(disposition: str, filename: str) -> str:
-    """The `Content-Disposition` value naming a download `filename`; a name outside plain ASCII is percent-encoded."""
-    encoded = quote(filename)
+    """The `Content-Disposition` value naming a download `filename`; a name outside the plain ASCII characters,
+    a `/` included, is percent-encoded."""
+    encoded = quote(filename, safe='')
     if encoded == filename:
         return f'{disposition}; filename="{filename}"'
     return f"{disposition}; filename*=utf-8''{encoded}"

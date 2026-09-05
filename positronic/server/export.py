@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -39,7 +39,9 @@ from positronic.server.positronic_server import (
     configure_pages,
     configure_tables,
     default_table,
+    download_at,
     download_link,
+    download_metadata,
     download_paths,
     episode_link,
     episode_rrd_link,
@@ -48,7 +50,6 @@ from positronic.server.positronic_server import (
     filter_spelling,
     group_api_link,
     group_link,
-    has_download,
     install_dataset,
     normalized_base_href,
 )
@@ -69,6 +70,8 @@ MAX_FILTER_KEYS_PER_GROUP = 6
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
 MAX_PATH_BYTES = 1024
+# Windows holds a path within `MAX_PATH` characters, its end mark included, unless a machine opts into long paths.
+_WINDOWS_PATH_MAX = 260
 # Windows reads these as devices, with or without a suffix, and trims a trailing dot off a name.
 _WINDOWS_DEVICES = frozenset([
     'con',
@@ -110,18 +113,20 @@ class GroupFile:
 
 
 def _path_max(directory: Path) -> int:
-    """The longest path, its end mark included, the filesystem under `directory` takes; read off the nearest
-    ancestor that exists."""
+    """The longest path, its end mark included, the filesystem under `directory` takes: read off the nearest
+    ancestor that exists where the platform reports it, and Windows' `MAX_PATH` where it does not."""
+    if not hasattr(os, 'pathconf'):
+        return _WINDOWS_PATH_MAX
     existing = next(candidate for candidate in (directory, *directory.parents) if candidate.exists())
     return os.pathconf(existing, 'PC_PATH_MAX')
 
 
 class _PortableTree:
-    """The paths written so far under `directory`, as any host or filesystem the tree lands on holds them.
+    """The paths the export writes under `directory`, as any host or filesystem the tree lands on holds them.
 
     A path past a host's key limit is refused, and so is one past the local filesystem's path limit with
     `directory` in front. So is a component Windows reads as a device or trims, and a path that folds onto
-    a file written before, or onto a directory above one, or whose own directory folds onto a file.
+    a file added before, or onto a directory above one, or whose own directory folds onto a file.
     """
 
     def __init__(self, directory: Path):
@@ -149,37 +154,55 @@ class _PortableTree:
 
 
 class _Output:
+    """The files the export writes under `directory`: every path is planned before the first write, and a write
+    of a path outside the plan is refused."""
+
     def __init__(self, directory: Path):
         self.directory = directory
         self.files: list[ExportedFile] = []
         self._tree = _PortableTree(directory)
+        self._planned: set[str] = set()
 
-    def target(self, path: str) -> Path:
-        """The file `path` is written to; a path that would land outside the directory, or that a host or a
-        filesystem the tree lands on does not hold as it is, is refused."""
-        relative = PurePosixPath(path)
-        if relative.is_absolute() or '\\' in path or '..' in relative.parts:
-            raise ValueError(f'{path!r} would land outside {self.directory}')
-        self._tree.add(relative)
-        return self.directory.joinpath(*relative.parts)
+    def plan(self, paths: Iterable[str]) -> None:
+        """Register every path the export writes; one that would land outside the directory, or that a host or a
+        filesystem the tree lands on does not hold as it is, is refused here, before a write."""
+        for path in paths:
+            relative = PurePosixPath(path)
+            if relative.is_absolute() or '\\' in path or '..' in relative.parts:
+                raise ValueError(f'{path!r} would land outside {self.directory}')
+            self._tree.add(relative)
+            self._planned.add(path)
 
     def write(self, path: str, body: bytes, content_type: str) -> ExportedFile:
-        target = self.target(path)
+        target = self._target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
         return self._record(path, content_type, len(body))
 
     def copy(self, path: str, source: Path) -> ExportedFile:
         """Copy the file at `source` to `path` without holding it in memory."""
-        target = self.target(path)
+        target = self._target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         return self._record(path, asset_content_type(source), target.stat().st_size)
+
+    def _target(self, path: str) -> Path:
+        if path not in self._planned:
+            raise ValueError(f'{path!r} is not in the export plan')
+        return self.directory.joinpath(*PurePosixPath(path).parts)
 
     def _record(self, path: str, content_type: str, size: int) -> ExportedFile:
         written = ExportedFile(PurePosixPath(path), content_type, size)
         self.files.append(written)
         return written
+
+
+@dataclass(frozen=True)
+class _Planned:
+    """One file the export writes at `path`; `write` writes it, once the app serves the dataset it reads."""
+
+    path: str
+    write: Callable[[_Output], ExportedFile]
 
 
 def _fetch(client: TestClient, path: str, params: dict[str, str] | None = None) -> tuple[bytes, str]:
@@ -188,11 +211,14 @@ def _fetch(client: TestClient, path: str, params: dict[str, str] | None = None) 
     return response.content, response.headers.get('content-type', '')
 
 
-def _filter_values(dataset: Dataset, keys: Iterable[str]) -> Iterator[dict[str, str]]:
-    """Each episode's values on the filter `keys`, as a filter spells them; an absent value is left out."""
-    for episode in dataset:
-        spelled = ((key, filter_spelling(cast(Episode, episode).static.get(key))) for key in keys)
-        yield {key: value for key, value in spelled if value is not None}
+def _fetched(client: TestClient, route: str, path: str, params: dict[str, str] | None = None) -> _Planned:
+    """The response of `route`, read with `params`, written at `path`."""
+    return _Planned(path, lambda out: out.write(path, *_fetch(client, route, params)))
+
+
+def _copied(path: str, source: Path) -> _Planned:
+    """The file at `source`, copied to `path`."""
+    return _Planned(path, lambda out: out.copy(path, source))
 
 
 def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
@@ -208,14 +234,39 @@ def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, s
     return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
 
 
+def _filter_values(dataset: Dataset, keys: Iterable[str]) -> Iterator[dict[str, str]]:
+    """Each episode's values on the filter `keys`, as a filter spells them; an absent value is left out."""
+    for episode in dataset:
+        spelled = ((key, filter_spelling(cast(Episode, episode).static.get(key))) for key in keys)
+        yield {key: value for key, value in spelled if value is not None}
+
+
+def _filter_sets_by_group(
+    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
+) -> dict[str, list[dict[str, str]]]:
+    """The filter sets each group table gets a file for; a group past either bound is refused before a write."""
+    sets_by_group: dict[str, list[dict[str, str]]] = {}
+    for name, cfg in (group_tables or {}).items():
+        if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
+            raise ValueError(
+                f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
+                f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
+            )
+        sets = filter_sets(_filter_values(dataset, cfg.group_filter_keys))
+        if len(sets) > MAX_FILTER_SETS_PER_GROUP:
+            raise ValueError(
+                f'group table {name!r} has {len(sets)} filter sets and an export reads the dataset once per set, '
+                f'so a group table takes at most {MAX_FILTER_SETS_PER_GROUP}; a filter key with a value per episode '
+                f'is the usual cause'
+            )
+        sets_by_group[name] = sets
+    return sets_by_group
+
+
 def _large_file_path(link: str, build_id: str) -> str:
-    return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
-
-
-def _on_disk(link: str, build_id: str) -> str:
     """Where the file a large-file `link` names is written: its segments as a directory tree, each keeping the
     encoded spelling the browser asks it by, under the build."""
-    return _large_file_path(link, build_id)
+    return f'{BUILD_DIR}/{build_id}/{link}' if build_id else link
 
 
 def _page_spelling(link: str) -> str:
@@ -246,54 +297,71 @@ def large_file_links_under(html: str, links: Iterable[str], build_id: str) -> st
 
 
 @dataclass(frozen=True)
-class _EpisodeFiles:
+class _EpisodeLinks:
     """The large files one episode page links, as the page spells them."""
 
     index: int
-    recording: str
-    downloads: list[str]
-
-    @property
-    def links(self) -> list[str]:
-        return [self.recording, *self.downloads]
+    recording_link: str
+    download_links: list[str]
 
 
-def _episode_files(dataset: Dataset, index: int) -> _EpisodeFiles:
+def _episode_links(dataset: Dataset, index: int) -> _EpisodeLinks:
     static = cast(Episode, dataset[index]).static
     downloads = [download_link(index, field) for field in download_paths(static)]
-    return _EpisodeFiles(index, episode_rrd_link(index), downloads)
+    return _EpisodeLinks(index, episode_rrd_link(index), downloads)
 
 
-def _write_pages(
-    client: TestClient, out: _Output, group_names: list[str], episodes: list[_EpisodeFiles], build_id: str
-) -> None:
-    """Write every page; an episode page carries its links moved under the build."""
-    body, content_type = _fetch(client, '/')
-    out.write(PAGE_FILE, body, content_type)
-    for route in (episodes_link(), *(group_link(name) for name in group_names)):
+def _episode_page(client: TestClient, links: _EpisodeLinks, build_id: str) -> _Planned:
+    """The page of one episode, with its links moved under the build."""
+    route = episode_link(links.index)
+    path = f'{route}/{PAGE_FILE}'
+    every = [links.recording_link, *links.download_links]
+
+    def write(out: _Output) -> ExportedFile:
         body, content_type = _fetch(client, f'/{route}')
-        out.write(f'{route}/{PAGE_FILE}', body, content_type)
-    for files in episodes:
-        body, content_type = _fetch(client, f'/{episode_link(files.index)}')
         page = body.decode()
-        if not all(any(node in page for node in _link_nodes(link)) for link in files.links):
-            raise RuntimeError(f'episode page {files.index} does not carry every link the export expects')
-        moved = large_file_links_under(page, files.links, build_id)
-        out.write(f'{episode_link(files.index)}/{PAGE_FILE}', moved.encode(), content_type)
+        if not all(any(node in page for node in _link_nodes(link)) for link in every):
+            raise RuntimeError(f'episode page {links.index} does not carry every link the export expects')
+        return out.write(path, large_file_links_under(page, every, build_id).encode(), content_type)
+
+    return _Planned(path, write)
 
 
-def _write_group(client: TestClient, out: _Output, name: str, sets: Iterable[dict[str, str]]) -> None:
+def _page_writes(
+    client: TestClient, group_names: Iterable[str], episodes: Iterable[_EpisodeLinks], build_id: str
+) -> list[_Planned]:
+    """Every page."""
+    routes = [episodes_link(), *(group_link(name) for name in group_names)]
+    return [
+        _fetched(client, '/', PAGE_FILE),
+        *(_fetched(client, f'/{route}', f'{route}/{PAGE_FILE}') for route in routes),
+        *(_episode_page(client, links, build_id) for links in episodes),
+    ]
+
+
+def _group_writes(client: TestClient, name: str, sets: Iterable[dict[str, str]]) -> list[_Planned]:
+    """One file per filter set of the group table `name`, and the index naming them."""
     route = group_api_link(name)
-    body, content_type = _fetch(client, f'/{route}')
-    index = [GroupFile({}, UNFILTERED_FILE)]
-    out.write(f'{route}/{UNFILTERED_FILE}', body, content_type)
-    for number, params in enumerate((chosen for chosen in sets if chosen), start=1):
-        filtered, filtered_type = _fetch(client, f'/{route}', params)
-        entry = GroupFile(params, f'{number}.json')
-        out.write(f'{route}/{entry.file}', filtered, filtered_type)
-        index.append(entry)
+    filtered = (chosen for chosen in sets if chosen)
+    index = [GroupFile({}, UNFILTERED_FILE), *(GroupFile(params, f'{n}.json') for n, params in enumerate(filtered, 1))]
     listing = json.dumps([asdict(entry) for entry in index]).encode()
-    out.write(f'{route}/{GROUP_INDEX_FILE}', listing, 'application/json')
+    return [
+        *(_fetched(client, f'/{route}', f'{route}/{entry.file}', entry.params) for entry in index),
+        _Planned(
+            f'{route}/{GROUP_INDEX_FILE}',
+            lambda out: out.write(f'{route}/{GROUP_INDEX_FILE}', listing, 'application/json'),
+        ),
+    ]
+
+
+def _large_file_writes(client: TestClient, links: _EpisodeLinks, build_id: str) -> list[_Planned]:
+    """The recording and the downloads of one episode, under the build; the recording is copied from the file the
+    app builds, the downloads are read through the client."""
+    recording = _large_file_path(links.recording_link, build_id)
+    return [
+        _Planned(recording, lambda out: out.copy(recording, episode_rrd_path(links.index))),
+        *(_fetched(client, f'/{link}', _large_file_path(link, build_id)) for link in links.download_links),
+    ]
 
 
 # `mimetypes` answers for neither on every box.
@@ -307,11 +375,11 @@ def asset_content_type(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
 
 
-def _write_assets(out: _Output) -> None:
+def _asset_writes() -> list[_Planned]:
+    """The app's own scripts, styles and viewer, under `static/`."""
     static_dir = Path(__file__).resolve().parent / ASSET_DIR
-    for path in sorted(p for p in static_dir.rglob('*') if p.is_file()):
-        relative = path.relative_to(static_dir).as_posix()
-        out.write(f'{ASSET_DIR}/{relative}', path.read_bytes(), asset_content_type(path))
+    files = sorted(p for p in static_dir.rglob('*') if p.is_file())
+    return [_copied(f'{ASSET_DIR}/{file.relative_to(static_dir).as_posix()}', file) for file in files]
 
 
 def _whole_api_routes() -> list[str]:
@@ -327,7 +395,8 @@ def _whole_api_routes() -> list[str]:
 
 
 def _aligned(full: Dataset, shown: Dataset) -> Dataset:
-    """`full`, once it holds the episodes of `shown` at the same indexes, by uid, with every download `shown` links."""
+    """`full`, once it holds the episodes of `shown` at the same indexes, by uid, with every download `shown` links,
+    of the type and the size the page reports beside the link."""
     if len(full) != len(shown):
         raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(shown)}')
     for index in range(len(shown)):
@@ -337,48 +406,20 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
                 f'full_dataset episode {index} has uid {full_episode.meta[META_UID]!r} and dataset has '
                 f'{shown_episode.meta[META_UID]!r}'
             )
-        missing = [path for path in download_paths(shown_episode.static) if not has_download(full_episode.static, path)]
-        if missing:
-            path = '/'.join(min(missing))
-            raise ValueError(f'full_dataset episode {index} has no download at {path!r}, which dataset links')
+        for path in download_paths(shown_episode.static):
+            linked = download_metadata(cast(bytes | str, download_at(shown_episode.static, path)))
+            held = download_at(full_episode.static, path)
+            if held is None:
+                raise ValueError(
+                    f'full_dataset episode {index} has no download at {"/".join(path)!r}, which dataset links'
+                )
+            if download_metadata(held) != linked:
+                raise ValueError(
+                    f'full_dataset episode {index} holds {download_metadata(held).type} of size '
+                    f'{download_metadata(held).size} at {"/".join(path)!r}, and dataset links {linked.type} of size '
+                    f'{linked.size}'
+                )
     return full
-
-
-def _filter_sets_by_group(
-    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
-) -> dict[str, list[dict[str, str]]]:
-    """The filter sets each group table gets a file for; a group past either bound is refused before a write."""
-    sets_by_group: dict[str, list[dict[str, str]]] = {}
-    for name, cfg in (group_tables or {}).items():
-        if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
-            raise ValueError(
-                f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
-                f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
-            )
-        sets = filter_sets(_filter_values(dataset, cfg.group_filter_keys))
-        if len(sets) > MAX_FILTER_SETS_PER_GROUP:
-            raise ValueError(
-                f'group table {name!r} has {len(sets)} filter sets and an export reads the dataset once per set, '
-                f'so a group table takes at most {MAX_FILTER_SETS_PER_GROUP}; a filter key with a value per episode '
-                f'is the usual cause'
-            )
-        sets_by_group[name] = sets
-    return sets_by_group
-
-
-def _refuse_unportable_paths(
-    out: _Output, group_names: Iterable[str], episodes: Iterable[_EpisodeFiles], build_id: str
-) -> None:
-    """Refuse a group directory or a large file that a host or a filesystem does not hold as it is, before a write.
-
-    Past `configure_tables`, every group name is one segment the route builder spells.
-    """
-    named = _PortableTree(out.directory)
-    for name in group_names:
-        named.add(PurePosixPath(group_link(name)))
-    for files in episodes:
-        for link in files.links:
-            named.add(PurePosixPath(_on_disk(link, build_id)))
 
 
 def export_static(
@@ -421,7 +462,7 @@ def export_static(
     shown = CachedDataset(dataset)
     sets_by_group = _filter_sets_by_group(shown, group_tables)
     full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
-    episodes = [_episode_files(shown, index) for index in range(len(shown))]
+    episodes = [_episode_links(shown, index) for index in range(len(shown))]
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
@@ -436,26 +477,27 @@ def export_static(
             max_hz=max_hz,
         )
         configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
-        _refuse_unportable_paths(out, group_tables or {}, episodes, build_id)
-        install_dataset(shown)
         client = TestClient(app)
-        group_names = list(group_tables or {})
+        # Past `configure_tables`, every group name is one segment the route builders spell.
+        pages = [
+            *_page_writes(client, sets_by_group, episodes, build_id),
+            *(_fetched(client, f'/{route}', f'{route}.json') for route in _whole_api_routes()),
+            *itertools.chain.from_iterable(_group_writes(client, name, sets) for name, sets in sets_by_group.items()),
+        ]
+        large_files = list(
+            itertools.chain.from_iterable(_large_file_writes(client, links, build_id) for links in episodes)
+        )
+        asset_files = _asset_writes() if assets else []
+        out.plan(planned.path for planned in (*pages, *large_files, *asset_files))
 
-        _write_pages(client, out, group_names, episodes, build_id)
-        for route in _whole_api_routes():
-            body, content_type = _fetch(client, f'/{route}')
-            out.write(f'{route}.json', body, content_type)
-        for name, sets in sets_by_group.items():
-            _write_group(client, out, name, sets)
-
+        install_dataset(shown)
+        for planned in pages:
+            planned.write(out)
         install_dataset(full)
-        for files in episodes:
-            out.copy(_on_disk(files.recording, build_id), episode_rrd_path(files.index))
-            for link in files.downloads:
-                body, content_type = _fetch(client, f'/{link}')
-                out.write(_on_disk(link, build_id), body, content_type)
-    if assets:
-        _write_assets(out)
+        for planned in large_files:
+            planned.write(out)
+    for planned in asset_files:
+        planned.write(out)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
     return out.files
 
