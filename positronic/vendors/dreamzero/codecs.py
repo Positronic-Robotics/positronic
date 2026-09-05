@@ -224,6 +224,7 @@ droid = codecs.compose.override(
     action=codecs.droid_execution.override(action=_action),
     fps=15.0,
 )
+droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})
 
 _traj_action = dreamzero_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP)
 joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)

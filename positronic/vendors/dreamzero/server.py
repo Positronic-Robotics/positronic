@@ -383,8 +383,9 @@ joints = pipeline
 joints_traj = pipeline.override(codec=codecs.joints_traj)
 joints_ik = pipeline.override(codec=codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
-# The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
-droid = pipeline.override(codec=codecs.droid, height=180)
+# The public pretrained DROID checkpoint on the wan2.1 backbone. Asserts 320x180 frames.
+droid = pipeline.override(codec=codecs.droid, height=180, **{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})
+droid_3cam = droid.override(codec=codecs.droid_3cam)
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
@@ -406,9 +407,8 @@ COMMANDS = {
             'pipeline.source.backbone': 'wan2.2',
         },
     ),
-    # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
-    # pipeline whose codec feeds its required 320x180 frames.
-    'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),
+    'droid': serve.override(pipeline=droid),
+    'droid_3cam': serve.override(pipeline=droid_3cam),
 }
 
 

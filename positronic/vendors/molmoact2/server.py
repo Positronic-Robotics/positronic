@@ -64,11 +64,15 @@ def pipeline(codec: Codec, source: ModelSource):
 
 
 droid = pipeline
+droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
 
 
 # Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
-COMMANDS = {k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')}
+COMMANDS = {
+    **{k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')},
+    'droid_3cam': serve.override(pipeline=droid_3cam),
+}
 
 
 if __name__ == '__main__':
