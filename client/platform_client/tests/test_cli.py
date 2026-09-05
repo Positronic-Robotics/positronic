@@ -386,6 +386,21 @@ def test_a_torn_write_leaves_the_previous_record_whole(config, monkeypatch):
     assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
 
 
+def test_a_path_planted_beside_the_record_is_not_written_through(config):
+    """The staged file is created for the write alone, so a link planted under a guessable name stays a link."""
+    config.mkdir(mode=0o700)
+    target = config / 'elsewhere'
+    target.write_text('')
+    planted = config / f'.{CONFIG_FILENAME}.{os.getpid()}'
+    planted.symlink_to(target)
+
+    cli.write_config(config, Config(platform_url=PLATFORM, api_key=KEY))
+
+    assert target.read_text() == '' and planted.is_symlink()
+    assert _record(config) == {'platform_url': PLATFORM, 'api_key': KEY}
+    assert stat.S_IMODE((config / CONFIG_FILENAME).stat().st_mode) == 0o600
+
+
 def test_a_fresh_registration_replaces_the_record_whole(config, monkeypatch, capsys):
     """Both halves move together: the new key never sits beside the old platform."""
     _registered(config)

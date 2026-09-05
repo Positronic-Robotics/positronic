@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -76,11 +77,15 @@ def read_config(directory: Path) -> Config | None:
 
 
 def write_config(directory: Path, config: Config) -> None:
-    """Record the pair as one file, mode 0600, by rename: a reader sees the previous record or this one."""
+    """Record the pair as one file, mode 0600, by rename: a reader sees the previous record or this one.
+
+    The staged file is created for this write alone, under a name of its own, so a path planted
+    beside the record is not written through.
+    """
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / CONFIG_FILENAME
-    staged = path.with_name(f'.{path.name}.{os.getpid()}')
-    with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as staged_file:
+    descriptor, staged = tempfile.mkstemp(dir=directory, prefix=f'.{CONFIG_FILENAME}.')
+    with os.fdopen(descriptor, 'w') as staged_file:
         staged_file.write(config.model_dump_json(indent=2))
     os.replace(staged, path)
 
