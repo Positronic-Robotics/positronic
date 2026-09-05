@@ -104,11 +104,23 @@ def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Conf
     return record.api_key if record else None
 
 
+def platform_is_given(env: Mapping[str, str], platform_url: str | None) -> bool:
+    """Whether the caller names a platform of their own — the flag or the environment — over the record's."""
+    return platform_url is not None or env.get(API_URL_ENV) is not None
+
+
 def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: Config | None) -> str | None:
     """What the client resolves the platform from: the flag, else the record — unless the environment names one."""
-    if platform_url is not None or env.get(API_URL_ENV) is not None:
+    if platform_is_given(env, platform_url):
         return platform_url
     return record.platform_url if record else None
+
+
+def record_if_needed(env: Mapping[str, str], api_key_file: Path | None, platform_url: str | None) -> Config | None:
+    """The saved record, read only where the caller leaves the key or the platform to it."""
+    if key_is_given(env, api_key_file) and platform_is_given(env, platform_url):
+        return None
+    return read_config(config_dir(env))
 
 
 def _one_line(exc: ValidationError) -> str:
@@ -189,7 +201,7 @@ def ask_from_args(args: argparse.Namespace) -> RequestCreate:
 
 def _client(args: argparse.Namespace, env: Mapping[str, str]) -> PlatformClient:
     """The client to call with. The record's key reaches the record's platform and no other."""
-    record = read_config(config_dir(env))
+    record = record_if_needed(env, args.api_key_file, args.platform_url)
     api_key = api_key_from(env, args.api_key_file, record)
     if api_key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, pass --api-key-file, or run `positronic-platform register`')
@@ -222,8 +234,9 @@ class Registered(BaseModel):
 
 
 def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
+    record = None if platform_is_given(env, args.platform_url) else read_config(config_dir(env))
     base_url = github_device_flow.allowed_platform_url(
-        platform_url_from(env, args.platform_url, read_config(config_dir(env))), plaintext_http=args.plaintext_http
+        platform_url_from(env, args.platform_url, record), plaintext_http=args.plaintext_http
     )
     response = github_device_flow.run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
     config_file: Path | None = None
@@ -264,7 +277,7 @@ def _get(args: argparse.Namespace, env: Mapping[str, str]) -> None:
 
 
 def _list(args: argparse.Namespace, env: Mapping[str, str]) -> None:
-    after = _request_id(args.after) if args.after else None
+    after = _request_id(args.after) if args.after is not None else None
     with _client(args, env) as client:
         _show(client.requests_list(after=after, limit=args.limit))
 
