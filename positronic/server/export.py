@@ -128,11 +128,11 @@ def _path_max(directory: Path) -> int:
 class _Output:
     """The files the export writes under `directory`, as any host or filesystem holds them.
 
-    Every path is planned before the first write. A path past a host's key limit with `key_prefix`, the
-    base href, in front is refused, and so is one past the local filesystem's path limit with `directory`
-    in front. So is a component Windows reads as a
-    device or trims, and a path that folds onto a file planned before, or onto a directory above one, or
-    whose own directory folds onto a file.
+    Every path is planned before the first write, and `plan` refuses:
+    - a key past a host's limit, with `key_prefix`, the base href, in front;
+    - a local path past the filesystem's limit, with `directory` in front;
+    - a component Windows reads as a device or trims;
+    - a path that folds onto a planned file or onto a directory above one, or whose directory folds onto a file.
     """
 
     def __init__(self, directory: Path, key_prefix: str = ''):
