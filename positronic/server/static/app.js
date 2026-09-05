@@ -13,6 +13,7 @@
 //   window.EPISODES_URL   — where View links point on grouped pages
 //   window.VIEW_LABEL     — button text override
 //   window.STATIC_EXPORT  — read the files a static export wrote, not the live API
+//   window.SERVER_NAMES   — the routes, the files an export writes and the response fields, by name
 //
 // Data flow
 // ---------
@@ -95,20 +96,14 @@ function baseScopedKey(name) {
 }
 
 // A static export holds a group table as one file per filter set some episode satisfies, listed in
-// `index.json` beside them; the unfiltered flat table is one file, filtered in the browser.
+// the index file beside them; the unfiltered flat table is one file, filtered in the browser.
 const groupIndexes = new Map();
 
-// A group's index: a file beside the group's files, listing {params, file} entries, one per filter set.
-const GROUP_INDEX_FILE = 'index.json';
-const ENTRY_PARAMS = 'params';
-const ENTRY_FILE = 'file';
-// The routes a page reads whole: the dataset's loading status, its description, and the flat episode table.
-const DATASET_STATUS_ROUTE = 'api/dataset_status';
-const DATASET_INFO_ROUTE = 'api/dataset_info';
-const EPISODES_ROUTE = 'api/episodes';
+// Every name the server and the page agree on: a route, a file an export writes, a response field.
+const NAMES = window.SERVER_NAMES;
 
 async function groupIndex(path) {
-  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${GROUP_INDEX_FILE}`)));
+  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${NAMES.group_index_file}`)));
   return groupIndexes.get(path);
 }
 
@@ -120,8 +115,8 @@ function sameFilters(a, b) {
 
 async function exportedGroupFile(path, params) {
   const chosen = Object.fromEntries(Object.entries(params).filter(([, value]) => value));
-  const entry = (await groupIndex(path)).find((item) => sameFilters(item[ENTRY_PARAMS], chosen));
-  return entry ? appUrl(`${path}/${entry[ENTRY_FILE]}`) : null;  // no episode satisfies this filter set
+  const entry = (await groupIndex(path)).find((item) => sameFilters(item[NAMES.entry_params], chosen));
+  return entry ? appUrl(`${path}/${entry[NAMES.entry_file]}`) : null;  // no episode satisfies this filter set
 }
 
 async function apiUrl(path, params) {
@@ -138,7 +133,7 @@ async function fetchJSON(url) {
 }
 
 async function loadDatasetInfo() {
-  const data = await fetchJSON(await apiUrl(DATASET_INFO_ROUTE));
+  const data = await fetchJSON(await apiUrl(NAMES.dataset_info));
   if (!data) return;
   document.getElementById('dataset-stats').innerHTML =
     `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
@@ -146,7 +141,7 @@ async function loadDatasetInfo() {
 
 async function loadEpisodes(filters = {}) {
   const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
-  const url = await apiUrl(window.API_ENDPOINT || EPISODES_ROUTE, perFilterSet ? filters : null);
+  const url = await apiUrl(window.API_ENDPOINT || NAMES.episodes_api, perFilterSet ? filters : null);
   if (!url) return { columns: state.columns, episodes: [] };
   return fetchJSON(url);
 }
@@ -189,7 +184,7 @@ async function pollUntilLoaded() {
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
-      const status = await fetchJSON(await apiUrl(DATASET_STATUS_ROUTE));
+      const status = await fetchJSON(await apiUrl(NAMES.dataset_status));
       if (!status || status.loading) return;
       clearInterval(interval);
       statusEl.classList.remove('show');
@@ -205,7 +200,7 @@ async function initEpisodesTable() {
   const loadingEl = container.querySelector('.loading');
 
   // Check if dataset is ready
-  const status = await fetchJSON(await apiUrl(DATASET_STATUS_ROUTE));
+  const status = await fetchJSON(await apiUrl(NAMES.dataset_status));
   if (!status) return;
 
   if (status.loading) {
@@ -229,7 +224,8 @@ async function initEpisodesTable() {
   const initial = await loadEpisodes({});
   if (!initial) return;
 
-  const { columns, group_filters: groupFilters, default_sort: defaultSort } = initial;
+  const { columns, default_sort: defaultSort } = initial;
+  const groupFilters = initial[NAMES.group_filters];
   state.columns = columns;
   state.filtersData = buildFiltersData(initial.episodes, columns);
 
@@ -480,7 +476,7 @@ function populateTable(columns) {
       const episodesUrl = window.EPISODES_URL || '.';
       viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
-      viewLink.href = appUrl(`episode/${episodeIndex}`);
+      viewLink.href = appUrl(`${NAMES.episode_page_prefix}${episodeIndex}`);
     }
     viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);
@@ -539,7 +535,7 @@ function renderServerFilters(groupFilters) {
   for (const [filterKey, filterData] of Object.entries(groupFilters)) {
     const options = [
       createOption('-1', 'All'),
-      ...filterData.values.map((v) => createOption(v, v)),
+      ...filterData[NAMES.filter_values].map((v) => createOption(v, v)),
     ];
 
     const container = createFilterDropdown({

@@ -1,10 +1,11 @@
 import ipaddress
+import json
 import os
 import re
 import socket
 import threading
 from collections import namedtuple
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,8 +22,10 @@ from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     FILTER_VALUES,
     GROUP_FILTERS,
+    GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
     ColumnConfig,
+    GroupFile,
     GroupTableConfig,
     PageConfig,
     _access_url,
@@ -42,6 +45,7 @@ from positronic.server.positronic_server import (
     configure_tables,
     download_link,
     download_paths,
+    episode_link,
     normalized_base_href,
 )
 
@@ -237,6 +241,9 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
 
 # A URL that starts at the server root, in an attribute or in a script's string.
 _ROOTED_URL = re.compile(r"""["'(`](/[^"'`)\s]*)""")
+
+# The object every page hands the script, as `base.html` writes it.
+_SERVER_NAMES = re.compile(r'window\.SERVER_NAMES = (\{.*?\});')
 
 
 def _server_rooted_urls(html: str, base_href: str) -> list[str]:
@@ -474,16 +481,24 @@ def test_a_path_of_any_depth_keeps_its_link_on_the_live_server():
     assert download_link(0, keys_).startswith('api/episode/0/static/')
 
 
-def test_the_page_script_names_each_api_route_once_as_the_server_declares_it():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+@pytest.mark.parametrize('page', _PAGES)
+def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
+    written = _SERVER_NAMES.search(viewer.get(page).text)
+    assert written is not None, f'{page} hands the script no names'
+    names = json.loads(written.group(1))
+    params, file = (field.name for field in fields(GroupFile))
 
-    for name, endpoint in (
-        ('DATASET_STATUS_ROUTE', api_dataset_status),
-        ('DATASET_INFO_ROUTE', api_dataset_info),
-        ('EPISODES_ROUTE', api_episodes),
-    ):
-        assert f"const {name} = '{_route(endpoint)}';" in app_js
-        assert app_js.count(f"'{_route(endpoint)}'") == 1
+    assert names.pop('episode_page_prefix') + '3' == episode_link(3)
+    assert names == {
+        'dataset_status': _route(api_dataset_status),
+        'dataset_info': _route(api_dataset_info),
+        'episodes_api': _route(api_episodes),
+        'group_index_file': GROUP_INDEX_FILE,
+        'entry_params': params,
+        'entry_file': file,
+        'group_filters': GROUP_FILTERS,
+        'filter_values': FILTER_VALUES,
+    }
 
 
 def test_the_flat_table_takes_a_url_filter_only_for_a_value_some_row_carries():

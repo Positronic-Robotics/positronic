@@ -7,7 +7,6 @@ import shutil
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import fields
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -29,7 +28,6 @@ from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
-    GroupFile,
     _fetch,
     _Output,
     asset_content_type,
@@ -810,14 +808,6 @@ def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):
     with pytest.raises(ValueError, match='home_page'):
         an_export(dataset, tmp_path / 'out', group_tables=GROUPS, home_page='nope')
     assert not (tmp_path / 'out').exists()
-
-
-def test_the_page_script_spells_a_group_index_as_the_export_writes_it():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
-    params, file = (field.name for field in fields(GroupFile))
-
-    assert f"const GROUP_INDEX_FILE = '{GROUP_INDEX_FILE}';" in app_js
-    assert f"const ENTRY_PARAMS = '{params}';" in app_js and f"const ENTRY_FILE = '{file}';" in app_js
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import StrEnum
 from functools import wraps
@@ -150,6 +150,16 @@ async def cache_rerun_assets(request: Request, call_next):
 # holding its values.
 GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
+# A static export holds a group table as one file per filter set, and this index beside them.
+GROUP_INDEX_FILE = 'index.json'
+
+
+@dataclass(frozen=True)
+class GroupFile:
+    """One file of a group table: the filter set it was read with, and its name beside the index."""
+
+    params: dict[str, str]
+    file: str
 
 
 def _page_config() -> PageConfig:
@@ -213,13 +223,35 @@ def group_api_link(name: str) -> str:
     return _route(api_groups, suffix=name)
 
 
+def _episode_page_prefix() -> str:
+    """What every episode page's link opens with; the page adds the episode's index to it."""
+    placeholder = 'INDEX'
+    return _route(episode_viewer, episode_id=placeholder).removesuffix(placeholder)
+
+
+def _server_names() -> dict[str, str]:
+    """Every name the page reads from the server rather than spelling it again: a route, a file, a field."""
+    params, file = (field.name for field in fields(GroupFile))
+    return {
+        'dataset_status': _route(api_dataset_status),
+        'dataset_info': _route(api_dataset_info),
+        'episodes_api': _route(api_episodes),
+        'episode_page_prefix': _episode_page_prefix(),
+        'group_index_file': GROUP_INDEX_FILE,
+        'entry_params': params,
+        'entry_file': file,
+        'group_filters': GROUP_FILTERS,
+        'filter_values': FILTER_VALUES,
+    }
+
+
 def _page_context() -> dict[str, Any]:
     """The template context every page shares."""
     home_page = app_state.get('home_page')
     group_tables = app_state.get('group_tables_cfg', {})
 
     nav_items = []
-    episodes_url = 'episodes' if home_page else '.'
+    episodes_url = episodes_link() if home_page else '.'
 
     # If home_page is set, it goes first
     if home_page and home_page in group_tables:
@@ -244,6 +276,7 @@ def _page_context() -> dict[str, Any]:
     pages = _page_config()
     return {
         'nav_items': nav_items,
+        'server_names': _server_names(),
         'home_page': home_page,
         'episodes_url': episodes_url,
         'base_href': pages.base_href,

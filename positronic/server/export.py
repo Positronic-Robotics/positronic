@@ -31,7 +31,9 @@ from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
+    GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
+    GroupFile,
     GroupTableConfig,
     TableConfig,
     app,
@@ -61,8 +63,7 @@ PAGE_FILE = 'index.html'
 API_DIR = 'api'
 # The recordings and the downloads sit under `build/<build_id>/`, a path a rebuild never rewrites.
 BUILD_DIR = 'build'
-# A group table is one file per filter set, and the index beside them says which file holds which.
-GROUP_INDEX_FILE = 'index.json'
+# The file of a group table read with no filter, beside the index that names it.
 UNFILTERED_FILE = 'all.json'
 # A group table is one file per filter set some episode satisfies, up to 2^k per episode for k filter keys.
 MAX_FILTER_KEYS_PER_GROUP = 6
@@ -102,14 +103,6 @@ class ExportedFile:
     path: PurePosixPath
     content_type: str
     size: int
-
-
-@dataclass(frozen=True)
-class GroupFile:
-    """One file of a group table: the filter set it was read with, and its name beside the index."""
-
-    params: dict[str, str]
-    file: str
 
 
 def _path_max(directory: Path) -> int:

@@ -11,6 +11,7 @@
       content="{% block description %}{% endblock %}"
     />
     <link rel="stylesheet" href="/static/styles.css" />
+    <script>window.SERVER_NAMES = {{ server_names | tojson }};</script>
     {% if static_export %}<script>window.STATIC_EXPORT = true;</script>{% endif %}
     {% endblock %}
 </head>
