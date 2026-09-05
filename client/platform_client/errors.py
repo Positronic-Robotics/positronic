@@ -20,6 +20,9 @@ REASON_CODE_DETAIL = 'reason_code'
 QUOTA_DETAIL = 'quota'
 EVALS_DETAIL = 'evals'
 TASKS_DETAIL = 'tasks'
+# Behind a scene the task cannot be set up in: the mounts and the tote sides that task offers.
+MOUNTS_DETAIL = 'mounts'
+TOTE_SIDES_DETAIL = 'tote_sides'
 
 
 class ApiErrorBody(BaseModel):
