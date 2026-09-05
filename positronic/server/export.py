@@ -73,8 +73,8 @@ MAX_FILTER_KEYS_PER_GROUP = 6
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
 MAX_KEY_BYTES = 1024
-# A platform that reports no path limit is Windows, whose `MAX_PATH` counts UTF-16 units, the end mark included,
-# unless a machine opts into long paths.
+# Windows reports no path limit; its `MAX_PATH` counts UTF-16 units, the end mark included, unless a machine opts
+# into long paths.
 _REPORTS_PATH_MAX = hasattr(os, 'pathconf')
 _WINDOWS_PATH_MAX = 260
 # Windows reads these as devices, with or without a suffix, and trims a trailing dot off a name.
