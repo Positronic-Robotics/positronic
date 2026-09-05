@@ -157,6 +157,8 @@ GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
 # A static export holds a group table as one file per filter set, and this index beside them.
 GROUP_INDEX_FILE = 'index.json'
+# A static export holds an API response read whole at the route's path with this suffix.
+API_FILE_SUFFIX = '.json'
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,7 @@ def _server_names() -> dict[str, str]:
         'dataset_status': _route(api_dataset_status),
         'dataset_info': _route(api_dataset_info),
         'episodes_api': _route(api_episodes),
+        'api_file_suffix': API_FILE_SUFFIX,
         'episode_page_before': before_index,
         'episode_page_after': after_index,
         'group_index_file': GROUP_INDEX_FILE,
@@ -403,6 +406,14 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
 _MISSING = object()
 
 
+def _list_index(key: str, items: list) -> int | None:
+    """The index `key` names into `items`: ASCII digits, no more of them than the length has; None otherwise."""
+    if not (key.isascii() and key.isdigit() and len(key) <= len(str(len(items)))):
+        return None
+    index = int(key)
+    return index if index < len(items) else None
+
+
 def _value_at(static: dict, key_path: Sequence[str]) -> object:
     """The value each key of `key_path` names in turn into `static`, or `_MISSING`.
 
@@ -412,9 +423,10 @@ def _value_at(static: dict, key_path: Sequence[str]) -> object:
     value: object = static
     for key in key_path:
         if isinstance(value, list):
-            if not key.isdigit() or int(key) >= len(value):
+            index = _list_index(key, value)
+            if index is None:
                 return _MISSING
-            value = value[int(key)]
+            value = value[index]
         elif isinstance(value, dict) and key in value:
             value = value[key]
         else:
@@ -451,10 +463,10 @@ def download_metadata(value: bytes | str) -> DownloadMetadata:
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
 @require_dataset
 async def episode_viewer(request: Request, episode_id: int):
-    ds = app_state.get('dataset')
+    ds = cast(Dataset, app_state.get('dataset'))
 
     try:
-        episode = ds[episode_id]
+        episode = cast(Episode, ds[episode_id])
     except IndexError as e:
         raise HTTPException(status_code=404, detail='Episode not found') from e
 
@@ -479,6 +491,8 @@ async def episode_viewer(request: Request, episode_id: int):
         {
             'episode_id': episode_id,
             'num_episodes': len(ds),
+            'prev_link': episode_link((episode_id - 1) % len(ds)),
+            'next_link': episode_link((episode_id + 1) % len(ds)),
             'viewer_path': asset_link(f'rerun/{rr.__version__}/index.html'),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),

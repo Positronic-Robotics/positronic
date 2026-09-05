@@ -102,6 +102,10 @@ const groupIndexes = new Map();
 // Every name the server and the page agree on: a route, a file an export writes, a response field.
 const NAMES = window.SERVER_NAMES;
 
+function episodePageUrl(index) {
+  return appUrl(`${NAMES.episode_page_before}${index}${NAMES.episode_page_after}`);
+}
+
 async function groupIndex(path) {
   if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${NAMES.group_index_file}`)));
   return groupIndexes.get(path);
@@ -120,7 +124,7 @@ async function exportedGroupFile(path, params) {
 }
 
 async function apiUrl(path, params) {
-  if (window.STATIC_EXPORT) return params ? exportedGroupFile(path, params) : appUrl(`${path}.json`);
+  if (window.STATIC_EXPORT) return params ? exportedGroupFile(path, params) : appUrl(`${path}${NAMES.api_file_suffix}`);
   const url = new URL(path, document.baseURI);
   for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
   return url.href;
@@ -476,7 +480,7 @@ function populateTable(columns) {
       const episodesUrl = window.EPISODES_URL || '.';
       viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
-      viewLink.href = appUrl(`${NAMES.episode_page_before}${episodeIndex}${NAMES.episode_page_after}`);
+      viewLink.href = episodePageUrl(episodeIndex);
     }
     viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);

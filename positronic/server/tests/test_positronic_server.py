@@ -20,6 +20,7 @@ from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
+    API_FILE_SUFFIX,
     FILTER_VALUES,
     GROUP_FILTERS,
     GROUP_INDEX_FILE,
@@ -396,6 +397,14 @@ def test_a_download_name_holding_a_slash_is_percent_encoded_in_the_header(viewer
     )
 
 
+def test_a_list_index_the_route_cannot_parse_is_a_missing_field(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'many': [b'x']})
+
+    for segment in ('\u00b2', '9' * 5000, '-1', '1_0', '01'):
+        assert viewer.get(f'/api/episode/0/static/many/{segment}').status_code == 404
+    assert viewer.get('/api/episode/0/static/many/0').content == b'x'
+
+
 def test_a_download_link_carries_each_key_encoded_and_the_route_answers_it(viewer, monkeypatch):
     monkeypatch.setattr(_StubEpisode, 'static', {'a?b c': b'a mesh', 'a/b': b'nested'})
 
@@ -501,6 +510,7 @@ def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
         'dataset_status': _route(api_dataset_status),
         'dataset_info': _route(api_dataset_info),
         'episodes_api': _route(api_episodes),
+        'api_file_suffix': API_FILE_SUFFIX,
         'group_index_file': GROUP_INDEX_FILE,
         'entry_params': params,
         'entry_file': file,

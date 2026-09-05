@@ -30,6 +30,7 @@ from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
+    API_FILE_SUFFIX,
     ASSET_ROUTE,
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
@@ -196,16 +197,6 @@ def _planned_fetch(
 ) -> _Planned:
     """The plan to write the response of `route`, read with `params` while the app serves `reads`, at `path`."""
     return _Planned(path, reads, lambda out: out.write(path, *_fetch(client, route, params)))
-
-
-def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
-    """Write each of `plans` with the app serving the dataset it reads."""
-    serving: Dataset | None = None
-    for planned in plans:
-        if planned.reads is not serving:
-            install_dataset(planned.reads)
-            serving = planned.reads
-        planned.write(out)
 
 
 def filter_sets(episode_values: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
@@ -412,6 +403,16 @@ def _aligned(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
+def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
+    """Write each of `plans` with the app serving the dataset it reads."""
+    serving: Dataset | None = None
+    for planned in plans:
+        if planned.reads is not serving:
+            install_dataset(planned.reads)
+            serving = planned.reads
+        planned.write(out)
+
+
 def export_static(
     dataset: Dataset,
     out_dir: Path,
@@ -472,7 +473,7 @@ def export_static(
         plans = [
             *_page_plans(client, shown, sets_by_group, episodes, build_id),
             *(
-                _planned_fetch(client, f'/{route}', PurePosixPath(f'{route}.json'), shown)
+                _planned_fetch(client, f'/{route}', PurePosixPath(route + API_FILE_SUFFIX), shown)
                 for route in _whole_api_routes()
             ),
             *itertools.chain.from_iterable(
