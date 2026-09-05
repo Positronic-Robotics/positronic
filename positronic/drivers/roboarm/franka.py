@@ -282,6 +282,53 @@ class _Arm(DriverRun[command.CommandType]):
             logger.exception('The arm did not reach the park pose, it stays where it stands')
 
 
+class _Brakes:
+    """The arm's joint brakes, and the idle time the driver holds them open for.
+
+    Both a Desk session and an idle time are needed to close them; without either the driver holds them
+    open for the whole run.
+    """
+
+    def __init__(self, desk: Desk | None, robot: pf.Robot, clock: pimm.Clock, after_idle_s: float | None):
+        self._desk = desk
+        self._robot = robot
+        self._clock = clock
+        self._after_idle_s = after_idle_s
+        self._closed = False
+        self._idle_since = clock.now()
+
+    @contextlib.contextmanager
+    def opened(self) -> Iterator[None]:
+        """Open the brakes for the block, and count the idle time from the moment the block ends."""
+        if self._closed:
+            assert self._desk is not None, 'only a Desk session closes the brakes'
+            logger.info('A command arrived, opening the brakes')
+            self._desk.open_brakes()
+            self._closed = False
+        try:
+            yield
+        finally:
+            self._idle_since = self._clock.now()
+
+    def close_if_idle(self) -> None:
+        """Close the brakes once the idle time passes with the arm at rest.
+
+        A streamed setpoint is published and done with, so the goal is the only thing that says the arm is
+        still travelling towards it.
+        """
+        if self._closed or self._desk is None or self._after_idle_s is None:
+            return
+        if self._robot.goal().status == pf.GoalStatus.IN_FLIGHT:
+            self._idle_since = self._clock.now()
+            return
+        if self._clock.now() - self._idle_since < self._after_idle_s:
+            return
+        logger.info(f'No command and no move for {self._after_idle_s}s, closing the brakes')
+        self._robot.stop()  # the brakes cannot engage on an arm the control loop still drives
+        self._desk.close_brakes()
+        self._closed = True
+
+
 class Robot(pimm.ControlSystem):
     def __init__(
         self,
@@ -292,6 +339,7 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         reboot_on_safety_error: bool = False,
+        brake_after_idle_s: float | None = None,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -304,8 +352,16 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
+        :param brake_after_idle_s: How long the arm may sit with no command and no move in flight before the driver
+            closes the brakes; the next command opens them again. None holds the brakes open for the whole run.
+            Needs ``manage_desk``.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
+        assert brake_after_idle_s is None or brake_after_idle_s > 0, brake_after_idle_s
+        if brake_after_idle_s is not None and not manage_desk:
+            raise ValueError(
+                'brake_after_idle_s needs manage_desk=True: without a Desk session the driver cannot close the brakes'
+            )
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
@@ -316,6 +372,7 @@ class Robot(pimm.ControlSystem):
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._reboot_on_safety_error = reboot_on_safety_error
+        self._brake_after_idle_s = brake_after_idle_s
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -416,12 +473,14 @@ class Robot(pimm.ControlSystem):
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with self._desk_session(), self._arm(should_stop, clock) as arm:
+        with self._desk_session() as desk, self._arm(should_stop, clock) as arm:
             robot = arm.robot
             self._init_robot(robot)
             self.robot_meta.emit(Robot._build_robot_meta(robot))
+            brakes = _Brakes(desk, robot, clock, self._brake_after_idle_s)
 
-            yield from arm.park()
+            with brakes.opened():
+                yield from arm.park()
 
             in_error = False
 
@@ -440,14 +499,18 @@ class Robot(pimm.ControlSystem):
 
                 asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
-                    yield from arm.sync_move(asked)
+                    with brakes.opened():
+                        yield from arm.sync_move(asked)
                 elif asked is not None:
-                    with log_failure(asked):
+                    with brakes.opened(), log_failure(asked):
                         arm.command_target(arm.to_joints(asked), asked.mode)
+                else:
+                    brakes.close_if_idle()
 
                 yield arm.limiter.wait()
 
-            yield from arm.park(at_teardown=True)
+            with brakes.opened():
+                yield from arm.park(at_teardown=True)
 
 
 if __name__ == '__main__':
