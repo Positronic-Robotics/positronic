@@ -35,7 +35,8 @@ FINGER_BODIES = ('left_finger_ph', 'right_finger_ph')
 CUBE_POSES = 'cube_poses'
 SUPPORTED = 'stack_supported'
 TIME_SUFFIX = '.time_ns'
-RECORDED_SIGNALS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP, keys.EE_POSE, keys.JOINTS, keys.GRIP)
+ROBOT_OBSERVATIONS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
+RECORDED_SIGNALS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP, *ROBOT_OBSERVATIONS)
 
 
 def checkpoint_url(url: str) -> str:
@@ -131,6 +132,9 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
             raise ValueError(f'{name}: empty or non-finite recording')
         if name.endswith(TIME_SUFFIX) and np.any(np.diff(values) <= 0):
             raise ValueError(f'{name}: timestamps must increase strictly')
+    for name in ROBOT_OBSERVATIONS:
+        if not np.array_equal(trace[name + TIME_SUFFIX], trace[CUBE_POSES + TIME_SUFFIX]):
+            raise ValueError(f'{name}: expected one observation at every recorded physics step')
     return trace
 
 

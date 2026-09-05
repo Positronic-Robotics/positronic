@@ -14,7 +14,8 @@ The default checks both:
 
 - **Task success:** the green cube touches the red cube, sits 15–25 mm above its center, and touches
   neither finger, continuously for at least 0.5 seconds. The check reconstructs every recorded physics
-  sample; it also requires a complete episode with the requested seed and checkpoint.
+  sample; it also requires a complete episode with the requested seed and checkpoint. Robot pose,
+  joints and gripper observations must each contain one sample at every physics step.
 - **Exact behavior:** commands, robot pose, joints, gripper state, both cube poses, support state and
   their episode-relative timestamps match the committed reference arrays. The comparison reports the
   first differing field, sample time and value.

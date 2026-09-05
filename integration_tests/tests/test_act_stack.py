@@ -2,20 +2,74 @@ import mujoco as mj
 import numpy as np
 import pytest
 
+from integration_tests import act_stack
 from integration_tests.act_stack import (
     CUBE_POSES,
     EPISODE_SECONDS,
     FINGER_BODIES,
     GREEN_BODY,
+    RECORDED_SIGNALS,
     RED_BODY,
     SUPPORTED,
     TIME_SUFFIX,
     capture,
+    check_episode,
     check_stacking,
     checkpoint_url,
     compare_trace,
     is_supported_stack,
 )
+from positronic import keys
+from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+
+
+@pytest.fixture
+def recorded_signals(monkeypatch, tmp_path):
+    times = np.arange(0, EPISODE_SECONDS * 1_000_000_000 + 1, 100_000_000)
+    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
+        for name in RECORDED_SIGNALS:
+            sample_times = times[::10] if name in (keys.TARGET_EE_POSE, keys.TARGET_GRIP) else times
+            for timestamp in sample_times:
+                writer.append(name, 0.0, int(timestamp))
+    signals = DiskEpisode(tmp_path / 'episode').signals
+    monkeypatch.setattr(
+        act_stack,
+        'cube_trace',
+        lambda episode: {
+            CUBE_POSES: np.zeros((len(times), 2, 7)),
+            CUBE_POSES + TIME_SUFFIX: times - episode.start_ts,
+            SUPPORTED: np.ones(len(times), dtype=bool),
+        },
+    )
+    monkeypatch.setattr(act_stack, 'read_episode', lambda output, seed: EpisodeContainer(signals))
+    return signals
+
+
+@pytest.mark.parametrize('name', [keys.EE_POSE, keys.JOINTS, keys.GRIP])
+@pytest.mark.parametrize(
+    'retained',
+    [
+        pytest.param([0], id='only-first'),
+        pytest.param(slice(1, None), id='missing-first'),
+        pytest.param(slice(None, -1), id='missing-last'),
+        pytest.param(np.delete(np.arange(151), 75), id='missing-middle'),
+    ],
+)
+def test_incomplete_observations_fail_success_check_and_capture(recorded_signals, name, retained, tmp_path):
+    recorded_signals[name] = recorded_signals[name][retained]
+    with pytest.raises(ValueError, match=f'{name}: expected one observation'):
+        check_episode(tmp_path, 4, tmp_path, success_only=True)
+    reference = tmp_path / 'reference'
+    with pytest.raises(ValueError, match=f'{name}: expected one observation'):
+        capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    assert not list(reference.glob('*.npz'))
+
+
+def test_complete_observations_and_sparse_commands_can_be_captured(recorded_signals, tmp_path):
+    reference = tmp_path / 'reference'
+    capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    check_episode(tmp_path, 4, reference, success_only=False)
 
 
 @pytest.mark.parametrize(
