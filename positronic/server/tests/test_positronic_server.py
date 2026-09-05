@@ -41,6 +41,7 @@ from positronic.server.positronic_server import (
     app,
     app_state,
     app_state_restored,
+    asset_link,
     configure_pages,
     configure_tables,
     download_link,
@@ -361,6 +362,13 @@ def test_the_api_reports_no_dataset_root_when_the_viewer_hides_paths(viewer, mon
 def test_the_api_reports_the_dataset_root_by_default(viewer):
     assert viewer.get('/api/dataset_info').json()['root'] == '/datasets/run-7'
     assert viewer.get('/api/dataset_status').json()['repo_id'] == '/datasets/run-7'
+
+
+def test_a_page_links_its_stylesheet_and_its_script_where_the_app_serves_them(viewer):
+    body = viewer.get('/').text
+
+    assert f'href="{asset_link("styles.css")}"' in body and f'src="{asset_link("app.js")}"' in body
+    assert viewer.get(asset_link('styles.css')).status_code == 200
 
 
 def test_the_episode_page_links_its_recording_and_its_downloads_at_their_routes(viewer):

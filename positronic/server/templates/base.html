@@ -10,7 +10,7 @@
       name="description"
       content="{% block description %}{% endblock %}"
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="{{ asset_link('styles.css') }}" />
     <script>window.SERVER_NAMES = {{ server_names | tojson }};</script>
     {% if static_export %}<script>window.STATIC_EXPORT = true;</script>{% endif %}
     {% endblock %}
@@ -30,7 +30,7 @@
       {% block footer %}{% endblock %}
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="{{ asset_link('app.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

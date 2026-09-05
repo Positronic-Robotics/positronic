@@ -132,17 +132,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Static files and templates (packaged relative to this file)
-_static_dir = _pkg_path('static')
-_templates_dir = _pkg_path('templates')
-app.mount('/static', StaticFiles(directory=_static_dir), name='static')
-templates = Jinja2Templates(directory=_templates_dir)
+# The app's own scripts, styles and viewer, served at the host root, so every export a host serves shares one copy.
+ASSET_ROUTE = 'static'
+app.mount(f'/{ASSET_ROUTE}', StaticFiles(directory=_pkg_path(ASSET_ROUTE)), name=ASSET_ROUTE)
+templates = Jinja2Templates(directory=_pkg_path('templates'))
+
+
+def asset_link(name: str) -> str:
+    """The path at the host root the asset file `name` is served at."""
+    return app.url_path_for(ASSET_ROUTE, path=name)
 
 
 @app.middleware('http')
 async def cache_rerun_assets(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith('/static/rerun/'):
+    if request.url.path.startswith(asset_link('rerun/')):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return response
 
@@ -281,6 +285,7 @@ def _page_context() -> dict[str, Any]:
     return {
         'nav_items': nav_items,
         'server_names': _server_names(),
+        'asset_link': asset_link,
         'home_page': home_page,
         'episodes_url': episodes_url,
         'base_href': pages.base_href,
@@ -474,7 +479,7 @@ async def episode_viewer(request: Request, episode_id: int):
         {
             'episode_id': episode_id,
             'num_episodes': len(ds),
-            'viewer_path': f'/static/rerun/{rr.__version__}/index.html',
+            'viewer_path': asset_link(f'rerun/{rr.__version__}/index.html'),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),

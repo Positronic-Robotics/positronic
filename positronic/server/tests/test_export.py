@@ -804,6 +804,12 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
     assert not out.exists()
 
 
+def test_a_base_href_that_leaves_no_room_for_a_key_stops_the_export_before_it_writes(dataset, tmp_path):
+    with pytest.raises(ValueError, match='key limit'):
+        an_export(dataset, tmp_path / 'out', base_href='/' + 'p' * (export.MAX_PATH_BYTES - 10) + '/')
+    assert not (tmp_path / 'out').exists()
+
+
 def test_a_home_page_that_names_no_group_table_is_refused(dataset, tmp_path):
     with pytest.raises(ValueError, match='home_page'):
         an_export(dataset, tmp_path / 'out', group_tables=GROUPS, home_page='nope')

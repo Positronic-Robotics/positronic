@@ -30,6 +30,7 @@ from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
+    ASSET_ROUTE,
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
@@ -82,8 +83,6 @@ _WINDOWS_DEVICES = frozenset([
     *(f'com{n}' for n in range(1, 10)),
     *(f'lpt{n}' for n in range(1, 10)),
 ])
-# The app's own assets, at the server root, so every export a host serves shares one copy.
-ASSET_DIR = 'static'
 
 # The `secrets.token_urlsafe` alphabet: a build id is a path segment and sits inside a script string.
 _BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
@@ -117,15 +116,17 @@ def _path_max(directory: Path) -> int:
 class _Output:
     """The files the export writes under `directory`, as any host or filesystem holds them.
 
-    Every path is planned before the first write. A path past a host's key limit is refused, and so is one
-    past the local filesystem's path limit with `directory` in front. So is a component Windows reads as a
+    Every path is planned before the first write. A path past a host's key limit with `key_prefix`, the
+    base href, in front is refused, and so is one past the local filesystem's path limit with `directory`
+    in front. So is a component Windows reads as a
     device or trims, and a path that folds onto a file planned before, or onto a directory above one, or
     whose own directory folds onto a file.
     """
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, key_prefix: str = ''):
         # Absolute, so a path is measured with the working directory in front, as the filesystem measures it.
         self.directory = directory.absolute()
+        self._key_prefix = key_prefix
         self.files: list[ExportedFile] = []
         self._path_max = _path_max(self.directory)
         self._folded_files: set[PurePosixPath] = set()
@@ -136,8 +137,9 @@ class _Output:
         for path in paths:
             if path.is_absolute() or '\\' in str(path) or '..' in path.parts:
                 raise ValueError(f'{path} would land outside {self.directory}')
-            if len(str(path).encode()) > MAX_PATH_BYTES:
-                raise ValueError(f'{path} is past the {MAX_PATH_BYTES}-byte key limit of a host')
+            key = self._key_prefix + str(path)
+            if len(key.encode()) > MAX_PATH_BYTES:
+                raise ValueError(f'{key} is past the {MAX_PATH_BYTES}-byte key limit of a host')
             local = self._target(path)
             if len(os.fsencode(local)) >= self._path_max:
                 raise ValueError(f'{local} is past the {self._path_max}-byte path limit of its filesystem')
@@ -365,9 +367,9 @@ def asset_content_type(path: Path) -> str:
 
 def _asset_files() -> list[tuple[PurePosixPath, Path]]:
     """The app's own scripts, styles and viewer, each with its path under `static/`."""
-    static_dir = Path(__file__).resolve().parent / ASSET_DIR
+    static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
-    return [(PurePosixPath(ASSET_DIR) / file.relative_to(static_dir).as_posix(), file) for file in files]
+    return [(PurePosixPath(ASSET_ROUTE) / file.relative_to(static_dir).as_posix(), file) for file in files]
 
 
 def _whole_api_routes() -> list[str]:
@@ -439,7 +441,7 @@ def export_static(
     for its duration, so a second export in the process waits for it; one into the same directory is
     then refused, as the directory holds the first.
     """
-    out = _Output(Path(out_dir))
+    out = _Output(Path(out_dir), normalized_base_href(base_href).removeprefix('/'))
     if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):
         raise ValueError(
             f'scratch_dir {scratch_dir} lies inside out_dir {out.directory}; the recordings are built beside it'
