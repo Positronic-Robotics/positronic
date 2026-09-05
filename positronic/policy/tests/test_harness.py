@@ -1232,6 +1232,46 @@ def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_trial_naming_no_prepare_on_a_rig_that_readies_fails_loudly(world):
+    """Only the handlers a task names are asked, so a task that names none asks nobody, and an empty ask
+    answers at once. The episode is refused instead of opening on a rig no device moved."""
+    moved = []
+    arm = _Scene(moved.append)
+    embodiment = make_embodiment(descriptor='yam', prepare_handlers={keys.ARM: arm.env_reset})
+    policy = StubPolicy()
+    harness = Harness(embodiment)
+    p = _pair_all(world, harness, policy)
+    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+
+    scheduler = world.start([harness, arm])
+    answer = p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05))
+
+    named = r"readies nothing on yam, which readies \['arm'\]"
+    with pytest.raises(ValueError, match=named):
+        drive_scheduler(scheduler, steps=50)
+    with pytest.raises(ValueError):
+        answer.result()  # whoever asked for the trial hears it too
+    assert moved == [], 'the rig was asked to ready something the trial never named'
+    assert DsWriterCommandType.START_EPISODE not in _ds_types(p), 'the episode opened on a rig nothing readied'
+
+
+@pytest.mark.timeout(3.0)
+def test_a_trial_naming_no_prepare_on_a_rig_that_readies_nothing_opens(world):
+    """A rig with nothing to ready is ready as it stands, so a task that names no prepare opens its episode
+    and runs it."""
+    policy = StubPolicy()
+    harness = Harness(make_embodiment(prepare_handlers={}))
+    p = _pair_all(world, harness, policy)
+
+    scheduler = world.start([harness, _Pacer()])
+    answer = p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05))
+    drive_scheduler(scheduler, steps=2000)
+
+    assert DsWriterCommandType.START_EPISODE in _ds_types(p), 'the episode never opened'
+    assert answer.done(), 'the episode never ended'
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """A trial's params draw its scene and identify it: the scene prepare is asked with them, and they land
     in episode meta beside the instruction. A real rig records that it charged inference time, whatever the
