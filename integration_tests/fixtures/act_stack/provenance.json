@@ -1,0 +1,44 @@
+{
+  "checkpoint": "s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/checkpoints/050000/pretrained_model",
+  "eval": ".sim.positronic.stack_cubes",
+  "seeds": [4, 8],
+  "separate_eval_process_per_seed": true,
+  "episode_seconds": 15,
+  "charge_inference_time": false,
+  "required_support_seconds": 0.5,
+  "local": {
+    "revision": "3d1710bf76770a91892a2abcbcf627384f44f9c2",
+    "uv_lock_sha256": "cfed0fa0fa3efa4ccd963a84823975c9e27b8e4a703e08c19efad582c30e042a",
+    "system": "macOS-26.6.2-arm64-arm-64bit",
+    "gpu": "Apple M2 Max",
+    "python": "3.12.11",
+    "packages": {
+      "mujoco": "3.5.0",
+      "numpy": "2.3.5",
+      "configuronic": "0.7.0",
+      "positronic": "0.2.1",
+      "glfw": "2.10.0",
+      "scipy": "1.17.1",
+      "opencv-python": "4.13.0.92"
+    }
+  },
+  "server": {
+    "revision": "68053fbf1d071ae01a170a4fd6c0597639f690c7",
+    "compose_service": "lerobot-0_3_3-server",
+    "image": "positro/positronic:act-baseline-68053fb",
+    "image_id": "sha256:be8e287fc62d3474345fff680ccd929be59e8c6f03c36f45c03ad4b0f27ae2ff",
+    "system": "Linux-6.14.0-33-generic-x86_64-with-glibc2.35",
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "python": "3.13.14",
+    "cuda": "12.6",
+    "packages": {
+      "torch": "2.7.1",
+      "torchvision": "0.22.1",
+      "lerobot": "0.3.3",
+      "timm": "1.0.24",
+      "numpy": "2.3.5",
+      "configuronic": "0.7.0"
+    }
+  },
+  "reference_stacked_by_seconds": {"4": 7.248, "8": 6.964}
+}
