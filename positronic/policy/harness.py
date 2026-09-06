@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
@@ -309,9 +310,13 @@ class Harness(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, None]:
         """Close the live episode: finalize the recording, put the rig back, return the terminal to the caller"""
         yield from self._finalize_recording(clock, payload)
-        yield from self._ready(  # Move robot back to ready state
-            should_stop, clock, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
-        )
+        back_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
+        # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
+        # A raise here costs the recorded episode its answer, and the run every episode it has left.
+        try:
+            yield from self._ready(should_stop, clock, back_args)  # Move robot back to ready state
+        except Exception as exc:
+            logging.error(f'The rig failed to go back after the episode: {exc}')
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
