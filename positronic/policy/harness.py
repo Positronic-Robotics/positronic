@@ -245,6 +245,7 @@ class Harness(pimm.ControlSystem):
         ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
             yield self._pace(clock)
+        # if `should_stop` is set, we don't care what result is
         if ready.done():
             ready.result()
 
@@ -415,6 +416,7 @@ class Harness(pimm.ControlSystem):
             if self._inference is not None:
                 if call is not None:
                     call.set_exception(RuntimeError('An episode is already running'))
+                # Deadline is checked once per harness tick.
                 if (terminal := self._trial_terminal(done, clock)) is not None:
                     yield from self._end_episode(clock, should_stop, terminal)
                 else:
