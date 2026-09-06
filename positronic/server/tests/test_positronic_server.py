@@ -49,6 +49,7 @@ from positronic.server.positronic_server import (
     download_paths,
     episode_link,
     normalized_base_href,
+    parse_table_cfg,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
@@ -724,3 +725,60 @@ def test_the_flat_table_compares_a_url_filter_with_a_cell_s_raw_value():
 
     assert 'return String(rawValue(episodeData[colIdx])) === value;' in app_js
     assert 'const v = rawValue(episodeData[index]);' in app_js
+
+
+def test_a_shown_column_carries_no_display_flag_and_a_hidden_one_carries_false():
+    columns, _, _ = parse_table_cfg({
+        keys.TASK: ColumnConfig(label='Task'),
+        'model': ColumnConfig(label='Model', filter=True, display=False),
+    })
+    by_key = {column['key']: column for column in columns}
+
+    assert 'display' not in by_key[keys.TASK]  # a shown column carries no flag
+    assert by_key['model']['display'] is False  # the page reads this and draws nothing
+    assert by_key['model']['filter'] is True  # a hidden column still filters
+
+
+@pytest.fixture
+def flat_with_hidden(monkeypatch):
+    episodes = _Statics({keys.TASK: 'stack', 'model': 'groot'}, {keys.TASK: 'stack', 'model': 'pi0'})
+    ep_table_cfg = {
+        keys.TASK: ColumnConfig(label='Task'),
+        'model': ColumnConfig(label='Model', filter=True, display=False),
+    }
+    monkeypatch.setitem(app_state, 'dataset', episodes)
+    monkeypatch.setitem(app_state, 'loading_state', False)
+    monkeypatch.setitem(app_state, 'episode_table_cfg', ep_table_cfg)
+    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    return TestClient(app)
+
+
+def test_the_flat_table_carries_a_hidden_column_value_to_the_page(flat_with_hidden):
+    table = flat_with_hidden.get('/api/episodes').json()
+    model_index = [column['key'] for column in table['columns']].index('model')
+
+    assert table['columns'][model_index]['display'] is False  # the page knows not to draw it
+    assert [row[1][model_index] for row in table['episodes']] == ['groot', 'pi0']  # the value still ships
+
+
+def test_the_flat_table_filters_on_a_hidden_column(flat_with_hidden):
+    filtered = flat_with_hidden.get('/api/episodes', params={'model': 'groot'}).json()
+
+    assert [row[0] for row in filtered['episodes']] == [0]  # a View link filters on the hidden column
+
+
+def test_a_group_filter_key_that_is_a_hidden_episode_column_is_accepted():
+    ep_table_cfg = {
+        keys.TASK: ColumnConfig(label='Task'),
+        ASSISTED: ColumnConfig(label='Assisted', filter=True, display=False),
+    }
+    with app_state_restored():
+        _configure(ep_table_cfg, {'by_task': _BY_TASK})  # a hidden column is still a column a View link filters on
+
+
+def test_the_page_draws_nothing_for_a_hidden_column():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert 'if (display === false) { headerCells.push(null); continue; }' in app_js  # no header
+    assert 'if (columns[i].display === false) continue;' in app_js  # no cell
+    assert 'if (column.display === false) continue;' in app_js  # no dropdown

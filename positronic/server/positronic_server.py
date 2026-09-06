@@ -545,6 +545,8 @@ class ColumnConfig:
         default: Fallback value when the cell is None/missing.
         renderer: Optional custom renderer (badge, icon, …).
         filter: Whether to show a client-side filter dropdown for this column.
+        display: Whether to draw the column. A False column still carries its value to the page and
+            still filters, so a View link filters on it, but the page draws no header, cell or dropdown.
     """
 
     label: str
@@ -553,6 +555,7 @@ class ColumnConfig:
     default: Any = None
     renderer: RendererConfig | None = None
     filter: bool = False
+    display: bool = True
     align: str | None = None
     sortable: bool = True
 
@@ -612,6 +615,9 @@ def parse_table_cfg(table_cfg: TableConfig) -> tuple:
 
         if cfg.filter:
             column['filter'] = cfg.filter
+
+        if not cfg.display:
+            column['display'] = False
 
         if not cfg.sortable:
             column['sortable'] = False

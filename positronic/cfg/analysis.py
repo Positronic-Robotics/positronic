@@ -399,6 +399,7 @@ def stacking_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.2f sec'),
+        'model': C(label='Model', filter=True, display=False),
         'checkpoint': C(label='CKPT', filter=True),
         'success': C(
             label='Pass',
@@ -845,6 +846,7 @@ def phail_episodes_table():
         'model': C(label='Model', filter=True),
         'variant': C(label='Variant', filter=True),
         'eval.object': C(label='Task', filter=True),
+        'equipment': C(label='Equipment', filter=True, display=False),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
         'units': C(label='Units', align='right'),
         'uph': C(label='UPH', subtitle='Units Per Hour', format='%.1f', default='-', align='right'),

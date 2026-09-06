@@ -403,7 +403,8 @@ function renderTableHeader(columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const headerCells = [];
 
-  for (const [columnIndex, { label, subtitle, align, sortable }] of Object.entries(columns)) {
+  for (const [columnIndex, { label, subtitle, align, sortable, display }] of Object.entries(columns)) {
+    if (display === false) { headerCells.push(null); continue; }  // a hidden column keeps its index, draws no header
     let content;
     if (subtitle) {
       content = document.createElement('span');
@@ -432,7 +433,7 @@ function renderTableHeader(columns) {
     headerCells.push(th);
   }
 
-  headerRow.prepend(...headerCells);
+  headerRow.prepend(...headerCells.filter(Boolean));
 
   if (state.sort.columnIndex !== null) {
     headerCells[state.sort.columnIndex]?.classList.add(`sorted-${state.sort.direction}`);
@@ -465,6 +466,7 @@ function populateTable(columns) {
     const row = document.createElement('tr');
 
     for (const [i, entity] of episodeData.entries()) {
+      if (columns[i].display === false) continue;  // a hidden column carries a value but draws no cell
       const td = createCell(cellValue(entity, columns[i]));
       if (columns[i].align) td.style.textAlign = columns[i].align;
       row.appendChild(td);
@@ -572,6 +574,7 @@ function renderClientFilters(columns) {
 
   for (const [filterKey, values] of Object.entries(state.filtersData)) {
     const column = columns.find((c) => c.key === filterKey);
+    if (column.display === false) continue;  // a hidden column filters from a View link, not a dropdown
     const options = [
       createOption('-1', 'All'),
       ...values.map((v) => createOption(v, column.renderer?.options[v]?.label ?? v)),
