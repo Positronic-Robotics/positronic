@@ -46,6 +46,7 @@ from positronic.server.positronic_server import (
     configure_pages,
     configure_tables,
     download_link,
+    download_metadata,
     download_paths,
     episode_link,
     normalized_base_href,
@@ -388,6 +389,12 @@ def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_e
     assert viewer.get('/api/episode/0/static/notes & é').headers['content-disposition'] == (
         "inline; filename*=utf-8''notes%20%26%20%C3%A9.txt"
     )
+
+
+def test_a_text_download_reports_the_size_of_the_bytes_the_route_answers(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'notes': 'é' * 3})
+
+    assert download_metadata('é' * 3).size == len(viewer.get('/api/episode/0/static/notes').content) == 6
 
 
 def test_a_download_name_holding_a_slash_is_percent_encoded_in_the_header(viewer, monkeypatch):

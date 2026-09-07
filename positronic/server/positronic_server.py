@@ -452,14 +452,16 @@ class DownloadKind(StrEnum):
 
 @dataclass(frozen=True)
 class DownloadMetadata:
-    """What a page says about a download beside its link: its kind, and its size."""
+    """What a page says about a download beside its link: its kind, and its size in bytes."""
 
     type: DownloadKind
     size: int
 
 
 def download_metadata(value: bytes | str) -> DownloadMetadata:
-    return DownloadMetadata(DownloadKind.BYTES if isinstance(value, bytes) else DownloadKind.TEXT, len(value))
+    if isinstance(value, bytes):
+        return DownloadMetadata(DownloadKind.BYTES, len(value))
+    return DownloadMetadata(DownloadKind.TEXT, len(value.encode()))
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
