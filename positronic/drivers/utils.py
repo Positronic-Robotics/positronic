@@ -104,6 +104,8 @@ class Moves(Generic[T]):
         held inside the call for the whole travel and polled nothing in between.
         """
         if self._handed_out and not self.busy:
+            # A driver held inside the call polls again as soon as the travel is over, so this is the tick
+            # it ended on. One that keeps the move in flight says when it ended itself, in ``settle``.
             self._stale_before, self._handed_out = now, False
         newest = self.take_newest_setpoint()
         if self.busy:
@@ -119,6 +121,7 @@ class Moves(Generic[T]):
         """Take `call` as the move in flight, aiming at `target` within `tol`, with `timeout_s` to get there."""
         self._call, self._target, self._tol = call, target, tol
         self._deadline = now + timeout_s
+        self._handed_out = False  # the move is in flight, and ``settle`` says which tick it ends on
 
     def fail(self, exc: BaseException) -> None:
         """Hand a settled move its own outcome, and `exc` to one still in flight. Both, if there are both."""
@@ -140,10 +143,12 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         if bool(np.all(np.abs(np.asarray(position) - np.asarray(self._target)) < self._tol)):
             self._settled, self._call, self.errored = (self._call, None), None, False
+            self._stale_before = now
             return MoveStatus.ARRIVED
         if now >= self._deadline:
             short = TimeoutError(f'stopped at {np.round(position, 3)}, short of {np.round(self._target, 3)}')
             self._settled, self._call, self.errored = (self._call, short), None, True
+            self._stale_before = now
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
 

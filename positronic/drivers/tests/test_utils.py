@@ -293,6 +293,22 @@ def test_a_setpoint_written_while_a_blocking_move_travelled_is_let_go(asking):
     assert moves.next_request(now=2.0) == 0.75
 
 
+def test_a_setpoint_written_after_a_move_arrived_is_kept(asking):
+    """A move settles at the end of a tick, and a driver that keeps it in flight polls again only after its
+    limiter sleeps. A setpoint written in between is newer than the move, and is what the device does next."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request(now=0.0)
+    assert isinstance(call, pimm.calls.Call)
+    moves.accept(call, 1.0, TOL, now=0.0, timeout_s=3.0)
+    assert moves.settle(1.0, now=0.1) is MoveStatus.ARRIVED
+    moves.answer()
+
+    stream.push(0.25, ts=int(0.15e9))  # written while the driver slept, and after the move was over
+
+    assert moves.next_request(now=0.2) == 0.25
+
+
 def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_both():
     """One outcome each: the settled move earned its answer, the travelling one is owed what killed it."""
     moves, landed = _accepted(0.0)
