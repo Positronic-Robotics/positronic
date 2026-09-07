@@ -563,6 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const SIDEBAR_STATE_DEFAULTS = { isExpanded: false, sidebarWidth: 300, keyColumnWidth: 150, scrollTop: 0 };
 const MIN_SIDEBAR_WIDTH = 100;
 const MIN_KEY_COLUMN_WIDTH = 50;
+const SIDEBAR_STATE_STORAGE_KEY = 'sidebarState';
 
 // Keep a measurement only when it is a real number. `${NaN}px` is invalid CSS, so the
 // browser drops the declaration and the sidebar keeps the 0px width the stylesheet gives it.
@@ -648,7 +649,7 @@ function initSidebar() {
   }
 
   function save() {
-    localStorage.setItem('sidebarState', JSON.stringify(sidebarState));
+    localStorage.setItem(SIDEBAR_STATE_STORAGE_KEY, JSON.stringify(sidebarState));
   }
 }
 
@@ -656,7 +657,7 @@ function initSidebar() {
 function loadSidebarState() {
   let saved = null;
   try {
-    saved = JSON.parse(localStorage.getItem('sidebarState'));
+    saved = JSON.parse(localStorage.getItem(SIDEBAR_STATE_STORAGE_KEY));
   } catch (error) {
     // Unreadable text, or a browser that blocks storage. Both mean the same here: no usable
     // preference, and the sidebar must still open.
