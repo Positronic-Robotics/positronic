@@ -98,7 +98,7 @@ def test_a_yuyv_buffer_reaches_the_port_as_an_image(device):
     assert adapter.array.min() > 150  # the grey survives the conversion
 
 
-def test_every_buffer_is_one_frame(device):
+def test_every_whole_yuyv_buffer_is_one_frame(device):
     frames = [FakeFrame(_yuyv(v), linux_video.PixelFormat.YUYV) for v in (50, 120, 200)]
 
     emitted, _ = _driven(device, frames)
@@ -119,15 +119,15 @@ def test_the_device_is_closed_when_the_frames_run_out(device):
     assert opened.closed
 
 
-def test_a_buffer_short_of_a_frame_is_dropped(device, caplog):
-    """A busy bus hands over a buffer with its tail missing, and a run outlives it."""
-    short = FakeFrame(_yuyv(200)[: WIDTH * HEIGHT], linux_video.PixelFormat.YUYV)
+def test_a_buffer_that_is_not_one_frame_in_size_is_dropped(device, caplog):
+    """A busy bus hands over a buffer that is not a whole frame, and a run outlives it."""
+    misframed = FakeFrame(_yuyv(200)[: WIDTH * HEIGHT], linux_video.PixelFormat.YUYV)
     whole = FakeFrame(_yuyv(200), linux_video.PixelFormat.YUYV)
 
-    emitted, _ = _driven(device, [short, whole, short])
+    emitted, _ = _driven(device, [misframed, whole, misframed])
 
     assert len(emitted.emitted) == 1
-    assert 'short of a frame' in caplog.text
+    assert 'not one frame in size' in caplog.text
     assert 'handed over 2 buffers' in caplog.text
 
 
@@ -157,14 +157,14 @@ def _h264(count: int) -> bytes:
     return stream.getvalue()
 
 
-def test_a_compressed_buffer_the_decoder_holds_back_is_not_counted_short(device, caplog):
+def test_a_compressed_buffer_the_decoder_holds_back_is_not_counted_misframed(device, caplog):
     """The decoder gives no image until it has one, and a whole buffer is not a truncated one."""
     head = FakeFrame(_h264(4)[:64], linux_video.PixelFormat.H264)
 
     emitted, _ = _driven(device, [head])
 
     assert emitted.emitted == []
-    assert 'short of a frame' not in caplog.text
+    assert 'not one frame in size' not in caplog.text
 
 
 def test_every_image_of_one_buffer_keeps_its_own_pixels(device):

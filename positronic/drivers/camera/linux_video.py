@@ -13,18 +13,18 @@ with vendor_import('linuxpy', 'Linux video capture', platforms=('linux',)):
 
 logger = logging.getLogger(__name__)
 
-# The formats a camera may compress in, and what decodes each of them.
-_CODECS = {
-    PixelFormat.H264: 'h264',
-    PixelFormat.HEVC: 'hevc',
-    PixelFormat.VP8: 'vp8',
-    PixelFormat.VP9: 'vp9',
-    PixelFormat.MPEG4: 'mpeg4',
-    PixelFormat.MJPEG: 'mjpeg',
-}
-
 
 class LinuxVideo(pimm.ControlSystem):
+    # The formats a camera may compress in, and what decodes each of them.
+    _CODECS = {
+        PixelFormat.H264: 'h264',
+        PixelFormat.HEVC: 'hevc',
+        PixelFormat.VP8: 'vp8',
+        PixelFormat.VP9: 'vp9',
+        PixelFormat.MPEG4: 'mpeg4',
+        PixelFormat.MJPEG: 'mjpeg',
+    }
+
     def __init__(self, device_path: str, width: int, height: int, fps: int, pixel_format: str):
         self.device_path = device_path
         self.width = width
@@ -37,13 +37,13 @@ class LinuxVideo(pimm.ControlSystem):
 
     @staticmethod
     def _framed(data: np.ndarray, frame, bytes_per_pixel: int) -> np.ndarray | None:
-        """``data`` shaped as the frame it belongs to, or ``None`` where it is short of one."""
+        """``data`` shaped as the frame it belongs to, or ``None`` where it is not one frame's worth."""
         if data.size != frame.height * frame.width * bytes_per_pixel:
             return None
         return data.reshape((frame.height, frame.width, bytes_per_pixel))
 
     def _images(self, frame, codec_context) -> list[np.ndarray] | None:
-        """Every image the buffer ``frame`` carries, as RGB, or ``None`` where it is short of a frame.
+        """Every image the buffer ``frame`` carries, as RGB, or ``None`` where it is not one frame's worth.
 
         A compressed buffer whole enough to read may still carry no image: the parser and the decoder both
         hold data back until they have a frame to give, so an empty list is a wait, not a loss.
@@ -56,8 +56,8 @@ class LinuxVideo(pimm.ControlSystem):
             case PixelFormat.UYVY:
                 raw = self._framed(data, frame, 2)
                 return None if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_UYVY)]
-            case _ if frame.pixel_format in _CODECS:
-                codec_ctx = codec_context(_CODECS[frame.pixel_format])
+            case _ if frame.pixel_format in self._CODECS:
+                codec_ctx = codec_context(self._CODECS[frame.pixel_format])
                 # `av` types what it parses as `bytes` and carries `decode` on the subclasses of
                 # `CodecContext`, so the buffer the device hands over and the base class both read wrong.
                 packets = codec_ctx.parse(data)  # pyright: ignore[reportArgumentType]
@@ -85,16 +85,16 @@ class LinuxVideo(pimm.ControlSystem):
         device.set_format(device.info.buffers[0], self.width, self.height, self.pixel_format)
         device.set_fps(device.info.buffers[0], self.fps)
 
-        short = 0
+        misframed = 0
         for frame in device:
             if should_stop.value:
                 break
 
             images = self._images(frame, codec_context)
             if images is None:
-                short += 1
-                if short == 1:
-                    logger.warning('%s handed over a buffer short of a frame', self.device_path)
+                misframed += 1
+                if misframed == 1:
+                    logger.warning('%s handed over a buffer that is not one frame in size', self.device_path)
             elif len(images) == 1:
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(images[0], self._frame_adapter)
                 self.frame.emit(self._frame_adapter)
@@ -108,6 +108,6 @@ class LinuxVideo(pimm.ControlSystem):
 
             yield pimm.Yield()  # Give control back to the world
 
-        if short:
-            logger.warning('%s handed over %d buffers short of a frame', self.device_path, short)
+        if misframed:
+            logger.warning('%s handed over %d buffers that are not one frame in size', self.device_path, misframed)
         device.close()

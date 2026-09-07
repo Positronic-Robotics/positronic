@@ -16,10 +16,10 @@ DEVICE_MODULE = f'{VENDOR}.video.device'
 
 if importlib.util.find_spec(VENDOR) is None:
     # The formats the driver names. The values are the V4L2 four-character codes, as `linuxpy` reports them.
-    pixel_format = Enum('PixelFormat', ['YUYV', 'UYVY', 'RGB24', 'H264', 'HEVC', 'VP8', 'VP9', 'MPEG4', 'MJPEG'])
+    PixelFormat = Enum('PixelFormat', ['YUYV', 'UYVY', 'RGB24', 'H264', 'HEVC', 'VP8', 'VP9', 'MPEG4', 'MJPEG'])
 
     device = types.ModuleType(DEVICE_MODULE)
-    device.__dict__.update(Device=object, PixelFormat=pixel_format)
+    device.__dict__.update(Device=object, PixelFormat=PixelFormat)
 
     video = types.ModuleType(f'{VENDOR}.video')
     video.__dict__.update(device=device)
