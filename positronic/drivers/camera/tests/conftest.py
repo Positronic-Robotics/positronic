@@ -12,7 +12,8 @@ import types
 from enum import Enum
 
 VENDOR = 'linuxpy'
-DEVICE_MODULE = f'{VENDOR}.video.device'
+VIDEO_MODULE = f'{VENDOR}.video'
+DEVICE_MODULE = f'{VIDEO_MODULE}.device'
 
 if importlib.util.find_spec(VENDOR) is None:
     # The formats the driver names. The values are the V4L2 four-character codes, as `linuxpy` reports them.
@@ -21,10 +22,10 @@ if importlib.util.find_spec(VENDOR) is None:
     device = types.ModuleType(DEVICE_MODULE)
     device.__dict__.update(Device=object, PixelFormat=PixelFormat)
 
-    video = types.ModuleType(f'{VENDOR}.video')
+    video = types.ModuleType(VIDEO_MODULE)
     video.__dict__.update(device=device)
 
     package = types.ModuleType(VENDOR)
     package.__dict__.update(video=video)
 
-    sys.modules.update({VENDOR: package, f'{VENDOR}.video': video, DEVICE_MODULE: device})
+    sys.modules.update({VENDOR: package, VIDEO_MODULE: video, DEVICE_MODULE: device})
