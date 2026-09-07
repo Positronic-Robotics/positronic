@@ -11,10 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from positronic.server.positronic_server import _server_names
+
 APP_JS = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
 
-# app.js registers listeners when it loads, so the context needs a document. Nothing here runs;
-# the harness calls one function and prints what it returns.
+# app.js registers listeners when it loads, so the context needs a document, and it reads the
+# names the page sets on window, so the context needs a window that carries them. Nothing here
+# runs; the harness calls one function and prints what it returns.
 _HARNESS = """
 const fs = require('fs');
 const vm = require('vm');
@@ -28,6 +31,7 @@ const context = {
   Object,
   console,
   localStorage: {getItem: () => stored, setItem: noop},
+  window: {SERVER_NAMES: JSON.parse(process.argv[3])},
   document: {
     addEventListener: noop,
     querySelector: () => null,
@@ -49,7 +53,11 @@ def load_sidebar_state(stored: str | None) -> dict:
     if node is None:
         pytest.skip('node is required to run the viewer JavaScript')
     result = subprocess.run(
-        [node, '-e', _HARNESS, json.dumps(stored), str(APP_JS)], capture_output=True, text=True, timeout=60, check=False
+        [node, '-e', _HARNESS, json.dumps(stored), str(APP_JS), json.dumps(_server_names())],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert result.returncode == 0, f'app.js raised on stored state {stored!r}:\n{result.stderr}'
     return json.loads(result.stdout)
