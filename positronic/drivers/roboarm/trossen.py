@@ -615,6 +615,10 @@ class _Arm(DriverRun[command.CommandType]):
             except trossen_arm.RuntimeError as exc:
                 logger.error(f'The old session with the arm at {self.ip} did not close: {exc}')
             _configure(self.driver, self.ip, _RECONNECT_TIMEOUT_S)
+            if self.moves.active:
+                # The new session holds the arm where it reads, and a move in flight refuses every request
+                # that would resend its target, so waiting out its deadline is all it could do.
+                self.moves.fail(ConnectionError(f'the link to the arm at {self.ip} dropped during the move'))
             self._take_control()
         # rules-allow: swallowed-error — an arm still out of reach reads ERROR; the next attempt tries again
         except trossen_arm.RuntimeError as exc:
