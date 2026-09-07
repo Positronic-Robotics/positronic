@@ -48,9 +48,9 @@ from positronic.server.positronic_server import (
     download_link,
     download_metadata,
     download_paths,
+    ensure_episode_rrd,
     episode_link,
     episode_rrd_link,
-    episode_rrd_path,
     episodes_link,
     filter_spelling,
     group_api_link,
@@ -334,7 +334,7 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
     recording = _large_file_path(links.recording_link, build_id)
     downloads = [(link, _large_file_path(link, build_id)) for link in links.download_links]
     return [
-        _Planned(recording, reads, lambda out: out.copy(recording, episode_rrd_path(links.index))),
+        _Planned(recording, reads, lambda out: out.copy(recording, ensure_episode_rrd(links.index))),
         *(_planned_fetch(client, f'/{link}', path, reads) for link, path in downloads),
     ]
 
@@ -358,7 +358,7 @@ def _whole_api_routes() -> list[str]:
     ]
 
 
-def _aligned(full: Dataset, shown: Dataset) -> Dataset:
+def _full_checked_against(full: Dataset, shown: Dataset) -> Dataset:
     """`full`, once it holds the episodes of `shown` at the same indexes, by uid, with every download `shown` links,
     of the type and the size the page reports beside the link."""
     if len(full) != len(shown):
@@ -465,7 +465,7 @@ def export_static(
     validated_build_id(build_id)
     shown = CachedDataset(dataset)
     sets_by_group = _filter_sets_by_group(shown, group_tables)
-    full = _aligned(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
+    full = _full_checked_against(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
     episodes = [_episode_links(shown, index) for index in range(len(shown))]
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.

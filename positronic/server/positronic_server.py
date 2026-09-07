@@ -795,11 +795,10 @@ def _recording_cache_path(episode_id: int) -> Path:
     return _get_rrd_cache_path(episode_id, cast(float, app_state['max_hz']), cast(int, app_state['max_resolution']))
 
 
-def _recording_chunks_cached(episode_id: int, cache_path: Path) -> Iterator[bytes]:
+def _recording_chunks_cached(
+    ds: Dataset, episode_id: int, cache_path: Path, *, max_hz: float, max_resolution: int
+) -> Iterator[bytes]:
     """The recording's chunks as they are built, written to `cache_path`; the path names a complete file only."""
-    ds = cast(Dataset, app_state['dataset'])
-    max_hz = cast(float, app_state['max_hz'])
-    max_resolution = cast(int, app_state['max_resolution'])
     fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
     partial = Path(name)
     published = False
@@ -815,11 +814,20 @@ def _recording_chunks_cached(episode_id: int, cache_path: Path) -> Iterator[byte
             partial.unlink(missing_ok=True)
 
 
-def episode_rrd_path(episode_id: int) -> Path:
-    """The complete cached recording of `episode_id`, built when the cache holds none."""
+def _recording_settings() -> tuple[Dataset, float, int]:
+    return (
+        cast(Dataset, app_state['dataset']),
+        cast(float, app_state['max_hz']),
+        cast(int, app_state['max_resolution']),
+    )
+
+
+def ensure_episode_rrd(episode_id: int) -> Path:
+    """Build the recording of `episode_id` into the cache when the cache holds none, and answer its path."""
     cache_path = _recording_cache_path(episode_id)
     if not cache_path.exists():
-        for _ in _recording_chunks_cached(episode_id, cache_path):
+        ds, max_hz, max_resolution = _recording_settings()
+        for _ in _recording_chunks_cached(ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution):
             pass
     return cache_path
 
@@ -831,8 +839,9 @@ async def api_episode_rrd(episode_id: int):
     if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
+    ds, max_hz, max_resolution = _recording_settings()
     return StreamingResponse(
-        _recording_chunks_cached(episode_id, cache_path),
+        _recording_chunks_cached(ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution),
         media_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
     )
