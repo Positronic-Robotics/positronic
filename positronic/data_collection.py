@@ -120,7 +120,7 @@ class _Tracker:
         return self._steady
 
     def update(self, tracker_pos: geom.Transform3D, ts_ns: int):
-        if self.umi_mode:
+        if self._operator_position is None:  # `umi_mode`, said so the operator's frame reads as the pose it is
             return tracker_pos
 
         steady = self._steadied(tracker_pos, ts_ns)

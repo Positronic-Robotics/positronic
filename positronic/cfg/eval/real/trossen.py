@@ -5,11 +5,11 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 
-from positronic import keys
 from positronic.cfg.embodiment import trossen
 from positronic.cfg.hardware.roboarm import TROSSEN_NOMINAL_JOINTS
 from positronic.drivers.roboarm import command
 from positronic.eval import Eval, Task
+from positronic.eval import keys as eval_keys
 
 PARTS_TASK = 'Pick the parts one by one from the table and put them into the transparent box.'
 
@@ -23,7 +23,7 @@ def _trossen_trial(instruction: str, timeout: float | None, meta: dict[str, Any]
     return Task(
         instruction_source=instruction,
         timeout_sec=timeout,
-        prepare_args={keys.ARM: command.JointPosition(np.asarray(TROSSEN_NOMINAL_JOINTS, dtype=np.float64))},
+        prepare_args={eval_keys.ARM: command.JointPosition(np.asarray(TROSSEN_NOMINAL_JOINTS, dtype=np.float64))},
         meta=meta or {},
     )
 
@@ -37,7 +37,7 @@ def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Tas
 
 def _planned_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
     return [
-        _trossen_trial(instruction, timeout, {keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count})
+        _trossen_trial(instruction, timeout, {eval_keys.TRIAL_INDEX: trial, eval_keys.TRIAL_COUNT: trial_count})
         for trial in range(trial_count)
     ]
 

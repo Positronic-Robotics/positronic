@@ -85,7 +85,7 @@ def trossen(robot_arm, cameras):
         observations=observations,
         commands=commands,
         # One driver, one handler: the arm's controller carries its fingers
-        prepare_handlers={keys.ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
