@@ -203,8 +203,6 @@ class RobolabEnv(EnvProtocol):
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         if task not in self._registered:
-            # RoboLab's presets hold the camera cfg classes; ``keys.CAMERA_SETS`` names the same sets on
-            # the wire, and the adapter raises when a run asks for a camera the server does not render.
             presets = {
                 keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
                 keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
