@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from multiprocessing.pool import ThreadPool
 from pathlib import Path, PurePosixPath
 from typing import cast
 from urllib.parse import quote
@@ -73,6 +74,8 @@ MAX_FILTER_KEYS_PER_GROUP = 6
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
 MAX_KEY_BYTES = 1024
+# A recording's build holds about two cores, so this many at once fill the machine.
+DEFAULT_WORKERS = max(1, (os.cpu_count() or 2) // 2)
 # Windows reports no path limit; its `MAX_PATH` counts UTF-16 units, the end mark included, unless a machine opts
 # into long paths.
 _REPORTS_PATH_MAX = hasattr(os, 'pathconf')
@@ -386,6 +389,22 @@ def _full_checked_against(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
+def _build_recordings(reads: Dataset, workers: int) -> None:
+    """Build the recording of each episode of `reads` into the cache, `workers` at a time, with the app serving
+    `reads`; one worker leaves each recording to the write that copies it.
+
+    The workers are threads: the decoder and the encoder release the interpreter lock, and a forked worker
+    hangs on the threads a recording built earlier in the process leaves behind.
+    """
+    if workers < 1:
+        raise ValueError(f'workers={workers}; a recording is built by at least one')
+    if workers == 1:
+        return
+    install_dataset(reads)
+    with ThreadPool(workers) as pool:
+        pool.map(ensure_episode_rrd, range(len(reads)), chunksize=1)
+
+
 def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
     """Write each of `plans` with the app serving the dataset it reads."""
     serving: Dataset | None = None
@@ -442,14 +461,15 @@ def export_static(
     full_dataset: Dataset | None = None,
     assets: bool = True,
     scratch_dir: Path | None = None,
+    workers: int = DEFAULT_WORKERS,
 ) -> list[ExportedFile]:
     """Write the viewer for `dataset` under `out_dir` and give back every file written.
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
     when given, which holds the same episodes in the same order; the recording builder reads an
-    episode's robot model out of its static values. The recordings are built in a directory of this
-    export's own under `scratch_dir`, the system's temporary directory when None, copied in from
-    there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
+    episode's robot model out of its static values. The recordings are built `workers` at a time in a
+    directory of this export's own under `scratch_dir`, the system's temporary directory when None,
+    copied in from there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
     and viewer under `static/`, which the pages request at the host root, so it goes with the root
     base href only; an export under a prefix shares the host's copy. An export holds the app's state
     for its duration, so a second export in the process waits for it; one into the same directory is
@@ -496,6 +516,7 @@ def export_static(
         ]
         asset_files = _asset_files() if assets else []
         out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in asset_files)))
+        _build_recordings(full, workers)
         _write_serving(out, plans)
     for path, file in asset_files:
         out.copy(path, file)
@@ -517,6 +538,7 @@ def main(
     show_paths: bool = False,
     build_id: str = '',
     assets: bool = True,
+    workers: int = DEFAULT_WORKERS,
 ):
     """Write the viewer for a Dataset as static files, for any static host.
 
@@ -525,7 +547,7 @@ def main(
         out_dir: Directory the files are written under; it is created
         ep_table_cfg: Columns of the episode table, by static key
         max_resolution: Long side an episode's videos are re-encoded down to
-        max_hz: Rate an episode's numeric signals are thinned to; 0 keeps every sample
+        max_hz: Rate an episode's videos and numeric signals are thinned to; 0 keeps every frame and sample
         group_tables: Grouped tables, by name
         home_page: The group table served at the root, or None for the episodes
         base_href: Path at the host root the export is served under
@@ -533,6 +555,7 @@ def main(
         show_paths: Whether the pages report where the dataset lives
         build_id: Names one build; the recordings and the downloads are written under `build/<build_id>/`
         assets: Whether to write the app's own assets under `static/`; with the root base href only
+        workers: Recordings built at once; half the machine's cores by default
     """
     written = export_static(
         dataset,
@@ -547,6 +570,7 @@ def main(
         show_paths=show_paths,
         build_id=build_id,
         assets=assets,
+        workers=workers,
     )
     logging.info(f'{len(written)} files, {sum(file.size for file in written) / 1e6:.1f} MB, under {out_dir}')
 

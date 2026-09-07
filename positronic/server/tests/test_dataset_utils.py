@@ -160,6 +160,9 @@ class _RawFrameSignal:
     def __iter__(self):
         return iter(zip(self._frames, self._times, strict=True))
 
+    def keys(self):
+        return np.asarray(self._times, dtype=np.int64)
+
 
 def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):
     times = [i * 33_000_000 for i in range(12)]
@@ -168,9 +171,23 @@ def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):
     monkeypatch.setattr(dataset_utils, 'set_timeline_time', lambda _timeline, ts: logged.append(ts))
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
 
-    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640)
+    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640, max_hz=0)
 
     assert logged == times
+
+
+def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(monkeypatch):
+    times = [i * 10_000_000 for i in range(12)]
+    frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
+    logged: list[int] = []
+    monkeypatch.setattr(dataset_utils, 'set_timeline_time', lambda _timeline, ts: logged.append(ts))
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+
+    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640, max_hz=30)
+
+    kept = _decimation_indices(np.asarray(times, dtype='datetime64[ns]'), max_hz=30)
+    assert 1 < len(kept) < len(times)
+    assert logged == [times[index] for index in kept]
 
 
 def _write_mp4(path: Path, width: int, height: int, frames: int) -> Path:
@@ -219,6 +236,17 @@ def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
     src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
 
     assert _mp4_downscaled_to(src, max_resolution=640) == src.read_bytes()
+
+
+def test_a_video_keeps_the_frames_named_at_their_own_times(tmp_path):
+    src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
+    kept = np.array([0, 3, 6, 9])
+
+    thinned = _mp4_downscaled_to(src, max_resolution=640, kept=kept)
+
+    source_times = _frame_times(src.read_bytes())
+    assert _frame_times(thinned) == pytest.approx([source_times[index] for index in kept], abs=1e-4)
+    assert thinned != src.read_bytes()
 
 
 def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):

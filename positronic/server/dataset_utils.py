@@ -328,7 +328,7 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
-def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
+def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: float) -> None:
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
@@ -344,6 +344,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
     width, height = _size_capped_to(w, h, max_resolution)
+    kept = set(_decimation_indices(np.asarray(sig.keys(), dtype='datetime64[ns]'), max_hz).tolist())
     stream = cast(VideoStream, container.add_stream('libx265', rate=30))
     stream.width = width
     stream.height = height
@@ -352,12 +353,12 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
 
     rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
 
-    for index, (val, ts) in enumerate(sig):
+    for position, (val, ts) in enumerate(sample for index, sample in enumerate(sig) if index in kept):
         frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
         if (width, height) != (w, h):
             frame = frame.reformat(width=width, height=height)
-        frame.pts, frame.time_base = index, _FRAME_INDEX_TIME_BASE
-        times_by_pts[index] = ts
+        frame.pts, frame.time_base = position, _FRAME_INDEX_TIME_BASE
+        times_by_pts[position] = ts
         _log_encoded(stream.encode(frame))
 
     _log_encoded(stream.encode())
@@ -366,14 +367,16 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
-def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
-    """Re-encode ``src`` with its long side at most ``max_resolution``, or return it unchanged if it fits."""
+def _mp4_downscaled_to(src: Path, max_resolution: int, kept: np.ndarray | None = None) -> bytes:
+    """Re-encode ``src`` with its long side at most ``max_resolution`` and only the frames at the indexes in
+    ``kept``, or return it unchanged if it fits and ``kept`` is None."""
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
         source = (in_stream.codec_context.width, in_stream.codec_context.height)
         # Odd sides pass through; evening them here would re-encode every source that already fits.
-        if max(source) <= max_resolution:
+        if max(source) <= max_resolution and kept is None:
             return src.read_bytes()
+        wanted = None if kept is None else set(kept.tolist())
         width, height = _size_capped_to(*source, max_resolution)
 
         buffer = io.BytesIO()
@@ -387,7 +390,9 @@ def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
             out_stream.max_b_frames = 0
             out_stream.options = dict(_DOWNSCALE_OPTIONS)
 
-            for frame in inp.decode(in_stream):
+            for index, frame in enumerate(inp.decode(in_stream)):
+                if wanted is not None and index not in wanted:
+                    continue
                 scaled = frame.reformat(width=width, height=height, format='yuv420p')
                 scaled.pts, scaled.time_base = frame.pts, frame.time_base
                 out.mux(out_stream.encode(scaled))
@@ -397,25 +402,26 @@ def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
 
 
 def _log_video_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int, max_hz: float
 ) -> Iterator[bytes]:
     """Log video signals as AssetVideo + VideoFrameReference (columnar), or as individual images."""
     for name in signals.videos:
         sig = ep.signals[name]
         if isinstance(sig, VideoSignal):
-            video_bytes = _mp4_downscaled_to(sig.video_path, max_resolution)
+            our_ts = np.asarray(sig.keys(), dtype='datetime64[ns]')
+            kept = _decimation_indices(our_ts, max_hz)
+            video_bytes = _mp4_downscaled_to(sig.video_path, max_resolution, kept if len(kept) < len(our_ts) else None)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
             rr.log(name, asset, static=True)
 
-            our_ts = np.asarray(sig.keys(), dtype='datetime64[ns]')
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
                 name,
-                indexes=[rr.TimeColumn('time', timestamp=our_ts)],
+                indexes=[rr.TimeColumn('time', timestamp=our_ts[kept])],
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
-            _encode_frames_as_video(name, sig, max_resolution)
+            _encode_frames_as_video(name, sig, max_resolution, max_hz)
         yield from drainer.drain()
 
 
@@ -651,7 +657,8 @@ def stream_episode_rrd(
 ) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated.
 
-    ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
+    The videos and the numeric signals are thinned to ``max_hz``; ``max_hz=0`` with a resolution above the
+    source keeps the recording as it was captured.
     """
 
     ep = ds[episode_id]
@@ -675,7 +682,7 @@ def stream_episode_rrd(
         _setup_series_names(signals, ep)
         yield from drainer.drain()
 
-        yield from _log_video_signals(ep, signals, drainer, max_resolution)
+        yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz)
         pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
         yield from _log_pose_signals(ep, signals, pose_data, drainer)
