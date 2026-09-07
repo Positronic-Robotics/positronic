@@ -32,7 +32,7 @@ DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotat
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
 
 
-class _Row(NamedTuple):
+class _UrdfRow(NamedTuple):
     """One link, and the joint that attaches it to its parent.
 
     ``axis`` names a revolute joint and its sign sets the closing direction; without one the joint is
@@ -49,12 +49,12 @@ class _Row(NamedTuple):
     visual_xyz: str | None
 
 
-def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
+def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
     left) mirrors the motion, so one positive ``grip`` closes both fingers. The follower rotates about
     an anchor offset from its body, carried as the follower mesh's visual origin."""
     return [
-        _Row(
+        _UrdfRow(
             f'{side}_driver',
             'gripper_base',
             f'{side}_driver_joint',
@@ -64,7 +64,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
             'driver.stl',
             None,
         ),
-        _Row(
+        _UrdfRow(
             f'{side}_coupler',
             f'{side}_driver',
             f'{side}_coupler_joint',
@@ -74,7 +74,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
             'coupler.stl',
             None,
         ),
-        _Row(
+        _UrdfRow(
             f'{side}_spring_link',
             'gripper_base',
             f'{side}_spring_link_joint',
@@ -84,7 +84,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
             'spring_link.stl',
             None,
         ),
-        _Row(
+        _UrdfRow(
             f'{side}_follower',
             f'{side}_spring_link',
             f'{side}_follower_joint',
@@ -94,20 +94,20 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
             'follower.stl',
             '0 0.018 -0.0065',
         ),
-        _Row(f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
-        _Row(f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
+        _UrdfRow(f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
+        _UrdfRow(f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
     ]
 
 
-# FOOTGUN: the coupler is fixed. Give it an axis and the outer link hangs 19 mm out at full grip.
+# The coupler stays fixed: given an axis, the outer link hangs 19 mm out at full grip.
 _ROBOTIQ_2F85 = [
-    _Row('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
-    _Row('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
+    _UrdfRow('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
+    _UrdfRow('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
-    _Row(DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
+    _UrdfRow(DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
 # A fixed joint keeps its rest pose, so ``grip`` does not drive it.
 _2F85_GRIP_ACTUATED_JOINTS = [row.joint for row in _ROBOTIQ_2F85 if row.joint and row.axis]
@@ -128,8 +128,8 @@ def _build_2f85_elements() -> list[ET.Element]:
             if row.visual_xyz is not None:
                 ET.SubElement(visual, 'origin', xyz=row.visual_xyz, rpy='0 0 0')
             ET.SubElement(ET.SubElement(visual, 'geometry'), 'mesh', filename=row.mesh)
-        name = row.joint or f'{row.link}_fixed'
-        joint_el = ET.Element('joint', name=name, type='revolute' if row.axis else 'fixed')
+        joint_name = row.joint or f'{row.link}_fixed'
+        joint_el = ET.Element('joint', name=joint_name, type='revolute' if row.axis else 'fixed')
         ET.SubElement(joint_el, 'origin', xyz=row.xyz, rpy=row.rpy)
         ET.SubElement(joint_el, 'parent', link=row.parent)
         ET.SubElement(joint_el, 'child', link=row.link)
