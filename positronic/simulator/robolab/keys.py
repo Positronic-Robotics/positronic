@@ -1,4 +1,7 @@
-"""The keys of a RoboLab task record, of the trial params the eval config owns, and the env's camera names.
+"""What the eval config, the launcher and the env server must spell the same way.
+
+The keys of a RoboLab task record and of the trial params, the env's camera names and sets, and the flag
+that carries the set to the server.
 
 The env server runs in RoboLab's own interpreter and cannot import positronic, so it reads this module as a
 top-level ``keys`` from its own directory. The eval config reads it as ``positronic.simulator.robolab.keys``.
@@ -14,8 +17,7 @@ OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'
 OVER_SHOULDER_RIGHT_CAMERA = 'over_shoulder_right_camera'
 WRIST_CAMERA = 'wrist_cam'
 
-# The camera sets a run picks from. The env registers one set for its whole life, because RoboLab bakes the
-# set into the registered task, so a change needs a fresh USD stage. The names follow RoboLab's own presets.
+# The camera sets a run picks from. The names follow RoboLab's own presets.
 WRIST_LEFT_RIGHT = 'wrist_left_right'
 WRIST_LEFT = 'wrist_left'
 WRIST_RIGHT = 'wrist_right'
@@ -24,3 +26,6 @@ CAMERA_SETS = {
     WRIST_LEFT: (OVER_SHOULDER_LEFT_CAMERA, WRIST_CAMERA),
     WRIST_RIGHT: (OVER_SHOULDER_RIGHT_CAMERA, WRIST_CAMERA),
 }
+
+# The flag the launcher spells and the server parses to carry the set name.
+CAMERAS_FLAG = '--cameras'

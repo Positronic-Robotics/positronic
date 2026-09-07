@@ -109,9 +109,11 @@ def _check_obs_contract(env: RobolabEnv) -> None:
             assert isinstance(arr, np.ndarray) and arr.shape == shape and arr.dtype == dtype, (
                 f'{key}: {type(arr).__name__} shape={getattr(arr, "shape", None)} dtype={getattr(arr, "dtype", None)}'
             )
+        rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+        assert rendered == set(keys.CAMERA_SETS[args.cameras]), f'rendered cameras {sorted(rendered)}'
         assert isinstance(obs['grip'], float) and 0.0 <= obs['grip'] <= 1.0, f'grip {obs["grip"]!r}'
         assert abs(float(np.linalg.norm(obs['eef_quat'])) - 1.0) < 1e-3, f'eef_quat norm {obs["eef_quat"]}'
-    print('  obs contract: OK (keys, shapes, dtypes, quat norm, grip range)')
+    print('  obs contract: OK (keys, camera set, shapes, dtypes, quat norm, grip range)')
 
 
 def _check_grip(env: RobolabEnv) -> None:
