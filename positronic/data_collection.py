@@ -480,8 +480,8 @@ def yamcfg(robot_arm, **kwargs):
     # rig: the controller moved away from the base runs along -z of the headset's frame, and only `BACK`
     # takes that to +x of the arm's.
     operator_position=OperatorPosition.BACK,
-    # No camera and no sound yet: the camera driver is still to come, and the station has no audio device,
-    # so the operator reads the recording state off the terminal.
+    # No camera and no sound: the station has no audio device, so the operator reads the recording state
+    # off the terminal.
     sound=None,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,

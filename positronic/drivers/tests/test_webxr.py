@@ -3,17 +3,17 @@
 import numpy as np
 import pytest
 
-from positronic.drivers.webxr import _parse_controller_data
+from positronic.drivers.webxr import BUTTONS, CONTROLLERS, ORIENTATION, POSITION, SIDES, _parse_controller_data
 
 TOUCH_BUTTONS = [0.4, 0.0, 0.0, 0.0, 1.0, 0.0]  # trigger, squeeze, unused, stick, A, B
 
 
 def _payload(**controllers):
-    return {'controllers': {'left': None, 'right': None, **controllers}}
+    return {CONTROLLERS: {**dict.fromkeys(SIDES), **controllers}}
 
 
 def _controller(buttons):
-    return {'position': [0.1, 0.2, 0.3], 'orientation': [1.0, 0.0, 0.0, 0.0], 'buttons': buttons}
+    return {POSITION: [0.1, 0.2, 0.3], ORIENTATION: [1.0, 0.0, 0.0, 0.0], BUTTONS: buttons}
 
 
 def test_gamepad_buttons_reach_the_caller():
