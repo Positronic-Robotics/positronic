@@ -226,23 +226,6 @@ def _connect(ip: str) -> Any:
     return driver
 
 
-@contextlib.contextmanager
-def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
-    """The arm, left idle and its handle given back however the run ends — including one that never starts."""
-    driver = connect(ip)
-    try:
-        yield driver
-    finally:
-        try:
-            driver.set_all_modes(trossen_arm.Mode.idle)
-        # rules-allow: swallowed-error — an arm that cannot be reached cannot be set idle either, and the
-        # handle still has to go back
-        except trossen_arm.RuntimeError as exc:
-            logger.error(f'The arm at {ip} was not set idle: {exc}')
-        finally:  # an arm that will not go idle still has a handle to give back
-            driver.cleanup()
-
-
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the controller handle, the reading it takes each tick, and the setpoint
     it holds the arm at.
@@ -496,9 +479,7 @@ class _Arm(DriverRun[command.CommandType]):
         from the reading walks itself outwards, further every tick.
 
         The standoff is bounded instead: the pose stepped on from is first pulled back to within reach of
-        the arm, so a target still cannot run away from one that is held up. The caller keeps what this
-        returns, and only once it has solved for it: an anchor that walked on past a pose with no solution
-        would leave every pose after it further out of reach than the last.
+        the arm, so a target still cannot run away from one that is held up.
         """
         anchor = self._towards(self.ee_pose, self.asked_pose, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
         return self._towards(anchor, target, _MAX_STEP_M, _MAX_STEP_RAD)
@@ -523,6 +504,8 @@ class _Arm(DriverRun[command.CommandType]):
         solution = self._kin.ik(stepped, self._target, max_jump=self._jump_max)
         if solution is None:
             raise ValueError(f'{pose} is out of reach')
+        # Only a pose that solved may be stepped on from: an anchor that walked on past one out of reach
+        # would leave every pose after it further out of reach than the last.
         self._anchor = stepped
         return solution
 
@@ -650,6 +633,28 @@ class _Arm(DriverRun[command.CommandType]):
         self.state.encode(self.q, velocities, self.ee_pose, status)
         self.out.emit(self.state)
         self.grip_out.emit(self._grip_of(self._output))
+
+
+@contextlib.contextmanager
+def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
+    """The arm, left idle and its handle given back however the run ends — including one that never starts."""
+    driver = connect(ip)
+    try:
+        yield driver
+    finally:
+        try:
+            driver.set_all_modes(trossen_arm.Mode.idle)
+        # rules-allow: swallowed-error — an arm that cannot be reached cannot be set idle either, and the
+        # handle still has to go back
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {ip} was not set idle: {exc}')
+        finally:  # an arm that will not go idle still has a handle to give back
+            try:
+                driver.cleanup()
+            # rules-allow: swallowed-error — this runs in a `finally`, and a session that cannot be closed
+            # must not replace the reason the run is ending
+            except trossen_arm.RuntimeError as exc:
+                logger.error(f'The session with the arm at {ip} did not close: {exc}')
 
 
 class Robot(pimm.ControlSystem):

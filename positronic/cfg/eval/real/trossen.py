@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -13,7 +14,7 @@ from positronic.eval import Eval, Task
 PARTS_TASK = 'Pick the parts one by one from the table and put them into the transparent box.'
 
 
-def _trossen_trial(instruction: str, timeout: float | None) -> Task:
+def _trossen_trial(instruction: str, timeout: float | None, meta: dict[str, Any] | None = None) -> Task:
     """One trial on the Trossen station. A person lays the parts out before it, so the trial asks for no scene.
 
     The arm opens every trial at the pose the operator's demonstrations open at: it rests on the lower limit
@@ -23,6 +24,7 @@ def _trossen_trial(instruction: str, timeout: float | None) -> Task:
         instruction_source=instruction,
         timeout_sec=timeout,
         prepare_args={keys.ARM: command.JointPosition(np.asarray(TROSSEN_NOMINAL_JOINTS, dtype=np.float64))},
+        meta=meta or {},
     )
 
 
@@ -34,7 +36,10 @@ def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Tas
 
 
 def _planned_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
-    return [_trossen_trial(instruction, timeout) for _ in range(trial_count)]
+    return [
+        _trossen_trial(instruction, timeout, {keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count})
+        for trial in range(trial_count)
+    ]
 
 
 @cfn.config(embodiment=trossen, instruction=PARTS_TASK, timeout=120, trial_count=1)

@@ -167,6 +167,10 @@ class Leader(pimm.ControlSystem):
         if not isinstance(asked, command.JointPosition):
             raise NotImplementedError(f'A leader is driven to joints, and {asked} names none')
         target = np.asarray(asked.positions, dtype=np.float64)
+        # Checked before the mode change: a shorter target broadcasts across the reading and moves every
+        # joint, and a NaN makes the travel time itself NaN, both with the arm already servoing.
+        if target.shape != (_ARM_JOINTS,) or not np.all(np.isfinite(target)):
+            raise ValueError(f'A leader takes {_ARM_JOINTS} finite joint positions, and this names {target}')
         positions = np.asarray(driver.get_all_positions(), dtype=np.float64)
         seconds = max(_MIN_MOVE_TIME_S, float(np.max(np.abs(target - positions[:_ARM_JOINTS]))) / _MOVE_SPEED)
         held = float(np.clip(positions[_GRIPPER_JOINT], closed, closed + travel))
