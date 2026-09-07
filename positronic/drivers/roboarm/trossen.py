@@ -30,8 +30,9 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
 
@@ -700,9 +701,9 @@ class Robot(pimm.ControlSystem):
         with _opened(self._connect, self._ip) as driver:
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
-                # TODO: carry the URDF, which lives in `trossen_arm_description`. `keys.CONTROL_FRAME`
+                # TODO: carry the URDF, which lives in `trossen_arm_description`. `roboarm_keys.CONTROL_FRAME`
                 # names a frame in it, so it waits for the same change.
-                self.robot_meta.emit({keys.ROBOT: 'trossen_wxai', keys.JOINT_NAMES: list(_JOINT_NAMES)})
+                self.robot_meta.emit({roboarm_keys.ROBOT: 'trossen_wxai', roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES)})
 
                 while not should_stop.value:
                     arm.read()
