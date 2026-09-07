@@ -24,6 +24,7 @@ from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_f
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
+from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 
@@ -38,8 +39,8 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
 _POINTER_VALUES: dict[str, Any] = {
-    keys.JOINT_SIGNALS: FromValue([keys.JOINTS]),
-    keys.POSE_SIGNALS: FromValue([keys.EE_POSE, keys.TARGET_EE_POSE]),
+    eval_keys.JOINT_SIGNALS: FromValue([keys.JOINTS]),
+    eval_keys.POSE_SIGNALS: FromValue([keys.EE_POSE, keys.TARGET_EE_POSE]),
 }
 ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 

@@ -143,6 +143,9 @@ Every command also takes an optional `mode`, the control law it asks to execute 
 `PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
 joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
+A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
+decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See
+[Control mode](codecs.md#control-mode) in the Codec Guide.
 
 Which command your model produces is decided by its codec.
 

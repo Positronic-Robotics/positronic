@@ -59,3 +59,4 @@ _action = codecs.absolute_joints_action.override(tgt_joints_key=keys.TARGET_JOIN
 
 # franka_droid runs at 15 Hz; the model emits a 15-step horizon and compose executes all steps by default.
 droid = codecs.compose.override(obs=molmoact2_obs, action=codecs.droid_execution.override(action=_action), fps=15.0)
+droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})

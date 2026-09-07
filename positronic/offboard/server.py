@@ -17,7 +17,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 
-from positronic import keys
+from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder
 from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
@@ -226,7 +226,7 @@ class PolicyServer:
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
-        self.metadata: dict[str, Any] = {keys.HOST: host, keys.PORT: port}
+        self.metadata: dict[str, Any] = {offboard_keys.HOST: host, offboard_keys.PORT: port}
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -339,11 +339,11 @@ class PolicyServer:
             meta = {
                 **self.metadata,
                 **self._source.meta(rid),
-                keys.CHECKPOINT_ID: rid,
+                offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,
-                keys.LOCAL_STACK: local_spec,
-                keys.COMPRESS_IMAGES: border.compress_images,
-                keys.POSITRONIC_VERSION: _pkg_version('positronic'),
+                offboard_keys.LOCAL_STACK: local_spec,
+                offboard_keys.COMPRESS_IMAGES: border.compress_images,
+                offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             await websocket.send_bytes(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 

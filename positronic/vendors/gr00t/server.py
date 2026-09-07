@@ -13,11 +13,11 @@ import pos3
 import zmq
 
 from pimm.logging import init_logging
-from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -223,7 +223,7 @@ class Gr00tPolicy(Policy):
 
     def __init__(self, groot: Gr00tSubprocess, checkpoint_path: str):
         self._groot = groot
-        self._meta = {keys.CHECKPOINT_PATH: checkpoint_path}
+        self._meta = {policy_keys.CHECKPOINT_PATH: checkpoint_path}
 
     def new_session(self, context=None, rt=None):
         self._groot.client.reset()
@@ -337,9 +337,9 @@ class Gr00tSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
-            keys.TYPE: 'groot',
+            policy_keys.TYPE: 'groot',
             'modality_config': self.modality_config,
-            keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
+            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
         }
 
 

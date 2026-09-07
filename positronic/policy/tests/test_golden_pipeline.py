@@ -40,12 +40,13 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler, episode_caller
+from positronic.tests.testing_coutils import EpisodeCaller, ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
 
@@ -211,7 +212,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         harness = Harness(embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        perform_task = episode_caller(world, harness, wrapped, tmp_path)
+        perform_task = EpisodeCaller(world, harness, wrapped, tmp_path)
         done_em = world.pair(harness.done)
 
         # Robot/gripper emit state every tick, so the script only drives the
@@ -222,7 +223,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             (robot.inject_error, 0.0),  # one-shot error: StopOnFault stops the arm for that frame
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
-            (partial(done_em.emit, {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}), 0.0),
+            (partial(done_em.emit, {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR}), 0.0),
             (None, 0.5),  # let DsWriterAgent commit before world exit
         ]
         scheduler = world.start([harness, ManualDriver(script), robot, gripper, ds_agent])

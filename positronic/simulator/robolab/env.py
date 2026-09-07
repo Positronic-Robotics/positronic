@@ -20,6 +20,7 @@ path has no seed hook, so a recorded seed would only mislead.
 """
 
 import argparse
+import json
 import os
 import tempfile
 from collections.abc import Callable
@@ -114,7 +115,7 @@ def _load_robot_meta() -> dict[str, Any]:
 
 
 class RobolabEnv(EnvProtocol):
-    """A RoboLab task behind the gym-style ``reset``/``step``/``close`` the env server serves.
+    """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
     Built from the reset token's key (RoboLab env name, instruction variant) and cached; ``reset`` rebuilds
     when the key changes and re-randomizes the scene through RoboLab's own reset events, or restores an exact
@@ -152,6 +153,43 @@ class RobolabEnv(EnvProtocol):
                 return method(*args, **kwargs)
 
         return timed
+
+    @staticmethod
+    def _benchmark_tasks() -> dict[str, dict[str, Any]]:
+        """Every benchmark task by name: the seconds RoboLab gives an episode, and the categories it sits in."""
+        with open(os.path.join(robolab.constants.TASK_DIR, '_metadata', 'task_metadata.json')) as f:
+            entries = json.load(f)
+        remap = robolab.constants.BENCHMARK_TASK_CATEGORIES
+        tasks = {}
+        for entry in entries:
+            attributes = [a.strip() for a in entry['attributes'].split(',')]
+            tasks[entry['task_name']] = {
+                'episode_length_s': float(entry['episode_s']),
+                # An attribute outside the map, such as ``vague``, is a phrasing and no category.
+                'categories': {remap[a] for a in attributes if a in remap},
+            }
+        return tasks
+
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tasks ``spec`` selects: ``task`` is one of RoboLab's categories, a task name, or a list of
+        names. Without a ``task`` the whole benchmark runs."""
+        benchmark = self._benchmark_tasks()
+        categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
+        match spec.get('task'):
+            case None:
+                names = list(benchmark)
+            case str() as category if category in categories:
+                names = [name for name, task in benchmark.items() if category in task['categories']]
+            case str() as name:
+                names = [name]
+            case selection:
+                names = list(selection)
+        unknown = [name for name in names if name not in benchmark]
+        if unknown:
+            raise ValueError(
+                f'RoboLab does not hold {unknown}; a task is a name, a list of names, or one of {sorted(categories)}'
+            )
+        return [{'name': name, 'episode_length_s': benchmark[name]['episode_length_s']} for name in names]
 
     def _build(self, task: str, instruction_type: str) -> None:
         if self._env is not None:

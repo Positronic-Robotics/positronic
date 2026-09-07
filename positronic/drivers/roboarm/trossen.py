@@ -30,8 +30,9 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
 
@@ -688,7 +689,7 @@ class Robot(pimm.ControlSystem):
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
                 # TODO: carry the URDF and the joint names, which live in `trossen_arm_description`.
-                self.robot_meta.emit({keys.ROBOT: 'trossen_wxai'})
+                self.robot_meta.emit({roboarm_keys.ROBOT: 'trossen_wxai'})
 
                 while not should_stop.value:
                     arm.read()
