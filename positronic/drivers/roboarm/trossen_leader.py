@@ -107,7 +107,12 @@ def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
         except trossen_arm.RuntimeError as exc:
             logger.error(f'The leader at {ip} was not set idle: {exc}')
         finally:  # an arm that will not go idle still has a handle to give back
-            driver.cleanup()
+            try:
+                driver.cleanup()
+            # rules-allow: swallowed-error — this runs in a `finally`, and a session that cannot be closed
+            # must not replace the reason the run is ending
+            except trossen_arm.RuntimeError as exc:
+                logger.error(f'The session with the leader at {ip} did not close: {exc}')
 
 
 class Leader(pimm.ControlSystem):

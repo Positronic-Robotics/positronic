@@ -219,13 +219,6 @@ def _configure(driver: Any, ip: str, timeout_s: float) -> None:
     driver.configure(trossen_arm.Model.wxai_v0, end_effector, ip, True, timeout_s)
 
 
-def _connect(ip: str) -> Any:
-    """Open the arm controller and take ownership of it."""
-    driver = trossen_arm.TrossenArmDriver()
-    _configure(driver, ip, _CONNECT_TIMEOUT_S)
-    return driver
-
-
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the controller handle, the reading it takes each tick, and the setpoint
     it holds the arm at.
@@ -637,6 +630,13 @@ class _Arm(DriverRun[command.CommandType]):
         self.state.encode(self.q, velocities, self.ee_pose, status)
         self.out.emit(self.state)
         self.grip_out.emit(self._grip_of(self._output))
+
+
+def _connect(ip: str) -> Any:
+    """Open the arm controller and take ownership of it."""
+    driver = trossen_arm.TrossenArmDriver()
+    _configure(driver, ip, _CONNECT_TIMEOUT_S)
+    return driver
 
 
 @contextlib.contextmanager

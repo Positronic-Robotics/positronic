@@ -290,6 +290,7 @@ class DataCollectionController(pimm.ControlSystem):
         """
         for port in (
             self.session_events,
+            self.buttons_receiver,
             self.controller_positions,
             self.robot_state,
             self.leader_joints,
