@@ -27,6 +27,7 @@ Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLaunc
 import math
 import sys
 
+import keys
 import numpy as np
 import torch
 
@@ -64,9 +65,9 @@ _OBS_SPECS = {
     'joint_vel': ((7,), np.float32),
     'eef_pos': ((3,), np.float32),
     'eef_quat': ((4,), np.float32),
-    'over_shoulder_left_camera': ((720, 1280, 3), np.uint8),
-    'over_shoulder_right_camera': ((720, 1280, 3), np.uint8),
-    'wrist_cam': ((720, 1280, 3), np.uint8),
+    keys.OVER_SHOULDER_LEFT_CAMERA: ((720, 1280, 3), np.uint8),
+    keys.OVER_SHOULDER_RIGHT_CAMERA: ((720, 1280, 3), np.uint8),
+    keys.WRIST_CAMERA: ((720, 1280, 3), np.uint8),
     'subtask': ((4,), np.float32),
 }
 

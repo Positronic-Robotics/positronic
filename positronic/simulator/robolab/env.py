@@ -17,6 +17,9 @@ frame.
 The reset token carries the RoboLab env name and the instruction variant; the env builds that task on the
 first reset and caches it, rebuilding only when the key changes. There is no seed anywhere: RoboLab's eval
 path has no seed hook, so a recorded seed would only mislead.
+
+``--cameras`` names the set in ``keys.CAMERA_SETS`` this server renders. RoboLab bakes the set into the
+registered task, so one server serves one set and the token carries no camera.
 """
 
 import argparse
@@ -28,6 +31,7 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
+import keys
 import numpy as np
 import torch
 from isaaclab.app import AppLauncher
@@ -70,6 +74,7 @@ except ImportError:
 parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server protocol.')
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
+parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -90,8 +95,10 @@ import robolab.constants  # noqa: E402
 from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
+
+# robolab resolves from its own uv project at run time, so the checker cannot see this module.
+from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
-from robolab.registrations.droid.camera_presets import WRIST_LEFT_RIGHT  # noqa: E402
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
@@ -196,7 +203,14 @@ class RobolabEnv(EnvProtocol):
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         if task not in self._registered:
-            auto_register_droid_envs(task=[task], cameras=WRIST_LEFT_RIGHT)
+            # RoboLab's presets hold the camera cfg classes; ``keys.CAMERA_SETS`` names the same sets on
+            # the wire, and the adapter raises when a run asks for a camera the server does not render.
+            presets = {
+                keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
+                keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
+                keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
+            }
+            auto_register_droid_envs(task=[task], cameras=presets[args.cameras])
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
         self._env, self._env_cfg = create_env(
