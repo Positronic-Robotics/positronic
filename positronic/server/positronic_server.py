@@ -976,9 +976,10 @@ def configure_tables(
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
-    A recording's videos are re-encoded down to `max_resolution` on the long side, and its numeric signals
-    are thinned to `max_hz`; 0 keeps every sample. `root` is the dataset path the pages report, and the
-    recordings are cached under `cache_dir`. A table response cached under the previous settings is dropped.
+    A recording's videos are re-encoded down to `max_resolution` on the long side, and its videos and its
+    numeric signals are thinned to `max_hz`; 0 keeps every frame and every sample. `root` is the dataset
+    path the pages report, and the recordings are cached under `cache_dir`. A table response cached under
+    the previous settings is dropped.
     """
     episode_columns = set(ep_table_cfg or {})
     for name, cfg in (group_tables or {}).items():
@@ -1038,7 +1039,7 @@ def main(
     Args:
         dataset: Dataset to visualize
         max_resolution: Long side an episode RRD's videos are re-encoded down to
-        max_hz: Rate an episode RRD's numeric signals are thinned to; 0 keeps every sample
+        max_hz: Rate an episode RRD's videos and numeric signals are thinned to; 0 keeps every frame and sample
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port

@@ -221,6 +221,42 @@ def test_a_recording_is_copied_from_the_file_built_under_the_scratch_dir_and_not
     assert not any(scratch.iterdir())
 
 
+def _recording_builder_threads(monkeypatch) -> list[int]:
+    """Wrap the recording builder so each call records the thread it runs on."""
+    stream = positronic_server.stream_episode_rrd
+    threads: list[int] = []
+
+    def stream_and_record(ds, episode_id, **kwargs):
+        threads.append(threading.get_ident())
+        yield from stream(ds, episode_id, **kwargs)
+
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
+    return threads
+
+
+def test_the_recordings_are_built_on_worker_threads_and_the_export_copies_them(dataset, tmp_path, monkeypatch):
+    threads = _recording_builder_threads(monkeypatch)
+
+    files = paths_of(an_export(dataset, tmp_path / 'out', workers=2))
+
+    assert len(threads) == 2
+    assert threading.get_ident() not in threads
+    assert len([path for path in files if 'episode_rrd' in path]) == 2
+
+
+def test_one_worker_builds_each_recording_on_the_export_s_own_thread(dataset, tmp_path, monkeypatch):
+    threads = _recording_builder_threads(monkeypatch)
+
+    an_export(dataset, tmp_path / 'out', workers=1)
+
+    assert threads == [threading.get_ident()] * 2
+
+
+def test_fewer_than_one_worker_is_refused(dataset, tmp_path):
+    with pytest.raises(ValueError):
+        an_export(dataset, tmp_path / 'out', workers=0)
+
+
 def test_two_views_of_one_dataset_through_one_scratch_dir_each_get_their_own_recording(dataset, tmp_path):
     """A transformed view keeps the dataset's root and its uids, so nothing but the export tells the two apart."""
     scratch = tmp_path / 'scratch'
