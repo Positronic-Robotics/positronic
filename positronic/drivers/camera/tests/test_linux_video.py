@@ -167,10 +167,16 @@ def test_a_compressed_buffer_the_decoder_holds_back_is_not_counted_misframed(dev
     assert 'not one frame in size' not in caplog.text
 
 
-def test_every_image_of_one_buffer_keeps_its_own_pixels(device):
-    """One buffer decoding to several images must not hand the same adapter, and its pixels, to each."""
+def test_a_buffer_of_several_images_gives_the_newest(device, caplog):
+    """The frame port holds one image, so the older images of a buffer have nowhere to go."""
+    buffer = FakeFrame(_h264(4), linux_video.PixelFormat.H264)
+    driver = linux_video.LinuxVideo(device_path='/dev/null', width=WIDTH, height=HEIGHT, fps=30, pixel_format='YUYV')
+    decoded = driver._images(buffer, lambda name: av.CodecContext.create(name, 'r'))
+    assert decoded is not None and len(decoded) > 1, 'the buffer decoded to a single image'
+
     emitted, _ = _driven(device, [FakeFrame(_h264(4), linux_video.PixelFormat.H264)])
 
-    greys = [adapter.array.mean() for _, adapter in emitted.emitted]
-    assert len(greys) > 1, 'the buffer decoded to a single image, so nothing was shared'
-    assert len({round(grey) for grey in greys}) == len(greys), f'images share their pixels: {greys}'
+    assert len(emitted.emitted) == 1
+    _, adapter = emitted.emitted[0]
+    assert adapter.array.mean() == pytest.approx(decoded[-1].mean())
+    assert f'{len(decoded) - 1} images a newer one' in caplog.text
