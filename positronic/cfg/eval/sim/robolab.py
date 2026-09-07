@@ -9,13 +9,21 @@ from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 
-@cfn.config(
-    camera_dict={keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera', keys.WRIST_IMAGE: 'wrist_cam'},
-    instruction_type='default',
-    trial_count=1,
-    timeout=None,
-)
-def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
+def _camera_dict(cameras: str) -> dict[str, str]:
+    """The wire name each camera of the set takes, keyed as ``camera_dict``.
+
+    A set with one exterior binds it to ``EXTERIOR_IMAGE``, so a two-camera policy reads the same key
+    whichever exterior the run renders.
+    """
+    exteriors = [keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2]
+    wire = {}
+    for name in robolab_keys.CAMERA_SETS[cameras]:
+        wire[keys.WRIST_IMAGE if name == robolab_keys.WRIST_CAMERA else exteriors.pop(0)] = name
+    return wire
+
+
+@cfn.config(cameras=robolab_keys.WRIST_LEFT_RIGHT, instruction_type='default', trial_count=1, timeout=None)
+def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
@@ -29,13 +37,17 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     when the run starts. The instruction is never pinned: the task reads its language live from the env, which
     reports the resolved instruction in every reset's meta.
 
+    ``cameras`` names the set the run renders, one of ``keys.CAMERA_SETS``: both exteriors and the wrist, or
+    one exterior and the wrist. RoboLab bakes the set into the registered task, so a run holds one set.
+
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
     per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The env's live
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
     """
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
+    camera_dict = _camera_dict(cameras)
+    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab(cameras))
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')

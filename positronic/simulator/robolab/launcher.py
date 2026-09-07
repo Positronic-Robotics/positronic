@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
+from functools import partial
 from pathlib import Path
 
 from positronic.drivers.roboarm.models import bundled_franka_model
@@ -66,7 +67,7 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int) -> subprocess.Popen:
+def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
     with _checkout_lock():
         src = _ensure_robolab_src()
         # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
@@ -87,6 +88,8 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         host,
         '--port',
         str(port),
+        '--cameras',
+        cameras,
         '--headless',
     ]
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
@@ -109,6 +112,10 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract)."""
-    return serve_subprocess(_spawn, host)
+def serve_robolab(cameras: str, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
+
+    ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
+    registered task, so one server serves one set.
+    """
+    return serve_subprocess(partial(_spawn, cameras=cameras), host)
