@@ -119,3 +119,13 @@ def test_nothing_stored_gives_the_defaults():
 
 def test_a_partial_stored_state_keeps_the_defaults_for_what_it_omits():
     assert load_sidebar_state('{"isExpanded": true}') == {**DEFAULTS, 'isExpanded': True}
+
+
+def test_a_stored_key_column_width_that_is_not_a_number_falls_back():
+    assert load_sidebar_state('{"keyColumnWidth": "wide"}')['keyColumnWidth'] == 150
+
+
+def test_a_stored_key_column_width_below_the_minimum_clamps_rather_than_resets():
+    """`Number(null)` is 0, and a 0px key column hides every metadata key; the resizer's floor holds it."""
+    assert load_sidebar_state('{"keyColumnWidth": null}')['keyColumnWidth'] == 50
+    assert load_sidebar_state('{"keyColumnWidth": 0}')['keyColumnWidth'] == 50
