@@ -389,13 +389,13 @@ def _downloads(value: object, prefix: tuple[str, ...]) -> Iterator[tuple[tuple[s
     elif isinstance(value, dict):
         for key, item in value.items():
             yield from _downloads(item, prefix + (key,))
-    elif isinstance(value, list):
+    elif isinstance(value, list | tuple):
         for index, item in enumerate(value):
             yield from _downloads(item, prefix + (str(index),))
 
 
 def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
-    """The key path of every static value an episode page links as a download; a list item by its index.
+    """The key path of every static value an episode page links as a download; a list or tuple item by its index.
 
     Each key is one URL segment, so distinct paths never share a link. A key that makes no segment —
     empty, `.`, `..`, or past a file name's limit once encoded — is refused.
@@ -408,7 +408,7 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
 _MISSING = object()
 
 
-def _list_index(key: str, items: list) -> int | None:
+def _list_index(key: str, items: Sequence[object]) -> int | None:
     """The index `key` names into `items`, spelled as `str` spells it and within the length; None otherwise."""
     if not (key.isascii() and key.isdigit() and len(key) <= len(str(len(items)))):
         return None
@@ -419,12 +419,12 @@ def _list_index(key: str, items: list) -> int | None:
 def _value_at(static: dict, key_path: Sequence[str]) -> object:
     """The value each key of `key_path` names in turn into `static`, or `_MISSING`.
 
-    Every key is one path segment, so a key holding a dot (`link0.stl`) is one step; a list is walked by
-    an index.
+    Every key is one path segment, so a key holding a dot (`link0.stl`) is one step; a list or a tuple is
+    walked by an index.
     """
     value: object = static
     for key in key_path:
-        if isinstance(value, list):
+        if isinstance(value, list | tuple):
             index = _list_index(key, value)
             if index is None:
                 return _MISSING
@@ -437,8 +437,8 @@ def _value_at(static: dict, key_path: Sequence[str]) -> object:
 
 
 def download_at(static: dict, key_path: tuple[str, ...]) -> bytes | str | None:
-    """The value a page links as a download at `key_path` into `static`, a list item by its index; None where
-    `static` holds no download there."""
+    """The value a page links as a download at `key_path` into `static`, a list or tuple item by its index; None
+    where `static` holds no download there."""
     value = _value_at(static, key_path)
     return cast(bytes | str, value) if is_download(value) else None
 
@@ -483,7 +483,7 @@ async def episode_viewer(request: Request, episode_id: int):
             return obj.isoformat()
         if isinstance(obj, dict):
             return {k: _make_serializable(v, key_path + (k,)) for k, v in obj.items()}
-        if isinstance(obj, list):
+        if isinstance(obj, list | tuple):
             return [_make_serializable(v, key_path + (str(i),)) for i, v in enumerate(obj)]
         return obj
 

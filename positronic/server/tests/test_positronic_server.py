@@ -420,6 +420,17 @@ def test_a_download_link_carries_each_key_encoded_and_the_route_answers_it(viewe
     assert f'"{link}"' in viewer.get('/episode/0').text
 
 
+def test_a_download_inside_a_tuple_is_linked_by_its_index_like_one_inside_a_list(viewer, monkeypatch):
+    monkeypatch.setattr(_StubEpisode, 'static', {'many': (b'x', 'short')})
+
+    link = download_link(0, ('many', '0'))
+
+    assert list(download_paths(_StubEpisode.static)) == [('many', '0')]
+    assert link == 'api/episode/0/static/many/0'
+    assert viewer.get(f'/{link}').content == b'x'
+    assert f'"{link}"' in viewer.get('/episode/0').text
+
+
 def test_a_nested_value_and_a_dotted_top_level_key_get_apart_links_the_route_tells_apart(viewer, monkeypatch):
     monkeypatch.setattr(_StubEpisode, 'static', {'scene.mesh': b'top', 'scene': {'mesh': b'nested'}})
 
