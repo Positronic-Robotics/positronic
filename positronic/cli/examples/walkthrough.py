@@ -99,7 +99,7 @@ def walkthrough(
     # A terminal view that is not finished carries no result, so there is no score to report.
     if not isinstance(view, FinishedSubmissionView):
         raise SystemExit(f'   {view.status.name}, with no result to read')
-    print(f'   primary {view.scores.primary} over {view.scores.episodes} episodes')
+    print(f'   primary {view.scores.primary}')
     print(f'   result  {view.artifacts.result}')
 
 

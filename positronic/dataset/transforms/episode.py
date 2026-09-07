@@ -127,10 +127,10 @@ class _LazyMergedEpisode(Episode):
 
     def __getitem__(self, name: str) -> Any:
         for ep in self._episodes:
-            try:
+            try:  # `name in ep` is `ep[name]` under `Mapping`, so a membership test costs the lookup twice
                 return ep[name]
             except KeyError:
-                continue
+                pass
         raise KeyError(name)
 
     @property

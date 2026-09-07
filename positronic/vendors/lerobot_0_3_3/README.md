@@ -38,7 +38,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
 
 # 4. Run inference
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.url=localhost:8000
 ```

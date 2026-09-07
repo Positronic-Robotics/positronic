@@ -61,6 +61,17 @@ Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship �
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
+## Control mode
+
+`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](connect-your-model.md#actions-server--client)). Implementation in [`positronic/policy/codec.py`](../positronic/policy/codec.py).
+
+Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply it to an action codec:
+
+| Wrapper | Expands to | Used by |
+|---------|-----------|---------|
+| `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` ([the DROID gains](../positronic/cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
+| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` | the `phail_v1` pipelines of LeRobot, GR00T, OpenPI and DreamZero |
+
 ## Writing custom codecs
 
 Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.

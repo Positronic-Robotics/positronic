@@ -11,6 +11,7 @@ from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
@@ -467,16 +468,6 @@ def test_records_infer_span_when_inference_raises(tmp_path, open_session):
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
 
-def test_remote_policy_meta_exposes_server_fields():
-    """RemotePolicy.meta prefixes the server's own fields with ``server.``, before any session exists."""
-    policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
-
-    meta = policy.meta
-    assert meta['type'] == 'remote'
-    assert meta['server.checkpoint_path'] == '/ckpts/abc'
-    assert meta['server.model_name'] == 'foo'
-
-
 def test_missing_declaration_fails_before_motion():
     """A handshake carrying no ``local_stack`` leaves nothing to build, so no session opens."""
     policy, _ = _mock_remote_policy({'positronic_version': '0.1.0'})
@@ -500,7 +491,10 @@ def test_declared_stack_built_at_session_open(open_session):
 
 
 def test_unknown_declared_entry_fails_before_motion():
-    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
+    policy, _ = _mock_remote_policy({
+        'local_stack': {'name': 'run_arbitrary_code'},
+        offboard_keys.POSITRONIC_VERSION: '9.9.9',
+    })
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
 

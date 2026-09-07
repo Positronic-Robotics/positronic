@@ -94,11 +94,9 @@ class CachedDataset(Dataset):
         return len(self._dataset)
 
     def _get_episode(self, index: int) -> Episode:
-        ep = self._cache.get(index)
-        if ep is None:
-            ep = self._dataset[index]
-            self._cache[index] = ep
-        return ep
+        if index not in self._cache:
+            self._cache[index] = self._dataset[index]
+        return self._cache[index]
 
     @property
     def meta(self) -> dict[str, Any]:

@@ -24,7 +24,7 @@ curl http://localhost:8000/api/v1/models
 In a separate terminal, run inference inside the simulation:
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=localhost:8000 \
   --output_dir=~/datasets/demo_run
 ```
@@ -143,6 +143,9 @@ Every command also takes an optional `mode`, the control law it asks to execute 
 `PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
 joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
+A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
+decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See
+[Control mode](codecs.md#control-mode) in the Codec Guide.
 
 Which command your model produces is decided by its codec.
 
@@ -192,6 +195,10 @@ class MySession(Session):
             for pose in predicted_poses
         ]
 
+    @property
+    def meta(self):
+        return {'type': 'my_model'}
+
 
 class MyPolicy(Policy):
     def __init__(self, model):
@@ -199,10 +206,6 @@ class MyPolicy(Policy):
 
     def new_session(self, context=None, rt=None):
         return MySession(self._model)  # per-episode setup goes here
-
-    @property
-    def meta(self):
-        return {'type': 'my_model'}
 
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
@@ -228,7 +231,8 @@ If your server sits behind a proxy that caps message size (Modal's is ~2 MB), wr
 Test the server with the same client as the demo:
 
 ```bash
-uv run positronic-inference sim --policy=.remote --policy.url=localhost:8000
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.remote --policy.url=localhost:8000
 ```
 
 ### Slow-loading or subprocess models

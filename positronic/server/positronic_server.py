@@ -1,6 +1,7 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
+import hashlib
 import ipaddress
 import logging
 import os
@@ -15,7 +16,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import quote
 
 import configuronic as cfn
 import pos3
@@ -23,7 +25,7 @@ import psutil
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -32,8 +34,15 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
+from positronic.server.dataset_utils import (
+    DEFAULT_MAX_HZ,
+    DEFAULT_MAX_RESOLUTION,
+    get_dataset_root,
+    get_episodes_list,
+    stream_episode_rrd,
+)
 
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
@@ -45,7 +54,8 @@ app_state: dict[str, object] = {
     'root': '',
     'cache_dir': '',
     'episode_keys': {},
-    'max_resolution': 640,
+    'max_resolution': DEFAULT_MAX_RESOLUTION,
+    'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
 }
@@ -70,17 +80,28 @@ def require_dataset(func):
     return wrapper
 
 
-def _get_rrd_cache_path(episode_id: int) -> str:
+_MAX_COMPONENT_BYTES = 200
+
+
+def _path_component(value: str) -> str:
+    """``value`` as one filename component, injectively and within any filesystem's name limit."""
+    encoded = quote(value, safe='')
+    if len(encoded.encode()) <= _MAX_COMPONENT_BYTES:
+        return encoded
+    # A digest is never read back as an encoded value: `quote` escapes '='.
+    return '=' + hashlib.sha256(value.encode()).hexdigest()
+
+
+def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> Path:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise RuntimeError('Dataset not loaded')
-    cache_root = str(app_state['cache_dir'])
-    ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
-    episode_cache_dir = os.path.join(cache_root, ds_id)
-    os.makedirs(episode_cache_dir, exist_ok=True)
-    # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
-    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
-    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta["uid"]}.rrd')
+    ds_id = _path_component(str(Path(str(app_state['root'])).resolve()))
+    episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
+    episode_cache_dir.mkdir(parents=True, exist_ok=True)
+    # The uid, because an episode's position is view-dependent.
+    uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
+    return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 
 @asynccontextmanager
@@ -106,15 +127,6 @@ async def cache_rerun_assets(request: Request, call_next):
     if request.url.path.startswith('/static/rerun/'):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return response
-
-
-def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
-    with open(path, 'rb') as source:
-        while True:
-            chunk = source.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
 
 
 def _get_nav_context() -> dict[str, Any]:
@@ -489,28 +501,30 @@ async def api_episode_static_field(episode_id: int, field_path: str):
 @app.get('/api/episode_rrd/{episode_id}')
 @require_dataset
 async def api_episode_rrd(episode_id: int):
-    ds = app_state.get('dataset')
-    cache_path = _get_rrd_cache_path(episode_id)
+    ds = cast(Dataset, app_state['dataset'])
+    max_hz = cast(float, app_state['max_hz'])
+    max_resolution = cast(int, app_state['max_resolution'])
+    cache_path = _get_rrd_cache_path(episode_id, max_hz, max_resolution)
 
-    if os.path.exists(cache_path):
+    if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
-        return StreamingResponse(
-            _iter_file_chunks(cache_path),
-            media_type='application/octet-stream',
-            headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
-        )
+        return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
-        success = False
+        # The final cache path denotes a complete file.
+        fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
+        partial = Path(name)
+        published = False
         try:
-            with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id):
+            with os.fdopen(fd, 'wb') as cache_file:
+                for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
                     cache_file.write(chunk)
                     yield chunk
-            success = True
+            os.replace(partial, cache_path)
+            published = True
         finally:
-            if not success:
-                shutil.rmtree(cache_path, ignore_errors=True)
+            if not published:
+                partial.unlink(missing_ok=True)
 
     return StreamingResponse(
         _stream_and_cache(),
@@ -627,11 +641,17 @@ def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
     return _SelfSignedCert(keyfile, certfile)
 
 
-@cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
+@cfn.config(
+    dataset=positronic.cfg.ds.local_all,
+    ep_table_cfg=default_table,
+    max_resolution=DEFAULT_MAX_RESOLUTION,
+    group_tables=None,
+)
 def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,
     max_resolution: int,
+    max_hz: float = DEFAULT_MAX_HZ,
     cache_dir: str = '~/.cache/positronic/server/',
     host: str = '0.0.0.0',
     port: int = 8400,
@@ -649,6 +669,8 @@ def main(
 
     Args:
         dataset: Dataset to visualize
+        max_resolution: Long side an episode RRD's videos are re-encoded down to
+        max_hz: Rate an episode RRD's numeric signals are thinned to; 0 keeps every sample
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port
@@ -690,22 +712,24 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    cache_dir = os.path.expanduser(cache_dir)
+    # configuronic passes this CLI value through uncoerced.
+    cache_root = Path(cache_dir).expanduser()
     app_state['root'] = root
-    app_state['cache_dir'] = cache_dir
+    app_state['cache_dir'] = cache_root
     app_state['loading_state'] = True
     app_state['episode_table_cfg'] = ep_table_cfg or {}
     app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
+    app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
 
-    if reset_cache and os.path.exists(cache_dir):
-        logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')
-        shutil.rmtree(cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
+    if reset_cache and cache_root.exists():
+        logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')
+        shutil.rmtree(cache_root)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     logging.info(f'Loading dataset from: {root}')
-    logging.info(f'RRD cache directory: {os.path.abspath(cache_dir)}')
+    logging.info(f'RRD cache directory: {cache_root.resolve()}')
 
     def load_dataset():
         try:

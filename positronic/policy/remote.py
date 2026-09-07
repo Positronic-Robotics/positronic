@@ -5,8 +5,10 @@ from typing import Any
 import numpy as np
 import pos3
 
-from positronic import keys, telemetry, telemetry_keys
+from positronic import telemetry, telemetry_keys
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
+from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
@@ -98,7 +100,7 @@ class RemoteSession(Session):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
+        return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._session.metadata})
 
     def close(self):
         assert self._answer is None or self._answer.done(), (
@@ -115,7 +117,7 @@ class _Endpoint(Policy):
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
         self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
-        # Filled on first contact, via a throwaway session if ``meta`` is read before any real one exists.
+        # Filled on first contact, through a session opened for it alone.
         self._server_meta: dict[str, Any] | None = None
 
     def server_meta(self) -> dict[str, Any]:
@@ -130,17 +132,13 @@ class _Endpoint(Policy):
     def new_session(self, context=None, rt=None) -> RemoteSession:
         if rt is None:
             raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
-        compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
+        compress = bool(self.server_meta().get(offboard_keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, rt, compress_images=compress)
 
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return {INFER: round_trip}
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self.server_meta()})
 
     def close(self):
         self._client = None
@@ -175,8 +173,8 @@ class RemotePolicy(Policy):
 
     def _resolve_stack(self) -> Layer:
         meta = self._endpoint.server_meta()
-        version = meta.get(keys.POSITRONIC_VERSION, 'unknown')
-        declared = meta.get(keys.LOCAL_STACK)
+        version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
+        declared = meta.get(offboard_keys.LOCAL_STACK)
         try:
             stack = from_spec(declared) if declared is not None else None
         except Exception as e:
@@ -203,10 +201,6 @@ class RemotePolicy(Policy):
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return self._policy().functions
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._policy().meta
 
     def close(self):
         self._endpoint.close()

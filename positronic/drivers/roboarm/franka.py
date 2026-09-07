@@ -11,8 +11,9 @@ from typing import Any
 import numpy as np
 
 import pimm
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
@@ -235,8 +236,9 @@ class _Arm(DriverRun[command.CommandType]):
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks for, not applied yet.
 
-        Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
-        is what applies the result.
+        Solved here so that a malformed command raises before anything changes; ``command_target``
+        applies the result. ``_ik`` keeps a Cartesian command inside the joint limits; a joint-space
+        one is unbounded.
         """
         match cmd:
             case command.CartesianPosition(pose):
@@ -401,11 +403,11 @@ class Robot(pimm.ControlSystem):
         gripper = attach_robotiq_2f85(root, meshes)
         add_default_frame(root, EE_LINK)
         return {
-            keys.URDF: ET.tostring(root, encoding='unicode'),
-            keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
+            roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
+            roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
-            keys.CONTROL_FRAME: DEFAULT_FRAME,
-            'gripper': gripper,
+            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+            roboarm_keys.GRIPPER: gripper,
         }
 
     def _init_robot(self, robot):

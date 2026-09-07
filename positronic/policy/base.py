@@ -75,7 +75,7 @@ class Session(ABC):
 
     @property
     def meta(self) -> dict[str, Any]:
-        """Session metadata (may include policy meta + per-session info)."""
+        """What this session reports about its model and its episode."""
         return {}
 
     def cancel(self):
@@ -133,11 +133,6 @@ class Policy(ABC):
         """The work this policy runs off the session's thread, by name. The framework serves it as ``rt.fns``."""
         return {}
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        """Static metadata about this policy/model."""
-        return {}
-
     def close(self):  # noqa: B027
         """Release shared resources (model weights, connections, etc.)."""
 
@@ -154,10 +149,6 @@ class DelegatingPolicy(Policy):
     @property
     def functions(self):
         return self._inner.functions
-
-    @property
-    def meta(self):
-        return self._inner.meta
 
     def close(self):
         self._inner.close()
@@ -203,11 +194,6 @@ class Layer:
         """
         raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        """Metadata contributed by this layer (merged into the wrapped policy's meta)."""
-        return {}
-
     def __or__(self, other: Layer) -> Layer:
         if isinstance(other, Layer):
             return _ComposedLayer((*self._layers(), *other._layers()))
@@ -219,10 +205,7 @@ class Layer:
 
 
 class _LayerPolicy(DelegatingPolicy):
-    """Policy produced by ``Layer.wrap()``.
-
-    Delegates session creation to the layer's ``make_session`` and merges meta.
-    """
+    """Policy produced by ``Layer.wrap()``."""
 
     def __init__(self, inner: Policy, layer: Layer):
         super().__init__(inner)
@@ -230,10 +213,6 @@ class _LayerPolicy(DelegatingPolicy):
 
     def new_session(self, context=None, rt=None):
         return self._layer.make_session(self._inner.new_session(context, rt))
-
-    @property
-    def meta(self):
-        return self._inner.meta | self._layer.meta
 
 
 class _ComposedLayer(Layer):

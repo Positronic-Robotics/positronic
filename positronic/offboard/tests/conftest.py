@@ -94,7 +94,6 @@ def _make_mock_policy(action, meta):
 
     policy = MagicMock()
     policy.new_session.return_value = session
-    policy.meta = meta
     policy.functions = {}  # `Policy.functions` is a mapping, and MagicMock's stand-in is not
     policy._mock_session = session  # expose for assertions
     return policy

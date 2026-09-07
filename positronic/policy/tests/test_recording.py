@@ -39,10 +39,6 @@ class _TrackingPolicy(Policy):
         self.session_count += 1
         return _TrackingSession(self._actions, {'policy_key': 'policy_value'})
 
-    @property
-    def meta(self):
-        return {'policy_key': 'policy_value'}
-
 
 class _CapturingSession(Session):
     """Innermost session that snapshots the Recorder's carried timeline state when called."""
@@ -167,9 +163,9 @@ def test_tap_delegates_inner_call(tmp_path):
 
 
 def test_tap_meta_passthrough(tmp_path):
-    """A tap contributes no meta; inner meta passes through."""
-    policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy())
-    assert policy.meta == {'policy_key': 'policy_value'}
+    """A tap passes the inner meta through, and adds the path it records to."""
+    session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy()).new_session()
+    assert session.meta['policy_key'] == 'policy_value'
 
 
 def test_obs_log_filtering_uses_pure_tap_names(tmp_path):

@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -124,47 +123,46 @@ def main(
     # Apply dataset transform once
     dataset = transforms.TransformedDataset(dataset, Group(RestoreCommand(), Identity()))
 
-    # Create writer context outside the loop so it persists across episodes
-    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer:
-        # Process each episode
-        for ep_index in indices:
-            episode = dataset[ep_index]
+    output_path = Path(output_dir) if output_dir is not None else None
+    dataset_factory = LocalDatasetWriter if output_path is not None else None
+    for ep_index in indices:
+        episode = dataset[ep_index]
+        assert isinstance(episode, Episode), 'an integer index names one episode'
 
-            sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
-            sim.load_state(episode.static)
-            cameras_mapped = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
-            gui = dpg_ui() if show_gui else None
+        sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
+        sim.load_state(episode.static)
+        cameras_mapped = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
+        gui = dpg_ui() if show_gui else None
 
-            replay = Replay()
+        replay = Replay()
 
-            with pimm.World(virtual_time=True) as world:
-                # The sim carries both the arm and the gripper ports, so it fills both slots.
-                ds_agent = wire.wire(world, replay, dataset_writer, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
-                player_cmd = world.pair(replay.command)
+        with pimm.World(virtual_time=True) as world:
+            # The sim carries both the arm and the gripper ports, so it fills both slots.
+            ds_agent = wire.wire(world, replay, dataset_factory, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
+            player_cmd = world.pair(replay.command)
 
-                ds_cmd = pimm.NoOpEmitter()
-                if ds_agent is not None:
-                    ds_cmd = world.pair(ds_agent.command)
+            ds_cmd = pimm.NoOpEmitter()
+            if ds_agent is not None:
+                ds_cmd = world.pair(ds_agent.command)
 
-                # This is extremely hacky, but it works. The problem to connect them directly
-                # is that any emitter can be connected only to one receiver.
-                def call_stop(_finished, ds_cmd=ds_cmd, world=world):
-                    ds_cmd.emit(DsWriterCommand.STOP())
-                    world.request_stop()
-                    return True
+            # This is extremely hacky, but it works. The problem to connect them directly
+            # is that any emitter can be connected only to one receiver.
+            def call_stop(_finished, ds_cmd=ds_cmd, world=world):
+                ds_cmd.emit(DsWriterCommand.STOP())
+                world.request_stop()
+                return True
 
-                _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
+            _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
 
-                sim_iter = world.start([sim, replay, ds_agent], gui)
-                ds_cmd.emit(DsWriterCommand.START(episode.static))
-                player_cmd.emit(DsPlayerStartCommand(episode))
+            sim_iter = world.start([sim, replay, ds_agent], gui)
+            ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
+            player_cmd.emit(DsPlayerStartCommand(episode))
 
-                p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+            p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
 
-                for _ in sim_iter:
-                    p_bar.n = round(world.clock.now(), 1)
-                    p_bar.refresh()
+            for _ in sim_iter:
+                p_bar.n = round(world.clock.now(), 1)
+                p_bar.refresh()
 
 
 if __name__ == '__main__':

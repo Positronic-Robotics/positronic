@@ -1,4 +1,4 @@
-"""The dumb remote env-server: a benchmark env behind ``reset``/``step``/``close`` over websockets.
+"""The dumb remote env-server: a benchmark env behind ``tasks``/``reset``/``step``/``close`` over websockets.
 
 Positronic-free by contract — it depends only on ``websockets``, plus the wire codec and the
 ``EnvProtocol`` an env implements. A benchmark runs this in its own isolated interpreter (where
@@ -11,6 +11,7 @@ re-randomizes it; ``control_dt`` rides every observation (``reset`` and each ``s
 may even vary its control period per step. Heavy construction is the env's own concern (cache it).
 
 Protocol (msgpack frames, see ``protocol``):
+  client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
   client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
@@ -35,12 +36,21 @@ logger = logging.getLogger(__name__)
 
 
 class EnvProtocol(ABC):
-    """A benchmark env behind the three methods the server exposes; the wire contract, positronic-free.
+    """A benchmark env behind the four methods the server exposes; the wire contract, positronic-free.
 
-    ``reset`` and ``step`` exchange raw plain-data dicts (numpy arrays + scalars) — the canonical<->raw
+    ``tasks``, ``reset`` and ``step`` exchange raw plain data (numpy arrays + scalars) — the canonical<->raw
     mapping is the client's ``EnvAdapter``, never the server's. Heavy, per-task construction is the
     env's own concern (cache it, keyed by the token's structural part); the protocol has no build phase.
     """
+
+    @abstractmethod
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The benchmark's task records for ``spec``: the selection arguments an eval binds, keyed by the eval
+        config's own parameter names.
+
+        An absent key does not narrow that axis; an unknown value raises. Every record carries ``name``, the id
+        of one task.
+        """
 
     @abstractmethod
     def reset(self, token: Any) -> dict[str, Any]:
@@ -95,6 +105,8 @@ class EnvServer:
                     case 'close':
                         connection.send(encode({'ok': True}))
                         return
+                    case 'tasks':
+                        result = {'tasks': self._env.tasks(msg['spec'])}
                     case 'reset':
                         result = self._env.reset(msg['token'])
                     case 'step':

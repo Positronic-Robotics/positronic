@@ -1,13 +1,29 @@
 import ipaddress
+import os
 import socket
 from collections import namedtuple
+from pathlib import Path
+from types import SimpleNamespace
 
 import psutil
 import pytest
 from cryptography import x509
 from cryptography.x509.oid import NameOID
+from fastapi.testclient import TestClient
 
-from positronic.server.positronic_server import _access_url, _generate_self_signed_cert, _is_loopback, _served_addresses
+from positronic.dataset.episode import META_UID
+from positronic.server import positronic_server
+from positronic.server.positronic_server import (
+    _MAX_COMPONENT_BYTES,
+    _access_url,
+    _generate_self_signed_cert,
+    _get_rrd_cache_path,
+    _is_loopback,
+    _path_component,
+    _served_addresses,
+    app,
+    app_state,
+)
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
 
@@ -120,3 +136,80 @@ def test_a_loopback_bind_is_told_from_an_exposed_one(multi_homed):
     assert _is_loopback('localhost')
     assert not _is_loopback('192.168.0.8')
     assert not _is_loopback('rig.local')
+
+
+class _OneEpisodeDataset:
+    def __init__(self, uid: str = 'ep-uid'):
+        self._uid = uid
+
+    def __getitem__(self, index):
+        return SimpleNamespace(meta={META_UID: self._uid})
+
+
+@pytest.fixture
+def rrd_cache(tmp_path, monkeypatch):
+    monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset())
+    monkeypatch.setitem(app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(app_state, 'root', str(tmp_path))
+
+    def path_under(max_hz: float, max_resolution: int) -> Path:
+        return _get_rrd_cache_path(0, max_hz, max_resolution)
+
+    return path_under
+
+
+def test_a_cached_rrd_written_under_other_caps_is_not_served(rrd_cache):
+    assert rrd_cache(30.0, 640) != rrd_cache(30.0, 1280)
+    assert rrd_cache(30.0, 640) != rrd_cache(60.0, 640)
+    assert rrd_cache(30.000001, 640) != rrd_cache(30.000002, 640)
+
+
+def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
+    assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
+
+
+def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monkeypatch):
+    inside = rrd_cache(30.0, 640).parent
+    monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset('../../etc/ep-uid'))
+
+    assert _get_rrd_cache_path(0, 30.0, 640).parent == inside
+
+
+def test_two_uids_that_differ_reach_different_cached_rrds(rrd_cache, monkeypatch):
+    def path_for(uid: str) -> Path:
+        monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset(uid))
+        return _get_rrd_cache_path(0, 30.0, 640)
+
+    assert path_for('camera/left') != path_for('camera_left')
+    assert path_for('a%2Fb') != path_for('a/b')
+    assert path_for('x' * 400) != path_for('y' * 400)
+
+
+def test_a_path_component_is_one_short_injective_name():
+    assert '/' not in _path_component('../../etc/passwd')
+    assert os.sep not in _path_component('../../etc/passwd')
+    assert _path_component('camera/left') != _path_component('camera_left')
+
+    long_name = _path_component('x' * 4000)
+    assert len(long_name.encode()) <= _MAX_COMPONENT_BYTES
+    # A value short enough to survive encoding can never collide with a hashed one.
+    assert _path_component(long_name) != long_name
+
+
+def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch):
+    monkeypatch.setitem(app_state, 'loading_state', False)
+    monkeypatch.setitem(app_state, 'max_hz', 30.0)
+    monkeypatch.setitem(app_state, 'max_resolution', 640)
+
+    def _dies_partway(ds, episode_id, *, max_hz, max_resolution):
+        yield b'half an episode'
+        raise RuntimeError('encoder died')
+
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', _dies_partway)
+
+    with pytest.raises(RuntimeError):
+        TestClient(app).get('/api/episode_rrd/0')
+
+    cache_path = rrd_cache(30.0, 640)
+    assert not cache_path.exists()
+    assert list(cache_path.parent.iterdir()) == []

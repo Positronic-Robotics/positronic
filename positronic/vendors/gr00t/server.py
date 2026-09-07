@@ -13,11 +13,11 @@ import pos3
 import zmq
 
 from pimm.logging import init_logging
-from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -201,8 +201,9 @@ class Gr00tSubprocess:
 
 
 class _Gr00tSession(Session):
-    def __init__(self, client: PolicyClient):
+    def __init__(self, client: PolicyClient, meta: dict[str, Any]):
         self._client = client
+        self._meta = meta
 
     def __call__(self, obs, time_ns):
         action_response, _info = self._client.get_action(obs)
@@ -212,21 +213,21 @@ class _Gr00tSession(Session):
         time_horizon = lengths.pop()
         return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
 
+    @property
+    def meta(self):
+        return self._meta
+
 
 class Gr00tPolicy(Policy):
     """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``."""
 
     def __init__(self, groot: Gr00tSubprocess, checkpoint_path: str):
         self._groot = groot
-        self._checkpoint_path = checkpoint_path
+        self._meta = {policy_keys.CHECKPOINT_PATH: checkpoint_path}
 
     def new_session(self, context=None, rt=None):
         self._groot.client.reset()
-        return _Gr00tSession(self._groot.client)
-
-    @property
-    def meta(self):
-        return {keys.CHECKPOINT_PATH: self._checkpoint_path}
+        return _Gr00tSession(self._groot.client, self._meta)
 
     def close(self):
         self._groot.stop()
@@ -336,9 +337,9 @@ class Gr00tSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
-            keys.TYPE: 'groot',
+            policy_keys.TYPE: 'groot',
             'modality_config': self.modality_config,
-            keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
+            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
         }
 
 

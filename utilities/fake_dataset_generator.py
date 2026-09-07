@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 
 import configuronic as cfn
 import numpy as np
@@ -10,6 +11,7 @@ from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TA
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.eval import keys as eval_keys
 
 # --- Metadata Templates ---
 
@@ -68,6 +70,7 @@ FAILURE_OUTCOME_WEIGHTS = (0.25, 0.20, 0.10, 0.10)
 class FakeGenerator(pimm.ControlSystem):
     def __init__(
         self,
+        output_path: Path,
         num_episodes: int,
         fps: int,
         avg_run_per_item: float,
@@ -77,6 +80,7 @@ class FakeGenerator(pimm.ControlSystem):
         max_items: int,
         cap_per_item: int = 30,
     ):
+        self.output_path = output_path
         self.num_episodes = num_episodes
         self.fps = fps
         self.avg_run_per_item = avg_run_per_item
@@ -138,7 +142,7 @@ class FakeGenerator(pimm.ControlSystem):
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
                 'inference.policy_fps': self.fps,
-                keys.EVAL_CHARGE_INFERENCE_TIME: False,
+                eval_keys.CHARGE_INFERENCE_TIME: False,
                 **self.policy_meta,
             }
 
@@ -146,7 +150,7 @@ class FakeGenerator(pimm.ControlSystem):
                 f'Starting episode {i + 1}/{self.num_episodes}: {task} (Items: {total_items},'
                 f' Duration: {episode_duration:.2f}s, Outcome: {outcome})'
             )
-            self.command.emit(DsWriterCommand.START(static_data))
+            self.command.emit(DsWriterCommand.START(self.output_path, static_data))
 
             # --- Episode Loop ---
             start_time = clock.now()
@@ -213,11 +217,13 @@ def main(
     meta = META_MAP[policy]
     print(f'Generating {num_episodes} episodes to {output_dir} mimicking {policy}...')
 
-    writer = LocalDatasetWriter(pos3.upload(output_dir, sync_on_error=True, interval=None))
+    output_path = pos3.upload(output_dir, sync_on_error=True, interval=None)
 
     with pimm.World() as world:
-        agent = DsWriterAgent(writer, time_mode=TimeMode.CLOCK)
-        generator = FakeGenerator(num_episodes, fps, avg_run_per_item, meta, success_rate, min_items, max_items)
+        agent = DsWriterAgent(LocalDatasetWriter, time_mode=TimeMode.CLOCK)
+        generator = FakeGenerator(
+            output_path, num_episodes, fps, avg_run_per_item, meta, success_rate, min_items, max_items
+        )
 
         # Wire generator to agent
         agent.add_signal(keys.WRIST_IMAGE, Serializers.camera_images)

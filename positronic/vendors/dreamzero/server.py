@@ -17,10 +17,10 @@ from huggingface_hub import snapshot_download
 from websockets.exceptions import ConnectionClosed
 
 from pimm.logging import init_logging
-from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Layer, Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -359,11 +359,11 @@ class DreamZeroSource(ModelSource):
     def meta(self, model_id: str) -> dict[str, Any]:
         checkpoint_path = self._checkpoint_path(model_id)
         return {
-            keys.TYPE: 'dreamzero',
+            policy_keys.TYPE: 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            keys.CHECKPOINT_PATH: checkpoint_path,
-            keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
+            policy_keys.CHECKPOINT_PATH: checkpoint_path,
+            policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
         }
 
 
@@ -383,8 +383,9 @@ joints = pipeline
 joints_traj = pipeline.override(codec=codecs.joints_traj)
 joints_ik = pipeline.override(codec=codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
-# The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
-droid = pipeline.override(codec=codecs.droid, height=180)
+# The public pretrained DROID checkpoint on the wan2.1 backbone. Asserts 320x180 frames.
+droid = pipeline.override(codec=codecs.droid, height=180, **{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})
+droid_3cam = droid.override(codec=codecs.droid_3cam, local=codecs.dreamzero_layers_3cam)
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
@@ -406,9 +407,8 @@ COMMANDS = {
             'pipeline.source.backbone': 'wan2.2',
         },
     ),
-    # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
-    # pipeline whose codec feeds its required 320x180 frames.
-    'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),
+    'droid': serve.override(pipeline=droid),
+    'droid_3cam': serve.override(pipeline=droid_3cam),
 }
 
 

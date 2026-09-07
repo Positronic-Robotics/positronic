@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from pathlib import Path
+from typing import Any, TypeVar
 
 import pimm
-from positronic.policy import Session
+from positronic.eval import Task
+from positronic.policy import Policy, Session
+from positronic.policy.harness import Harness, Rollout
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -53,6 +56,26 @@ class ManualDriver(pimm.ControlSystem):
 def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     """Convenience factory mirroring ``ManualDriver`` construction."""
     return ManualDriver(script=steps)
+
+
+class EpisodeCaller:
+    """Asks ``harness`` for a task the way a driver does: it opens the session that runs it and names the
+    path it records into. Nothing writes there unless the test runs a recorder of its own."""
+
+    def __init__(self, world: pimm.World, harness: Harness, policy: Policy, output_path: Path | None = Path('dataset')):
+        self._perform_task = world.pair(harness.perform_task)
+        self._policy = policy
+        self._output_path = output_path
+        self._rollouts: list[Rollout] = []
+
+    def __call__(self, task: Task) -> pimm.calls.Answer[dict[str, Any]]:
+        rollout = Rollout(task, self._policy, self._output_path)
+        self._rollouts.append(rollout)
+        return self._perform_task(rollout)
+
+    def close(self) -> None:
+        while self._rollouts:
+            self._rollouts.pop().close()
 
 
 class RecordingEmitter(pimm.SignalEmitter[T]):

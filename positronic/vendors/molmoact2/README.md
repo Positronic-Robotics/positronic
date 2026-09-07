@@ -47,7 +47,7 @@ curl http://localhost:8000/api/v1/models
 Point the unified `.remote` client at the server (same client as every other vendor):
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=localhost:8000 \
   --output_dir=~/datasets/molmoact2_run
 ```
@@ -73,7 +73,8 @@ ships one, `droid` (source: [`codecs.py`](./codecs.py)):
 ## Technical details
 
 - **Action space**: absolute joint positions (7) + gripper (1), decoded straight into a `JointPosition`
-  command (no IK at runtime).
+  command (no IK at runtime). Each chunk executes under DROID's impedance gains (`codecs.droid_execution`;
+  see [Control mode](../../../docs/codecs.md#control-mode)).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + 8-D state + language prompt.
 - **Inference**: `norm_tag='franka_droid'`, continuous action mode; the model emits a 15-step action chunk at
   15 Hz, executed in full by the client's declared `ChunkedSchedule`.

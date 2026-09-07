@@ -13,6 +13,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic import keys
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
@@ -60,7 +61,7 @@ def test_full_inference_cycle(stub_server):
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
-        assert keys.POSITRONIC_VERSION in session.metadata
+        assert offboard_keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
         result = session.infer(obs)
@@ -465,7 +466,7 @@ def test_auth_accepts_the_token(authed_endpoint):
     try:
         # Reaching the handshake metadata means the upgrade completed and the server's first frame arrived.
         # An ingress that drops ``Upgrade`` never gets that far: it answers the handshake with a plain 200.
-        assert keys.POSITRONIC_VERSION in session.metadata
+        assert offboard_keys.POSITRONIC_VERSION in session.metadata
     finally:
         session.close()
 

@@ -5,6 +5,7 @@ from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
 from positronic.offboard.protocol import deserialise
+from positronic.policy.executor import blocking
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import remote
 
@@ -64,10 +65,9 @@ def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
         policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
         checkpoints_dir='s3://bucket/exp',
     )
-    assert source.load('42').meta == {
-        'type': 'act',
-        'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
-    }
+    session = blocking(source.load('42')).new_session()
+    assert session.meta == {'type': 'act', 'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model'}
+    session.close()
 
 
 def _make_server(checkpoint: str | None) -> PolicyServer:
@@ -88,7 +88,6 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     async def fake_get_policy(checkpoint_id: str, websocket=None):
         requested['checkpoint_id'] = checkpoint_id
         policy = MagicMock()
-        policy.meta = {'model_name': 'test'}
         policy.new_session.return_value.meta = {}
         return policy
 

@@ -30,13 +30,9 @@ PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
 class Scores(BaseModel):
-    """The scorer's output for a finished run. `primary` is the value a board ranks on."""
+    """A finished run's published score. `primary` is its value under the eval's primary metric."""
 
     primary: float | None = None
-    success_rate: float | None = None
-    per_task: dict[str, float] = Field(default_factory=dict)
-    episodes: int = 0
-    unscored: int = 0
 
 
 # The rule keys a caller matches on: a 429 names one in its `details`, and `quota_for` takes one.

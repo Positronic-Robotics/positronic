@@ -6,8 +6,8 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
-from positronic import keys
 from positronic.policy import Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.observation import TASK_FIELD
 
 
@@ -95,7 +95,7 @@ class LerobotPolicy(Policy):
         policy_cls = get_policy_class(config.type)
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
-        self._meta = {**(extra_meta or {}), keys.TYPE: config.type}
+        self._meta = {**(extra_meta or {}), policy_keys.TYPE: config.type}
 
     @property
     def config(self) -> PreTrainedConfig:
@@ -105,10 +105,6 @@ class LerobotPolicy(Policy):
     def new_session(self, context=None, rt=None):
         self._policy.reset()
         return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta.copy()
 
     def close(self):
         if self._policy is not None:

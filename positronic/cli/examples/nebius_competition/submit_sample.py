@@ -89,7 +89,7 @@ def main() -> None:
             if not isinstance(view, FinishedSubmissionView):
                 raise SystemExit(f'finished as {view.status.name}, with no result to read')
             print(f'finished as {view.status.name}')
-            print(f'primary {view.scores.primary} over {view.scores.episodes} episodes')
+            print(f'primary {view.scores.primary}')
         except PlatformError as exc:
             offered = f'\nevals on offer: {", ".join(exc.evals)}' if exc.evals is not None else ''
             raise SystemExit(f'{exc.code.name}: {exc.message}{offered}') from exc

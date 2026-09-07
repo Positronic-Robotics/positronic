@@ -1,5 +1,7 @@
 import configuronic as cfn
 
+from positronic import keys
+
 
 @cfn.config()
 def linux_video(**kwargs):
@@ -31,6 +33,13 @@ def zed(**kwargs):
 
 zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
+zed_2i_second = zed.override(serial_number=13785037)
+
+_DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
+
+droid = {keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM), keys.EXTERIOR_IMAGE: zed_2i.override(**_DROID_STREAM)}
+
+droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: zed_2i_second.override(**_DROID_STREAM)}
 
 # YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
 zed_x_top = zed.override(serial_number=48953814)
