@@ -83,6 +83,7 @@ def test_the_tracker_follows_a_hand_that_means_it():
     """What the filter holds back is the shake, not the movement: a hand that goes somewhere arrives."""
     tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
     tracker.turn_on(geom.Transform3D())
+    where = geom.Transform3D()
     for tick in range(100):  # one second of holding the hand 20 cm away
         where = tracker.update(geom.Transform3D(np.array([0.2, 0.0, 0.0])), tick * 10_000_000)
     assert np.linalg.norm(where.translation) > 0.19

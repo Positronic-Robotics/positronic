@@ -111,7 +111,7 @@ class _Tracker:
         return self._steady
 
     def update(self, tracker_pos: geom.Transform3D, ts_ns: int):
-        if self.umi_mode:
+        if self._operator_position is None:  # `umi_mode`, said so the operator's frame reads as the pose it is
             return tracker_pos
 
         steady = self._steadied(tracker_pos, ts_ns)
@@ -354,7 +354,13 @@ def main(
         bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, sound]
 
         if stream_video_to_webxr is not None:
-            world.connect(camera_emitters[stream_video_to_webxr], webxr.frame, receiver_wrapper=pimm.map(_frame_array))
+            # `connect` types a receiver wrapper as carrying the emitter's own type, and `pimm.map` is what
+            # changes it; #691 gives `connect` the overload that says so.
+            world.connect(
+                camera_emitters[stream_video_to_webxr],
+                webxr.frame,
+                receiver_wrapper=pimm.map(_frame_array),  # pyright: ignore[reportArgumentType]
+            )
 
         world.run(data_collection, bg_cs)
 
