@@ -35,12 +35,24 @@ zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
 zed_2i_second = zed.override(serial_number=39058547)
 
+# The station's two sideviews, by side. UNVERIFIED against the rig: correct these two lines and
+# every sided config below follows them. A right-side view differs optically from a left-side one:
+# the two sideviews are different camera models.
+sideview_left = zed_2i
+sideview_right = zed_2i_second
+
 _DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
 
-droid = {keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM), keys.EXTERIOR_IMAGE: zed_2i.override(**_DROID_STREAM)}
+droid = {
+    keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM),
+    keys.EXTERIOR_IMAGE: sideview_left.override(**_DROID_STREAM),
+}
 
-# `exterior_2` runs on `zed_2i_second`, a ZED-M, so its optics differ from `exterior`.
-droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: zed_2i_second.override(**_DROID_STREAM)}
+droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
+
+# One exterior each, by side. Same keys as `droid`, so only the vantage moves.
+droid_left = droid  # the unsided default already binds the left sideview
+droid_right = {**droid, keys.EXTERIOR_IMAGE: sideview_right.override(**_DROID_STREAM)}
 
 # YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
 zed_x_top = zed.override(serial_number=48953814)
