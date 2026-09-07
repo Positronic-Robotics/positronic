@@ -65,10 +65,11 @@ parameter with a default for the usual one. When everyone must agree on the same
 as a named constant in a shared module.
 
 The same holds for any literal two pieces of code must spell identically — an environment-variable
-name, a filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
-consumer can import, usually the most constrained of them. Not a third copy neither side imports —
-and where there is no shared module at all, as across languages, name it once on each side, beside
-the code that parses it.
+name, a filename two processes agree on, a wire field. Hoist it when a rename must reach a reader you
+cannot name, into the module every consumer can import, usually the most constrained of them. Not a
+third copy neither side imports — and where there is no shared module at all, as across languages, name
+it once on each side, beside the code that parses it. Where you can name every reader from the file in
+front of you, the constant only adds a step. Leave the literal.
 
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
@@ -78,6 +79,9 @@ return {**data, 'ee_pose': change_frame(data['ee_pose'])}
 
 # Good — pose_key is a constructor parameter defaulting to 'ee_pose'
 return {**data, self._pose_key: change_frame(data[self._pose_key])}
+
+# Good — the launcher spells this flag and the subprocess it starts parses it
+command = ['uv', 'run', str(_ENV_SCRIPT), '--host', host, '--cameras', cameras]
 ```
 
 ### overspecific
