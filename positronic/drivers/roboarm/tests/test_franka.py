@@ -20,7 +20,7 @@ IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, k
 
 
 class Call(StrEnum):
-    """The vendor calls ``FakeArm`` records."""
+    """The calls the fakes record: the vendor calls of ``FakeArm``, and the brake operations of ``FakeDesk``."""
 
     STATE = 'state'
     GOAL = 'goal'
@@ -31,6 +31,8 @@ class Call(StrEnum):
     SET_CONTROL_MODE = 'set_control_mode'
     INVERSE_KINEMATICS = 'inverse_kinematics'
     SET_LOAD = 'set_load'
+    OPEN_BRAKES = 'open_brakes'
+    CLOSE_BRAKES = 'close_brakes'
 
 
 @dataclass
@@ -125,11 +127,13 @@ class FakeArm:
 
 
 class FakeDesk:
-    """In-memory ``Desk``: records that the session opened the brakes and released control."""
+    """In-memory ``Desk``: records that the session prepared the robot and released control, and every brake
+    operation the driver asked for."""
 
     def __init__(self):
         self.prepared = False
         self.released = False
+        self.calls: list[Call] = []
 
     def __enter__(self) -> 'FakeDesk':
         return self
@@ -140,6 +144,12 @@ class FakeDesk:
 
     def prepare(self) -> None:
         self.prepared = True
+
+    def open_brakes(self) -> None:
+        self.calls.append(Call.OPEN_BRAKES)
+
+    def close_brakes(self) -> None:
+        self.calls.append(Call.CLOSE_BRAKES)
 
 
 @pytest.fixture
@@ -393,6 +403,138 @@ def test_a_stop_during_the_opening_move_ends_the_run_without_a_fault(desk):
     _drive(loop, clock)
 
     assert arm.calls[-1] == Call.STOP
+
+
+def test_the_brakes_close_once_no_command_comes_for_the_idle_time(desk):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt and the brakes are ordered against each other
+    driver = _driver(arm, brake_after_idle_s=30.0)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    mark = len(arm.calls)
+    clock.advance(30.0)
+    next(loop)
+
+    braking = [c for c in arm.calls[mark:] if c in (Call.STOP, Call.CLOSE_BRAKES)]
+    assert braking == [Call.STOP, Call.CLOSE_BRAKES], 'the brakes closed on an arm the control loop still drives'
+
+
+def test_a_command_opens_the_brakes_the_idle_time_closed(desk):
+    arm = FakeArm(PARK)
+    driver = _driver(arm, brake_after_idle_s=30.0)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+    assert desk.calls == [Call.CLOSE_BRAKES]
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert desk.calls == [Call.CLOSE_BRAKES, Call.OPEN_BRAKES]
+    np.testing.assert_allclose(arm.targets[-1], JOGGED)
+
+
+def test_a_streamed_command_holds_the_brakes_open_until_the_arm_arrives(desk):
+    """A streamed setpoint is published and done with, so only the goal says the arm is still travelling."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, brake_after_idle_s=30.0)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.polls_to_reach = 4  # from here the streamed move takes a few ticks to land
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+    assert desk.calls == [], 'the brakes closed on an arm still travelling'
+
+    for _ in range(3):  # the arm arrives
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+
+    assert desk.calls == [Call.CLOSE_BRAKES]
+    np.testing.assert_allclose(arm.q, JOGGED)
+
+
+def test_a_travel_longer_than_the_idle_time_leaves_the_brakes_open(desk, world):
+    """The idle time is time with nothing to do, and an arm still travelling has something to do."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, brake_after_idle_s=1.0)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.polls_to_reach = 4  # from here a travel takes longer than the idle time
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        clock.advance(1.0)
+        next(loop)
+    answer.result()
+    next(loop)
+
+    assert desk.calls == []
+
+
+def test_the_teardown_park_opens_the_brakes_the_idle_time_closed(desk):
+    """The park on the way out has to move an arm the idle time braked."""
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the brakes and the travel are ordered against each other
+    driver = _driver(arm, brake_after_idle_s=30.0)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+    arm.q = JOGGED  # the operator jogs the arm, then finishes the run from there
+    mark = len(arm.calls)
+    stop.stopped = True
+    _drive(loop, clock)
+
+    teardown = arm.calls[mark:]
+    assert teardown.index(Call.OPEN_BRAKES) < teardown.index(Call.SET_TARGET_JOINTS)
+    np.testing.assert_allclose(arm.q, PARK)
+    assert desk.released
+
+
+def test_the_brakes_stay_open_for_a_run_with_no_idle_time(desk):
+    arm = FakeArm(PARK)
+    clock = MockClock()
+    loop = _driver(arm).run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    clock.advance(3600.0)
+    for _ in range(3):
+        next(loop)
+
+    assert desk.calls == []
+
+
+def test_an_idle_time_the_driver_cannot_act_on_is_refused():
+    """Without a Desk session the driver never reaches the brakes, and an idle time it drops reads as set."""
+    with pytest.raises(ValueError, match='manage_desk'):
+        franka.Robot('192.0.2.1', manage_desk=False, brake_after_idle_s=30.0)
 
 
 def test_an_arm_that_will_not_park_reads_error_rather_than_ending_the_run():
