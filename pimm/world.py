@@ -77,6 +77,28 @@ class QueueEmitter(SignalEmitter[T]):
                 pass
 
 
+# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
+# that connection then holds half a message: the next call over it returns what another one asked for, so
+# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
+_interrupted = False
+
+
+@contextmanager
+def _noting_interrupt() -> Iterator[None]:
+    """Record an interrupt taken inside the block, and let it go on.
+
+    A connection is torn by an interrupt that lands in the middle of a call over it, so every process that
+    reaches a transport records its own -- there is nowhere else the tearing can happen, and no process has
+    to have had a handler installed for it.
+    """
+    global _interrupted
+    try:
+        yield
+    except KeyboardInterrupt:
+        _interrupted = True
+        raise
+
+
 class MultiprocessEmitter(SignalEmitter[T]):
     """Signal emitter that transparently bridges processes.
 
@@ -190,20 +212,20 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         return True
 
+    @_noting_interrupt()
     def emit(self, data: T, ts: int = -1):
         if _interrupted:
             return
-        with _noting_interrupt():
-            ts = ts if ts >= 0 else self._clock.now_ns()
-            mode = self._ensure_mode(data)  # itself a call to the manager, so it sits inside the guard
+        ts = ts if ts >= 0 else self._clock.now_ns()
+        mode = self._ensure_mode(data)  # itself a call to the manager, so it sits inside the guard
 
-            if mode is TransportMode.SHARED_MEMORY:
-                if not isinstance(data, SMCompliant):
-                    raise TypeError('Shared memory transport selected; data must implement SMCompliant')
-                self._emit_shared_memory(data, ts)
-                return
+        if mode is TransportMode.SHARED_MEMORY:
+            if not isinstance(data, SMCompliant):
+                raise TypeError('Shared memory transport selected; data must implement SMCompliant')
+            self._emit_shared_memory(data, ts)
+            return
 
-            self._emit_queue(data, ts)
+        self._emit_queue(data, ts)
 
     def close(self) -> None:
         if self._closed:
@@ -223,28 +245,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def __del__(self):
         # Last-resort cleanup when user code forgets to close the emitter.
         self.close()
-
-
-# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
-# that connection then holds half a message: the next call over it returns what another one asked for, so
-# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
-_interrupted = False
-
-
-@contextmanager
-def _noting_interrupt() -> Iterator[None]:
-    """Record an interrupt taken inside the block, and let it go on.
-
-    A connection is torn by an interrupt that lands in the middle of a call over it, so every process that
-    reaches a transport records its own -- there is nowhere else the tearing can happen, and no process has
-    to have had a handler installed for it.
-    """
-    global _interrupted
-    try:
-        yield
-    except KeyboardInterrupt:
-        _interrupted = True
-        raise
 
 
 class MultiprocessReceiver(SignalReceiver[T]):
@@ -363,23 +363,23 @@ class MultiprocessReceiver(SignalReceiver[T]):
             self._up_value.value = False
             return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
 
+    @_noting_interrupt()
     def read(self) -> Message[T] | None:
         if _interrupted:
             return None
-        with _noting_interrupt():
-            mode = self.transport_mode  # itself a call to the manager, so it sits inside the guard
+        mode = self.transport_mode  # itself a call to the manager, so it sits inside the guard
 
-            if mode is TransportMode.SHARED_MEMORY:
-                return self._read_shared_memory()
+        if mode is TransportMode.SHARED_MEMORY:
+            return self._read_shared_memory()
 
-            message = self._read_queue()
-            if message is not None:
-                return message
+        message = self._read_queue()
+        if message is not None:
+            return message
 
-            if mode is TransportMode.UNDECIDED:
-                # No data yet; underlying transport still undecided.
-                return None
+        if mode is TransportMode.UNDECIDED:
+            # No data yet; underlying transport still undecided.
             return None
+        return None
 
     def close(self) -> None:
         if self._closed:
