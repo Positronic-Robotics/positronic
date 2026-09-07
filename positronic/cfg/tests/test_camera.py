@@ -8,7 +8,7 @@ def _serials(cameras: dict) -> dict[str, int]:
     return {name: cfg.kwargs['serial_number'] for name, cfg in cameras.items()}
 
 
-def test_each_sided_droid_carries_the_same_cameras_as_the_unsided_one():
+def test_each_sided_droid_keeps_the_observation_keys_of_the_unsided_one():
     assert set(camera.droid_left) == set(camera.droid) == {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE}
     assert set(camera.droid_right) == set(camera.droid)
 
@@ -25,7 +25,7 @@ def test_each_side_binds_the_sideview_the_station_declares_for_it():
     assert _serials(camera.droid_right)[keys.EXTERIOR_IMAGE] == camera.sideview_right.kwargs['serial_number']
 
 
-def test_the_launcher_reference_binds_the_side_without_disturbing_the_rest():
+def test_an_at_reference_overrides_cameras_and_leaves_a_sibling_override_standing():
     """An `@` reference resolves to a plain dict, and overriding `cameras` alone leaves a sibling
     override on the same config standing."""
 
