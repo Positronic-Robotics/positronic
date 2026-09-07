@@ -8,16 +8,18 @@
 //   episode.html  — single episode with Rerun viewer + static data sidebar
 //
 // Templates set window globals before this script's DOMContentLoaded fires:
-//   window.API_ENDPOINT   — override for /api/episodes (grouped.html sets /api/groups/{name})
+//   window.API_ENDPOINT   — override for api/episodes (grouped.html sets api/groups/{name})
 //   window.IS_GROUPED_TABLE — true on grouped.html, changes View link behavior
 //   window.EPISODES_URL   — where View links point on grouped pages
 //   window.VIEW_LABEL     — button text override
+//   window.STATIC_EXPORT  — read the files a static export wrote, not the live API
+//   window.SERVER_NAMES   — the routes, the files an export writes and the response fields, by name
 //
 // Data flow
 // ---------
 // On DOMContentLoaded, initEpisodesTable() runs:
-//   1. Polls /api/dataset_status until the server finishes loading the dataset
-//   2. Calls loadEpisodes({}) → fetches from API_ENDPOINT (default /api/episodes)
+//   1. Polls api/dataset_status until the server finishes loading the dataset
+//   2. Calls loadEpisodes({}) → fetches from API_ENDPOINT (default api/episodes)
 //      Response shape: { columns, episodes, group_filters?, default_sort? }
 //        columns:  array of {key, label, filter?, renderer?, align?, subtitle?}
 //        episodes: array of [episodeId, [cell0, cell1, ...], groupFilters?]
@@ -68,7 +70,7 @@
 const state = {
   sort: { columnIndex: null, direction: 'desc' },
   filters: {},           // client-side column filters
-  serverFilters: {},     // server-side group filters (sent to /api/episodes)
+  serverFilters: {},     // server-side group filters (sent to api/episodes)
   episodes: [],          // current episode data
   columns: [],           // column definitions from server
   filtersData: {},       // unique values per filterable column
@@ -78,6 +80,54 @@ const state = {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Every link resolves against the <base href> the server rendered, so one export serves from
+// whatever prefix it sits under.
+function appUrl(path) {
+  return new URL(path, document.baseURI).href;
+}
+
+const FILTERED_EPISODE_IDS = 'filteredEpisodeIds';
+const EPISODES_REFERRER_URL = 'episodesReferrerUrl';
+
+// sessionStorage is origin-scoped and one origin serves many exports, so a key names the base
+// href of the export that wrote it.
+function baseScopedKey(name) {
+  return `${name}:${document.baseURI}`;
+}
+
+// Each group table's index, read once; the unfiltered flat table is one file, filtered in the browser.
+const groupIndexes = new Map();
+
+const NAMES = window.SERVER_NAMES;
+
+function episodePageUrl(index) {
+  return appUrl(`${NAMES.episode_page_before}${index}${NAMES.episode_page_after}`);
+}
+
+async function groupIndex(path) {
+  if (!groupIndexes.has(path)) groupIndexes.set(path, fetchJSON(appUrl(`${path}/${NAMES.group_index_file}`)));
+  return groupIndexes.get(path);
+}
+
+function sameFilters(a, b) {
+  const keys = Object.keys(a).sort();
+  const other = Object.keys(b).sort();
+  return keys.length === other.length && keys.every((key, i) => key === other[i] && String(a[key]) === String(b[key]));
+}
+
+async function exportedGroupFile(path, params) {
+  const chosen = Object.fromEntries(Object.entries(params).filter(([, value]) => value));
+  const entry = (await groupIndex(path)).find((item) => sameFilters(item[NAMES.entry_params], chosen));
+  return entry ? appUrl(`${path}/${entry[NAMES.entry_file]}`) : null;  // no episode satisfies this filter set
+}
+
+async function apiUrl(path, params) {
+  if (window.STATIC_EXPORT) return params ? exportedGroupFile(path, params) : appUrl(`${path}${NAMES.api_file_suffix}`);
+  const url = new URL(path, document.baseURI);
+  for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
+  return url.href;
+}
+
 async function fetchJSON(url) {
   const response = await fetch(url);
   if (response.status === 202) return null;  // dataset still loading
@@ -85,18 +135,17 @@ async function fetchJSON(url) {
 }
 
 async function loadDatasetInfo() {
-  const data = await fetchJSON('/api/dataset_info');
+  const data = await fetchJSON(await apiUrl(NAMES.dataset_info));
   if (!data) return;
   document.getElementById('dataset-stats').innerHTML =
     `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
 }
 
 async function loadEpisodes(filters = {}) {
-  const endpoint = new URL(window.API_ENDPOINT || '/api/episodes', window.location.origin);
-  for (const [key, value] of Object.entries(filters)) {
-    endpoint.searchParams.append(key, value);
-  }
-  return fetchJSON(endpoint);
+  const perFilterSet = !window.STATIC_EXPORT || window.IS_GROUPED_TABLE;
+  const url = await apiUrl(window.API_ENDPOINT || NAMES.episodes_api, perFilterSet ? filters : null);
+  if (!url) return { columns: state.columns, episodes: [] };
+  return fetchJSON(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,14 +158,18 @@ function syncURL() {
   window.history.replaceState({}, '', url);
 }
 
-function readFiltersFromURL(serverFilterKeys) {
+function readFiltersFromURL(serverFilterKeys, columns, episodes) {
   const params = new URLSearchParams(window.location.search);
   for (const [key, value] of params.entries()) {
+    if (!value) continue;  // the server reads an empty value as no filter; so does the page
     if (serverFilterKeys.has(key)) {
       state.serverFilters[key] = value;
-    } else if (state.filtersData[key]?.includes(value)) {
-      state.filters[key] = value;
+      continue;
     }
+    const index = columns.findIndex((c) => c.key === key);
+    if (index === -1) continue;  // a key that names no column carries no per-episode value to filter on
+    if (!(key in state.filtersData)) state.filtersData[key] = columnValues(episodes, index);
+    if (state.filtersData[key].includes(value)) state.filters[key] = value;  // a value no row carries is no filter
   }
 }
 
@@ -133,7 +186,7 @@ async function pollUntilLoaded() {
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
-      const status = await fetchJSON('/api/dataset_status');
+      const status = await fetchJSON(await apiUrl(NAMES.dataset_status));
       if (!status || status.loading) return;
       clearInterval(interval);
       statusEl.classList.remove('show');
@@ -149,7 +202,7 @@ async function initEpisodesTable() {
   const loadingEl = container.querySelector('.loading');
 
   // Check if dataset is ready
-  const status = await fetchJSON('/api/dataset_status');
+  const status = await fetchJSON(await apiUrl(NAMES.dataset_status));
   if (!status) return;
 
   if (status.loading) {
@@ -173,13 +226,14 @@ async function initEpisodesTable() {
   const initial = await loadEpisodes({});
   if (!initial) return;
 
-  const { columns, group_filters: groupFilters, default_sort: defaultSort } = initial;
+  const { columns, default_sort: defaultSort } = initial;
+  const groupFilters = initial[NAMES.group_filters];
   state.columns = columns;
   state.filtersData = buildFiltersData(initial.episodes, columns);
 
   // Parse URL into server/client filters
   const serverFilterKeys = groupFilters ? new Set(Object.keys(groupFilters)) : new Set();
-  readFiltersFromURL(serverFilterKeys);
+  readFiltersFromURL(serverFilterKeys, columns, initial.episodes);
 
   // Re-fetch with server filters if any were set from URL
   if (Object.keys(state.serverFilters).length > 0) {
@@ -209,16 +263,24 @@ async function initEpisodesTable() {
 // Filtering & sorting
 // ---------------------------------------------------------------------------
 
+// A formatted cell is `[raw, formatted]`; a filter value is the raw one, as the server spells it in a query.
+function rawValue(entity) {
+  return Array.isArray(entity) ? entity[0] : entity;
+}
+
+function columnValues(episodes, index) {
+  const values = new Set();
+  for (const [, episodeData] of episodes) {
+    const v = rawValue(episodeData[index]);
+    if (v !== null && v !== undefined) values.add(String(v));
+  }
+  return Array.from(values);
+}
+
 function buildFiltersData(episodes, columns) {
   const result = {};
   for (const [index, column] of Object.entries(columns)) {
-    if (!column.filter) continue;
-    const values = new Set();
-    for (const [, episodeData] of episodes) {
-      const v = episodeData[index];
-      if (v !== null && v !== undefined) values.add(String(v));
-    }
-    result[column.key] = Array.from(values);
+    if (column.filter) result[column.key] = columnValues(episodes, index);
   }
   return result;
 }
@@ -229,7 +291,7 @@ function getFilteredEpisodes(columns) {
   let result = state.episodes.filter(([, episodeData]) =>
     Object.entries(filters).every(([filterKey, value]) => {
       const colIdx = columns.findIndex((c) => c.key === filterKey);
-      return String(episodeData[colIdx]) === value;
+      return String(rawValue(episodeData[colIdx])) === value;
     })
   );
 
@@ -341,7 +403,8 @@ function renderTableHeader(columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const headerCells = [];
 
-  for (const [columnIndex, { label, subtitle, align, sortable }] of Object.entries(columns)) {
+  for (const [columnIndex, { label, subtitle, align, sortable, display }] of Object.entries(columns)) {
+    if (display === false) { headerCells.push(null); continue; }  // a hidden column keeps its index, draws no header
     let content;
     if (subtitle) {
       content = document.createElement('span');
@@ -370,7 +433,7 @@ function renderTableHeader(columns) {
     headerCells.push(th);
   }
 
-  headerRow.prepend(...headerCells);
+  headerRow.prepend(...headerCells.filter(Boolean));
 
   if (state.sort.columnIndex !== null) {
     headerCells[state.sort.columnIndex]?.classList.add(`sorted-${state.sort.direction}`);
@@ -403,6 +466,7 @@ function populateTable(columns) {
     const row = document.createElement('tr');
 
     for (const [i, entity] of episodeData.entries()) {
+      if (columns[i].display === false) continue;  // a hidden column carries a value but draws no cell
       const td = createCell(cellValue(entity, columns[i]));
       if (columns[i].align) td.style.textAlign = columns[i].align;
       row.appendChild(td);
@@ -412,11 +476,15 @@ function populateTable(columns) {
     const viewLink = document.createElement('a');
     viewLink.className = 'btn btn-primary btn-small';
     if (window.IS_GROUPED_TABLE) {
-      const filters = { ...groupFilters, ...state.serverFilters, ...state.filters };
-      const episodesUrl = window.EPISODES_URL || '/';
-      viewLink.href = `${episodesUrl}?${new URLSearchParams(filters).toString()}`;
+      // An absent group value is no filter, as the server spells it.
+      const present = Object.fromEntries(
+        Object.entries(groupFilters).filter(([, value]) => value !== null && value !== undefined)
+      );
+      const filters = { ...present, ...state.serverFilters, ...state.filters };
+      const episodesUrl = window.EPISODES_URL || '.';
+      viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
-      viewLink.href = `/episode/${episodeIndex}`;
+      viewLink.href = episodePageUrl(episodeIndex);
     }
     viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);
@@ -430,11 +498,11 @@ function populateTable(columns) {
     const hasFilters = Object.keys(state.serverFilters).length > 0 ||
       filtered.length < state.episodes.length;
     if (hasFilters) {
-      sessionStorage.setItem('filteredEpisodeIds', JSON.stringify(filtered.map(([id]) => id)));
-      sessionStorage.setItem('episodesReferrerUrl', window.location.href);
+      sessionStorage.setItem(baseScopedKey(FILTERED_EPISODE_IDS), JSON.stringify(filtered.map(([id]) => id)));
+      sessionStorage.setItem(baseScopedKey(EPISODES_REFERRER_URL), window.location.href);
     } else {
-      sessionStorage.removeItem('filteredEpisodeIds');
-      sessionStorage.removeItem('episodesReferrerUrl');
+      sessionStorage.removeItem(baseScopedKey(FILTERED_EPISODE_IDS));
+      sessionStorage.removeItem(baseScopedKey(EPISODES_REFERRER_URL));
     }
   }
 }
@@ -475,7 +543,7 @@ function renderServerFilters(groupFilters) {
   for (const [filterKey, filterData] of Object.entries(groupFilters)) {
     const options = [
       createOption('-1', 'All'),
-      ...filterData.values.map((v) => createOption(v, v)),
+      ...filterData[NAMES.filter_values].map((v) => createOption(v, v)),
     ];
 
     const container = createFilterDropdown({
@@ -510,6 +578,7 @@ function renderClientFilters(columns) {
 
   for (const [filterKey, values] of Object.entries(state.filtersData)) {
     const column = columns.find((c) => c.key === filterKey);
+    if (column.display === false) continue;  // a hidden column draws no dropdown
     const options = [
       createOption('-1', 'All'),
       ...values.map((v) => createOption(v, column.renderer?.options[v]?.label ?? v)),
