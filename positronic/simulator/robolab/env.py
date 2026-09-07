@@ -74,7 +74,7 @@ except ImportError:
 parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server protocol.')
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
-parser.add_argument(keys.CAMERAS_FLAG, default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)

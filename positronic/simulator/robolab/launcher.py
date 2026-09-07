@@ -19,7 +19,6 @@ from pathlib import Path
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.env_server.protocol import encode
-from positronic.simulator.robolab import keys as robolab_keys
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -89,7 +88,7 @@ def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
         host,
         '--port',
         str(port),
-        robolab_keys.CAMERAS_FLAG,
+        '--cameras',
         cameras,
         '--headless',
     ]
