@@ -584,6 +584,18 @@ def test_a_base_href_a_browser_would_resolve_outside_the_prefix_is_refused():
             normalized_base_href(value)
 
 
+def test_a_base_href_holding_an_encoded_separator_is_refused():
+    """A host decodes `%2F` and `%5C` once, and a browser sends them as written."""
+    for value in ('/v/%2Ftok/', '/v/%2ftok/', '/v/%5Ctok/', '/v/tok%5C/'):
+        with pytest.raises(ValueError, match='dot segment'):
+            normalized_base_href(value)
+
+
+def test_a_base_href_whose_segment_holds_another_encoded_character_stands():
+    for value in ('/v/caf%C3%A9/', '/v/a%20b/'):
+        assert normalized_base_href(value) == value
+
+
 def test_a_base_href_whose_segment_only_contains_dots_stands():
     for value in ('/v/tok.1/', '/v/..tok/', '/v/tok../', '/v/a.b.c/'):
         assert normalized_base_href(value) == value

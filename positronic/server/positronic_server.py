@@ -326,14 +326,19 @@ def normalized_base_href(value: str) -> str:
     Only a path at the server root: a relative one, a netloc, a query or a fragment each send a
     relative link somewhere other than the prefix, and so does a path opening with two slashes, which
     a browser reads as a host. A browser resolves a dot segment and a backslash before it reads the
-    `<base>`, so a path holding one names a different prefix than it shows.
+    `<base>`, so a path holding one names a different prefix than it shows. A host decodes an encoded
+    slash or backslash once, so a segment holding one names a different prefix on the host than in the
+    browser.
     """
     parts = urlsplit(value)
     rooted = parts.path.startswith('/') and not parts.path.startswith('//')
     if parts.scheme or parts.netloc or parts.query or parts.fragment or not rooted:
         raise ValueError(f'base_href must be a path at the server root and nothing else, got {value!r}')
-    if '\\' in parts.path or any(unquote(segment) in ('.', '..') for segment in parts.path.split('/')):
-        raise ValueError(f'base_href must hold no dot segment and no backslash, got {value!r}')
+    segments = [unquote(segment) for segment in parts.path.split('/')]
+    if any(segment in ('.', '..') or '/' in segment or '\\' in segment for segment in segments):
+        raise ValueError(
+            f'base_href must hold no dot segment and no slash or backslash inside a segment, got {value!r}'
+        )
     return parts.path if parts.path.endswith('/') else parts.path + '/'
 
 
