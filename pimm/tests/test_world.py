@@ -108,6 +108,7 @@ def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypat
     """
     with World() as world:
         emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)  # one receiver, which is what `mp_pipes` makes by default
         emitter.emit('before', ts=1)
         assert receiver.read() is not None
 
