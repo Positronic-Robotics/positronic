@@ -52,8 +52,17 @@ SCENE_TOTE = 'tote_placement'
 SCENE_VANTAGE = 'camera_vantage'
 SCENE_CAMERA_PREFIX = 'camera.'
 
-_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
-_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
+
+def checked_api_key(value: str) -> str:
+    """The record's key, or a `ValueError` that `read_config` reports as a malformed record.
+
+    A blank one reaches the gateway as an unusable `Bearer` header, so the command ends on a
+    transport or authorization failure naming no file. The environment and `--api-key-file` paths
+    refuse a blank key, and the record is the third way in.
+    """
+    if not value.strip():
+        raise ValueError('api_key is blank; register again, or put the key in the record')
+    return value
 
 
 def checked_platform_url(value: str) -> str:
@@ -75,7 +84,7 @@ class Config(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     platform_url: Annotated[str, AfterValidator(checked_platform_url)]
-    api_key: ApiKey
+    api_key: Annotated[ApiKey, AfterValidator(checked_api_key)]
 
 
 def config_dir(env: Mapping[str, str]) -> Path:
@@ -182,6 +191,10 @@ def _endpoint(spec: str) -> EndpointAsk:
     """`NAME` or `NAME=URL`, as `--endpoints` takes each entry."""
     name, has_url, url = spec.partition('=')
     return EndpointAsk(name=name, url=url if has_url else None)
+
+
+_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
+_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
 
 
 def scene_from_pairs(pairs: Sequence[str]) -> SceneAsk | None:

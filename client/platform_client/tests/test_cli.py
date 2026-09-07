@@ -150,8 +150,8 @@ def test_the_key_and_the_platform_are_read_from_the_config_directory(config, gat
 
 
 def test_a_key_variable_set_to_nothing_is_refused_rather_than_ignored(config, gateway, monkeypatch):
-    """It used to fall through to the saved record, so a caller who meant to clear the key called
-    the platform as whoever registered last."""
+    """An explicitly empty override must not select the saved credentials: clearing the variable is
+    how a caller says to use no key, and the record is not a fallback for it."""
     _registered(config)
     monkeypatch.setenv(API_KEY_ENV, '   ')
 
@@ -160,8 +160,8 @@ def test_a_key_variable_set_to_nothing_is_refused_rather_than_ignored(config, ga
 
 
 def test_a_config_directory_set_to_nothing_is_refused_rather_than_ignored(monkeypatch):
-    """It used to select the default, so a caller pointing the CLI somewhere else read the record
-    they were trying to leave behind."""
+    """An explicitly empty override must not select the default directory: the caller is naming
+    where the CLI reads, and the default is not a fallback for a name they gave."""
     monkeypatch.setenv(CONFIG_DIR_ENV, '')
 
     with pytest.raises(SystemExit, match='empty value'):
@@ -307,6 +307,19 @@ def test_an_unreadable_record_ends_the_command_naming_the_file(config, gateway):
     assert gateway.requests == []
 
 
+def test_a_record_holding_a_blank_key_is_reported_as_the_malformed_record(config, gateway):
+    """A blank key reaches the gateway as an unusable Bearer header, so the command would end on a
+    transport or authorization failure naming no file. The other two key paths refuse a blank one."""
+    cli.write_config(config, Config(platform_url=PLATFORM, api_key=KEY))
+    record = config / CONFIG_FILENAME
+    record.write_text(json.dumps({'platform_url': PLATFORM, 'api_key': '   '}))
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(['requests', 'get', '2a'])
+
+    assert str(record) in str(raised.value) and gateway.requests == []
+
+
 def test_no_key_anywhere_ends_the_command_naming_register(config, gateway):
     with pytest.raises(SystemExit) as raised:
         cli.main(['requests', 'get', '2a'])
@@ -423,7 +436,8 @@ def test_a_scene_pair_that_names_no_field_or_no_side_is_refused(pair: str):
     'pairs', [['tote_placement=left', 'tote_placement=right'], ['camera.side=left', 'camera.side=right']]
 )
 def test_a_scene_key_given_twice_is_refused(pairs: list[str]):
-    """The last one used to win in silence, so the request carried a side nobody asked for."""
+    """A key may be given once. Two values for one field are an ask the request cannot carry, so it
+    is refused rather than settled by position."""
     with pytest.raises(SystemExit, match='given twice'):
         cli.scene_from_pairs(pairs)
 

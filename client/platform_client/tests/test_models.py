@@ -640,6 +640,22 @@ def test_a_served_endpoint_names_its_bring_up_and_no_address():
         EndpointAsk(name='gyros', provider='droid_cohost')
 
 
+def test_an_endpoint_url_names_a_host():
+    """An address with no host reaches nothing, and it counts as a locator all the way to the
+    platform, which refuses the request after it is filed."""
+    with pytest.raises(ValidationError, match='no host'):
+        EndpointAsk(name='gyros', url='/ws')
+    with pytest.raises(ValidationError, match='no host'):
+        EndpointAsk(name='gyros', url='gyros.example/ws')
+
+
+@pytest.mark.parametrize('url', ['wss://gyros.example/ws', 'https://gyros.example/ws', 'http://localhost:8080/ws'])
+def test_an_absolute_endpoint_url_is_left_alone(url: str):
+    """The boundary: the scheme is the platform's to judge — it dials wss:// as readily as https://
+    — so this refuses an address with no host and nothing else."""
+    assert EndpointAsk(name='gyros', url=url).url == url
+
+
 def test_an_endpoint_says_whether_it_names_a_locator():
     assert EndpointAsk(name='gyros').names_a_locator is False
     assert EndpointAsk(name='gyros', url='wss://x/ws').names_a_locator is True

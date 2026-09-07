@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Self
 
+import httpx
 from platform_client.boards import BoardRef
 from platform_client.enums import CameraVantage, EndpointKind, Placement
 from platform_client.evals import EvalRef
@@ -96,6 +97,11 @@ class EndpointAsk(BaseModel):
 
     @model_validator(mode='after')
     def _the_kind_carries_its_own_locator(self) -> Self:
+        if self.url is not None and not httpx.URL(self.url).is_absolute_url:
+            # The scheme is the platform's to judge — it dials wss:// as readily as https:// — but
+            # an address with no host reaches nothing, and it passes as a locator until the platform
+            # refuses the request that was already filed.
+            raise ValueError(f'endpoint {self.name!r} names {self.url!r}, which has no host: give an absolute URL')
         if self.kind is EndpointKind.served:
             if self.provider is None or self.spec is None:
                 raise ValueError(f'served endpoint {self.name!r} names no provider or no spec')
