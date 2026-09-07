@@ -73,7 +73,8 @@ ships one, `droid` (source: [`codecs.py`](./codecs.py)):
 ## Technical details
 
 - **Action space**: absolute joint positions (7) + gripper (1), decoded straight into a `JointPosition`
-  command (no IK at runtime).
+  command (no IK at runtime). Each chunk executes under DROID's impedance gains (`codecs.droid_execution`;
+  see [Control mode](../../../docs/codecs.md#control-mode)).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + 8-D state + language prompt.
 - **Inference**: `norm_tag='franka_droid'`, continuous action mode; the model emits a 15-step action chunk at
   15 Hz, executed in full by the client's declared `ChunkedSchedule`.

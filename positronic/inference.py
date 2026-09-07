@@ -43,6 +43,7 @@ class KeyboardOperator(KeyboardControl):
         self._policy = policy
         self._output_path = output_path
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
+        self._rollout: Rollout | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
@@ -58,14 +59,23 @@ class KeyboardOperator(KeyboardControl):
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                # A model that will not open a session ends the episode, not the run: the operator hears it
-                # and presses again.
-                try:  # rules-allow: swallowed-error — the operator is who this failure is for
-                    self._pending = self.perform_task(Rollout(self._next_task(), self._policy, self._output_path))
-                except Exception as e:
+                if self._rollout is not None:
+                    self._rollout.close()
+                    self._rollout = None
+                try:
+                    self._rollout = Rollout(self._next_task(), self._policy, self._output_path)
+                    self._pending = self.perform_task(self._rollout)
+                except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
                 self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        try:
+            yield from super().run(should_stop, clock)
+        finally:
+            if self._rollout is not None:
+                self._rollout.close()
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):

@@ -359,3 +359,32 @@ reason: an import that cannot resolve gets `# pyright: ignore[reportMissingImpor
 other diagnostic in that file live. Where the gate compares per-file counts rather than entries —
 `.basedpyright/baseline.json` is one such baseline — re-anchoring line numbers can absorb a new
 finding without it noticing, so check that yourself.
+
+### unchecked-field-name
+
+Don't address a typed object's field by a string the type checker never sees. `obj.field` is
+checked, and `getattr(obj, 'field')` raises on a rename. The dict side of a model is neither:
+`model_dump(exclude=…)`, `model_copy(update=…)`, `getattr(obj, 'field', default)` and a filter
+over `.items()` take names pydantic never compares against the model, so a rename passes every
+gate and changes what the code does at run time.
+
+Keep a typed value typed to the end: copy the model and assign the field, which the type checker
+reads. Where a set of names is needed, derive it from the type (`model_fields`,
+`dataclasses.fields`) or pin it with a test that fails when the model renames or gains a field.
+
+A model that refuses or validates the assignment — frozen, a frozen field, `validate_assignment` —
+keeps `model_copy(update=…)`, and a test pins each name to `model_fields`, so a rename fails the
+suite instead of the run.
+
+Exception: a name that is the wire — a JSON key two deploys exchange, an environment variable, a
+third-party object's attribute. There the string is the contract (`hardcoded-keys`).
+
+```python
+# Bad — pydantic checks none of these names, so a rename is silent
+data.update({k: v for k, v in ended.model_dump().items() if k not in ('active', 'phase')})
+attempt = spec.model_copy(update={'artifact_location': moved})
+
+# Good — the type checker reads the assignment
+attempt = spec.model_copy()
+attempt.artifact_location = moved
+```

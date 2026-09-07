@@ -450,12 +450,12 @@ droid = cfn.Config(
     joints_spread=positronic.cfg.hardware.roboarm.FRANKA_JOINTS_SPREAD,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    cameras={
-        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
-        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
-    },
+    cameras=positronic.cfg.hardware.camera.droid,
     operator_position=OperatorPosition.BACK,
 )
+
+
+droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
 
 
 human = cfn.Config(
@@ -481,6 +481,7 @@ def _internal_main():
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,
+        'droid_3cam': droid_3cam,
         'human': human,
     })
 

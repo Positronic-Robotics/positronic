@@ -58,17 +58,24 @@ def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     return ManualDriver(script=steps)
 
 
-def episode_caller(
-    world: pimm.World, harness: Harness, policy: Policy, output_path: Path | None = Path('dataset')
-) -> Callable[[Task], pimm.calls.Answer[dict[str, Any]]]:
-    """A caller that asks ``harness`` for a task the way a driver does: it opens the session that runs it and
-    names the path it records into. Nothing writes there unless the test runs a recorder of its own."""
-    perform_task = world.pair(harness.perform_task)
+class EpisodeCaller:
+    """Asks ``harness`` for a task the way a driver does: it opens the session that runs it and names the
+    path it records into. Nothing writes there unless the test runs a recorder of its own."""
 
-    def ask(task: Task):
-        return perform_task(Rollout(task, policy, output_path))
+    def __init__(self, world: pimm.World, harness: Harness, policy: Policy, output_path: Path | None = Path('dataset')):
+        self._perform_task = world.pair(harness.perform_task)
+        self._policy = policy
+        self._output_path = output_path
+        self._rollouts: list[Rollout] = []
 
-    return ask
+    def __call__(self, task: Task) -> pimm.calls.Answer[dict[str, Any]]:
+        rollout = Rollout(task, self._policy, self._output_path)
+        self._rollouts.append(rollout)
+        return self._perform_task(rollout)
+
+    def close(self) -> None:
+        while self._rollouts:
+            self._rollouts.pop().close()
 
 
 class RecordingEmitter(pimm.SignalEmitter[T]):

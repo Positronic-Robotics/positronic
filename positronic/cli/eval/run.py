@@ -65,12 +65,16 @@ class TaskDriver(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(Rollout(task, self._policy, self._output_path))
-            while not answer.done():
-                if should_stop.value:
-                    return
-                yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-            answer.result()  # raises if the episode failed
+            rollout = Rollout(task, self._policy, self._output_path)
+            try:
+                answer = self.perform_task(rollout)
+                while not answer.done():
+                    if should_stop.value:
+                        return
+                    yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
+                answer.result()  # raises if the episode failed
+            finally:
+                rollout.close()
         # Let the recorder commit the final episode before this return brings the world down.
         yield pimm.Sleep(0.5)
 
