@@ -237,36 +237,6 @@ def filter_sets(episode_values: Iterable[Mapping[str, str]], most: int) -> list[
     return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
 
 
-def _filter_sets_by_group(
-    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
-) -> dict[str, list[dict[str, str]]]:
-    """The non-empty filter sets each group table gets a file for; a group past either bound is refused."""
-    sets_by_group: dict[str, list[dict[str, str]]] = {}
-    for name, cfg in (group_tables or {}).items():
-        if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
-            raise ValueError(
-                f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
-                f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
-            )
-        # Each episode's values on the group's filter keys, as a filter spells them; an absent value is left out.
-        episode_values = (
-            {
-                key: spelling
-                for key in cfg.group_filter_keys
-                if (spelling := filter_spelling(cast(Episode, episode).static.get(key))) is not None
-            }
-            for episode in dataset
-        )
-        try:
-            # One of the files is the unfiltered one.
-            sets_by_group[name] = filter_sets(episode_values, MAX_FILTER_SETS_PER_GROUP - 1)
-        except ValueError as past_bound:
-            raise ValueError(
-                f'group table {name!r} has {past_bound}; an export reads the dataset once per set'
-            ) from None
-    return sets_by_group
-
-
 def _large_file_path(link: str, build_id: str) -> PurePosixPath:
     """Where the file a large-file `link` names is written: its segments as a directory tree, each keeping the
     encoded spelling the browser asks it by, under the build."""
@@ -424,6 +394,36 @@ def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
             install_dataset(planned.reads)
             serving = planned.reads
         planned.write(out)
+
+
+def _filter_sets_by_group(
+    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
+) -> dict[str, list[dict[str, str]]]:
+    """The non-empty filter sets each group table gets a file for; a group past either bound is refused."""
+    sets_by_group: dict[str, list[dict[str, str]]] = {}
+    for name, cfg in (group_tables or {}).items():
+        if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
+            raise ValueError(
+                f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
+                f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
+            )
+        # Each episode's values on the group's filter keys, as a filter spells them; an absent value is left out.
+        episode_values = (
+            {
+                key: spelling
+                for key in cfg.group_filter_keys
+                if (spelling := filter_spelling(cast(Episode, episode).static.get(key))) is not None
+            }
+            for episode in dataset
+        )
+        try:
+            # One of the files is the unfiltered one.
+            sets_by_group[name] = filter_sets(episode_values, MAX_FILTER_SETS_PER_GROUP - 1)
+        except ValueError as past_bound:
+            raise ValueError(
+                f'group table {name!r} has {past_bound}; an export reads the dataset once per set'
+            ) from None
+    return sets_by_group
 
 
 def export_static(

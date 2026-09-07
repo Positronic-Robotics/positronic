@@ -476,7 +476,11 @@ function populateTable(columns) {
     const viewLink = document.createElement('a');
     viewLink.className = 'btn btn-primary btn-small';
     if (window.IS_GROUPED_TABLE) {
-      const filters = { ...groupFilters, ...state.serverFilters, ...state.filters };
+      // An absent group value is no filter, as the server spells it.
+      const present = Object.fromEntries(
+        Object.entries(groupFilters).filter(([, value]) => value !== null && value !== undefined)
+      );
+      const filters = { ...present, ...state.serverFilters, ...state.filters };
       const episodesUrl = window.EPISODES_URL || '.';
       viewLink.href = appUrl(`${episodesUrl}?${new URLSearchParams(filters).toString()}`);
     } else {
@@ -574,7 +578,7 @@ function renderClientFilters(columns) {
 
   for (const [filterKey, values] of Object.entries(state.filtersData)) {
     const column = columns.find((c) => c.key === filterKey);
-    if (column.display === false) continue;  // a hidden column filters from a View link, not a dropdown
+    if (column.display === false) continue;  // a hidden column draws no dropdown
     const options = [
       createOption('-1', 'All'),
       ...values.map((v) => createOption(v, column.renderer?.options[v]?.label ?? v)),
