@@ -396,6 +396,31 @@ def test_a_new_session_holds_the_arm_where_it_finds_it():
     np.testing.assert_allclose(_held(arm), where_it_is, atol=1e-3)
 
 
+def test_a_move_in_flight_when_the_link_drops_is_failed_by_the_new_session(world):
+    """A new session holds the arm where it reads, so the target of a move in flight is never sent again."""
+    arm = FakeArm()
+    clock = MockClock()
+    driver, states, loop = _driven(arm, clock)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    next(loop)
+
+    answer = caller(command.JointPosition(JOGGED))
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
+    for _ in range(4):  # the link goes before the target reaches the controller
+        next(loop)
+    assert not answer.done()
+
+    arm.write_raises = None
+    clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
+    next(loop)
+
+    assert clock.now() < trossen_driver._MOVE_TIMEOUT_S, 'the move waited out its deadline'
+    with pytest.raises(ConnectionError, match='dropped during the move'):
+        answer.result()
+    assert states.emitted[-1][1].status is RobotStatus.ERROR  # the arm is not where the driver put it
+
+
 def test_a_new_session_that_fails_is_tried_again_further_and_further_apart():
     """A fault the controller latches outlives a new session, so retrying at the same pace stalls the loop."""
     arm = FakeArm()

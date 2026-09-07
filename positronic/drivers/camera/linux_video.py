@@ -85,7 +85,7 @@ class LinuxVideo(pimm.ControlSystem):
         device.set_format(device.info.buffers[0], self.width, self.height, self.pixel_format)
         device.set_fps(device.info.buffers[0], self.fps)
 
-        misframed = 0
+        misframed = overtaken = 0
         for frame in device:
             if should_stop.value:
                 break
@@ -98,19 +98,18 @@ class LinuxVideo(pimm.ControlSystem):
                 misframed += 1
                 if misframed == 1:
                     logger.warning('%s handed over a buffer that is not one frame in size', self.device_path)
-            elif len(images) == 1:
-                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(images[0], self._frame_adapter)
+            elif images:
+                # The port holds one image and nothing runs between two emissions of the same tick, so a
+                # buffer decoding to several has only its newest to give; the rest are counted, not sent.
+                overtaken += len(images) - 1
+                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(images[-1], self._frame_adapter)
                 self.frame.emit(self._frame_adapter)
                 self.fps_counter.tick()
-            else:
-                # A buffer that decodes to several images emits them with nothing read in between, so one
-                # adapter shared between them would show every reader the last image.
-                for image in images:
-                    self.frame.emit(pimm.shared_memory.NumpySMAdapter.lazy_init(image, None))
-                    self.fps_counter.tick()
 
             yield pimm.Yield()  # Give control back to the world
 
         if misframed:
             logger.warning('%s handed over %d buffers that are not one frame in size', self.device_path, misframed)
+        if overtaken:
+            logger.warning('%s decoded %d images a newer one of the same buffer overtook', self.device_path, overtaken)
         device.close()

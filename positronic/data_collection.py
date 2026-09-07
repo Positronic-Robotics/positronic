@@ -1,6 +1,6 @@
 import logging
 import time
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -297,34 +297,49 @@ class DataCollectionController(pimm.ControlSystem):
         ):
             port.read()
 
-    def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Redraw the scene and put every arm at a start pose drawn around the nominal joints, yielding
-        until all of them are done."""
+    def _ready(self, source: Any, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Stop the tracking, redraw the scene, and put every arm at a start pose drawn around the nominal
+        joints, yielding until all of them are done."""
+        source.turn_off()
         logging.info('Readying the rig for the next episode')
         # A real scene is a person's to set up, and nothing here is asked.
         scene = [self.redraw_scene(None)] if self.redraw_scene.connected else []
-        yield from self._travel(
-            roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread), should_stop, scene
-        )
+        try:
+            yield from self._travel(
+                roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread), should_stop, scene
+            )
+            if isinstance(source, _Follow):
+                source.arm()
+        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+        except Exception as e:
+            logging.error(f'The rig was not readied: {e}')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
 
-    def _park(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Put every arm of the rig where it rests, yielding until all of them are there."""
+    def _park(self, source: Any, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Stop the tracking and put every arm of the rig where it rests, yielding until all of them are
+        there."""
+        source.turn_off()
         if not len(self._park_joints):
             logging.warning('This rig names no pose to rest at, so there is nowhere to park it')
             return
         logging.info('Taking the rig to rest')
-        yield from self._travel(roboarm.command.JointPosition(self._park_joints), should_stop)
+        try:
+            yield from self._travel(roboarm.command.JointPosition(self._park_joints), should_stop)
+        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+        except Exception as e:
+            logging.error(f'The rig was not parked: {e}')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
 
-    def _abandon(self, recording: bool) -> bool:
-        """Give up the recording that runs, if one does, and answer that none runs now."""
-        if recording:
-            self.ds_agent_commands.emit(DsWriterCommand.ABORT())
-            self.sound.emit(_RECORDING_ABANDONED)
-            logging.info('The recording was abandoned')
-        return False
+    def _abandon(self, recording: bool) -> None:
+        """Give up the recording that runs, if one does."""
+        if not recording:
+            return
+        self.ds_agent_commands.emit(DsWriterCommand.ABORT())
+        self.sound.emit(_RECORDING_ABANDONED)
+        logging.info('The recording was abandoned')
 
-    def _recorded(self, recording: bool) -> bool:
-        """Start a recording, or stop the one that runs; answer whether one runs now."""
+    def _record(self, recording: bool) -> None:
+        """Start a recording, or stop the one that runs."""
         if recording:
             self.ds_agent_commands.emit(DsWriterCommand.STOP())
             self.sound.emit(_RECORDING_STOPPED)
@@ -336,7 +351,6 @@ class DataCollectionController(pimm.ControlSystem):
             self.ds_agent_commands.emit(DsWriterCommand.START(self._output_path, meta))
             self.sound.emit(_RECORDING_STARTED)
             logging.info('The recording started')
-        return not recording
 
     def _tracked(self, source: _Tracker, state: pimm.Message[RoboarmState] | None) -> None:
         """Follow the hand, or stop following it. An arm that has not said where it stands cannot be left."""
@@ -347,36 +361,6 @@ class DataCollectionController(pimm.ControlSystem):
         else:
             source.turn_on(state.data.ee_pose)
         logging.info('Tracking is %s', 'on' if source.on else 'off')
-
-    def _readied(
-        self, source: Any, recording: bool, should_stop: pimm.SignalReceiver
-    ) -> Generator[pimm.Sleep, None, bool]:
-        """Take the rig to its start pose, giving up the recording and the tracking first."""
-        recording = self._abandon(recording)
-        source.turn_off()
-        try:
-            yield from self._ready(should_stop)
-            if isinstance(source, _Follow):
-                source.arm()
-        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
-        except Exception as e:
-            logging.error(f'The rig was not readied: {e}')
-            self.sound.emit(_SOMETHING_WENT_WRONG)
-        return recording
-
-    def _parked(
-        self, source: Any, recording: bool, should_stop: pimm.SignalReceiver
-    ) -> Generator[pimm.Sleep, None, bool]:
-        """Take the rig to rest, giving up the recording and the tracking first."""
-        recording = self._abandon(recording)
-        source.turn_off()
-        try:
-            yield from self._park(should_stop)
-        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
-        except Exception as e:
-            logging.error(f'The rig was not parked: {e}')
-            self.sound.emit(_SOMETHING_WENT_WRONG)
-        return recording
 
     def _from_hand(self, tracker: _Tracker, hands: set[str], buttons: ButtonHandler) -> tuple[Any, float | None]:
         """What the hand asks the arm for, and what it holds the grip at.
@@ -409,6 +393,14 @@ class DataCollectionController(pimm.ControlSystem):
             return None, grip
         return roboarm.command.JointPosition(leader), grip
 
+    def _in_error(self, state: pimm.Message[RoboarmState], was_error: bool) -> bool:
+        """Whether the arm reads ERROR, told to the operator on the tick it starts to."""
+        in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, was_error)
+        if entered_error:
+            logging.error('The arm is in error. It holds still until a reset clears the error.')
+            self.sound.emit(_SOMETHING_WENT_WRONG)
+        return in_error
+
     def _asked_of_the_arm(
         self, source: Any, hands: set[str], buttons: ButtonHandler, state: pimm.Message[RoboarmState] | None
     ) -> tuple[Any, float | None]:
@@ -416,16 +408,6 @@ class DataCollectionController(pimm.ControlSystem):
         if isinstance(source, _Tracker):
             return self._from_hand(source, hands, buttons)
         return self._from_leader(source, state)
-
-    def _drove(self, cmd: Any, state: pimm.Message[RoboarmState], in_error: bool) -> bool:
-        """Put ``cmd`` on the arm unless it is in error, and answer whether it is in error now."""
-        in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, in_error)
-        if entered_error:
-            logging.error('The arm is in error. It holds still until a reset clears the error.')
-            self.sound.emit(_SOMETHING_WENT_WRONG)
-        if not in_error and cmd is not None:
-            self.robot_commands.emit(cmd)
-        return in_error
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         source = _Tracker(self.operator_position) if self.teleop is Teleop.HAND else _Follow()
@@ -440,19 +422,26 @@ class DataCollectionController(pimm.ControlSystem):
                 state = self.robot_state.read()
                 asked = pimm.value_updated(self.session_events)
                 if button_handler.just_pressed('right_B') or asked is SessionEvent.RECORD:
-                    recording = self._recorded(recording)
+                    self._record(recording)
+                    recording = not recording
                 elif isinstance(source, _Tracker) and button_handler.just_pressed('right_A'):
                     self._tracked(source, state)
                 elif (button_handler.just_pressed('right_stick') or asked is SessionEvent.READY) and not self._umi:
-                    recording = yield from self._readied(source, recording, should_stop)
+                    self._abandon(recording)
+                    recording = False
+                    yield from self._ready(source, should_stop)
                 elif asked is SessionEvent.PARK:
-                    recording = yield from self._parked(source, recording, should_stop)
+                    self._abandon(recording)
+                    recording = False
+                    yield from self._park(source, should_stop)
 
                 cmd, grip = self._asked_of_the_arm(source, hands, button_handler, state)
                 if grip is not None:
                     self.target_grip.emit(grip)
                 if source.on and state is not None:
-                    in_error = self._drove(cmd, state, in_error)
+                    in_error = self._in_error(state, in_error)
+                    if not in_error and cmd is not None:
+                        self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
 
