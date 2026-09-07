@@ -15,7 +15,7 @@ from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
     _collect_signal_groups,
     _decimation_indices,
-    _mp4_downscaled_to,
+    _mp4_reduced_to,
     _size_capped_to,
     _unplotted_notice,
     _write_urdf_to_dir,
@@ -235,14 +235,14 @@ def test_a_cap_an_encoder_cannot_carry_is_refused():
 def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
     src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
 
-    assert _mp4_downscaled_to(src, max_resolution=640) == src.read_bytes()
+    assert _mp4_reduced_to(src, max_resolution=640) == src.read_bytes()
 
 
 def test_a_video_keeps_the_frames_named_at_their_own_times(tmp_path):
     src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
     kept = np.array([0, 3, 6, 9])
 
-    thinned = _mp4_downscaled_to(src, max_resolution=640, kept=kept)
+    thinned = _mp4_reduced_to(src, max_resolution=640, kept=kept)
 
     source_times = _frame_times(src.read_bytes())
     assert _frame_times(thinned) == pytest.approx([source_times[index] for index in kept], abs=1e-4)
@@ -252,7 +252,7 @@ def test_a_video_keeps_the_frames_named_at_their_own_times(tmp_path):
 def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):
     src = _write_mp4(tmp_path / 'big.mp4', width=1280, height=720, frames=12)
 
-    downscaled = _mp4_downscaled_to(src, max_resolution=640)
+    downscaled = _mp4_reduced_to(src, max_resolution=640)
 
     with av.open(io.BytesIO(downscaled), 'r') as container:
         stream = container.streams.video[0]

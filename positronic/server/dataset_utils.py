@@ -367,9 +367,9 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: 
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
-def _mp4_downscaled_to(src: Path, max_resolution: int, kept: np.ndarray | None = None) -> bytes:
-    """Re-encode ``src`` with its long side at most ``max_resolution`` and only the frames at the indexes in
-    ``kept``, or return it unchanged if it fits and ``kept`` is None."""
+def _mp4_reduced_to(src: Path, max_resolution: int, kept: np.ndarray | None = None) -> bytes:
+    """``src`` re-encoded to at most ``max_resolution`` on the long side and to the frames at the indexes in
+    ``kept``; unchanged when it fits and ``kept`` is None."""
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
         source = (in_stream.codec_context.width, in_stream.codec_context.height)
@@ -410,7 +410,7 @@ def _log_video_signals(
         if isinstance(sig, VideoSignal):
             our_ts = np.asarray(sig.keys(), dtype='datetime64[ns]')
             kept = _decimation_indices(our_ts, max_hz)
-            video_bytes = _mp4_downscaled_to(sig.video_path, max_resolution, kept if len(kept) < len(our_ts) else None)
+            video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(our_ts) else None)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
             rr.log(name, asset, static=True)
 

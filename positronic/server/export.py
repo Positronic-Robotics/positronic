@@ -74,8 +74,17 @@ MAX_FILTER_KEYS_PER_GROUP = 6
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
 MAX_KEY_BYTES = 1024
+
+
+def _available_cpus() -> int:
+    """The CPUs this process may run on; a cgroup quota without a cpuset is not visible to a process."""
+    if hasattr(os, 'sched_getaffinity'):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 2
+
+
 # A recording's build holds about two cores, so this many at once fill the machine.
-DEFAULT_WORKERS = max(1, (os.cpu_count() or 2) // 2)
+DEFAULT_WORKERS = max(1, _available_cpus() // 2)
 # Windows reports no path limit; its `MAX_PATH` counts UTF-16 units, the end mark included, unless a machine opts
 # into long paths.
 _REPORTS_PATH_MAX = hasattr(os, 'pathconf')
@@ -389,22 +398,6 @@ def _full_checked_against(full: Dataset, shown: Dataset) -> Dataset:
     return full
 
 
-def _build_recordings(reads: Dataset, workers: int) -> None:
-    """Build the recording of each episode of `reads` into the cache, `workers` at a time, with the app serving
-    `reads`; one worker leaves each recording to the write that copies it.
-
-    The workers are threads: the decoder and the encoder release the interpreter lock, and a forked worker
-    hangs on the threads a recording built earlier in the process leaves behind.
-    """
-    if workers < 1:
-        raise ValueError(f'workers={workers}; a recording is built by at least one')
-    if workers == 1:
-        return
-    install_dataset(reads)
-    with ThreadPool(workers) as pool:
-        pool.map(ensure_episode_rrd, range(len(reads)), chunksize=1)
-
-
 def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
     """Write each of `plans` with the app serving the dataset it reads."""
     serving: Dataset | None = None
@@ -443,6 +436,24 @@ def _filter_sets_by_group(
                 f'group table {name!r} has {past_bound}; an export reads the dataset once per set'
             ) from None
     return sets_by_group
+
+
+def _build_recordings(reads: Dataset, workers: int) -> None:
+    """Build the recording of each episode of `reads` into the cache, `workers` at a time, with the app serving
+    `reads`; one worker builds them on the calling thread.
+
+    The workers are threads: the decoder and the encoder release the interpreter lock, and a forked worker
+    hangs on the threads a recording built earlier in the process leaves behind.
+    """
+    if workers < 1:
+        raise ValueError(f'workers={workers}; a recording is built by at least one')
+    install_dataset(reads)
+    if workers == 1:
+        for index in range(len(reads)):
+            ensure_episode_rrd(index)
+        return
+    with ThreadPool(workers) as pool:
+        pool.map(ensure_episode_rrd, range(len(reads)), chunksize=1)
 
 
 def export_static(
