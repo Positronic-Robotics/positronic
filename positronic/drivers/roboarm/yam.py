@@ -375,7 +375,7 @@ class Robot(pimm.ControlSystem):
                     grip_target = float(grip)
 
                 q = chain.observations()[_JOINT_POS]
-                asked = chain.moves.next_request()
+                asked = chain.moves.next_request(clock.now())
                 if isinstance(asked, pimm.calls.Call):
                     q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
                 elif asked is not None:

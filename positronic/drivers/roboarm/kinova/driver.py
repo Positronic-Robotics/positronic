@@ -188,7 +188,7 @@ class Robot(pimm.ControlSystem):
             with self._arm(api, should_stop, clock) as arm:
                 while not should_stop.value:
                     arm.settle()
-                    asked = arm.moves.next_request()
+                    asked = arm.moves.next_request(clock.now())
                     if isinstance(asked, pimm.calls.Call):
                         arm.sync_move(asked)
                     elif asked is not None:

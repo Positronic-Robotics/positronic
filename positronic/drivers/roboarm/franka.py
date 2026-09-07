@@ -497,7 +497,7 @@ class Robot(pimm.ControlSystem):
                     yield arm.limiter.wait()
                     continue
 
-                asked = arm.moves.next_request()
+                asked = arm.moves.next_request(clock.now())
                 if isinstance(asked, pimm.calls.Call):
                     with brakes.opened():
                         yield from arm.sync_move(asked)

@@ -183,7 +183,7 @@ class MujocoSim(pimm.ControlSystem):
                         self.reset(dict(redraw.request or {}).get(eval_keys.SEED))
                         redraw.set_result(None)
 
-                command = self._moves.next_request()
+                command = self._moves.next_request(now)
                 if isinstance(command, pimm.calls.Call):
                     self._accept_move(command, now)
                 elif self._error:
