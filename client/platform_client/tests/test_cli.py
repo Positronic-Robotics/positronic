@@ -68,8 +68,8 @@ def gateway(monkeypatch) -> Gateway:
     return answering
 
 
-def _registered(config: Path) -> None:
-    cli.write_config(config, Config(platform_url=PLATFORM, api_key=KEY))
+def _registered(config: Path, platform_url: str = PLATFORM) -> None:
+    cli.write_config(config, Config(platform_url=platform_url, api_key=KEY))
 
 
 def _record(config: Path) -> dict[str, str]:
@@ -147,6 +147,60 @@ def test_the_key_and_the_platform_are_read_from_the_config_directory(config, gat
     sent = gateway.request()
     assert str(sent.url) == f'{PLATFORM}{routes.REQUESTS_GET}?id=2a'
     assert sent.headers['authorization'] == f'Bearer {KEY}'
+
+
+def test_a_key_variable_set_to_nothing_is_refused_rather_than_ignored(config, gateway, monkeypatch):
+    """It used to fall through to the saved record, so a caller who meant to clear the key called
+    the platform as whoever registered last."""
+    _registered(config)
+    monkeypatch.setenv(API_KEY_ENV, '   ')
+
+    with pytest.raises(SystemExit, match='empty value'):
+        cli.main(['requests', 'get', '2a'])
+
+
+def test_a_config_directory_set_to_nothing_is_refused_rather_than_ignored(monkeypatch):
+    """It used to select the default, so a caller pointing the CLI somewhere else read the record
+    they were trying to leave behind."""
+    monkeypatch.setenv(CONFIG_DIR_ENV, '')
+
+    with pytest.raises(SystemExit, match='empty value'):
+        cli.config_dir(os.environ)
+
+
+def _client_kwargs(monkeypatch) -> dict[str, object]:
+    """What the CLI hands `httpx.Client`. Wraps whatever the gateway fixture already installed, so
+    the mock transport still answers."""
+    seen: dict[str, object] = {}
+    building = httpx.Client
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return building(**kwargs)
+
+    monkeypatch.setattr(httpx, 'Client', recording)
+    return seen
+
+
+def test_a_plaintext_platform_reads_no_proxy_variables(config, gateway, monkeypatch):
+    """httpx trusts HTTP_PROXY, so a plaintext platform would put the key header through a proxy in
+    the clear. A plaintext platform is a local one and needs none."""
+    _registered(config, platform_url='http://localhost:8080')
+    built = _client_kwargs(monkeypatch)
+
+    cli.main(['requests', 'get', '2a'])
+
+    assert built['trust_env'] is False
+
+
+def test_a_platform_over_https_is_left_its_proxy(config, gateway, monkeypatch):
+    """The boundary: the key is already encrypted, and a caller behind a corporate proxy needs it."""
+    _registered(config)
+    built = _client_kwargs(monkeypatch)
+
+    cli.main(['requests', 'get', '2a'])
+
+    assert 'trust_env' not in built
 
 
 def test_the_environment_wins_over_the_config_directory(config, gateway, monkeypatch):
@@ -365,6 +419,15 @@ def test_a_scene_pair_that_names_no_field_or_no_side_is_refused(pair: str):
         cli.scene_from_pairs([pair])
 
 
+@pytest.mark.parametrize(
+    'pairs', [['tote_placement=left', 'tote_placement=right'], ['camera.side=left', 'camera.side=right']]
+)
+def test_a_scene_key_given_twice_is_refused(pairs: list[str]):
+    """The last one used to win in silence, so the request carried a side nobody asked for."""
+    with pytest.raises(SystemExit, match='given twice'):
+        cli.scene_from_pairs(pairs)
+
+
 def test_the_scene_keys_are_the_fields_the_model_declares():
     assert {cli.SCENE_TOTE, cli.SCENE_VANTAGE} < set(SceneAsk.model_fields)
 
@@ -393,7 +456,7 @@ def test_a_refusal_survives_a_catalogue_the_platform_mangled(config, gateway):
     with pytest.raises(SystemExit) as raised:
         cli.main(['requests', 'create', '--tasks', 'nope', '--endpoints', 'gyros', '--episodes-per-endpoint', '1'])
 
-    assert str(raised.value) == "bad_request: unknown task 'nope'"
+    assert str(raised.value) == "bad_request: unknown task 'nope'\nthe catalogue it sent back does not read"
 
 
 def test_a_refusal_ends_the_command_with_the_code_and_the_catalogue(config, gateway):

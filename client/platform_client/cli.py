@@ -27,7 +27,14 @@ from typing import Annotated
 
 import httpx
 from platform_client import github_device_flow
-from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, require_absolute_url, resolve_base_url
+from platform_client.client import (
+    API_KEY_ENV,
+    API_URL_ENV,
+    DEFAULT_TIMEOUT_S,
+    PlatformClient,
+    require_absolute_url,
+    resolve_base_url,
+)
 from platform_client.enums import CameraVantage, KeyStatus, Placement
 from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
@@ -72,7 +79,10 @@ class Config(BaseModel):
 
 
 def config_dir(env: Mapping[str, str]) -> Path:
-    return Path(env.get(CONFIG_DIR_ENV) or DEFAULT_CONFIG_DIR).expanduser()
+    named = env.get(CONFIG_DIR_ENV)
+    if named is not None and not named.strip():
+        raise SystemExit(f'{CONFIG_DIR_ENV} is set to an empty value: name a directory, or unset it')
+    return Path(named or DEFAULT_CONFIG_DIR).expanduser()
 
 
 def read_config(directory: Path) -> Config | None:
@@ -119,6 +129,8 @@ def key_is_given(env: Mapping[str, str], api_key_file: Path | None) -> bool:
 def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Config | None) -> ApiKey | None:
     """The key to call with: the environment's, else the named file's, else the record's."""
     from_env = env.get(API_KEY_ENV)
+    if from_env is not None and not from_env.strip():
+        raise SystemExit(f'{API_KEY_ENV} is set to an empty value: put the key in it, or unset it')
     if from_env:
         return ApiKey(from_env)
     if api_key_file is not None:
@@ -179,10 +191,14 @@ def scene_from_pairs(pairs: Sequence[str]) -> SceneAsk | None:
     tote: Placement | None = None
     vantage: CameraVantage | None = None
     cameras: dict[str, Placement] = {}
+    seen: set[str] = set()
     for pair in pairs:
         key, has_value, value = pair.partition('=')
         if not has_value:
             raise SystemExit(f'--scene takes KEY=VALUE, not {pair!r}')
+        if key in seen:
+            raise SystemExit(f'--scene {key} is given twice: the request would carry only the last one')
+        seen.add(key)
         try:
             if key == SCENE_TOTE:
                 tote = _PLACEMENT.validate_python(value)
@@ -258,6 +274,13 @@ def _client(args: argparse.Namespace, env: Mapping[str, str]) -> PlatformClient:
             f'--api-key-file with a key for that platform, or register there with '
             f'`positronic-platform register --platform-url={base_url}`'
         )
+    if httpx.URL(base_url).scheme != 'https':
+        # httpx trusts HTTP_PROXY from the environment. On a plaintext platform that puts the key
+        # header through a proxy in the clear, and a plaintext platform is a local one, which needs
+        # no proxy — so this client reads no proxy variables at all.
+        return PlatformClient(
+            api_key=api_key, client=httpx.Client(base_url=base_url, timeout=DEFAULT_TIMEOUT_S, trust_env=False)
+        )
     return PlatformClient(base_url, api_key=api_key)
 
 
@@ -332,8 +355,9 @@ def _refusal(exc: PlatformError) -> str:
         tasks = exc.tasks
     except ValidationError:
         # Reading the catalogue validates it, and this runs inside `main`'s handler, where a
-        # sibling `except` cannot reach. A mangled catalogue costs the catalogue, not the refusal.
-        return line
+        # sibling `except` cannot reach. A mangled catalogue costs the catalogue, not the refusal —
+        # but it is said, so a reader does not take the shorter answer for the whole of it.
+        return line + '\nthe catalogue it sent back does not read'
     if tasks is not None:
         line += f'\nthe catalogue holds: {", ".join(tasks)}'
     return line
