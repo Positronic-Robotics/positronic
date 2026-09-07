@@ -91,6 +91,9 @@ class LinuxVideo(pimm.ControlSystem):
                 break
 
             images = self._images(frame, codec_context)
+            # rules-allow: swallowed-error — a busy bus hands over a buffer that is not a whole frame as
+            # ordinary traffic, roughly one per camera per minute of capture on the station's four D405;
+            # the next buffer is a thirtieth of a second away, and the count says how many went
             if images is None:
                 misframed += 1
                 if misframed == 1:
