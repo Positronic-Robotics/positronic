@@ -10,6 +10,7 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
@@ -484,13 +485,23 @@ class RestrictImageSize(Codec):
             return type(value)(self._restrict(key, v) for v in value)
         return value
 
+    def _workers(self, frames: int) -> int:
+        """Threads to scale ``frames`` on. One means the serial path: a pool wins nothing on a single
+        usable CPU, and below ``_PARALLEL_FROM`` it costs more to raise than the frames take."""
+        if frames < self._PARALLEL_FROM:
+            return 1
+        # FOOTGUN: `cpu_count` reports the machine, not a cgroup quota, so a container pinned to one
+        # core of many still reads as many and takes the threaded path.
+        return max(1, min(frames, self._MAX_WORKERS, os.cpu_count() or 1))
+
     def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
-        """Every frame of one stack, scaled. Threaded above ``_PARALLEL_FROM``: the frames are
-        independent and Pillow drops the GIL for a resize."""
-        if len(stack) < self._PARALLEL_FROM:
-            return [_scaled(frame, self._width, self._height) for frame in stack]
+        """Every frame of one stack, scaled. Pillow drops the GIL for a resize and the frames are
+        independent, so more than one may run at a time."""
         scale = partial(_scaled, width=self._width, height=self._height)
-        with ThreadPoolExecutor(max_workers=min(len(stack), self._MAX_WORKERS)) as pool:
+        workers = self._workers(len(stack))
+        if workers == 1:
+            return [scale(frame) for frame in stack]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             return list(pool.map(scale, stack))
 
     def decode(self, data):

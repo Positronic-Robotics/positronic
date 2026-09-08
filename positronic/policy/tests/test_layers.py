@@ -1,5 +1,6 @@
 """Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
+import os
 from typing import Any
 
 import numpy as np
@@ -643,6 +644,17 @@ class TestRestrictImageSize:
         codec = RestrictImageSize(64, 48)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
+
+    def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
+        """A pool wins nothing on a single core, and costs threads to raise."""
+        monkeypatch.setattr(os, 'cpu_count', lambda: 1)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._PARALLEL_FROM + 4) == 1
+
+    def test_the_pool_is_bounded_by_the_core_count(self, monkeypatch):
+        monkeypatch.setattr(os, 'cpu_count', lambda: 2)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._MAX_WORKERS * 4) == 2
 
     def test_a_stack_under_the_parallel_bar_still_scales(self):
         stack = np.zeros((RestrictImageSize._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
