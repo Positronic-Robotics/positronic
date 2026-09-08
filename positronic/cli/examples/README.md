@@ -30,8 +30,7 @@ uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candi
 ```
 
 Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode
-records which one served it. `--from-file` takes the whole plan as a YAML or JSON file. `--eval` does the same when its value is
-the path of a file.
+records which one served it. `--from-file` takes the whole plan as a YAML or JSON file.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list, and naming one

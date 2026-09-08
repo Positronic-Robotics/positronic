@@ -32,6 +32,17 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert 'digest sha256:abc' in out
 
 
+def test_an_eval_is_a_name_beside_a_file_of_that_name(platform, run_command, tmp_path, monkeypatch):
+    # `--eval` reads as a name wherever the command runs, so a file of that name beside it changes nothing.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+    (tmp_path / 'fake.smoke').write_text('tasks: []\n')
+    monkeypatch.chdir(tmp_path)
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert platform.body['eval'] == 'fake.smoke'
+
+
 def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, capsys):
     # Terminal at the door and charged: a zero exit would let a script read it as a run that happened.
     platform.answer({'submission_id': ID, 'status': 'errored', 'reason_code': 'image_unpullable'})

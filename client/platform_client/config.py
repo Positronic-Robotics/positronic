@@ -134,6 +134,8 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: 
     return record.platform_url if record else None
 
 
+# rules-allow: hidden-dependency — the record supplies its key and its platform one at a time, by
+# design: a command that names another platform keeps the saved key. `client/README.md` states it.
 def record_if_needed(env: Mapping[str, str], platform_url: str | None, *, key_required: bool = True) -> Config | None:
     """The saved record, or `None` when it has nothing left to supply.
 

@@ -254,7 +254,7 @@ def _file_for_the_rig(
         refusing_a_second_source(source, rig_only)
         return file_plan(read_plan(source, transaction_key, alias), platform_url)
     if eval is not None:
-        raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
+        raise SystemExit(f'--eval={eval!r} names an eval: the rig runs a plan, from --from-file or from the flags')
     plan = plan_from_flags(
         policy_url=policy_url,
         tasks=tasks,
@@ -303,7 +303,7 @@ def run(
     eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
-    in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
+    in a file (``--from-file``). Two or more ``--policy-url``
     make one blind sample. Every place answers a submission id, which ``positronic eval status``
     reads.
 
@@ -345,12 +345,10 @@ def run(
         return None
 
     if policy_image is not None:
-        if source is not None:
-            raise SystemExit(f'--eval={eval!r} names a plan file, and --policy-image runs an eval by name; pass one')
-        if not isinstance(eval, str):
-            raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file, **rig_only}, 'platform')
+        if not isinstance(eval, str):
+            raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
     if source is not None or any(given(value) for value in rig_only.values()):

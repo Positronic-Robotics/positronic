@@ -138,15 +138,6 @@ def test_a_plan_file_giving_a_key_twice_is_refused(platform, run_command, tmp_pa
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', twice))
 
 
-def test_an_eval_naming_an_existing_file_is_that_file(platform, run_command, tmp_path: Path):
-    platform.answer(FILED)
-
-    run_command(run, eval=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML))
-
-    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
-    assert platform.body['episodes_per_endpoint'] == 4
-
-
 def test_a_plan_file_beside_a_plan_flag_is_refused(platform, run_command, tmp_path: Path):
     # One source states the plan; a flag beside a file would be ignored.
     with pytest.raises(SystemExit, match='carries the whole plan'):
@@ -193,9 +184,10 @@ def test_the_rig_flags_state_an_alias(platform, run_command):
 
 
 def test_a_plan_file_beside_a_policy_image_is_refused(platform, run_command, tmp_path: Path):
+    # The platform runs an eval of its own by name, so it has no plan file to read.
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
-    with pytest.raises(SystemExit, match='names a plan file, and --policy-image'):
-        run_command(run, eval=named, policy_image='org/p:v1')
+    with pytest.raises(SystemExit, match='a platform run has no --from-file'):
+        run_command(run, from_file=named, policy_image='org/p:v1')
     assert platform.seen is None
 
 
@@ -226,9 +218,9 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
     assert platform.seen is None
 
 
-def test_an_eval_name_that_is_no_file_is_refused_on_the_rig(platform, run_command):
+def test_an_eval_is_refused_on_the_rig(platform, run_command):
     # The rig runs a plan, and `EvalPlan` carries no eval name, so a name reaches nothing there.
-    with pytest.raises(SystemExit, match='names no plan file'):
+    with pytest.raises(SystemExit, match='the rig runs a plan'):
         run_command(run, eval='fake.smoke', policy_url=BASELINE, tasks=SPOONS, episodes=1)
     assert platform.seen is None
 

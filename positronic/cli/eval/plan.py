@@ -142,12 +142,16 @@ def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCrea
 
 
 def plan_source(eval: object, from_file: str | None) -> Path | None:
-    """The file a whole plan comes from: `--from-file`, else an `--eval` that names an existing file."""
-    if from_file is not None:
-        if eval is not None:
-            raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
-        return Path(from_file)
-    return Path(eval) if isinstance(eval, str) and Path(eval).is_file() else None
+    """The file a whole plan comes from. `--from-file` names it, and no other option does.
+
+    An `--eval` value is a name wherever the command runs. Read as a path as well, one token would
+    mean two things by what the working directory holds beside it.
+    """
+    if from_file is None:
+        return None
+    if eval is not None:
+        raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
+    return Path(from_file)
 
 
 def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:

@@ -76,8 +76,8 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `submissions.create`. `--from-file` names the file.
-`--eval` also names it when its value is the path of an existing file. The same flags state a plan
+`positronic eval run` files that plan with `submissions.create`. `--from-file` names the file, and
+it is the only option that does: an `--eval` value is a name. The same flags state a plan
 without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
 `--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
 catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
@@ -129,6 +129,10 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 | `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment or the saved record, never an argument, so it reaches no process listing |
 | `POSITRONIC_PLATFORM_CONFIG_DIR` | where `positronic account register` saves that record, else `~/.config/positronic-platform` |
 | `POSITRONIC_PLATFORM_CREDENTIAL` | the identity `register` registers with — read the same way, for the same reason |
+
+The record's key and its platform are read one at a time. A command that names another platform, and
+no key, sends the record's key to the platform it names. The client speaks one wire contract and runs
+against any platform that serves it, but it is built for ours. You take the risk of another one.
 
 Boards have no command yet — `PlatformClient.list_boards` and `.rankings` read them from Python, the
 latter taking a `BoardRef` (`platform_client.boards`). Both take the key when one is set and work
