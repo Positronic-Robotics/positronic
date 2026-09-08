@@ -196,10 +196,10 @@ class PlatformClient:
         """File one eval plan. Needs a customer grant: a key without one is refused `forbidden`."""
         return self._post(routes.EVALS_RUN, plan, PlanFiled)
 
-    def get_eval(self, plan_id: PlanId) -> PlanView:
+    def get_plan(self, plan_id: PlanId) -> PlanView:
         return self._get(routes.EVALS_GET, PlanView, query=EvalGetQuery(id=plan_id))
 
-    def list_evals(self, *, after: PlanId | None = None, limit: int | None = None) -> PlanListResponse:
+    def list_plans(self, *, after: PlanId | None = None, limit: int | None = None) -> PlanListResponse:
         """One page of the caller's plans, oldest first. Pass a page's `next` as `after` for the page after it."""
         query = EvalListQuery(after=after, limit=limit)
         return self._get(routes.EVALS_LIST, PlanListResponse, query=query)

@@ -439,8 +439,8 @@ def test_every_endpoint_has_exactly_one_method():
         'rankings',
         'list_boards',
         'run_eval',
-        'get_eval',
-        'list_evals',
+        'get_plan',
+        'list_plans',
         'catalog_evals',
         'catalog_tasks',
     }
@@ -560,7 +560,7 @@ def test_evals_run_posts_the_plan_and_parses_the_id():
 
 def test_evals_get_sends_the_hex_id_and_parses_the_view():
     gateway = Gateway(200, PLAN_VIEW)
-    view = make_client(gateway).get_eval(PlanId(0x2A))
+    view = make_client(gateway).get_plan(PlanId(0x2A))
 
     assert isinstance(view, PlanView)
     assert view.status is PlanStatus.filed and view.episodes.outstanding == 10
@@ -570,7 +570,7 @@ def test_evals_get_sends_the_hex_id_and_parses_the_view():
 
 def test_evals_list_sends_the_cursor_and_parses_the_next():
     gateway = Gateway(200, {'plans': [PLAN_VIEW], 'next': '2a'})
-    page = make_client(gateway).list_evals(after=PlanId(0x1F), limit=1)
+    page = make_client(gateway).list_plans(after=PlanId(0x1F), limit=1)
 
     assert isinstance(page, PlanListResponse)
     assert [row.plan_id for row in page.plans] == [PlanId(0x2A)] and page.next == PlanId(0x2A)
@@ -580,7 +580,7 @@ def test_evals_list_sends_the_cursor_and_parses_the_next():
 
 def test_evals_list_asks_for_the_first_page_with_nothing_in_the_query():
     gateway = Gateway(200, {'plans': []})
-    page = make_client(gateway).list_evals()
+    page = make_client(gateway).list_plans()
     assert page.plans == [] and page.next is None
     assert dict(gateway.request().url.params) == {}
 

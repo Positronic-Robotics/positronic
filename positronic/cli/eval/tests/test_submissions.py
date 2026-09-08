@@ -57,6 +57,45 @@ def test_list_prints_a_labelled_line_per_submission_and_per_plan(platform, run_c
     assert out == [f'submission {ID} 2026-03-04 05:06 running fake.smoke demo', f'plan {ID} filed 0/20 episodes']
 
 
+def test_list_reads_every_page_of_plans(platform, run_command, capsys):
+    platform.answer({'submissions': []})
+    plan = {'status': 'filed', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}}
+    platform.answer_in_turn(
+        routes.EVALS_LIST,
+        [({'plans': [{'plan_id': '1a', **plan}], 'next': '1a'}, 200), ({'plans': [{'plan_id': '2b', **plan}]}, 200)],
+    )
+
+    run_command(list_runs)
+
+    assert platform.paths.count(routes.EVALS_LIST) == 2
+    assert platform.request.url.params['after'] == '1a'
+    assert capsys.readouterr().out.splitlines() == ['plan 1a filed 0/20 episodes', 'plan 2b filed 0/20 episodes']
+
+
+def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platform, run_command):
+    platform.answer({'submissions': []})
+    platform.answer_by_route({routes.EVALS_LIST: ({'plans': 'not a list', 'secret': 'x'}, 200)})
+    with pytest.raises(SystemExit, match='cannot read: plans') as caught:
+        run_command(list_runs)
+    assert 'secret' not in str(caught.value)
+
+
+def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platform, run_command, capsys):
+    platform.answer_by_route({
+        routes.CATALOG_EVALS: (
+            {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}]},
+            200,
+        ),
+        routes.CATALOG_TASKS: ({'error': {'code': 'forbidden', 'message': 'no customer grant'}}, 403),
+    })
+
+    run_command(catalog)
+
+    out, err = capsys.readouterr()
+    assert '"id": "fake.smoke"' in out
+    assert err.strip() == 'tasks: forbidden: no customer grant'
+
+
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
     platform.answer({
         'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}],

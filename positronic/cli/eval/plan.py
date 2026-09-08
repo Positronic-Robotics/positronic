@@ -13,20 +13,13 @@ from platform_client.responses import PlanFiled
 from platform_client.slug import Slugged
 from pydantic import TypeAdapter, ValidationError
 
-from positronic.cli.account.gateway import gateway
+from positronic.cli.account.gateway import gateway, one_line
 
 # What `--scene` takes: `tote_placement=<side>`, `camera_vantage=<vantage>`, and `camera.<mount>=<side>`.
 SCENE_TOTE = 'tote_placement'
 SCENE_VANTAGE = 'camera_vantage'
 SCENE_CAMERA_PREFIX = 'camera.'
 SCENE_CAMERAS = 'external_cameras'
-
-_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
-_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
-
-
-def one_line(exc: ValidationError) -> str:
-    return '; '.join(f'{".".join(str(part) for part in error["loc"])}: {error["msg"]}' for error in exc.errors())
 
 
 def repeated(value: object, flag: str) -> list[str]:
@@ -62,6 +55,39 @@ def endpoint_of(spec: str, position: int) -> dict[str, str]:
     return {'name': f'policy{position}', 'url': spec}
 
 
+class _OneValuePerKey(yaml.SafeLoader):
+    """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
+    two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen: set[str] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if isinstance(key, str) and key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f'{key!r} is given twice', key_node.start_mark)
+            if isinstance(key, str):
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def read_plan(path: Path) -> EvalPlan:
+    """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms."""
+    try:
+        payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
+    except OSError as exc:
+        raise SystemExit(f'{path}: {exc.strerror}') from exc
+    except yaml.YAMLError as exc:
+        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
+    try:
+        return EvalPlan.model_validate(payload)
+    except ValidationError as exc:
+        raise SystemExit(f'{path}: {one_line(exc)}') from exc
+
+
+_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
+_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
+
+
 def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
     """`--scene KEY=VALUE` pairs as the plan's own scene fields. An unknown key is a `SystemExit`."""
     scene: dict[str, object] = {}
@@ -88,20 +114,6 @@ def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
     if cameras:
         scene[SCENE_CAMERAS] = cameras
     return scene
-
-
-def read_plan(path: Path) -> EvalPlan:
-    """The whole plan, from a file. `yaml.safe_load` reads JSON too, so one reader takes both forms."""
-    try:
-        payload = yaml.safe_load(path.read_bytes())
-    except OSError as exc:
-        raise SystemExit(f'{path}: {exc.strerror}') from exc
-    except yaml.YAMLError as exc:
-        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
-    try:
-        return EvalPlan.model_validate(payload)
-    except ValidationError as exc:
-        raise SystemExit(f'{path}: {one_line(exc)}') from exc
 
 
 def plan_from_flags(

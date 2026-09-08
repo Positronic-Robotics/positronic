@@ -22,10 +22,25 @@ from platform_client.config import (
 )
 from platform_client.errors import PlatformError
 from platform_client.ids import Id64
+from pydantic import ValidationError
 
 ID = TypeVar('ID', bound=Id64)
 
-__all__ = ['API_KEY_ENV', 'API_URL_ENV', 'CREDENTIAL_ENV', 'credential', 'gateway', 'parse_id', 'refusing_bad_input']
+__all__ = [
+    'API_KEY_ENV',
+    'API_URL_ENV',
+    'CREDENTIAL_ENV',
+    'credential',
+    'gateway',
+    'one_line',
+    'parse_id',
+    'refusing_bad_input',
+]
+
+
+def one_line(exc: ValidationError) -> str:
+    """Every error of a validation as one line: the field, then what refused it. The value stays out."""
+    return '; '.join(f'{".".join(str(part) for part in error["loc"])}: {error["msg"]}' for error in exc.errors())
 
 
 @contextmanager
@@ -75,6 +90,9 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
             if exc.evals is not None:
                 lines.append(f'evals on offer: {", ".join(exc.evals)}')
             raise SystemExit('\n'.join(lines)) from exc
+        except ValidationError as exc:
+            # A 2xx whose body is not the route's response model. The body stays out of the message.
+            raise SystemExit(f'the platform answered with a response the client cannot read: {one_line(exc)}') from exc
 
 
 def credential() -> str:

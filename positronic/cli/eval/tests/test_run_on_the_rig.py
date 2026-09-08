@@ -135,6 +135,13 @@ def test_a_plan_file_is_filed_whole(platform, run_command, tmp_path: Path, name:
     assert [task['task_id'] for task in platform.body['tasks']] == [SPOONS]
 
 
+def test_a_plan_file_giving_a_key_twice_is_refused(platform, run_command, tmp_path: Path):
+    # A YAML reader keeps the last of two equal keys, so the count the author meant would be lost.
+    twice = PLAN_YAML + 'episodes_per_endpoint: 40\n'
+    with pytest.raises(SystemExit, match="'episodes_per_endpoint' is given twice"):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', twice))
+
+
 def test_an_eval_naming_an_existing_file_is_that_file(platform, run_command, tmp_path: Path):
     platform.answer(FILED)
 

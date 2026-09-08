@@ -196,6 +196,12 @@ class EvalPlan(Cascade):
 
     @model_validator(mode='after')
     def _every_task_runs_on_a_defined_endpoint(self) -> Self:
+        bare = sorted(entry.name for entry in self.endpoints if not entry.names_a_locator)
+        if bare:
+            raise ValueError(
+                f'the plan defines {", ".join(bare)} with no url and no provider and spec: an endpoint of the '
+                'plan states where its policy comes from, and a bare label on a task names one'
+            )
         defined = {entry.name for entry in self.endpoints}
         for task in self.tasks:
             if task.endpoints is None and not self.endpoints:

@@ -7,6 +7,7 @@ names, and a customer grant adds the rig's evals and tasks.
 from __future__ import annotations
 
 from platform_client.enums import CameraVantage, Placement
+from platform_client.eval_plan import Clutter
 from platform_client.evals import EvalRef
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
@@ -18,7 +19,7 @@ class TaskSummary(BaseModel):
 
     `tote_placement` and `external_cameras` list the sides a plan may pin, or draw between; a mount
     is keyed by the name the task gives it. `default_cap_per_episode_sec` is what a plan that states
-    no cap takes.
+    no cap takes, and `clutter` the draw a plan that states none takes; absent, the table is laid bare.
     """
 
     id: TaskRef
@@ -31,6 +32,7 @@ class TaskSummary(BaseModel):
     camera_vantage: Slugged[CameraVantage] | None = None
     external_cameras: dict[str, list[Slugged[Placement]]] = Field(default_factory=dict)
     default_cap_per_episode_sec: int | None = None
+    clutter: Clutter | None = None
 
 
 class EvalSummary(BaseModel):

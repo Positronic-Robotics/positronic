@@ -135,7 +135,10 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
                 ],
             },
         ],
-        endpoints=[{'name': 'own', 'url': 'wss://own.example/ws', 'episodes_per_endpoint': 3}, {'name': 'bare'}],
+        endpoints=[
+            {'name': 'own', 'url': 'wss://own.example/ws', 'episodes_per_endpoint': 3},
+            {'name': 'bare', 'url': 'wss://bare.example/ws'},
+        ],
     )
     first, second = plan.tasks
     assert [plan.episodes_on(first, entry) for entry in plan.task_endpoints(first)] == [3, 10]
@@ -167,6 +170,11 @@ def test_an_absolute_endpoint_url_is_left_alone(url: str):
     """The boundary: the scheme is the platform's to judge — it dials wss:// as readily as https://
     — so this refuses an address with no host and nothing else."""
     assert Endpoint(name='baseline', url=url).url == url
+
+
+def test_a_plan_endpoint_states_where_its_policy_comes_from():
+    with pytest.raises(ValidationError, match='states where its policy comes from'):
+        a_plan(endpoints=[{'name': 'bare'}])
 
 
 def test_an_endpoint_says_whether_it_names_a_locator():

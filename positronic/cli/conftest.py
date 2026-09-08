@@ -30,6 +30,7 @@ class StubPlatform:
         self.payload: object = {}
         self.seen: httpx.Request | None = None
         self.by_route: dict[str, tuple[object, int]] = {}
+        self.in_turn: dict[str, list[tuple[object, int]]] = {}
         self.paths: list[str] = []
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
@@ -41,10 +42,17 @@ class StubPlatform:
         """One answer per path, for a command that calls more than one route."""
         self.by_route = answers
 
+    def answer_in_turn(self, path: str, answers: list[tuple[object, int]]) -> None:
+        """One answer per call of `path`, in order, for a command that reads a route page by page."""
+        self.in_turn[path] = list(answers)
+
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
         self.paths.append(request.url.path)
-        payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
+        if queued := self.in_turn.get(request.url.path):
+            payload, status = queued.pop(0)
+        else:
+            payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
         return httpx.Response(status, json=payload)
 
     @property
