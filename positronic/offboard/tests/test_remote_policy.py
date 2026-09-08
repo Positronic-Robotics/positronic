@@ -424,13 +424,13 @@ def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
 
 def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
     """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
-    front of it."""
+    front of it, and the preparation before it is its own span rather than part of it."""
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
         assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}) is not None
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
+    assert {s.name for s in spans} == {telemetry_keys.SPAN_POLICY_PREPARE, telemetry_keys.SPAN_POLICY_INFER}
 
 
 def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_session):
@@ -449,10 +449,12 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
         with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-prep'):
             round_trip(session, rt, {'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
 
-    (span,) = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
-    assert span.name == telemetry_keys.SPAN_POLICY_INFER
+    spans = {s.name: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
     assert encoded_at, 'the observation carried an image to compress'
-    assert span.start_ns >= encoded_at[-1]  # every encode finishes before the span opens, not inside it
+    # Every encode finishes before the infer span opens, and falls inside the span that does measure it.
+    assert spans[telemetry_keys.SPAN_POLICY_INFER].start_ns >= encoded_at[-1]
+    prepare = spans[telemetry_keys.SPAN_POLICY_PREPARE]
+    assert prepare.start_ns <= encoded_at[0] and prepare.end_ns >= encoded_at[-1]
 
 
 def test_records_infer_span_when_inference_raises(tmp_path, open_session):
@@ -465,7 +467,7 @@ def test_records_infer_span_when_inference_raises(tmp_path, open_session):
         with pytest.raises(TimeoutError):
             round_trip(session, rt, {keys.OBS_TIME_NS: 0})
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
+    assert telemetry_keys.SPAN_POLICY_INFER in {s.name for s in spans}
 
 
 def test_missing_declaration_fails_before_motion():

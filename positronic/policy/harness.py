@@ -86,7 +86,16 @@ class _EpisodeInference:
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._rollout.rt.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._rollout.session(frozen_view(self._owned(obs)), now_ns)
+        # FOOTGUN: recorded, not entered. Entering it re-parents ``policy.infer``, which the pass report
+        # reads off the episode's own children.
+        call_start_ns = time.time_ns()
+        trajectory = None
+        try:
+            trajectory = self._rollout.session(frozen_view(self._owned(obs)), now_ns)
+        finally:
+            inferred = {telemetry_keys.ATTR_POLICY_INFERRED: trajectory is not None}
+            telemetry.record_span(telemetry_keys.SPAN_POLICY_CALL, call_start_ns, time.time_ns(), **inferred)
+        return trajectory
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
@@ -403,6 +412,12 @@ class Harness(pimm.ControlSystem):
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        # FOOTGUN: outside the handler that seals the episode span — leaving this scope shuts the provider
+        # down, and a span ended after that is dropped. Inert unless the env vars are set.
+        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
+            yield from self._guarded(should_stop, clock)
+
+    def _guarded(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
