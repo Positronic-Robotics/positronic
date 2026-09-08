@@ -2658,3 +2658,42 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
     assert not _emitted_commands(cmd_recorder)
+
+
+@pytest.mark.timeout(5.0)
+def test_the_episode_span_carries_the_same_waypoint_account_as_the_meta(world, tmp_path):
+    """Under ``telemetry.bind`` the episode span carries the waypoint totals over every command channel, and
+    they are the episode statics' own per-channel figures added up: one measurement, two sinks."""
+    policy = ChunkPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['perform_task'], Task(instruction_source='t', timeout_sec=None)), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.05),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.0),
+        (None, 0.02),
+    ])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-waypoints'), _eval_pass('run-waypoints'):
+        drive_scheduler(world.start([harness, driver]), steps=200)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    attrs = episodes[0].attrs
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_EMITTED] > 0, 'the episode played no waypoint'
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_LATE_SUM_MS] >= 0.0
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_LATE_MAX_MS] >= 0.0
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
+    channels = (keys.ROBOT_COMMAND, keys.TARGET_GRIP)
+    for attr, field in (
+        (telemetry_keys.ATTR_WAYPOINTS_SCHEDULED, eval_keys.SCHEDULED),
+        (telemetry_keys.ATTR_WAYPOINTS_EMITTED, eval_keys.EMITTED),
+        (telemetry_keys.ATTR_WAYPOINTS_DROPPED, eval_keys.DROPPED),
+    ):
+        assert attrs[attr] == sum(meta[_schedule_key(channel, field)] for channel in channels)

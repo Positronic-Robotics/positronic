@@ -131,29 +131,29 @@ class _EpisodeTelemetry:
     def step(self) -> None:
         self._steps += 1
 
-    def end(self, virtual_now: float) -> None:
-        """Close the rollout, stamped with its step count and its virtual duration up to ``virtual_now`` —
-        captured when the rollout ended, before the flush round advances the sim clock."""
+    def end(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
+        """Close the rollout, stamped with its step count, its waypoint account and its virtual duration up to
+        ``virtual_now`` — captured when the rollout ended, before the flush round advances the sim clock."""
         if self._span is None:
             return
-        self._close(virtual_now)
+        self._close(virtual_now, waypoint_attrs)
         telemetry.force_flush()
 
-    def seal(self, virtual_now: float) -> None:
+    def seal(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
         """Close a rollout abandoned mid-flight by a raising ``reset`` / ``new_session`` / session call, marked
         ``episode.partial`` so the reduce keeps it. Ending it is what exports it: the batch processor drops an
         unended span, orphaning the finished children and losing their phases."""
         if self._span is None:
             return
         telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_PARTIAL: True})
-        self.end(virtual_now)
+        self.end(virtual_now, waypoint_attrs)
 
-    def _close(self, virtual_now: float) -> None:
+    def _close(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
         # A rollout that never started — a prepare that raised — has zero virtual duration.
         virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
         assert self._span is not None
         attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
-        telemetry.set_attrs(self._span, **attrs)
+        telemetry.set_attrs(self._span, **attrs, **waypoint_attrs)
         self._end_span()
 
     def _end_span(self) -> None:
@@ -180,6 +180,7 @@ class _ScheduleFidelity:
         self._scheduled = 0
         self._emitted = 0
         self._dropped = 0
+        self._late_sum_ns = 0
         self._max_late_ns = 0
         self._late_bins = [0] * (_LATE_BINS_MS + 1)
 
@@ -190,8 +191,29 @@ class _ScheduleFidelity:
         """Record a round that emitted the newest of ``popped`` due waypoints, ``late_ns`` past its due time."""
         self._emitted += 1
         self._dropped += popped - 1
+        self._late_sum_ns += late_ns
         self._max_late_ns = max(self._max_late_ns, late_ns)
         self._late_bins[min(late_ns // 1_000_000, _LATE_BINS_MS)] += 1
+
+    def merge(self, other: '_ScheduleFidelity') -> None:
+        """Fold another channel's account into this one, so an episode's totals read off a single account."""
+        self._scheduled += other._scheduled
+        self._emitted += other._emitted
+        self._dropped += other._dropped
+        self._late_sum_ns += other._late_sum_ns
+        self._max_late_ns = max(self._max_late_ns, other._max_late_ns)
+        self._late_bins = [own + theirs for own, theirs in zip(self._late_bins, other._late_bins, strict=True)]
+
+    def span_attrs(self) -> dict[str, Any]:
+        """The account as episode-span attributes. Lateness rides as a sum and a maximum, which the offline
+        reduce totals across episodes exactly, where a percentile would not survive being averaged."""
+        return {
+            telemetry_keys.ATTR_WAYPOINTS_SCHEDULED: self._scheduled,
+            telemetry_keys.ATTR_WAYPOINTS_EMITTED: self._emitted,
+            telemetry_keys.ATTR_WAYPOINTS_DROPPED: self._dropped,
+            telemetry_keys.ATTR_WAYPOINTS_LATE_SUM_MS: self._late_sum_ns / 1e6,
+            telemetry_keys.ATTR_WAYPOINTS_LATE_MAX_MS: self._max_late_ns / 1e6,
+        }
 
     def meta(self, prefix: str) -> dict[str, Any]:
         """The episode's account under ``prefix``, empty for a channel the trajectory never named."""
@@ -295,6 +317,13 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = self._task.instruction
         return meta
 
+    def _episode_waypoints(self) -> _ScheduleFidelity:
+        """Every command channel's account for this episode, in one."""
+        total = _ScheduleFidelity()
+        for fidelity in self._fidelity.values():
+            total.merge(fidelity)
+        return total
+
     def _ready(
         self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, args: dict[str, Any]
     ) -> Generator[pimm.Command, None, None]:
@@ -338,7 +367,7 @@ class Harness(pimm.ControlSystem):
         # The episode span must still be open while the recorder writes the STOP, so that write is timed
         # inside the episode. The other control systems run in that round as well, and the episode is timed
         # with their work too. The error is not more than one control period.
-        self._telemetry.end(virtual_now)
+        self._telemetry.end(virtual_now, self._episode_waypoints().span_attrs())
 
     def _set_deadline(self, deadline_ns: int | None) -> None:
         """Arm the live episode's deadline and publish it, so the enforced one and the published one agree."""
@@ -471,7 +500,7 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
-            self._telemetry.seal(clock.now())
+            self._telemetry.seal(clock.now(), self._episode_waypoints().span_attrs())
             if self._call is not None:
                 self._call.set_exception(exc)
                 self._call = None
