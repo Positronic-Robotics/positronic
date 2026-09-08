@@ -201,8 +201,9 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
 def bind_from_env(process: str):
     """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
 
-    The directory turns recording on. A fixed run id in an operator's environment would merge two runs
-    into a single file under a single name, so an unset one is minted here instead.
+    The directory turns recording on, and the run names the file: two runs against one directory each
+    get their own sidecar. An unset run id is minted, so a directory left set across runs separates them
+    without the operator having to think about it; a run id deliberately shared groups them again.
 
     Inert while the directory is unset, and while a provider is already bound.
     """
@@ -210,7 +211,9 @@ def bind_from_env(process: str):
     if directory is None or _provider is not None:
         return nullcontext()
     run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
-    return _bind_to(Path(directory) / f'{process}{SPANS_SUFFIX}', process, run_id)
+    # The reduce globs the suffix and reads the process from each file's resource block, so qualifying
+    # the name by run costs it nothing.
+    return _bind_to(Path(directory) / f'{process}.{run_id}{SPANS_SUFFIX}', process, run_id)
 
 
 def force_flush() -> None:

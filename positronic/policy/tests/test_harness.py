@@ -1964,8 +1964,9 @@ def test_seal_exports_when_the_harness_owns_the_provider(world, tmp_path, monkey
             for call in scene.incoming():
                 call.set_exception(RuntimeError('reset boom'))
 
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    # `bind_from_env` names the sidecar per run, so the reduce's own glob is what finds it.
+    (path,) = (tmp_path / telemetry.TELEMETRY_SUBDIR).glob(f'*{telemetry.SPANS_SUFFIX}')
+    episodes = [s for s in telemetry.read_spans(path) if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     assert episodes[0].attrs.get(telemetry_keys.ATTR_EPISODE_PARTIAL) is True
 
