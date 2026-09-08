@@ -60,17 +60,17 @@ tasks:
   - task_id: marker-in-mug               # a mapping overrides for that task alone
     episodes_per_endpoint: 2
     cap_per_episode_sec: 120
-    endpoints: [ziyi]                    # a list replaces the plan's list for this task
+    endpoints: [candidate]                    # a list replaces the plan's list for this task
 endpoints:
-  - name: gyros
-    url: wss://gyros.example/ws
-  - name: ziyi
-    url: wss://ziyi.example/ws
+  - name: baseline
+    url: wss://baseline.example/ws
+  - name: candidate
+    url: wss://candidate.example/ws
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
 max_cap_per_episode_sec: 300
-policy_preset: runway_ziyi
+policy_preset: example_candidate
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
@@ -105,7 +105,7 @@ uv run positronic account register --alias=<display name>
 export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>

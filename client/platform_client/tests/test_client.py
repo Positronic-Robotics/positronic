@@ -524,7 +524,7 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 
 PLAN = EvalPlan(
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
-    endpoints=[Endpoint(name='gyros', url='wss://gyros.example/ws')],
+    endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
     episodes_per_endpoint=10,
 )
 
@@ -542,9 +542,9 @@ def test_evals_run_posts_the_plan_and_parses_the_id():
     body = gateway.body()
     assert body['tasks'][0]['task_id'] == 'eight-spoons-into-grey-tote'
     assert body['endpoints'][0] == {
-        'name': 'gyros',
+        'name': 'baseline',
         'kind': 'remote',
-        'url': 'wss://gyros.example/ws',
+        'url': 'wss://baseline.example/ws',
         'provider': None,
         'spec': None,
         'episodes_per_endpoint': None,

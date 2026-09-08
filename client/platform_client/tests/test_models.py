@@ -111,17 +111,17 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
-            'endpoints': ['gyros', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
         },
     ],
     'endpoints': [
-        {'name': 'gyros', 'url': 'wss://gyros.example/ws'},
+        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
         {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
     ],
     'episodes_per_endpoint': 10,
     'cap_per_episode_sec': 180,
     'max_cap_per_episode_sec': 300,
-    'policy_preset': 'runway_ziyi',
+    'policy_preset': 'example_candidate',
     'tote_placement': 'left',
     'clutter': {'count_min': 2, 'count_max': 6},
     'transaction_key': 'round-1',
@@ -132,7 +132,7 @@ VIEW = PlanView(
     status=PlanStatus.running,
     episodes=EpisodeCounts(total=24, done=3, outstanding=21),
     runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
-    artifacts='s3://inference/runway/040926/ziyi-0/',
+    artifacts='s3://inference/example/040926/candidate-0/',
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)

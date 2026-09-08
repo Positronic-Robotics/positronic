@@ -15,16 +15,16 @@ from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
-GYROS = 'wss://gyros.example/ws'
-ZIYI = 'wss://ziyi.example/ws'
+BASELINE = 'wss://baseline.example/ws'
+CANDIDATE = 'wss://candidate.example/ws'
 FILED = {'plan_id': '2a', 'status': 'received'}
 
 FLAGS = {
-    'policy_url': f'gyros={GYROS},ziyi={ZIYI}',
+    'policy_url': f'baseline={BASELINE},candidate={CANDIDATE}',
     'tasks': f'{SPOONS},{MUG}',
     'episodes': 10,
     'cap': 180,
-    'preset': 'runway_ziyi',
+    'preset': 'example_candidate',
     'scene': 'tote_placement=random,camera.side=left',
 }
 
@@ -39,8 +39,8 @@ PLAN_YAML = f"""
 tasks:
   - {SPOONS}
 endpoints:
-  - name: gyros
-    url: {GYROS}
+  - name: baseline
+    url: {BASELINE}
 episodes_per_endpoint: 4
 """
 
@@ -56,10 +56,13 @@ def test_the_flags_state_a_plan_and_it_is_filed(platform, run_command, capsys):
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
     body = platform.body
     assert [task['task_id'] for task in body['tasks']] == [SPOONS, MUG]
-    assert [(entry['name'], entry['url']) for entry in body['endpoints']] == [('gyros', GYROS), ('ziyi', ZIYI)]
+    assert [(entry['name'], entry['url']) for entry in body['endpoints']] == [
+        ('baseline', BASELINE),
+        ('candidate', CANDIDATE),
+    ]
     assert body['episodes_per_endpoint'] == 10
     assert body['cap_per_episode_sec'] == 180
-    assert body['policy_preset'] == 'runway_ziyi'
+    assert body['policy_preset'] == 'example_candidate'
     assert body['tote_placement'] == 'random'
     assert body['external_cameras'] == {'side': 'left'}
     assert json.loads(capsys.readouterr().out)['plan_id'] == '2a'
@@ -69,7 +72,9 @@ def test_a_bracketed_list_states_the_same_plan_as_the_comma_form(platform, run_c
     # A CLI value is literal-evaluated, so `[a,b]` arrives as a list where the entries read as
     # names and as text where they do not. Both spell one plan.
     platform.answer(FILED)
-    run_command(run, **{**FLAGS, 'tasks': [SPOONS, MUG], 'policy_url': [f'gyros={GYROS}', f'ziyi={ZIYI}']})
+    run_command(
+        run, **{**FLAGS, 'tasks': [SPOONS, MUG], 'policy_url': [f'baseline={BASELINE}', f'candidate={CANDIDATE}']}
+    )
     from_list = platform.body
 
     platform.answer(FILED)
@@ -81,11 +86,11 @@ def test_a_bracketed_list_states_the_same_plan_as_the_comma_form(platform, run_c
 def test_a_bare_policy_url_is_named_for_its_place_in_the_list(platform, run_command):
     platform.answer(FILED)
 
-    run_command(run, policy_url=f'{GYROS},{ZIYI}', tasks=SPOONS, episodes=2)
+    run_command(run, policy_url=f'{BASELINE},{CANDIDATE}', tasks=SPOONS, episodes=2)
 
     assert [(entry['name'], entry['url']) for entry in platform.body['endpoints']] == [
-        ('policy1', GYROS),
-        ('policy2', ZIYI),
+        ('policy1', BASELINE),
+        ('policy2', CANDIDATE),
     ]
 
 
@@ -112,7 +117,11 @@ def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
     }
 
 
-PLAN_JSON = json.dumps({'tasks': [SPOONS], 'endpoints': [{'name': 'gyros', 'url': GYROS}], 'episodes_per_endpoint': 4})
+PLAN_JSON = json.dumps({
+    'tasks': [SPOONS],
+    'endpoints': [{'name': 'baseline', 'url': BASELINE}],
+    'episodes_per_endpoint': 4,
+})
 
 
 @pytest.mark.parametrize(('name', 'payload'), [('plan.yaml', PLAN_YAML), ('plan.json', PLAN_JSON)])
@@ -170,24 +179,24 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
 def test_an_eval_name_that_is_no_file_is_refused_on_the_rig(platform, run_command):
     # The rig runs a plan, and `EvalPlan` carries no eval name, so a name reaches nothing there.
     with pytest.raises(SystemExit, match='names no plan file'):
-        run_command(run, eval='fake.smoke', policy_url=GYROS, tasks=SPOONS, episodes=1)
+        run_command(run, eval='fake.smoke', policy_url=BASELINE, tasks=SPOONS, episodes=1)
     assert platform.seen is None
 
 
 def test_a_rig_run_states_its_tasks_its_endpoints_and_its_count(platform, run_command):
     with pytest.raises(SystemExit, match='--tasks, --policy-url and --episodes'):
-        run_command(run, policy_url=GYROS, episodes=1)
+        run_command(run, policy_url=BASELINE, episodes=1)
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('rig_only', [{'policy_url': GYROS}, {'tasks': SPOONS}, {'episodes': 4}, {'cap': 60}])
+@pytest.mark.parametrize('rig_only', [{'policy_url': BASELINE}, {'tasks': SPOONS}, {'episodes': 4}, {'cap': 60}])
 def test_a_local_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
     with pytest.raises(SystemExit, match='a local run has no'):
         run_command(run, eval='fake.smoke', policy='a policy', **rig_only)
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('rig_only', [{'policy_url': GYROS}, {'preset': 'p'}, {'scene': 'tote_placement=left'}])
+@pytest.mark.parametrize('rig_only', [{'policy_url': BASELINE}, {'preset': 'p'}, {'scene': 'tote_placement=left'}])
 def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
     with pytest.raises(SystemExit, match='a platform run has no'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', **rig_only)
@@ -197,7 +206,7 @@ def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_comma
 @pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'alias': 'demo'}])
 def test_a_rig_run_refuses_what_only_another_half_can_mean(platform, run_command, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
-        run_command(run, policy_url=GYROS, tasks=SPOONS, episodes=1, **elsewhere)
+        run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)
     assert platform.seen is None
 
 
@@ -217,7 +226,7 @@ def test_a_transaction_key_makes_a_retry_return_the_first_plan(platform, run_com
 
 def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(platform, run_command):
     with pytest.raises(SystemExit, match='not a task id'):
-        run_command(run, policy_url=GYROS, tasks='Eight Spoons', episodes=1)
+        run_command(run, policy_url=BASELINE, tasks='Eight Spoons', episodes=1)
     assert platform.seen is None
 
 
@@ -250,8 +259,8 @@ def test_a_repeatable_flag_read_as_a_number_is_refused():
 
 
 def test_a_labelled_url_takes_its_label():
-    assert endpoint_of(f'gyros={GYROS}', 1) == {'name': 'gyros', 'url': GYROS}
-    assert endpoint_of(GYROS, 3) == {'name': 'policy3', 'url': GYROS}
+    assert endpoint_of(f'baseline={BASELINE}', 1) == {'name': 'baseline', 'url': BASELINE}
+    assert endpoint_of(BASELINE, 3) == {'name': 'policy3', 'url': BASELINE}
 
 
 def test_scene_pairs_become_the_plans_own_fields():

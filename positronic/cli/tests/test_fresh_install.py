@@ -192,7 +192,7 @@ DOCUMENTED_COMMANDS = {
         'positronic',
         'eval',
         'run',
-        '--policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws',
+        '--policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws',
         f'--tasks={TASK}',
         '--episodes=10',
         '--cap=180',

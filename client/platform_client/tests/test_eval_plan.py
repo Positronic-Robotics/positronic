@@ -10,12 +10,12 @@ from pydantic import ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
-GYROS = {'name': 'gyros', 'url': 'wss://gyros.example/ws'}
-ZIYI = {'name': 'ziyi', 'url': 'wss://ziyi.example/ws'}
+BASELINE = {'name': 'baseline', 'url': 'wss://baseline.example/ws'}
+CANDIDATE = {'name': 'candidate', 'url': 'wss://candidate.example/ws'}
 
 
 def a_plan(**over) -> EvalPlan:
-    fields = {'tasks': [SPOONS], 'endpoints': [GYROS, ZIYI], 'episodes_per_endpoint': 10}
+    fields = {'tasks': [SPOONS], 'endpoints': [BASELINE, CANDIDATE], 'episodes_per_endpoint': 10}
     return EvalPlan.model_validate({**fields, **over})
 
 
@@ -25,10 +25,10 @@ def test_the_plan_count_reaches_every_leaf():
 
 
 def test_a_task_overrides_the_plan_and_an_endpoint_overrides_the_task():
-    plan = a_plan(tasks=[SPOONS, {'task_id': MUG, 'episodes_per_endpoint': 2, 'endpoints': ['ziyi']}])
+    plan = a_plan(tasks=[SPOONS, {'task_id': MUG, 'episodes_per_endpoint': 2, 'endpoints': ['candidate']}])
     mug = plan.tasks[1]
     assert mug.endpoints is not None
-    assert plan.task_endpoints(mug) == [Endpoint(name='ziyi')]
+    assert plan.task_endpoints(mug) == [Endpoint(name='candidate')]
     assert plan.episodes_on(mug, mug.endpoints[0]) == 2
     assert plan.resolved_episodes_total == 22
 
@@ -36,8 +36,8 @@ def test_a_task_overrides_the_plan_and_an_endpoint_overrides_the_task():
 def test_a_plan_endpoint_count_beats_the_task_count_for_a_bare_label():
     """The definition the label names states the count for that endpoint on every task it runs."""
     plan = a_plan(
-        tasks=[{'task_id': MUG, 'episodes_per_endpoint': 2, 'endpoints': ['ziyi']}],
-        endpoints=[GYROS, {**ZIYI, 'episodes_per_endpoint': 12}],
+        tasks=[{'task_id': MUG, 'episodes_per_endpoint': 2, 'endpoints': ['candidate']}],
+        endpoints=[BASELINE, {**CANDIDATE, 'episodes_per_endpoint': 12}],
     )
     mug = plan.tasks[0]
     assert mug.endpoints is not None
@@ -51,15 +51,15 @@ def test_a_stated_checksum_must_match_the_leaves():
 
 
 def test_a_bare_task_id_and_a_bare_endpoint_label_are_the_short_forms():
-    plan = a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['gyros']}])
+    plan = a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['baseline']}])
     spoons = plan.tasks[0]
-    assert spoons == TaskNode(task_id=TaskRef(SPOONS), endpoints=[Endpoint(name='gyros')])
+    assert spoons == TaskNode(task_id=TaskRef(SPOONS), endpoints=[Endpoint(name='baseline')])
     assert spoons.endpoints is not None and spoons.endpoints[0].kind is EndpointKind.remote
 
 
 def test_a_plan_states_a_count():
     with pytest.raises(ValidationError, match='states episodes_per_endpoint'):
-        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [GYROS]})
+        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE]})
 
 
 def test_a_task_label_names_a_plan_endpoint():
@@ -69,7 +69,7 @@ def test_a_task_label_names_a_plan_endpoint():
 
 def test_an_endpoint_overrides_only_its_count():
     with pytest.raises(ValidationError, match='per-task properties'):
-        a_plan(endpoints=[{**GYROS, 'cap_per_episode_sec': 60}])
+        a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
 
 
 def test_a_served_endpoint_names_its_bring_up_and_no_url():
@@ -148,35 +148,37 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
 
 def test_a_remote_endpoint_names_no_bring_up():
     with pytest.raises(ValidationError, match='only a served endpoint carries'):
-        Endpoint(name='gyros', provider='droid_cohost')
+        Endpoint(name='baseline', provider='droid_cohost')
 
 
 def test_an_endpoint_url_names_a_host():
     """An address with no host reaches nothing, and it counts as a locator all the way to the
     platform, which refuses the plan after it is filed."""
     with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='gyros', url='/ws')
+        Endpoint(name='baseline', url='/ws')
     with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='gyros', url='gyros.example/ws')
+        Endpoint(name='baseline', url='baseline.example/ws')
 
 
-@pytest.mark.parametrize('url', ['wss://gyros.example/ws', 'https://gyros.example/ws', 'http://localhost:8080/ws'])
+@pytest.mark.parametrize(
+    'url', ['wss://baseline.example/ws', 'https://baseline.example/ws', 'http://localhost:8080/ws']
+)
 def test_an_absolute_endpoint_url_is_left_alone(url: str):
     """The boundary: the scheme is the platform's to judge — it dials wss:// as readily as https://
     — so this refuses an address with no host and nothing else."""
-    assert Endpoint(name='gyros', url=url).url == url
+    assert Endpoint(name='baseline', url=url).url == url
 
 
 def test_an_endpoint_says_whether_it_names_a_locator():
-    assert Endpoint(name='gyros').names_a_locator is False
-    assert Endpoint(name='gyros', url='wss://x/ws').names_a_locator is True
+    assert Endpoint(name='baseline').names_a_locator is False
+    assert Endpoint(name='baseline', url='wss://x/ws').names_a_locator is True
 
 
 def test_a_plan_names_each_task_and_each_endpoint_once():
     with pytest.raises(ValidationError, match='more than once'):
         a_plan(tasks=[SPOONS, SPOONS])
     with pytest.raises(ValidationError, match='more than once'):
-        a_plan(endpoints=[GYROS, GYROS])
+        a_plan(endpoints=[BASELINE, BASELINE])
     with pytest.raises(ValidationError, match='more than once'):
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': [{'name': 'e'}, {'name': 'e'}]})
 

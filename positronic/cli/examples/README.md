@@ -27,7 +27,7 @@ lab rig:
 
 ```bash
 uv run positronic eval catalog
-uv run positronic eval run --policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
 ```
 
 Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode
