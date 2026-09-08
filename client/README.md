@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.6.0"
+uv add "positronic-platform-client==0.7.0"
 ```
 
 `platform_client` never imports `positronic`. One command ships here, `platform-register`, which

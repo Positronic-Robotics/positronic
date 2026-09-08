@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from platform_client import config as config_module
 from platform_client import routes
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.ids import ApiKey
@@ -58,6 +59,17 @@ def test_a_registration_goes_to_the_platform_it_names_whatever_the_record_holds(
     assert platform.base_url == 'http://other.test'
     assert platform.request.url.path == routes.USERS_REGISTER
     assert 'authorization' not in platform.request.headers
+
+
+def test_a_config_directory_that_cannot_be_named_stops_before_a_key_is_minted(platform, run_command, monkeypatch):
+    # A key is minted once. Resolving the destination after the mint would spend it on a record the
+    # command cannot write, and a retry without --rotate answers `existing` with no key.
+    monkeypatch.setenv(config_module.CONFIG_DIR_ENV, '   ')
+
+    with pytest.raises(SystemExit, match='set to an empty value'):
+        run_command(register, platform_url='http://other.test')
+
+    assert platform.seen is None
 
 
 def test_a_registration_naming_its_platform_reads_no_key_and_no_record(platform, run_command, monkeypatch):

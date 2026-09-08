@@ -539,6 +539,26 @@ def test_a_plain_http_gateway_client_ignores_an_environment_proxy(platform_url: 
     assert gateway['trust_env'] is trusts_env
 
 
+def test_run_registration_gates_the_url_itself():
+    """A direct caller reaches no transport with a URL the gate refuses: the check is inside."""
+    reached: list[object] = []
+
+    def record(**kwargs: Any) -> httpx.Client:
+        reached.append(kwargs)
+        raise AssertionError('the token must not reach a client on a refused URL')
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(httpx, 'Client', record)
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.run_registration(
+                'x', 'http://gateway.example', alias=None, rotate=False, plaintext_http=False
+            )
+
+    assert 'in the clear' in str(raised.value)
+    assert reached == []
+
+
 def test_the_command_refuses_a_platform_that_would_show_the_token():
     """A shared-address http platform never sees the GitHub token: the command stops before the code."""
     reached: list[object] = []

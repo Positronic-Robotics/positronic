@@ -240,6 +240,13 @@ class EvalPlan(Cascade):
                 f'the plan defines {", ".join(bare)} with no url and no spec: an endpoint of the plan states '
                 'where its policy comes from, and a bare label on a task names one'
             )
+        if self.names_an_eval and not self.tasks and not self.endpoints:
+            # The catalogue supplies the tasks of a named eval, so the loop below reads nothing and
+            # every other check passes. The plan still has to say what runs them.
+            raise ValueError(
+                f'the plan names {self.eval} and defines no endpoint: the catalogue supplies its tasks, '
+                'and the plan supplies the policy that runs them'
+            )
         defined = {entry.name for entry in self.endpoints}
         for task in self.tasks:
             if task.endpoints is None and not self.endpoints:

@@ -169,6 +169,29 @@ def test_a_plan_file_carrying_a_transaction_key_takes_no_flag(platform, run_comm
     assert platform.seen is None
 
 
+def test_an_alias_beside_a_plan_file_is_filed_with_the_plan(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), alias='nightly')
+
+    assert platform.body['alias'] == 'nightly'
+
+
+def test_a_plan_file_carrying_an_alias_takes_no_flag(platform, run_command, tmp_path: Path):
+    named = PLAN_YAML + 'alias: nightly\n'
+    with pytest.raises(SystemExit, match='carries alias; drop --alias'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', named), alias='other')
+    assert platform.seen is None
+
+
+def test_the_rig_flags_state_an_alias(platform, run_command):
+    platform.answer(FILED)
+
+    run_command(run, **FLAGS, alias='nightly')
+
+    assert platform.body['alias'] == 'nightly'
+
+
 def test_a_plan_file_beside_a_policy_image_is_refused(platform, run_command, tmp_path: Path):
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
     with pytest.raises(SystemExit, match='names a plan file, and --policy-image'):
@@ -232,7 +255,7 @@ def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_comma
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'alias': 'demo'}])
+@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}])
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)

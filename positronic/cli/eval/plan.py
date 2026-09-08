@@ -10,8 +10,9 @@ from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
 
-# The plan field `--transaction-key` states beside a plan file.
+# The plan fields the command line states beside a plan file.
 TRANSACTION_KEY_FIELD = 'transaction_key'
+ALIAS_FIELD = 'alias'
 
 
 class _OneValuePerKey(yaml.SafeLoader):
@@ -29,11 +30,11 @@ class _OneValuePerKey(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-def read_plan(path: Path, transaction_key: str | None = None) -> EvalPlan:
+def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
     """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
 
-    `--transaction-key` is the one plan field the command line states beside a file: a key names
-    one filing, and the file names the plan. A file that carries its own key takes no flag.
+    `--transaction-key` and `--alias` are the plan fields the command line states beside a file: each
+    belongs to one filing, and the file names the plan. A file carrying either takes no flag for it.
     """
     try:
         payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
@@ -41,10 +42,12 @@ def read_plan(path: Path, transaction_key: str | None = None) -> EvalPlan:
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
         raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
-    if transaction_key is not None and isinstance(payload, dict):
-        if TRANSACTION_KEY_FIELD in payload:
-            raise SystemExit(f'{path} carries {TRANSACTION_KEY_FIELD}; drop --transaction-key')
-        payload = {**payload, TRANSACTION_KEY_FIELD: transaction_key}
+    for field, stated in ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias)):
+        if stated is None or not isinstance(payload, dict):
+            continue
+        if field in payload:
+            raise SystemExit(f'{path} carries {field}; drop --{field.replace("_", "-")}')
+        payload = {**payload, field: stated}
     try:
         return EvalPlan.model_validate(payload)
     except ValidationError as exc:
@@ -97,6 +100,7 @@ def plan_from_flags(
     cap: int | None,
     preset: str | None,
     transaction_key: str | None,
+    alias: str | None = None,
 ) -> EvalPlan:
     """The plan the rig flags state."""
     task_ids = flag_entries(tasks, '--tasks')
@@ -110,6 +114,7 @@ def plan_from_flags(
         'cap_per_episode_sec': cap,
         'policy_preset': preset,
         'transaction_key': transaction_key,
+        'alias': alias,
     }
     try:
         return EvalPlan.model_validate(payload)

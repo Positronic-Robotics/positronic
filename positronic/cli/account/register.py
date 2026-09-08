@@ -18,6 +18,9 @@ def register(alias: str | None = None, rotate: bool = False, platform_url: str |
     """
     with refusing_bad_input():
         request = RegisterRequest(credential=credential(), alias=alias, rotate=rotate)
+    # A key is minted once and cannot be fetched again, so the destination is named before the
+    # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
+    directory = config_dir(os.environ)
     with gateway(platform_url, key_required=False) as client:
         response = client.register(request)
         base_url = client.base_url
@@ -25,7 +28,6 @@ def register(alias: str | None = None, rotate: bool = False, platform_url: str |
     if response.api_key is None:
         print('no key issued: one is minted on a first registration, or by --rotate')
         return
-    directory = config_dir(os.environ)
     try:
         write_config(directory, Config(platform_url=base_url, api_key=response.api_key))
     except OSError as exc:

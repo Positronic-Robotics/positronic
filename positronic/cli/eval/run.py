@@ -247,15 +247,22 @@ def _file_for_the_rig(
     cap: int | None,
     preset: str | None,
     transaction_key: str | None,
+    alias: str | None,
 ) -> SubmissionCreateResponse:
     """File the plan a file states, else the plan the flags state."""
     if source is not None:
         refusing_a_second_source(source, rig_only)
-        return file_plan(read_plan(source, transaction_key), platform_url)
+        return file_plan(read_plan(source, transaction_key, alias), platform_url)
     if eval is not None:
         raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
     plan = plan_from_flags(
-        policy_url=policy_url, tasks=tasks, episodes=episodes, cap=cap, preset=preset, transaction_key=transaction_key
+        policy_url=policy_url,
+        tasks=tasks,
+        episodes=episodes,
+        cap=cap,
+        preset=preset,
+        transaction_key=transaction_key,
+        alias=alias,
     )
     return file_plan(plan, platform_url)
 
@@ -348,8 +355,8 @@ def run(
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
     if source is not None or any(given(value) for value in rig_only.values()):
-        # The rig records under the client's own prefix, and a plan carries no alias.
-        _refuse({**local_only, '--alias': alias}, 'rig')
+        # The rig records under the client's own prefix, so it has no output of its own to name.
+        _refuse(local_only, 'rig')
         return _file_for_the_rig(
             eval,
             source,
@@ -361,6 +368,7 @@ def run(
             cap=cap,
             preset=preset,
             transaction_key=transaction_key,
+            alias=alias,
         )
 
     raise SystemExit(_NO_POLICY_NAMED)

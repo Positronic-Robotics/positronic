@@ -263,6 +263,18 @@ def test_every_task_runs_on_at_least_one_endpoint():
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': []})
 
 
+def test_a_plan_naming_an_eval_states_the_policy_that_runs_it():
+    # The catalogue supplies a named eval's tasks, so `tasks` is empty and the per-task endpoint
+    # check reads nothing. Without this the plan files with no policy at all.
+    with pytest.raises(ValidationError, match='defines no endpoint'):
+        EvalPlan.model_validate({'eval': 'robolab.public_subset'})
+    # One plan-level endpoint is enough, which is the shape `plan_of_image` builds.
+    EvalPlan.model_validate({
+        'eval': 'robolab.public_subset',
+        'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}],
+    })
+
+
 def test_a_count_below_one_is_refused_at_every_level():
     with pytest.raises(ValidationError):
         a_plan(episodes_per_endpoint=0)

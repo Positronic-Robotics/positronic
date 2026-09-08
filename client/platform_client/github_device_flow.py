@@ -336,13 +336,20 @@ def allowed_platform_url(platform_url: str | None, *, plaintext_http: bool) -> s
     return base_url
 
 
-def run_registration(client_id: str | None, base_url: str, *, alias: str | None, rotate: bool) -> RegisterResponse:
-    """Register with `base_url` through GitHub's device flow, or a `SystemExit` with one line saying what stopped it."""
+def run_registration(
+    client_id: str | None, platform_url: str | None, *, alias: str | None, rotate: bool, plaintext_http: bool = False
+) -> RegisterResponse:
+    """Register through GitHub's device flow, or a `SystemExit` with one line saying what stopped it.
+
+    This resolves the platform itself, so no caller can reach the transport with a URL the gate
+    would refuse: the token goes to the link `plaintext_http` names, or to none.
+    """
     if not client_id:
         # GitHub answers an empty id with an error that names nothing, so an empty override stops here.
         raise SystemExit(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
+    base_url = allowed_platform_url(platform_url, plaintext_http=plaintext_http)
     github = httpx.Client(timeout=REQUEST_TIMEOUT)
-    # An environment proxy would carry a plain-http token off the machine, past the URL gate above.
+    # An environment proxy would carry a plain-http token off the machine, past the URL gate.
     gateway = httpx.Client(base_url=base_url, timeout=REGISTER_TIMEOUT, trust_env=httpx.URL(base_url).scheme == 'https')
     with github, gateway, PlatformClient(client=gateway) as platform:
         try:
@@ -370,8 +377,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_arguments(parser)
     args = parser.parse_args()
-    base_url = allowed_platform_url(args.platform_url, plaintext_http=args.plaintext_http)
-    response = run_registration(args.client_id, base_url, alias=args.alias, rotate=args.rotate)
+    response = run_registration(
+        args.client_id, args.platform_url, alias=args.alias, rotate=args.rotate, plaintext_http=args.plaintext_http
+    )
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
