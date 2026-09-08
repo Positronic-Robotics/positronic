@@ -20,7 +20,7 @@ class TaskSummary(BaseModel):
     `tote_placement` and `external_cameras` list the sides a plan may choose, or ask `random` to
     draw from. `external_cameras` is keyed by the mount name the task defines.
     `default_cap_per_episode_sec` applies when the plan states no cap. `clutter` applies when the
-    plan states none; absent, the table is laid bare.
+    plan states none; a task carrying neither draws no clutter objects.
     """
 
     id: TaskRef
