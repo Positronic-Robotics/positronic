@@ -303,9 +303,9 @@ def run(
     eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
-    in a file (``--from-file``). Two or more ``--policy-url``
-    make one blind sample. Every place answers a submission id, which ``positronic eval status``
-    reads.
+    in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
+    the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads;
+    a run here answers the dataset it wrote.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
