@@ -572,12 +572,19 @@ def test_every_status_a_caller_can_see_is_kept(status: str):
 
 
 def test_only_the_blocked_view_says_what_a_run_waits_on():
-    # `reason` lives on the one variant it can be true of, so no status check is needed to keep it
-    # off the others: a running payload carrying one selects a variant that declares no such field.
+    # `reason` lives on the one variant it can be true of. A response model IGNORES a field it does
+    # not declare, so another variant does not refuse a stray `reason`, it drops it — which is what
+    # lets a newer gateway add a field without breaking this client.
     blocked = {'id': '2a', 'status': 'blocked', 'reason': 'the rig is not ready'}
     assert SUBMISSION_VIEWS.validate_python(blocked).reason == 'the rig is not ready'
-    with pytest.raises(ValidationError):
-        SUBMISSION_VIEWS.validate_python({**blocked, 'status': 'running'})
+    running = SUBMISSION_VIEWS.validate_python({
+        'id': '2a',
+        'status': 'running',
+        'running_since': AT,
+        'reason': 'the rig is not ready',
+    })
+    assert isinstance(running, RunningSubmissionView)
+    assert not hasattr(running, 'reason')
 
 
 def test_a_limit_below_one_is_refused():
