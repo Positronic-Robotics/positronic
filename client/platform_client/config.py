@@ -3,8 +3,7 @@
 `register` writes `config.json` under the config directory, mode 0600, holding the platform URL and
 the key together. A command reads the key from `POSITRONIC_PLATFORM_API_KEY`, else from the file
 `--api-key-file` names, else from that record; and the platform from its own argument, else
-`POSITRONIC_PLATFORM_URL`, else that record. The config directory is
-`POSITRONIC_PLATFORM_CONFIG_DIR`, else `~/.config/positronic-platform`.
+`POSITRONIC_PLATFORM_URL`, else that record.
 """
 
 from __future__ import annotations

@@ -1,8 +1,6 @@
 """`EvalPlan`: an eval to run — the tasks, the policies that run them, and the count per policy per task.
 
-The plan is the one definition of that shape. The rollouts coordinator's own record extends it with
-its bookkeeping (id, client, requester, channel, approval, runs) and adds no field of its own to
-the ask. Unknown fields are rejected: a typo'd field is a 422.
+The plan is the one definition of that shape. Unknown fields are rejected: a typo'd field is a 422.
 """
 
 from __future__ import annotations
@@ -152,8 +150,7 @@ class EvalPlan(Cascade):
 
     The plan states the count once; a task overrides it for itself, and an endpoint for itself. The
     plan carries no client: the key names the customer, and the gateway reads the client off their
-    grant. A named eval the platform offers is a plan the registry holds; this is the one a caller
-    composes.
+    grant. A named eval the platform offers is a plan the registry holds; a caller composes this one.
     """
 
     tasks: list[TaskNode] = Field(min_length=1)

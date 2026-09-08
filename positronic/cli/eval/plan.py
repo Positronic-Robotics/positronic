@@ -33,8 +33,8 @@ def repeated(value: object, flag: str) -> list[str]:
     """The entries of a flag that takes more than one, in either spelling the command line reaches.
 
     A CLI value is read with `ast.literal_eval`, which takes `[a,b]` as a list and keeps the text of
-    anything it cannot read — a hyphen or a `=` inside the brackets is enough. So splitting the text
-    on the comma is what makes `--tasks=[a,b]` and `--tasks=a-b,c-d` one list.
+    anything it cannot read — a hyphen or a `=` inside the brackets is enough. So this splits the
+    text on the comma, and `--tasks=[a,b]` and `--tasks=a-b,c-d` state one list.
     """
     if value is None:
         return []
