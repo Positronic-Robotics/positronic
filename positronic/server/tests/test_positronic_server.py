@@ -315,11 +315,11 @@ def test_a_static_export_tells_the_page_to_read_the_files_it_wrote(viewer, monke
 
 
 def test_a_title_stands_in_for_the_dataset_root(viewer, monkeypatch):
-    monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, PageConfig(title='Runway rollouts, 29 August'))
+    monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, PageConfig(title='Tote rollouts, 29 August'))
 
     for page in ['/', '/episode/0']:
         body = viewer.get(page).text
-        assert 'Runway rollouts, 29 August' in body
+        assert 'Tote rollouts, 29 August' in body
 
 
 def test_the_header_falls_back_to_the_dataset_root(viewer):
