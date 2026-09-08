@@ -220,6 +220,24 @@ def _configure(driver: Any, ip: str, timeout_s: float) -> None:
     driver.configure(trossen_arm.Model.wxai_v0, end_effector, ip, True, timeout_s)
 
 
+def _short_way(frm: geom.Rotation, to: geom.Rotation) -> np.ndarray:
+    """The rotation vector from ``frm`` to ``to``, the way round that turns least.
+
+    A quaternion and its negative are the same turn, and `as_rotvec` reads the negative one as nearly a
+    full turn the other way.
+    """
+    turn = (frm.inv * to).as_rotvec
+    angle = float(np.linalg.norm(turn))
+    return turn * (1.0 - 2.0 * np.pi / angle) if angle > np.pi else turn
+
+
+def _apart(frm: geom.Transform3D, to: geom.Transform3D) -> tuple[float, float]:
+    """How far ``to`` stands from ``frm``: metres, and radians the short way round."""
+    return float(np.linalg.norm(to.translation - frm.translation)), float(
+        np.linalg.norm(_short_way(frm.rotation, to.rotation))
+    )
+
+
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the controller handle, the reading it takes each tick, and the setpoint
     it holds the arm at.
@@ -265,6 +283,9 @@ class _Arm(DriverRun[command.CommandType]):
         # A cap tighter than that error refuses every one of those targets, so the error the controller
         # reports is the cap.
         self._jump_max = tolerance
+        # What a delta still owes: a delta is consumed once, and its travel takes more than the one step a
+        # streamed pose is paced to
+        self._travel_to: geom.Transform3D | None = None
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
@@ -356,6 +377,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_target = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
         self._anchor = None  # wherever the arm is now is what a Cartesian target steps on from
+        self._travel_to = None  # and nothing is owed the rest of a travel across a new session
         self._arm_unsent, self._grip_unsent = True, True
         self.write()
 
@@ -415,7 +437,7 @@ class _Arm(DriverRun[command.CommandType]):
             # Holding the target the arm stopped short of would resume the move once whatever blocked it
             # goes away, long after its asker was told it failed.
             self._target = self._wanted = self.q
-            self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
+            self._goal_time, self._arm_unsent, self._travel_to = _STREAM_GOAL_TIME_S, True, None
 
     def advance(self) -> None:
         """Move the setpoint one tick's travel towards the joints last asked for.
@@ -452,14 +474,10 @@ class _Arm(DriverRun[command.CommandType]):
     @staticmethod
     def _towards(frm: geom.Transform3D, to: geom.Transform3D, max_m: float, max_rad: float) -> geom.Transform3D:
         """``to``, brought within ``max_m`` and ``max_rad`` of ``frm``."""
-        step = to.translation - frm.translation
-        distance = float(np.linalg.norm(step))
+        step, turn = to.translation - frm.translation, _short_way(frm.rotation, to.rotation)
+        distance, angle = _apart(frm, to)
         if distance > max_m:
             step = step * (max_m / distance)
-        turn = (frm.rotation.inv * to.rotation).as_rotvec
-        angle = float(np.linalg.norm(turn))
-        if angle > np.pi:  # `as_rotvec` keeps the way round it was given; the other one is the short way
-            turn, angle = turn * (1.0 - 2.0 * np.pi / angle), 2.0 * np.pi - angle
         if angle > max_rad:
             turn = turn * (max_rad / angle)
         return geom.Transform3D(frm.translation + step, frm.rotation * geom.Rotation.from_rotvec(turn))
@@ -531,8 +549,31 @@ class _Arm(DriverRun[command.CommandType]):
         Held to what a joint may travel in a tick. Teleoperation is paced by the hand it follows, so this
         only bounds what one wild target can ask the arm for.
         """
+        # Read before `_target_of`, which steps the anchor a delta is measured from
+        is_delta = isinstance(cmd, command.CartesianDelta)
+        self._travel_to = cmd.apply(self.asked_pose) if is_delta else None
         self._wanted = self._target_of(cmd)
         self._goal_time = _STREAM_GOAL_TIME_S
+
+    def walk(self) -> None:
+        """Take one more step of the travel a delta asked for, where one is still owed.
+
+        A streamed pose is paced to a step a tick and a delta is consumed once, so a delta longer than that
+        step would arrive as that step and lose the rest. A pose asks for no travel: the next one supersedes
+        it, and an arm whose stream stops holds where it stands.
+        """
+        if self._travel_to is None or self._goal_time != _STREAM_GOAL_TIME_S:
+            return
+        distance, angle = _apart(self.asked_pose, self._travel_to)
+        goal, last = self._travel_to, distance <= _MAX_STEP_M and angle <= _MAX_STEP_RAD
+        if last:
+            self._travel_to = None
+        try:
+            self._wanted = self._target_of(command.CartesianPosition(goal))
+        # rules-allow: swallowed-error — a travel the arm cannot finish ends here, and the run outlives it
+        except ValueError as exc:
+            self._travel_to = None
+            self.complain(f'The arm at {self.ip} stopped short of {goal}: {exc}', key='travel refused')
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there.
@@ -545,6 +586,7 @@ class _Arm(DriverRun[command.CommandType]):
             target = self._target_of(call.request, streamed=False)
             travel = float(np.max(np.abs(target - self.q)))
             self._target = self._wanted = target
+            self._travel_to = None
             self._goal_time = max(_MIN_MOVE_TIME_S, travel / _MOVE_SPEED)
             self._arm_unsent = True
             self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
@@ -722,6 +764,8 @@ class Robot(pimm.ControlSystem):
                         # setpoint supersedes this one
                         except Exception as exc:
                             arm.complain(f'{asked} not applied: {exc}', key='setpoint refused')
+                    else:
+                        arm.walk()  # a delta asked for a travel, and nothing has superseded it
 
                     arm.advance()
                     arm.write()
