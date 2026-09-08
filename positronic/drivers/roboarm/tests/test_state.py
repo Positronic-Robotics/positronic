@@ -34,6 +34,8 @@ def test_the_state_says_how_to_build_it_again(n_joints):
 
     assert rebuilt.n_joints == n_joints
     assert rebuilt.array.shape == state.array.shape
+    with pytest.raises(AttributeError):  # the count is the layout's, and nothing else may set it
+        state.n_joints = n_joints + 1
 
 
 def test_a_reading_is_a_copy_of_what_the_buffer_holds():
