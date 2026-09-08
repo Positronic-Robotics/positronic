@@ -45,7 +45,7 @@ ATTR_PASS_FAILED = 'pass.failed'
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
 # Whether a `policy.call` came back with a trajectory. A round trip runs asynchronously, so the tick that
-# STARTS one answers False too; the tick that started it is the one carrying a `policy.encode`.
+# STARTS one answers False too; the tick that started it carries a `policy.encode`.
 ATTR_POLICY_ANSWERED = 'policy.answered'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)

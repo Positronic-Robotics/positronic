@@ -70,15 +70,15 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
-        with telemetry.span(telemetry_keys.SPAN_WIRE_SEND) as sending:
-            serialised = serialise(obs)
-            telemetry.set_attrs(sending, **{telemetry_keys.ATTR_WIRE_BYTES: len(serialised)})
-            self._websocket.send(serialised)
+        serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+        # Each span is the socket alone, so the pair reads as the uplink and then the wait the server's
+        # own time sits inside. An uplink too slow for the payload shows as a send outlasting its bytes.
+        wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
+            self._websocket.send(serialised)
 
         try:
-            # Splits the round trip into the upload and the wait: the server's own time is inside the wait,
-            # and an uplink too slow for the payload shows as a send that outlasts it.
             with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
                 response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
         except TimeoutError:
