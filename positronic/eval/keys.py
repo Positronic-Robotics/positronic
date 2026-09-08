@@ -1,4 +1,5 @@
-"""The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
+"""The keys a trial writes: what it readies, the conditions it runs under, how well the loop kept its
+schedule, and the verdict it ends on."""
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
 # is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
@@ -41,3 +42,17 @@ TRIAL_COUNT = 'eval.trial_count'
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
 # inside it.
 TASK = 'eval.task'
+
+# How well the loop kept the trajectory's schedule, per command channel, over the episode. A reader composes
+# the prefix, a channel and a field: f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. ``SCHEDULED`` counts every
+# waypoint the channel's schedule took, ``EMITTED`` the rounds that sent one and ``DROPPED`` the waypoints a
+# round overtook, so the rest is what a fresh chunk replaced before it came due. The lateness figures measure
+# an emitted waypoint against its own due time, in milliseconds; the percentiles are binned to the whole
+# millisecond, and only ``LATE_MAX_MS`` is exact.
+SCHEDULE = 'eval.schedule'
+SCHEDULED = 'scheduled'
+EMITTED = 'emitted'
+DROPPED = 'dropped'
+LATE_P50_MS = 'late_p50_ms'
+LATE_P90_MS = 'late_p90_ms'
+LATE_MAX_MS = 'late_max_ms'

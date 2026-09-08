@@ -163,6 +163,62 @@ class _EpisodeTelemetry:
         self._span = None
 
 
+# Lateness is binned to the whole millisecond up to this bound. Anything later shares the last bin, where
+# only the running maximum still separates it, so the bound must outlast the longest round worth resolving.
+_LATE_BINS_MS = 1000
+
+
+class _ScheduleFidelity:
+    """How well one episode's loop played the waypoints scheduled on one command channel.
+
+    A round emits only the newest waypoint that has come due, so a round longer than the control period
+    discards every earlier one it overtook. This counts those against what the schedule took, and bins how
+    far past its own due time each emitted waypoint went out.
+    """
+
+    def __init__(self) -> None:
+        self._scheduled = 0
+        self._emitted = 0
+        self._dropped = 0
+        self._max_late_ns = 0
+        self._late_bins = [0] * (_LATE_BINS_MS + 1)
+
+    def count_scheduled(self, waypoints: int) -> None:
+        self._scheduled += waypoints
+
+    def count_played(self, popped: int, late_ns: int) -> None:
+        """Record a round that emitted the newest of ``popped`` due waypoints, ``late_ns`` past its due time."""
+        self._emitted += 1
+        self._dropped += popped - 1
+        self._max_late_ns = max(self._max_late_ns, late_ns)
+        self._late_bins[min(late_ns // 1_000_000, _LATE_BINS_MS)] += 1
+
+    def meta(self, prefix: str) -> dict[str, Any]:
+        """The episode's account under ``prefix``, empty for a channel the trajectory never named."""
+        if self._scheduled == 0:
+            return {}
+        meta: dict[str, Any] = {
+            f'{prefix}.{eval_keys.SCHEDULED}': self._scheduled,
+            f'{prefix}.{eval_keys.EMITTED}': self._emitted,
+            f'{prefix}.{eval_keys.DROPPED}': self._dropped,
+        }
+        if self._emitted > 0:
+            meta[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._late_percentile_ms(50)
+            meta[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._late_percentile_ms(90)
+            meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._max_late_ns / 1e6
+        return meta
+
+    def _late_percentile_ms(self, percent: int) -> float:
+        """The whole millisecond at or under which ``percent`` of the emitted waypoints went out."""
+        rank = -(-self._emitted * percent // 100)  # nearest-rank, in integers, so no float rounds it off by one
+        seen = 0
+        for ms, count in enumerate(self._late_bins):
+            seen += count
+            if seen >= rank:
+                return float(ms)
+        raise AssertionError('every emitted waypoint is binned, so a rank within the count is always reached')
+
+
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
@@ -195,6 +251,8 @@ class Harness(pimm.ControlSystem):
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
+        # How the live episode has played those schedules, rebuilt per episode and stamped into its statics.
+        self._fidelity = {name: _ScheduleFidelity() for name in embodiment.commands}
 
         # One episode per call, answered with the terminal payload it ended on.
         self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
@@ -231,6 +289,8 @@ class Harness(pimm.ControlSystem):
         assert self._inference is not None, 'only a live episode has meta'
         for k, v in flatten_dict(self._inference.meta).items():
             meta[f'{policy_keys.POLICY_META}.{k}'] = v
+        for name, fidelity in self._fidelity.items():
+            meta.update(fidelity.meta(f'{eval_keys.SCHEDULE}.{name}'))
         meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
         return meta
@@ -294,6 +354,7 @@ class Harness(pimm.ControlSystem):
         # it, and still closes the session it was handed.
         self._call = call
         self._inference = _EpisodeInference(call.request, self._charges_wall_time, clock)
+        self._fidelity = {name: _ScheduleFidelity() for name in self._embodiment.commands}
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
@@ -379,16 +440,20 @@ class Harness(pimm.ControlSystem):
         for name, schedule in self._schedules.items():
             schedule.clear()
             schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
+            self._fidelity[name].count_scheduled(len(schedule))
 
     def _issue_due_commands(self, clock: pimm.Clock) -> None:
-        """Emit each channel's due command. Nothing on a channel with none. Last on a channel with multiple."""
+        """Emit each channel's due command. Nothing on a channel with none. Last on a channel with multiple,
+        counting the ones it overtakes as dropped and how late the one it sends is."""
         now_ns = clock.now_ns()
         for name, schedule in self._schedules.items():
-            value = None
+            due_ns, value, popped = now_ns, None, 0
             while schedule and schedule[0][0] <= now_ns:
-                value = schedule.popleft()[1]
+                due_ns, value = schedule.popleft()
+                popped += 1
             if value is not None:
                 self.commands[name].emit(value)
+                self._fidelity[name].count_played(popped, now_ns - due_ns)
 
     def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if the live trial has ended this round, else ``None``.
