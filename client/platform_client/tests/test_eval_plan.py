@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from platform_client.enums import EndpointKind, Placement
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
+from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode
 from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
@@ -89,6 +89,29 @@ def test_a_served_endpoint_names_its_spec_and_no_url():
             'spec': 's',
             'url': 'wss://x/ws',
         })
+
+
+def test_an_endpoint_states_only_a_locator_and_its_own_count():
+    # The check names what an endpoint may state, so a field added to `Cascade` is refused here
+    # rather than accepted in silence, and the refusal names every field it found.
+    with pytest.raises(ValidationError, match='which are per-task properties'):
+        Endpoint.model_validate({**BASELINE, 'policy_preset': 'p'})
+    with pytest.raises(ValidationError, match='cap_per_episode_sec, tote_placement'):
+        Endpoint.model_validate({**BASELINE, 'tote_placement': 'left', 'cap_per_episode_sec': 30})
+    allowed = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
+    assert allowed.episodes_per_endpoint == 2
+
+
+def test_an_endpoint_reads_back_from_its_own_dump():
+    # A dump names every field, so the check reads what each one carries: a plan the client sends
+    # is one the platform validates from that JSON.
+    entry = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+
+
+def test_the_fields_an_endpoint_may_state_are_fields_it_declares():
+    # A name here the model does not carry would let the per-task field of that name through.
+    assert _ENDPOINT_MAY_STATE <= set(Endpoint.model_fields)
 
 
 def test_a_scene_is_flat_on_every_level():

@@ -78,6 +78,13 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
+# What an endpoint states: its name, its kind, where its policy comes from, and its own count. A run
+# lays out one scene, one cap and one preset for its whole sample, so every other field of `Cascade`
+# is per task. This names what an endpoint may state rather than what it may not: a field added to
+# `Cascade` later is then refused on an endpoint, where a list of the forbidden ones would take it.
+_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'episodes_per_endpoint'})
+
+
 class Endpoint(Cascade):
     """One policy to run, and where it comes from.
 
@@ -115,17 +122,14 @@ class Endpoint(Cascade):
 
     @model_validator(mode='after')
     def _overrides_only_the_count(self) -> Self:
-        # A run lays out one scene, one cap and one preset for its whole sample, so these are per
-        # task, and an endpoint overrides only its own count.
-        per_task = {
-            'cap_per_episode_sec': self.cap_per_episode_sec,
-            'policy_preset': self.policy_preset,
-            'camera_vantage': self.camera_vantage,
-            'tote_placement': self.tote_placement,
-            'clutter': self.clutter,
-            'external_cameras': self.external_cameras or None,
-        }
-        stated = [name for name, value in per_task.items() if value is not None]
+        # A dump carries every field, and a plan read back from its own JSON therefore sets them
+        # all, so what is refused is a per-task field carrying a value rather than one a dump names.
+        fields = type(self).model_fields
+        stated = sorted(
+            name
+            for name in self.model_fields_set - _ENDPOINT_MAY_STATE
+            if getattr(self, name) != fields[name].get_default(call_default_factory=True)
+        )
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '
