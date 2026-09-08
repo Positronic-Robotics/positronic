@@ -20,15 +20,27 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert created.submission_id == SubmissionId.parse(ID)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
-    assert platform.body == {
-        'policy_image': 'org/p:v1',
-        'eval': 'fake.smoke',
-        'alias': None,
-        'transaction_key': 'retry-1',
-    }
+    # A policy image is one endpoint of a plan, and the eval names the tasks the catalogue expands.
+    body = platform.body
+    assert body['eval'] == 'fake.smoke' and body['tasks'] == []
+    assert [(entry['name'], entry['kind'], entry['image']) for entry in body['endpoints']] == [
+        ('policy', 'image', 'org/p:v1')
+    ]
+    assert body['alias'] is None and body['transaction_key'] == 'retry-1'
     out = capsys.readouterr().out
     assert f'submission {ID} (pending)' in out
     assert 'digest sha256:abc' in out
+
+
+def test_an_eval_is_a_name_beside_a_file_of_that_name(platform, run_command, tmp_path, monkeypatch):
+    # `--eval` reads as a name wherever the command runs, so a file of that name beside it changes nothing.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+    (tmp_path / 'fake.smoke').write_text('tasks: []\n')
+    monkeypatch.chdir(tmp_path)
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert platform.body['eval'] == 'fake.smoke'
 
 
 def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, capsys):
@@ -102,7 +114,7 @@ def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_trac
     'platform_only', [{'alias': 'demo'}, {'transaction_key': 'k'}, {'platform_url': 'http://x.test'}]
 )
 def test_a_local_run_refuses_what_only_a_platform_run_can_mean(platform, run_command, platform_only: dict):
-    # The mirror of the check below it: neither half may drop the other's arguments in silence.
+    # The mirror of the check below it: no place may drop another place's arguments in silence.
     with pytest.raises(SystemExit, match='a local run has no'):
         run_command(run, eval='fake.smoke', policy='a policy', **platform_only)
     assert platform.seen is None
@@ -127,6 +139,26 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     with pytest.raises(SystemExit, match='a platform run has no'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', **local_only)
     assert platform.seen is None
+
+
+@pytest.mark.parametrize('stated_off', [{'episodes': False}, {'cap': False}])
+def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, stated_off: dict):
+    # The command line literal-evaluates its values, so `--episodes=False` reaches the run as
+    # `False`. It is a value asked for, like `--episodes=0`, and a platform run has no such flag.
+    with pytest.raises(SystemExit, match='a platform run has no'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **stated_off)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('switched_off', [{'timing': False}, {'charge_inference_time': False}])
+def test_a_platform_run_takes_a_local_switch_stated_off(platform, run_command, switched_off: dict):
+    # The boundary of the refusal above: a switch reads `False` whether it was left off or stated
+    # off, and either way asks for what the platform already does, so it refuses neither.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+
+    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **switched_off)
+
+    assert created.submission_id == SubmissionId.parse(ID)
 
 
 def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):

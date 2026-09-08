@@ -61,8 +61,9 @@ class ReasonCode(IntEnum):
 
 @unique
 class SubmissionStatus(IntEnum):
-    """The submission lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
+    """The lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
 
+    `blocked` interrupts it at any point before an end state, and a later report moves it on.
     `submitting` is the internal claim state; the gateway reports it as `pending`, so it never
     reaches a caller.
     """
@@ -74,6 +75,8 @@ class SubmissionStatus(IntEnum):
     finished = 4
     errored = 5
     cancelled = 6
+    # It waits on what `reason` names, and a later report moves it on.
+    blocked = 7
 
 
 @unique
@@ -117,7 +120,8 @@ class BoardVisibility(IntEnum):
     tenant = 2
 
 
-# Charged, undecided, still holding a concurrency slot.
+# Charged, undecided, still holding a concurrency slot. `blocked` is charged and undecided too, and
+# holds no slot, so it is in neither this set nor the terminal one.
 ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.pending,
     SubmissionStatus.submitting,
@@ -134,3 +138,37 @@ TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
 # Decided, and there will never be a result to read. Derived, so a fourth terminal status joins it
 # by being terminal rather than by every caller remembering to name it.
 NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {SubmissionStatus.finished}
+
+
+@unique
+class EndpointKind(IntEnum):
+    """Where a policy comes from: an address the caller provides (`remote`), a checkpoint the
+    platform serves (`served`), or a container image the platform runs (`image`)."""
+
+    INVALID = 0
+    remote = 1
+    served = 2
+    image = 3
+
+
+@unique
+class Placement(IntEnum):
+    """Which side of the rig a piece of the scene sits on.
+
+    `random` draws a side per run; `none` states the piece is absent.
+    """
+
+    INVALID = 0
+    left = 1
+    right = 2
+    random = 3
+    none = 4
+
+
+@unique
+class CameraVantage(IntEnum):
+    """How steeply the external camera looks down: each value names the dataset whose geometry the rig matches."""
+
+    INVALID = 0
+    droid = 1
+    phail = 2

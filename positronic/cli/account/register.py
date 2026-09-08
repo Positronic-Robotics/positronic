@@ -1,27 +1,40 @@
 """`positronic account register` — the account this platform knows you by."""
 
-import shlex
+import os
 
 import configuronic as cfn
+from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
 from platform_client.requests import RegisterRequest
 
-from positronic.cli.account.gateway import API_KEY_ENV, credential, gateway, refusing_bad_input
+from positronic.cli.account.gateway import credential, gateway, refusing_bad_input
 
 
 @cfn.config()
 def register(alias: str | None = None, rotate: bool = False, platform_url: str | None = None):
     """Register with the platform, or rotate an existing registration's API key.
 
-    Reads the credential from the environment, never an argument.
+    Reads the credential from the environment, never an argument, and saves the key it mints in the
+    config record every other command reads.
     """
     with refusing_bad_input():
         request = RegisterRequest(credential=credential(), alias=alias, rotate=rotate)
+    # A key is minted once and cannot be fetched again, so the destination is named before the
+    # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
+    directory = config_dir(os.environ)
     with gateway(platform_url, key_required=False) as client:
         response = client.register(request)
+        base_url = client.base_url
     print(f'user {response.user_id} ({response.key_status.name})')
     if response.api_key is None:
         print('no key issued: one is minted on a first registration, or by --rotate')
-    else:
-        # The key is opaque, so it may hold whitespace or shell metacharacters; an unquoted export
-        # line would either mangle it or run the rest of it.
-        print(f'export {API_KEY_ENV}={shlex.quote(response.api_key)}')
+        return
+    try:
+        write_config(directory, Config(platform_url=base_url, api_key=response.api_key))
+    except OSError as exc:
+        # The key cannot be fetched again, so the message says how to mint another and does not print this one.
+        raise SystemExit(
+            f'the platform issued a key for user {response.user_id}, and writing '
+            f'{directory / CONFIG_FILENAME} failed: {exc.strerror or exc}. The key is not shown; '
+            'run `positronic account register --rotate` to mint another.'
+        ) from exc
+    print(f'key saved in {directory / CONFIG_FILENAME}')

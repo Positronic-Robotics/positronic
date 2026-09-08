@@ -11,7 +11,7 @@ Assumes a key you already hold; `../walkthrough.py` covers registration. Re-runn
 `--transaction-key` returns the original submission rather than spending quota twice.
 
 The command-line equivalent is `positronic eval run --eval=robolab.public_subset
---policy-image=...`, then `positronic eval status --submission-id=...`.
+--policy-image=...`, then `positronic eval status --id=...`.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ import time
 from platform_client.client import API_KEY_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode
 from platform_client.errors import PlatformError
+from platform_client.eval_plan import plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import SubmissionCreateRequest
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
 
 # The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
@@ -38,7 +38,7 @@ def submit(
 ) -> SubmissionCreateResponse:
     """Create the submission, and report the exact image it was pinned to."""
     submission = client.create_submission(
-        SubmissionCreateRequest(policy_image=policy_image, eval=EVAL, alias=alias, transaction_key=transaction_key)
+        plan_of_image(policy_image, EVAL, alias=alias, transaction_key=transaction_key)
     )
     print(f'submission {submission.submission_id} — {submission.status.name}')
     print(f'pinned image {submission.policy_image_digest} against eval {EVAL}')
@@ -69,7 +69,9 @@ def main() -> None:
 
     key = os.environ.get(API_KEY_ENV)
     if not key:
-        raise SystemExit(f'set {API_KEY_ENV} to the key `positronic account register` printed')
+        # `positronic account register` saves the key in its record, which this script does not read.
+        # `platform-register` prints the export line, so it is the one that helps here.
+        raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
 
     with PlatformClient(args.platform_url, api_key=ApiKey(key)) as client:
         try:

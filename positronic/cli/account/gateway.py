@@ -1,17 +1,23 @@
 """The plumbing every platform command shares: a configured client, and refusals a user can read.
 
-The URL's precedence — argument, then environment, then the default platform — belongs to the
-client, so a script and a command cannot resolve it differently. A key or a credential is never an
-argument: a command line is readable by every process on the box and lands in shell history.
+The URL's precedence — argument, then environment, then the saved record, then the default platform
+— belongs to `platform_client.config`, so a script and a command cannot resolve it differently. A
+key or a credential is never an argument: a command line is readable by every process on the box and
+lands in shell history.
 """
 
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TypeVar
 
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV, PlatformClient
+from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.errors import PlatformError
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import Id64
+from pydantic import ValidationError
+
+ID = TypeVar('ID', bound=Id64)
 
 __all__ = [
     'API_KEY_ENV',
@@ -19,9 +25,15 @@ __all__ = [
     'CREDENTIAL_ENV',
     'credential',
     'gateway',
-    'parse_submission_id',
+    'one_line',
+    'parse_id',
     'refusing_bad_input',
 ]
+
+
+def one_line(exc: ValidationError) -> str:
+    """Every error of a validation as one line: the field, then what refused it. The value stays out."""
+    return '; '.join(f'{".".join(str(part) for part in error["loc"])}: {error["msg"]}' for error in exc.errors())
 
 
 @contextmanager
@@ -39,13 +51,18 @@ def refusing_bad_input() -> Iterator[None]:
 
 @contextmanager
 def gateway(platform_url: str | None = None, *, key_required: bool = True) -> Iterator[PlatformClient]:
-    """A client on the configured platform, reporting a refusal by it as a CLI failure."""
-    key = os.environ.get(API_KEY_ENV)
-    if key_required and not key:
-        raise SystemExit(f'no API key: set {API_KEY_ENV} to the one `positronic account register` printed')
+    """A client on the configured platform, reporting a refusal by it as a CLI failure.
+
+    One client, one platform: the key comes from the environment, then from the record `register`
+    saved. `register` sends no key, so a registration naming its platform reads no record.
+    """
+    record = record_if_needed(os.environ, platform_url, key_required=key_required)
+    key = api_key_from(os.environ, record) if key_required else None
+    if key_required and key is None:
+        raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     # A misconfigured platform — an empty `--platform-url`, or one the client cannot reach.
     with refusing_bad_input():
-        client_ = PlatformClient(platform_url, api_key=ApiKey(key) if key else None)
+        client_ = PlatformClient(platform_url_from(os.environ, platform_url, record), api_key=key)
     with client_ as client:
         try:
             yield client
@@ -56,6 +73,9 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
             if exc.evals is not None:
                 lines.append(f'evals on offer: {", ".join(exc.evals)}')
             raise SystemExit('\n'.join(lines)) from exc
+        except ValidationError as exc:
+            # A 2xx whose body is not the route's response model. The body stays out of the message.
+            raise SystemExit(f'the platform answered with a response the client cannot read: {one_line(exc)}') from exc
 
 
 def credential() -> str:
@@ -66,13 +86,13 @@ def credential() -> str:
     return value
 
 
-def parse_submission_id(token: object) -> SubmissionId:
-    """One submission id off the command line."""
+def parse_id(token: object, kind: type[ID]) -> ID:
+    """One platform id off the command line, parsed as `kind`."""
     # CLI values are literal-evaluated, so an all-digit id arrives as an int, and reading that as
-    # decimal would name a different submission. Such an id needs inner quotes to stay text.
+    # decimal would name a different record. Such an id needs inner quotes to stay text.
     if not isinstance(token, str):
-        raise SystemExit(f'submission id is hexadecimal; quote one that reads as a number: \'"{token}"\'')
+        raise SystemExit(f'an id is hexadecimal; quote one that reads as a number: \'"{token}"\'')
     try:
-        return SubmissionId.parse(token)
+        return kind.parse(token)
     except ValueError as exc:
-        raise SystemExit(f'not a submission id: {exc}') from exc
+        raise SystemExit(f'not an id: {exc}') from exc

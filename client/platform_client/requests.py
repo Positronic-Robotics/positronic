@@ -1,15 +1,14 @@
 """What a caller sends: the POST bodies, and the query models the GET endpoints take.
 
 Unknown fields are rejected, so a typo'd field is a 422 rather than a silently dropped input that
-would change what the submission means.
+would change what the submission means. `submissions.create` takes an `EvalPlan`, which lives in
+`eval_plan` with the cascade it carries.
 """
 
 from __future__ import annotations
 
 from platform_client.boards import BoardRef
-from platform_client.evals import EvalRef
-from platform_client.ids import SubmissionId, TransactionKey
-from platform_client.policy_images import PolicyImage
+from platform_client.ids import SubmissionId
 from pydantic import BaseModel, ConfigDict, Field
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
@@ -23,23 +22,6 @@ class RegisterRequest(BaseModel):
     credential: str
     alias: str | None = None
     rotate: bool = False
-
-
-class SubmissionCreateRequest(BaseModel):
-    """`submissions.create` — the run-defining fields, exactly as sent."""
-
-    model_config = _FORBID_EXTRA
-
-    # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
-    # process instead of spending a round trip to learn it.
-    policy_image: PolicyImage
-    # The whole of what the caller chooses: the eval names its own embodiment, and the platform
-    # answers an unknown name with the ones it offers.
-    eval: EvalRef
-    alias: str | None = None
-    # A present key must be non-empty: an empty string is a client bug, not "no key", and accepting
-    # it would silently drop the caller's dedup guarantee.
-    transaction_key: TransactionKey | None = Field(default=None, min_length=1)
 
 
 class CancelRequest(BaseModel):
@@ -64,3 +46,12 @@ class RankingsQuery(BaseModel):
     model_config = _FORBID_EXTRA
 
     board: BoardRef
+
+
+class SubmissionListQuery(BaseModel):
+    """`submissions.list` — the page after the last id seen. A `limit` above the gateway's cap is clamped to it."""
+
+    model_config = _FORBID_EXTRA
+
+    after: SubmissionId | None = None
+    limit: int | None = Field(default=None, gt=0)
