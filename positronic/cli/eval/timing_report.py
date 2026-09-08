@@ -156,12 +156,10 @@ class WaypointReport:
     """How well the loop kept the trajectory's schedule, summed over the pass's episodes and their command
     channels.
 
-    A round emits only the newest waypoint that has come due, so ``dropped`` counts the ones it overtook and
-    ``emitted + dropped`` is what came due; ``dropped_share`` is a fraction of that, not of ``scheduled``,
-    which also covers what a fresh chunk replaced before its time. The lateness figures measure an emitted
-    waypoint against its own due time, and both are exact over the pass because each episode carries a sum
-    and a maximum rather than a percentile. The distribution behind them is per channel in the episode's own
-    statics; a percentile of the pass is not recoverable from here.
+    ``dropped`` counts a waypoint a round overtook, so ``dropped_share`` is a fraction of
+    ``emitted + dropped``, not of ``scheduled``, which also covers what a fresh chunk replaced first. The
+    distribution behind the lateness figures is per channel in the episode's own statics; a percentile of
+    the pass is not recoverable from here.
     """
 
     scheduled: int
