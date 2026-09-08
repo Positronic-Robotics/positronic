@@ -207,7 +207,7 @@ def bundled_panda_model() -> dict:
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'mujoco' / 'panda.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_dir = urdf_path.parent / 'assets'
-    mesh_files = {mesh.get('filename') for mesh in root.iter('mesh')}
+    mesh_files = {mesh.get('filename', '') for mesh in root.iter('mesh')}
     add_default_frame(root, EE_LINK)
     return {
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
