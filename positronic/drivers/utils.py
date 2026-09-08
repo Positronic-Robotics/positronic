@@ -104,12 +104,12 @@ class Moves(Generic[T]):
             return call
         return self.take_newest_setpoint()
 
-    def finished(self) -> None:
-        """The move that owned the device is over, so what was streamed at it while it travelled goes.
+    def discard_streamed_setpoints(self) -> None:
+        """Let go of every setpoint streamed at the device while a move owned it.
 
         Those setpoints say where the device was wanted on the way to the pose it now holds, and applying
-        one would drive it straight back off that pose. A driver that keeps its move in flight has
-        ``settle`` for this; one held inside the call for the whole travel says so itself.
+        one would drive it straight back off that pose. ``settle`` does this for a move it ends; a driver
+        held inside the call for the whole travel does it when the travel is over.
         """
         self.take_newest_setpoint()
 
@@ -140,12 +140,12 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         if bool(np.all(np.abs(np.asarray(position) - np.asarray(self._target)) < self._tol)):
             self._settled, self._call, self.errored = (self._call, None), None, False
-            self.finished()
+            self.discard_streamed_setpoints()
             return MoveStatus.ARRIVED
         if now >= self._deadline:
             short = TimeoutError(f'stopped at {np.round(position, 3)}, short of {np.round(self._target, 3)}')
             self._settled, self._call, self.errored = (self._call, short), None, True
-            self.finished()
+            self.discard_streamed_setpoints()
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
 

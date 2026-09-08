@@ -286,7 +286,7 @@ def test_a_setpoint_written_while_a_blocking_move_travelled_is_let_go(asking):
 
     stream.push(0.25)  # written while the device travelled, and never polled for
     call.set_result(None)
-    moves.finished()  # the driver blocked for the whole travel and says so on its way out
+    moves.discard_streamed_setpoints()  # the driver blocked for the whole travel and lets go of what queued up
 
     assert moves.next_request() is None
 
@@ -302,7 +302,7 @@ def test_a_setpoint_written_after_a_blocking_move_ended_survives_the_wait_for_th
     call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
     call.set_result(None)
-    moves.finished()
+    moves.discard_streamed_setpoints()
 
     stream.push(0.25)  # written after the travel, while the driver slept
 

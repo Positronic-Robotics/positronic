@@ -251,20 +251,28 @@ class _Chain(DriverRun[command.CommandType]):
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
             started = self.clock.now()
-            while not self._arrived(obs := self.observations(), target, grip):
-                if self.should_stop.value:
-                    return MoveStatus.GAVE_UP
-                elapsed = self.clock.now() - started
-                if elapsed > self._MOVE_TIME_S + self._SETTLE_S:
-                    raise TimeoutError(f'the chain stopped short of {target} at grip {grip}')
-                # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
-                # and held at the target afterwards while it settles the last of the way in.
-                alpha = min(elapsed / self._MOVE_TIME_S, 1.0)
-                self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
-                self.encode(obs, RobotStatus.BUSY)  # the driver owns the chain until it arrives
-                self.out.emit(self.state)
-                self.grip_out.emit(self._grip(obs))
-                yield self.limiter.wait()
+            commanded = False
+            try:
+                while not self._arrived(obs := self.observations(), target, grip):
+                    if self.should_stop.value:
+                        return MoveStatus.GAVE_UP
+                    elapsed = self.clock.now() - started
+                    if elapsed > self._MOVE_TIME_S + self._SETTLE_S:
+                        raise TimeoutError(f'the chain stopped short of {target} at grip {grip}')
+                    # Ramped rather than commanded outright, so the chain travels at a pace the joints can
+                    # hold, and held at the target afterwards while it settles the last of the way in.
+                    alpha = min(elapsed / self._MOVE_TIME_S, 1.0)
+                    self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
+                    commanded = True
+                    self.encode(obs, RobotStatus.BUSY)  # the driver owns the chain until it arrives
+                    self.out.emit(self.state)
+                    self.grip_out.emit(self._grip(obs))
+                    yield self.limiter.wait()
+            finally:
+                if commanded:
+                    # The chain took the target, so it travelled however this ends, and the loop read
+                    # nothing while it did: what was streamed at it says where it was wanted on the way.
+                    self.moves.discard_streamed_setpoints()
         except Exception:
             self.moves.errored = True
             raise
@@ -291,13 +299,8 @@ class _Chain(DriverRun[command.CommandType]):
         Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
         """
         try:
-            target = self.to_joints(call.request, q)  # a target the chain cannot hold is refused first
-            try:
-                arrived = yield from self.move_to(target, grip)
-            finally:
-                # The chain travelled, however that ended, and the loop read nothing while it did: what was
-                # streamed at it in the meantime says where it was wanted on the way here.
-                self.moves.finished()
+            target = self.to_joints(call.request, q)
+            arrived = yield from self.move_to(target, grip)
             if arrived is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return target, grip
