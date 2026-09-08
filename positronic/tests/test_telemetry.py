@@ -453,11 +453,16 @@ def test_bind_from_env_is_inert_without_the_env_vars(tmp_path, monkeypatch):
     with telemetry.bind_from_env(HARNESS_PROCESS):
         with telemetry.span('client'):
             pass
-    assert not telemetry.spans_path(tmp_path, HARNESS_PROCESS).exists()
+    assert not (tmp_path / telemetry.TELEMETRY_SUBDIR).exists()
 
 
 def _run_id(path):
     return _resource_attrs(path)[telemetry.ATTR_RUN_ID]
+
+
+def _env_sidecars(tmp_path):
+    """The sidecars `bind_from_env` wrote under a telemetry dir, which it names per run."""
+    return sorted((tmp_path / telemetry.TELEMETRY_SUBDIR).glob(f'*{telemetry.SPANS_SUFFIX}'))
 
 
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
@@ -467,7 +472,8 @@ def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
     with telemetry.bind_from_env(HARNESS_PROCESS):
         with telemetry.span('client'):
             pass
-    assert _run_id(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    (path,) = _env_sidecars(tmp_path)
+    assert _run_id(path)
 
 
 def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch):
@@ -477,7 +483,7 @@ def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch)
     with telemetry.bind_from_env(HARNESS_PROCESS):
         with telemetry.span('client'):
             pass
-    path = telemetry.spans_path(tmp_path, HARNESS_PROCESS)
+    (path,) = _env_sidecars(tmp_path)
     assert _spans_by_name(path)['client'].process == HARNESS_PROCESS
     assert _run_id(path) == 'rollout-1'
 
