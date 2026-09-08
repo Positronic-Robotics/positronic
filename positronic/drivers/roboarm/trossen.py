@@ -81,6 +81,12 @@ _VELOCITY_HEADROOM = 0.8
 # The share of a joint's velocity limit a streamed setpoint may ask for. Teleoperation is paced by the hand
 # it follows, so this only bounds what one wild target can ask for.
 _COMMANDED_SHARE = 0.1
+# Where the driver puts the arm at either end of a run. The arm rests at all joints zero, which is the
+# lower limit of joints 1 and 2 and where half the directions out of it have no solution, so a run opens by
+# taking the arm off it. It closes back on it, because the controller holds the arm only there: set idle
+# anywhere else, the arm falls.
+_HOME_JOINTS = np.array([0.0, 1.571, 1.178, 0.0, 0.0, 0.0])
+_REST_JOINTS = np.zeros(6)
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
@@ -329,7 +335,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     # TODO(#686): a rate limit on a log line belongs in the logging layer, as `log_every_n_sec`, where every
     # driver reaches it.
-    def complain(self, message: str, key: str | None = None) -> None:
+    def complain(self, message: str, key: str | None = None, level: int = logging.ERROR) -> None:
         """Say what is wrong, but not on every tick of a fault that stands.
 
         ``key`` names the fault where the message alone cannot: a refused setpoint carries the pose, which
@@ -340,7 +346,7 @@ class _Arm(DriverRun[command.CommandType]):
         if key == self._complaint and now - self._complained_at < _COMPLAIN_EVERY_S:
             return
         self._complaint, self._complained_at = key, now
-        logger.error(message)
+        logger.log(level, message)
 
     @property
     def link_down(self) -> bool:
@@ -570,7 +576,18 @@ class _Arm(DriverRun[command.CommandType]):
         # A shorter target broadcasts across the limits and moves every joint; a NaN clips to itself.
         if target.shape != (len(_JOINT_NAMES),) or not np.all(np.isfinite(target)):
             raise ValueError(f'{cmd} asks the arm for {target}, and not for {len(_JOINT_NAMES)} finite joints')
-        return np.clip(target, self._q_lower, self._q_upper)
+        clipped = np.clip(target, self._q_lower, self._q_upper)
+        # The nearest joints the arm can hold are still worth moving to -- a leader pushed past the
+        # follower's range should carry it as far as the range goes -- but the operator hears about it.
+        if (outside := np.flatnonzero(clipped != target)).size:
+            i = int(outside[0])
+            self.complain(
+                f'Joint {i} of the arm at {self.ip} was asked for {target[i]:.4f}, outside '
+                f'[{self._q_lower[i]:.4f}, {self._q_upper[i]:.4f}]; it holds at {clipped[i]:.4f}',
+                key='target clipped',
+                level=logging.WARNING,
+            )
+        return clipped
 
     def track(self, cmd: command.CommandType) -> None:
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival.
@@ -603,6 +620,37 @@ class _Arm(DriverRun[command.CommandType]):
         except ValueError as exc:
             self._travel_to = None
             self.complain(f'The arm at {self.ip} stopped short of {goal}: {exc}', key='travel refused')
+
+    def travel_to(self, joints: np.ndarray, what: str, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
+        """Put the arm at ``joints`` and yield until it reads back there.
+
+        Nobody waits on this, so a travel that does not arrive is logged and the run goes on. ``at_teardown``
+        is for the travel the driver makes on its way out: the stop is set by then, and heeding it would
+        abandon the travel before it began.
+        """
+        target = np.clip(np.asarray(joints, dtype=np.float64), self._q_lower, self._q_upper)
+        self._target = self._wanted = target
+        self._anchor = self._travel_to = None
+        self._goal_time = max(_MIN_MOVE_TIME_S, float(np.max(np.abs(target - self.q))) / _MOVE_SPEED)
+        self._arm_unsent = True
+        logger.info(f'The arm at {self.ip} travels to {what}, in {self._goal_time:.1f} s')
+        deadline = self.clock.now() + _MOVE_TIMEOUT_S
+        try:
+            while at_teardown or not self.should_stop.value:
+                self.publish()  # a run says where the arm stands from its first tick, travel or no travel
+                self.write()
+                yield self.limiter.wait()
+                self.read()
+                if bool(np.all(np.abs(self.q - target) < self._arrived_tol)):
+                    return
+                if self.link_down:
+                    logger.error(f'The arm at {self.ip} stopped answering on its way to {what}')
+                    return
+                if self.clock.now() >= deadline:
+                    logger.error(f'The arm at {self.ip} stopped at {np.round(self.q, 3)}, short of {what}')
+                    return
+        finally:
+            self._goal_time = _STREAM_GOAL_TIME_S  # what a streamed setpoint is paced by
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there.
@@ -772,6 +820,7 @@ class Robot(pimm.ControlSystem):
                 # TODO: carry the URDF, which lives in `trossen_arm_description`. `roboarm_keys.CONTROL_FRAME`
                 # names a frame in it, so it waits for the same change.
                 self.robot_meta.emit({roboarm_keys.ROBOT: 'trossen_wxai', roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES)})
+                yield from arm.travel_to(_HOME_JOINTS, 'the pose it opens at')
 
                 while not should_stop.value:
                     arm.read()
@@ -813,6 +862,10 @@ class Robot(pimm.ControlSystem):
                     arm.moves.answer()  # the state a settled move is answered with is out
 
                     yield arm.limiter.wait()
+
+                # The controller holds the arm only at rest; `_opened` sets it idle, and idle anywhere else
+                # is an arm that falls.
+                yield from arm.travel_to(_REST_JOINTS, 'rest', at_teardown=True)
 
 
 class _FakeTrossen:
