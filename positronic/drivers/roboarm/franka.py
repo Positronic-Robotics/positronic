@@ -265,8 +265,8 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         cmd = call.request
         try:
-            arrived = yield from self.move_to(self.to_joints(cmd), cmd.mode)
-            if arrived is MoveStatus.ARRIVED:
+            status = yield from self.move_to(self.to_joints(cmd), cmd.mode)
+            if status is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
