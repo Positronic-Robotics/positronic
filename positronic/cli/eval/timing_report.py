@@ -40,6 +40,11 @@ from positronic.telemetry_keys import (
     ATTR_EPISODE_PARTIAL,
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_PASS_FAILED,
+    ATTR_WAYPOINTS_DROPPED,
+    ATTR_WAYPOINTS_EMITTED,
+    ATTR_WAYPOINTS_LATE_MAX_MS,
+    ATTR_WAYPOINTS_LATE_SUM_MS,
+    ATTR_WAYPOINTS_SCHEDULED,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -147,6 +152,27 @@ class EnvStepSplit:
 
 
 @dataclass
+class WaypointReport:
+    """How well the loop kept the trajectory's schedule, summed over the pass's episodes and their command
+    channels.
+
+    A round emits only the newest waypoint that has come due, so ``dropped`` counts the ones it overtook and
+    ``emitted + dropped`` is what came due; ``dropped_share`` is a fraction of that, not of ``scheduled``,
+    which also covers what a fresh chunk replaced before its time. The lateness figures measure an emitted
+    waypoint against its own due time, and both are exact over the pass because each episode carries a sum
+    and a maximum rather than a percentile. The distribution behind them is per channel in the episode's own
+    statics; a percentile of the pass is not recoverable from here.
+    """
+
+    scheduled: int
+    emitted: int
+    dropped: int
+    dropped_share: float
+    mean_late_ms: float
+    max_late_ms: float
+
+
+@dataclass
 class PassReport:
     """Pass-level wall-clock roll-up reduced from the recorded telemetry spans and stats.
 
@@ -164,6 +190,7 @@ class PassReport:
     infer_p95_ms: float
     wall_split: WallSplit
     env_step_split: EnvStepSplit | None
+    waypoints: WaypointReport | None
     gpu: GpuReport
 
 
@@ -377,6 +404,11 @@ class _EpisodeTiming:
     policy_wait_s: float
     overhead_s: float
     infer_ms: list[float]
+    waypoints_scheduled: int
+    waypoints_emitted: int
+    waypoints_dropped: int
+    late_sum_ms: float
+    late_max_ms: float
 
 
 def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _EpisodeTiming:
@@ -405,6 +437,30 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
         policy_wait_s=policy_wait_s,
         overhead_s=max(wall_s - measured, 0.0),
         infer_ms=infer_ms,
+        waypoints_scheduled=int(episode.attrs.get(ATTR_WAYPOINTS_SCHEDULED, 0)),
+        waypoints_emitted=int(episode.attrs.get(ATTR_WAYPOINTS_EMITTED, 0)),
+        waypoints_dropped=int(episode.attrs.get(ATTR_WAYPOINTS_DROPPED, 0)),
+        late_sum_ms=float(episode.attrs.get(ATTR_WAYPOINTS_LATE_SUM_MS, 0.0)),
+        late_max_ms=float(episode.attrs.get(ATTR_WAYPOINTS_LATE_MAX_MS, 0.0)),
+    )
+
+
+def _waypoint_report(timings: list[_EpisodeTiming]) -> WaypointReport | None:
+    """The pass's waypoint account, or ``None`` where no episode carries one — a run that played no
+    trajectory, and a sidecar whose episodes hold no waypoint attributes, reduce the same way."""
+    scheduled = sum(t.waypoints_scheduled for t in timings)
+    if not scheduled:
+        return None
+    emitted = sum(t.waypoints_emitted for t in timings)
+    dropped = sum(t.waypoints_dropped for t in timings)
+    due = emitted + dropped
+    return WaypointReport(
+        scheduled=scheduled,
+        emitted=emitted,
+        dropped=dropped,
+        dropped_share=(dropped / due) if due else 0.0,
+        mean_late_ms=(sum(t.late_sum_ms for t in timings) / emitted) if emitted else 0.0,
+        max_late_ms=max((t.late_max_ms for t in timings), default=0.0),
     )
 
 
@@ -535,6 +591,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         wall_split=wall_split,
         env_step_split=_env_step_split(spans, episodes, env_step_sum, materialize_sum),
+        waypoints=_waypoint_report(timings),
         gpu=GpuReport(sim=_gpu_summary_from_stats(stats, list(windows.values())), policy=policy_gpu),
     )
 
@@ -580,6 +637,13 @@ def _render(report: PassReport) -> str:
         lines += [_share_row(name, frac) for name, frac in split.phases.items()]
         lines.append(_share_row('wire', split.wire))
         lines.append(_share_row('materialize', split.materialize))
+    if report.waypoints is not None:
+        way = report.waypoints
+        lines += [
+            f'waypoints:           {way.scheduled} scheduled, {way.emitted} emitted, {way.dropped} dropped',
+            f'waypoint drops:      {way.dropped_share * 100:>6.1f}% of the waypoints that came due',
+            f'waypoint late mean:  {way.mean_late_ms:.1f} ms (max {way.max_late_ms:.1f})',
+        ]
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
