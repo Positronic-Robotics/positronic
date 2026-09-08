@@ -60,8 +60,8 @@ def refusing_bad_input() -> Iterator[None]:
 def gateway(platform_url: str | None = None, *, key_required: bool = True) -> Iterator[PlatformClient]:
     """A client on the configured platform, reporting a refusal by it as a CLI failure.
 
-    The key is the environment's, else the one `register` saved. A saved key reaches the platform it
-    was minted on and no other.
+    The key comes from the environment, then from the record `register` saved. A saved key is valid
+    only on the platform it was minted on, so a command that names another platform is refused.
     """
     record = record_if_needed(os.environ, None, platform_url)
     key = api_key_from(os.environ, None, record)
@@ -104,7 +104,7 @@ def credential() -> str:
 
 
 def parse_id(token: object, kind: type[ID]) -> ID:
-    """One platform id off the command line, as the kind of id the command is about to read."""
+    """One platform id off the command line, parsed as `kind`."""
     # CLI values are literal-evaluated, so an all-digit id arrives as an int, and reading that as
     # decimal would name a different record. Such an id needs inner quotes to stay text.
     if not isinstance(token, str):

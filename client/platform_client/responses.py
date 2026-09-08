@@ -157,7 +157,7 @@ class SubmissionListResponse(BaseModel):
 STATUS_FIELD = 'status'
 
 # The field every view identifies a submission by, named for the same reason: a renderer that
-# excludes it by a stale literal prints it twice. `PLAN_ID_FIELD` is the plan view's own.
+# excludes it by a stale literal prints it twice. `PLAN_ID_FIELD` is the same field on a plan view.
 ID_FIELD = 'id'
 PLAN_ID_FIELD = 'plan_id'
 
@@ -307,7 +307,7 @@ class RankingsResponse(BaseModel):
 
 
 class PlanFiled(BaseModel):
-    """`evals.run` — a fresh plan, or the one an earlier call under the same key filed."""
+    """`evals.run` — a new plan, or the plan an earlier call with the same `transaction_key` filed."""
 
     plan_id: PlanId
     status: Slugged[PlanStatus]

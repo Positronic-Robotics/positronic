@@ -1,6 +1,6 @@
 """What the platform offers: the evals a caller may name, and the tasks a caller may compose into one.
 
-Both lists are answered for the caller's grant. Every registered user sees the evals a submission
+Both lists depend on the caller's grant. Every registered user sees the evals a submission
 names, and a customer grant adds the rig's evals and tasks.
 """
 
@@ -17,9 +17,10 @@ from pydantic import BaseModel, Field
 class TaskSummary(BaseModel):
     """`catalog.tasks` — one task the caller may put in a plan, as the catalogue states it.
 
-    `tote_placement` and `external_cameras` list the sides a plan may pin, or draw between; a mount
-    is keyed by the name the task gives it. `default_cap_per_episode_sec` is what a plan that states
-    no cap takes, and `clutter` the draw a plan that states none takes; absent, the table is laid bare.
+    `tote_placement` and `external_cameras` list the sides a plan may choose, or ask `random` to
+    draw from. `external_cameras` is keyed by the mount name the task defines.
+    `default_cap_per_episode_sec` applies when the plan states no cap. `clutter` applies when the
+    plan states none; absent, the table is laid bare.
     """
 
     id: TaskRef
@@ -38,9 +39,9 @@ class TaskSummary(BaseModel):
 class EvalSummary(BaseModel):
     """`catalog.evals` — one eval `evals.run` accepts by name.
 
-    `tasks` names what the eval runs, in the embodiment's own spelling. A composable eval is a plan
-    the registry holds over catalogue tasks, so a caller may write their own over the same tasks; a
-    pinned one fixes its trials, and takes no `tasks` of the caller's.
+    `tasks` names what the eval runs, in the embodiment's own spelling. `composable` is true for an
+    eval built from catalogue tasks: a caller may compose a plan over the same tasks. A pinned eval
+    fixes its trials and accepts no `tasks` from the caller.
     """
 
     id: EvalRef

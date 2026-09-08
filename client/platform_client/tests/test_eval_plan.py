@@ -144,7 +144,7 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
     assert [plan.episodes_on(first, entry) for entry in plan.task_endpoints(first)] == [3, 10]
     assert [plan.episodes_on(second, entry) for entry in plan.task_endpoints(second)] == [5, 2, 5]
     assert plan.resolved_episodes_total == 25
-    # The count leaves on the wire under its own name, and comes back.
+    # The count is serialized under its own field name and round-trips.
     sent = plan.endpoints[0].model_dump(mode='json')
     assert sent['episodes_per_endpoint'] == 3 and Endpoint.model_validate(sent) == plan.endpoints[0]
 
@@ -155,8 +155,8 @@ def test_a_remote_endpoint_names_no_bring_up():
 
 
 def test_an_endpoint_url_names_a_host():
-    """An address with no host reaches nothing, and it counts as a locator all the way to the
-    platform, which refuses the plan after it is filed."""
+    """An address with no host reaches nothing. Without this check it counts as a locator, and the
+    platform refuses the plan only after it is filed."""
     with pytest.raises(ValidationError, match='no host'):
         Endpoint(name='baseline', url='/ws')
     with pytest.raises(ValidationError, match='no host'):
@@ -167,8 +167,8 @@ def test_an_endpoint_url_names_a_host():
     'url', ['wss://baseline.example/ws', 'https://baseline.example/ws', 'http://localhost:8080/ws']
 )
 def test_an_absolute_endpoint_url_is_left_alone(url: str):
-    """The boundary: the scheme is the platform's to judge — it dials wss:// as readily as https://
-    — so this refuses an address with no host and nothing else."""
+    """The platform judges the scheme, and it dials wss:// and https:// alike, so the client refuses
+    only an address with no host."""
     assert Endpoint(name='baseline', url=url).url == url
 
 

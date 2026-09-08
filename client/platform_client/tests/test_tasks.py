@@ -21,8 +21,8 @@ def test_a_value_that_could_never_be_a_catalogue_key_is_refused_here(value: str)
 
 
 def test_an_id_this_client_has_never_heard_of_still_reaches_the_platform():
-    # The catalogue lives on the server; a client that curated its own copy would refuse a task
-    # added this morning until someone remembered to release it.
+    # The catalogue lives on the server. A client with its own copy would refuse a new task until the
+    # client is released again.
     assert TaskNode.model_validate({'task_id': 'a-task-added-this-morning'}).task_id == 'a-task-added-this-morning'
 
 

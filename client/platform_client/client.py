@@ -146,7 +146,7 @@ class PlatformClient:
 
     @property
     def base_url(self) -> str:
-        """The platform this client reaches, as it resolved it."""
+        """The platform URL this client resolved and reaches."""
         return str(self._client.base_url)
 
     # --- endpoints ---------------------------------------------------------------------------

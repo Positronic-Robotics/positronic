@@ -67,5 +67,5 @@ def test_register_says_no_key_came_back_for_an_existing_registration(platform, r
     run_command(register)
 
     assert 'no key issued' in capsys.readouterr().out
-    # A repeat registration mints none, and the record already on disk stays as it is.
+    # A repeat registration mints no key, so no record is written.
     assert read_config(config_dir(os.environ)) is None

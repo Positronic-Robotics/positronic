@@ -102,7 +102,7 @@ def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_trac
     'platform_only', [{'alias': 'demo'}, {'transaction_key': 'k'}, {'platform_url': 'http://x.test'}]
 )
 def test_a_local_run_refuses_what_only_a_platform_run_can_mean(platform, run_command, platform_only: dict):
-    # The mirror of the check below it: neither half may drop the other's arguments in silence.
+    # The mirror of the check below it: no place may drop another place's arguments in silence.
     with pytest.raises(SystemExit, match='a local run has no'):
         run_command(run, eval='fake.smoke', policy='a policy', **platform_only)
     assert platform.seen is None

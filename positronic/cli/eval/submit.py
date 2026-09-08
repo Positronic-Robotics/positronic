@@ -1,4 +1,4 @@
-"""The half of `positronic eval run` that hands the run to the platform instead of running it here.
+"""The part of `positronic eval run` that hands the run to the platform.
 
 Not a command of its own: running an eval is one act, and where it runs is an argument to it.
 """

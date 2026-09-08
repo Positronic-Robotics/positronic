@@ -1,6 +1,6 @@
 """`EvalPlan`: an eval to run — the tasks, the policies that run them, and the count per policy per task.
 
-The plan is the one definition of that shape. Unknown fields are rejected: a typo'd field is a 422.
+Unknown fields are rejected, so a misspelled field is a 422.
 """
 
 from __future__ import annotations
@@ -19,14 +19,14 @@ _FORBID_EXTRA = ConfigDict(extra='forbid')
 
 
 def _absolute_url(url: str, whose: str) -> None:
-    """Refuse an address that is not absolute. A malformed one raises `httpx.InvalidURL`, which is
-    not a `ValueError`, so it is turned into one here for the model to report."""
+    """Refuse an address that is not absolute. `httpx.InvalidURL` is not a `ValueError`, so this
+    converts it to one for the model to report."""
     try:
         absolute = httpx.URL(url).is_absolute_url
     except httpx.InvalidURL as e:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which is not a URL: {e}') from e
     if not absolute:
-        # The scheme is the platform's to judge; an address with no host reaches nothing.
+        # The platform judges the scheme; this refuses only an address with no host.
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
@@ -60,9 +60,9 @@ class Clutter(BaseModel):
 class Cascade(BaseModel):
     """The properties any level of a plan may state: the plan, one of its tasks, one endpoint.
 
-    A field left unset takes the nearest level above that states it, and below the plan the task's
-    own catalogue entry. A stated value pins it for this level and everything under it;
-    `random` draws a side here whatever a level above says.
+    An unset field takes the value of the nearest level above that states it. Below the plan, the
+    task's catalogue entry supplies the default. A stated value applies to this level and every
+    level under it. `random` draws a side at this level even when a level above states one.
     """
 
     model_config = _FORBID_EXTRA
@@ -81,9 +81,10 @@ class Cascade(BaseModel):
 class Endpoint(Cascade):
     """One policy to run, and where it comes from.
 
-    A `remote` endpoint is an address the caller holds up. A `served` endpoint names the bring-up
-    (`provider`) and what it serves (`spec`), and carries no `url`: the platform brings it up and
-    records the address. A bare label on a task names one of the plan's endpoints.
+    A `remote` endpoint is an address the caller provides. A `served` endpoint names the provider
+    that starts it (`provider`) and the checkpoint it serves (`spec`), and has no `url`: the
+    platform starts it and records the address. A bare label on a task names one of the plan's
+    endpoints.
     """
 
     name: str = Field(min_length=1)
@@ -143,8 +144,8 @@ class Endpoint(Cascade):
 class TaskNode(Cascade):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
-    `endpoints`, when given, replaces the plan's list for this task; an entry in it that names no
-    locator names one of the plan's endpoints by label. A bare id states nothing for the task.
+    `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
+    to a plan endpoint by its name. A bare id takes every value from the plan.
     """
 
     task_id: TaskRef
@@ -164,16 +165,17 @@ class TaskNode(Cascade):
 class EvalPlan(Cascade):
     """`evals.run` — one eval to run: the tasks, the endpoints each task runs, and the count per endpoint.
 
-    The plan states the count once; a task overrides it for itself, and an endpoint for itself. The
-    plan carries no client: the key names the customer, and the gateway reads the client off their
-    grant. A named eval the platform offers is a plan the registry holds; a caller composes this one.
+    The plan states the count once. A task may override it for that task, and an endpoint for that
+    endpoint. The plan carries no client field: the gateway reads the client from the key's grant.
+    A named eval the platform offers is a plan the registry holds; this model is the plan a caller
+    composes.
     """
 
     tasks: list[TaskNode] = Field(min_length=1)
     endpoints: list[Endpoint] = Field(default_factory=list)
-    # The checksum: stated, it must equal the sum over the resolved leaves; absent, the platform fills it.
+    # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
     episodes_total: int | None = Field(default=None, ge=1)
-    # A ceiling every leaf's window sits under. A cap typo costs real minutes at the rig.
+    # The upper bound on every leaf's cap: a mistyped cap costs minutes at the rig.
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
@@ -246,8 +248,8 @@ class EvalPlan(Cascade):
     def episodes_on(self, task: TaskNode, entry: Endpoint) -> int:
         """The episodes `entry` takes for `task`.
 
-        Its own count, else its definition's, else the task's, else the plan's. The definition is
-        the plan's entry of that name, for an entry that names no locator.
+        The count comes from `entry`, then from its definition, then from `task`, then from the plan.
+        The definition is the plan endpoint of the same name; only an entry with no locator has one.
         """
         definition = None
         if not entry.names_a_locator:

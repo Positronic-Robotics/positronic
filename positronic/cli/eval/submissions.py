@@ -32,8 +32,8 @@ def _show(header: str, view: SubmissionView | PlanView) -> None:
 def status(id: str, platform_url: str | None = None):
     """Report what one submission or one eval plan is doing, and what it produced once it is done.
 
-    The id says which of the two it names, so this reads the submission first and the plan where the
-    platform knows no such submission.
+    The id does not say which of the two it names, so this reads the submission first, and the plan
+    when the platform knows no such submission.
     """
     submission_id, plan_id = _both_ids(id)
     with gateway(platform_url) as client:

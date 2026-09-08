@@ -140,9 +140,8 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 class PlanStatus(IntEnum):
     """A filed plan's lifecycle: received -> filed -> running -> done|cancelled|errored.
 
-    `received` is the gateway's own row, and every status from `filed` on is what the coordinator
-    reports. `blocked` is a stop and not an end: the plan waits on what `error` names, and a later
-    report moves it on.
+    The gateway sets `received`; the coordinator reports every status from `filed` on. `blocked`
+    pauses the plan: it waits on what `error` names, and a later report moves it on.
     """
 
     INVALID = 0
@@ -157,7 +156,8 @@ class PlanStatus(IntEnum):
 
 @unique
 class EndpointKind(IntEnum):
-    """Where a plan's policy comes from: an address the caller holds up, or a checkpoint the platform serves."""
+    """Where a plan's policy comes from: an address the caller provides (`remote`), or a checkpoint the
+    platform serves (`served`)."""
 
     INVALID = 0
     remote = 1
@@ -187,7 +187,7 @@ class CameraVantage(IntEnum):
     phail = 2
 
 
-# A plan the coordinator has finished with, one way or another.
+# A plan the coordinator reports no later status for.
 PLAN_TERMINAL_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored})
 
 # A plan that stopped for a reason `error` carries: one that waits on it, and one that ended on it.

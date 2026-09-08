@@ -10,7 +10,7 @@ from platform_client.eval_plan import EvalPlan
 from platform_client.ids import PlanId
 
 from positronic.cli.conftest import KEY
-from positronic.cli.eval.plan import endpoint_of, repeated, scene_from_pairs
+from positronic.cli.eval.plan import endpoint_of, flag_entries, scene_from_pairs
 from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
@@ -152,7 +152,7 @@ def test_an_eval_naming_an_existing_file_is_that_file(platform, run_command, tmp
 
 
 def test_a_plan_file_beside_a_plan_flag_is_refused(platform, run_command, tmp_path: Path):
-    # One source states the plan: a flag alongside it would be read by nobody.
+    # One source states the plan; a flag beside a file would be ignored.
     with pytest.raises(SystemExit, match='carries the whole plan'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), episodes=3)
     assert platform.seen is None
@@ -211,13 +211,13 @@ def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_comma
 
 
 @pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'alias': 'demo'}])
-def test_a_rig_run_refuses_what_only_another_half_can_mean(platform, run_command, elsewhere: dict):
+def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)
     assert platform.seen is None
 
 
-def test_a_run_naming_no_half_says_which_three_there_are(platform, run_command):
+def test_a_run_naming_no_policy_is_told_the_three_places(platform, run_command):
     with pytest.raises(SystemExit, match='--policy is required'):
         run_command(run)
     assert platform.seen is None
@@ -251,18 +251,18 @@ def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(platform
     ],
 )
 def test_a_repeatable_flag_reads_every_spelling_the_command_line_reaches(value: object, entries: list[str]):
-    assert repeated(value, '--tasks') == entries
+    assert flag_entries(value, '--tasks') == entries
 
 
 @pytest.mark.parametrize('value', ['a,,b', ' '])
 def test_a_repeatable_flag_refuses_an_empty_entry(value: str):
     with pytest.raises(SystemExit, match='empty entry'):
-        repeated(value, '--tasks')
+        flag_entries(value, '--tasks')
 
 
 def test_a_repeatable_flag_read_as_a_number_is_refused():
     with pytest.raises(SystemExit, match='quote'):
-        repeated(10, '--tasks')
+        flag_entries(10, '--tasks')
 
 
 def test_a_labelled_url_takes_its_label():

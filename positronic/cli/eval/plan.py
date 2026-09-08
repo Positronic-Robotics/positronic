@@ -1,7 +1,4 @@
-"""The half of `positronic eval run` that files an eval plan for the rig.
-
-Not a command of its own: running an eval is one act, and where it runs is an argument to it.
-"""
+"""The part of `positronic eval run` that files an eval plan for the lab rig."""
 
 from collections.abc import Mapping
 from pathlib import Path
@@ -22,12 +19,12 @@ SCENE_CAMERA_PREFIX = 'camera.'
 SCENE_CAMERAS = 'external_cameras'
 
 
-def repeated(value: object, flag: str) -> list[str]:
-    """The entries of a flag that takes more than one, in either spelling the command line reaches.
+def flag_entries(value: object, flag: str) -> list[str]:
+    """The entries of a repeatable flag, in both forms the command line produces.
 
-    A CLI value is read with `ast.literal_eval`, which takes `[a,b]` as a list and keeps the text of
-    anything it cannot read — a hyphen or a `=` inside the brackets is enough. So this splits the
-    text on the comma, and `--tasks=[a,b]` and `--tasks=a-b,c-d` state one list.
+    The CLI reads a value with `ast.literal_eval`: `[a,b]` arrives as a list, and a value it cannot
+    read (a hyphen or a `=` inside the brackets) arrives as text. This splits the text on commas,
+    so `--tasks=[a,b]` and `--tasks=a-b,c-d` state one list.
     """
     if value is None:
         return []
@@ -127,8 +124,8 @@ def plan_from_flags(
     transaction_key: str | None,
 ) -> EvalPlan:
     """The plan the rig flags state."""
-    task_ids = repeated(tasks, '--tasks')
-    urls = repeated(policy_url, '--policy-url')
+    task_ids = flag_entries(tasks, '--tasks')
+    urls = flag_entries(policy_url, '--policy-url')
     if not task_ids or not urls or episodes is None:
         raise SystemExit('a rig run states --tasks, --policy-url and --episodes, or the whole plan in a file')
     payload: dict[str, object] = {
@@ -138,7 +135,7 @@ def plan_from_flags(
         'cap_per_episode_sec': cap,
         'policy_preset': preset,
         'transaction_key': transaction_key,
-        **scene_from_pairs(repeated(scene, '--scene')),
+        **scene_from_pairs(flag_entries(scene, '--scene')),
     }
     try:
         return EvalPlan.model_validate(payload)
@@ -149,9 +146,8 @@ def plan_from_flags(
 def file_plan(plan: EvalPlan, platform_url: str | None = None) -> PlanFiled:
     """File one plan with `evals.run`, print what came back, and return it.
 
-    The plan names the tasks and the policies each runs, so it is the whole of the ask. Two or more
-    endpoints make one blind sample: the operator is told no policy, and each episode records which
-    one served it. `positronic eval status` reads the plan back by the id this prints.
+    Two or more endpoints make one blind sample: the operator is told no policy, and each episode
+    records which one served it. `positronic eval status` reads the plan back by the id this prints.
     """
     with gateway(platform_url) as client:
         filed = client.run_eval(plan)
@@ -168,7 +164,7 @@ def plan_source(eval: object, from_file: str | None) -> Path | None:
 
 
 def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:
-    """Stop where a plan file and the flags that state a plan both name one."""
+    """Exit when a plan file and plan flags are both given: one source states the plan."""
     twice = sorted(flag for flag, value in stated.items() if value)
     if twice:
         raise SystemExit(f'{source} carries the whole plan; drop {", ".join(twice)}')

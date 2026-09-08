@@ -21,9 +21,8 @@ uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
 uv run positronic eval status --id=<hex id>
 ```
 
-`eval run` is the same command that runs an eval on the machine in front of you; a policy image in
-place of a policy is what sends it to the platform, and a policy URL is what files a plan for the
-lab rig:
+`eval run` is the same command that runs an eval on the machine in front of you. A policy image in
+place of a policy sends it to the platform, and a policy URL files a plan for the lab rig:
 
 ```bash
 uv run positronic eval catalog
@@ -31,8 +30,8 @@ uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candi
 ```
 
 Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode
-records which one served it. `--from-file` takes the whole plan as YAML or JSON instead, and so does
-`--eval` where its value names a file.
+records which one served it. `--from-file` takes the whole plan as a YAML or JSON file. `--eval` does the same when its value is
+the path of a file.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list, and naming one

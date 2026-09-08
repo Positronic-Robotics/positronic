@@ -225,7 +225,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
 
 
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
-    """Stop on an argument the chosen half of `run` cannot honour.
+    """Stop on an argument the chosen place of `run` cannot honour.
 
     Dropping one silently hands back a run the caller believes they shaped. Every "not asked for"
     value is falsy, which is what makes the test the value itself.
@@ -240,8 +240,10 @@ def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task
     return (replace(task, charge_inference_time=charge) for task in tasks())
 
 
-# What a run with no half named is missing: each half is chosen by the policy it names.
-_WHICH_HALF = '--policy is required to run here; --policy-image runs it on the platform, and --policy-url on the rig'
+# The policy flag chooses where the eval runs.
+_NO_POLICY_NAMED = (
+    '--policy is required to run here; --policy-image runs it on the platform, and --policy-url on the rig'
+)
 
 
 @cfn.config(eval=unset, policy=policy_cfg.unset)
@@ -269,16 +271,16 @@ def run(
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
-    lab rig: the tasks (``--tasks``), the count per endpoint (``--episodes``) and the scene, or the
-    whole plan in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
+    lab rig: the tasks (``--tasks``), the count per endpoint (``--episodes``) and the scene
+    (``--scene``), or the whole plan in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
     make one blind sample. The platform answers a submission id or a plan id, which ``positronic
     eval status`` reads.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
 
-    A run that goes to the platform returns what the platform made, so a caller holding this
-    function has the id without parsing what was printed. A local run's result is the dataset it wrote.
+    A run sent to the platform returns the platform's answer, so a caller holding this function has
+    the id without parsing what was printed. A local run's result is the dataset it wrote.
     """
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
@@ -305,7 +307,7 @@ def run(
             'local',
         )
         if policy is None:
-            raise SystemExit(_WHICH_HALF)
+            raise SystemExit(_NO_POLICY_NAMED)
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
         eval = replace(eval, tasks=partial(_charged, eval.tasks, charge_inference_time))
@@ -320,7 +322,7 @@ def run(
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
     if source is not None or any(rig_only.values()):
-        # The rig runs the plan the platform files, and records under the client's own prefix.
+        # The rig records under the client's own prefix, and a plan carries no alias.
         _refuse({**local_only, '--alias': alias}, 'rig')
         if source is not None:
             refusing_a_second_source(source, rig_only)
@@ -340,4 +342,4 @@ def run(
             platform_url,
         )
 
-    raise SystemExit(_WHICH_HALF)
+    raise SystemExit(_NO_POLICY_NAMED)

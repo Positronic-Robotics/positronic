@@ -48,11 +48,11 @@ tailnet: pass `--plaintext-http` to reach it.
 
 An eval is a list of tasks. The platform offers named evals, and a customer composes one: an
 `EvalPlan` names the catalogue tasks to run, the policies (endpoints) to run them on, and the
-episodes each endpoint takes on each task. The count is stated once on the plan; a task states its
-own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
-plan. The scene sits flat on the plan and on a task: `tote_placement`, `camera_vantage`,
-`external_cameras` and `clutter`; an endpoint states only its count. `episodes_total` is a checksum a caller may state, and `max_cap_per_episode_sec` a
-ceiling every task's window sits under.
+episodes each endpoint takes on each task. The plan states the count once. A task may override it for that task, and an endpoint may
+override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
+plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras` and `clutter`. An
+endpoint states only its count. `episodes_total` is a checksum a caller may state.
+`max_cap_per_episode_sec` is the upper bound on every task's cap.
 
 ```yaml
 tasks:
@@ -75,22 +75,23 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `evals.run`: `--from-file` names the file, and so does
-`--eval` where its value names one. The same flags state a plan without a file — `--policy-url`
+`positronic eval run` files that plan with `evals.run`. `--from-file` names the file. `--eval`
+also names it when its value is the path of an existing file. The same flags state a plan without a file — `--policy-url`
 (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap`, `--preset` and `--scene KEY=VALUE`. Two
-or more endpoints make one blind sample. `eval status` and `eval list` read a filed plan back by its
+or more endpoints make one blind sample: the operator is told no policy, and each episode records
+which one served it. `eval status` and `eval list` read a filed plan back by its
 id, as they read a submission. The platform records the plan, the rollouts coordinator runs it on
 the lab rig, and a `blocked` plan waits on what its `error` names. A key needs a customer grant for
 `evals.run`; a key without one is refused `forbidden`.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `evals.run`
 takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
-evals a submission names. A customer grant adds the rig's evals and tasks, filtered to the entries
+evals a submission can name. A customer grant adds the rig's evals and tasks, filtered to the entries
 offered to the grant's client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
-`platform_client.catalog`. The coordinator's own request record extends `EvalPlan` with its
-bookkeeping and adds no field of its own to the ask, so the two never drift.
+`platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
+definition.
 
 ## From the command line
 

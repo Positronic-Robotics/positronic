@@ -10,8 +10,8 @@ from positronic.eval import keys as eval_keys
 
 @cfn.config()
 def unset():
-    """No eval. It lives in this package so a relative ``--eval=.sim.positronic.stack_cubes`` still resolves
-    against it, and instantiates to None rather than raising, so the absence is a value ``run`` can act on."""
+    """No eval. It lives in this package so a relative ``--eval=.sim.positronic.stack_cubes`` resolves
+    against it, and it instantiates to None so ``run`` can act on the absence."""
     return None
 
 

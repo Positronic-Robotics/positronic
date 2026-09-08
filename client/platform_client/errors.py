@@ -21,7 +21,7 @@ REASON_CODE_DETAIL = 'reason_code'
 QUOTA_DETAIL = 'quota'
 EVALS_DETAIL = 'evals'
 TASKS_DETAIL = 'tasks'
-# Behind a scene the task cannot be set up in: the mounts and the tote sides that task offers.
+# Sent with the refusal of a scene the task cannot provide: the mounts and the tote sides it offers.
 MOUNTS_DETAIL = 'mounts'
 TOTE_SIDES_DETAIL = 'tote_sides'
 
@@ -103,8 +103,8 @@ class PlatformError(Exception):
     def tasks(self) -> list[TaskRef] | None:
         """The task ids the rollouts catalogue holds, when the failure is that the one asked for is not one.
 
-        Absent means absent. A present value that is not a list of ids raises, for the reason
-        `evals` gives.
+        A missing key means the failure is not that one. A present value that is not a list of ids
+        raises: a short list is worse than none, since a caller would pick from it believing it whole.
         """
         if TASKS_DETAIL not in self.details:
             return None
