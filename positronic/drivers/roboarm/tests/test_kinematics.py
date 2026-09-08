@@ -1,9 +1,9 @@
-"""What ``MjcfKinematics`` answers, pinned to what the YAM driver answered before it shared the class.
+"""What ``MjcfKinematics`` answers on the YAM model, held to a fixed corpus.
 
-``yam_kinematics_goldens.npz`` was generated from the YAM's own ``_Kinematics`` at `cab986af`: ten random
-joint vectors inside the model's range, the pose each puts ``DEFAULT_FRAME`` at, the joints IK finds for
-that pose from a seed 0.15 rad away, and two targets outside the arm's reach. Regenerating it is a change
-of behaviour, not of test data.
+``yam_kinematics_goldens.npz`` holds ten joint vectors inside the model's range, the pose each puts
+``DEFAULT_FRAME`` at, the joints IK finds for that pose from a seed 0.15 rad away, and two targets outside
+the arm's reach. The numbers are the answers, not a sample of them: a run that disagrees with the file has
+changed what the class solves, so regenerating it is a change of behaviour rather than of test data.
 """
 
 from pathlib import Path
@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from positronic import geom
-from positronic.drivers.roboarm.kinematics import MjcfKinematics
+from positronic.drivers.roboarm.mjcf_kinematics import MjcfKinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 
 _YAM_MJCF = 'assets/mujoco/i2rt_yam/yam.xml'
@@ -20,9 +20,10 @@ _YAM_JOINTS = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 _GOLDENS = Path(__file__).with_name('yam_kinematics_goldens.npz')
 
 
-def _yam_reach_postures(x: float, y: float) -> list[np.ndarray]:
-    """The YAM's own warm starts, copied from its driver so the goldens meet the seeds that made them."""
-    az = np.arctan2(y, x)
+def _yam_reach_postures(target: geom.Transform3D) -> list[np.ndarray]:
+    """The YAM's warm starts: joint1 at the target's azimuth, elbow folded down at two heights. The corpus
+    is answers from these seeds, so it is read with them."""
+    az = np.arctan2(target.translation[1], target.translation[0])
     return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
 
 

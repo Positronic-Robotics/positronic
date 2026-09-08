@@ -27,7 +27,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
-from .kinematics import MjcfKinematics
+from .mjcf_kinematics import MjcfKinematics
 from .models import DEFAULT_FRAME
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
@@ -47,11 +47,11 @@ _PARK_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
 
-def _reach_postures(x: float, y: float) -> list[np.ndarray]:
-    """IK warm-start candidates for reaching toward arm-base-frame point (x, y): joint1 swung to the target's
-    azimuth, elbow folded down at two heights. The 6-DoF wrist gives LM no null space to escape bad basins,
-    so seeding near the goal is what makes limit-clamped IK reliable."""
-    az = np.arctan2(y, x)
+def _reach_postures(target: geom.Transform3D) -> list[np.ndarray]:
+    """IK warm-start candidates for reaching toward ``target``: joint1 swung to its azimuth, elbow folded
+    down at two heights. The 6-DoF wrist gives LM no null space to escape bad basins, so seeding near the
+    goal is what makes limit-clamped IK reliable."""
+    az = np.arctan2(target.translation[1], target.translation[0])
     return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
 
 
