@@ -80,8 +80,7 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
-# What an endpoint may state, rather than what it may not: a field added to `Cascade` later is then
-# refused on an endpoint, where a list of the forbidden ones would take it.
+# A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
 _ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
 
 

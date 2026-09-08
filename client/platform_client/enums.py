@@ -74,7 +74,7 @@ class SubmissionStatus(IntEnum):
     finished = 4
     errored = 5
     cancelled = 6
-    # Paused rather than decided: it waits on what `reason` names, and a later report moves it on.
+    # It waits on what `reason` names, and a later report moves it on.
     blocked = 7
 
 

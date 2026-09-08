@@ -388,8 +388,8 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
-    # Every status a caller can see carries a variant. `submitting` is internal and INVALID is the
-    # unset sentinel, so a status added with no variant of its own is what this catches.
+    # Every status a caller can see carries a variant. This catches one added without one;
+    # `submitting` is internal and INVALID is the unset sentinel.
     internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
     assert {get_args(variant)[1].tag for variant in variants} == {
         slug_of(status) for status in SubmissionStatus if status not in internal
