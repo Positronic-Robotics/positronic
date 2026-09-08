@@ -27,7 +27,15 @@ from pimm.core import (
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
+from pimm.world import (
+    EventReceiver,
+    LocalQueueEmitter,
+    MultiprocessReceiver,
+    QueueEmitter,
+    SystemClock,
+    VirtualClock,
+    World,
+)
 
 
 def dummy_process(stop_reader, clock):
@@ -148,7 +156,7 @@ def test_a_queue_that_answers_with_anything_but_a_message_says_the_connection_is
     the incident that named this produced a float. Reading `.data` off it would hide the interrupt."""
     with World() as world:
         emitter, receiver = world.mp_pipes()
-        assert not isinstance(receiver, list)
+        assert isinstance(receiver, MultiprocessReceiver)
         emitter.emit('before', ts=1)  # settles the channel on the queue transport
         assert receiver.read() is not None
         receiver._queue.put(0.5)  # what the torn connection hands back
