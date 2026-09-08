@@ -151,7 +151,7 @@ def _bundled_robotiq_2f85() -> dict:
     subtree = ''.join(ET.tostring(el, encoding='unicode') for el in _build_2f85_elements())
     return {
         'subtree': subtree,
-        'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
+        roboarm_keys.MESHES: {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
         roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
     }
 
@@ -170,7 +170,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     merge its meshes into ``meshes``. Returns the ``grip``-driven gripper spec for the viewer."""
     gripper = _bundled_robotiq_2f85()
     arm_root.extend(ET.fromstring(f'<robot>{gripper["subtree"]}</robot>'))
-    meshes.update(gripper['meshes'])
+    meshes.update(gripper[roboarm_keys.MESHES])
     return gripper[roboarm_keys.GRIPPER]
 
 
@@ -189,7 +189,7 @@ def bundled_franka_model() -> dict:
     add_default_frame(arm_root, EE_LINK)
     return {
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
-        'meshes': meshes,
+        roboarm_keys.MESHES: meshes,
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         roboarm_keys.GRIPPER: gripper,
@@ -211,7 +211,7 @@ def bundled_panda_model() -> dict:
     add_default_frame(root, EE_LINK)
     return {
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
-        'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
+        roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.

@@ -230,6 +230,25 @@ def test_a_run_opens_by_taking_the_arm_off_its_rest_pose():
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
 
 
+def test_a_run_that_opens_on_a_moving_arm_waits_for_it_before_it_writes():
+    """Position mode on a joint past its limit faults the controller. A goal sent before the mode change is
+    refused, and that refusal reads as a dead command channel and sends the run through link recovery."""
+    arm = FakeArm()
+    arm.velocities = np.full(ARM, 10.0)  # past every joint's limit when the session opens
+    driver, states, loop = _driven(arm)
+
+    for _ in range(20):
+        next(loop)
+    assert arm.goals == [], 'the arm was written to before it was in position mode'
+    assert arm.mode is not trossen_driver.trossen_arm.Mode.position
+
+    arm.velocities = np.zeros(ARM)
+    _homed(loop)
+
+    assert arm.mode is trossen_driver.trossen_arm.Mode.position
+    np.testing.assert_allclose(_held(arm), trossen_driver._HOME_JOINTS, atol=1e-3)
+
+
 def test_a_run_ends_by_putting_the_arm_back_on_it():
     """The controller holds the arm only at rest: `_opened` sets it idle, and idle anywhere else falls."""
     arm = FakeArm()

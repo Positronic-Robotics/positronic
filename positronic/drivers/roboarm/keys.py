@@ -10,6 +10,8 @@ JOINT_NAMES = 'joint_names'
 ROBOT = 'robot'
 # The gripper spec the viewer drives: the signal it reads, the joints it moves, their travel at full closure.
 GRIPPER = 'gripper'
+# The mesh files ``URDF`` names, keyed by the name it gives each one.
+MESHES = 'meshes'
 
 # Where the episode's poses sit relative to ``DEFAULT_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]`` transform.
 # Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.

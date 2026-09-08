@@ -26,7 +26,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import mujoco as mj
 import numpy as np
@@ -253,24 +253,6 @@ def _connect(ip: str) -> Any:
     return driver
 
 
-def _short_way(frm: geom.Rotation, to: geom.Rotation) -> np.ndarray:
-    """The rotation vector from ``frm`` to ``to``, the way round that turns least.
-
-    A quaternion and its negative are the same turn, and `as_rotvec` reads the negative one as nearly a
-    full turn the other way.
-    """
-    turn = (frm.inv * to).as_rotvec
-    angle = float(np.linalg.norm(turn))
-    return turn * (1.0 - 2.0 * np.pi / angle) if angle > np.pi else turn
-
-
-def _apart(frm: geom.Transform3D, to: geom.Transform3D) -> tuple[float, float]:
-    """How far ``to`` stands from ``frm``: metres, and radians the short way round."""
-    return float(np.linalg.norm(to.translation - frm.translation)), float(
-        np.linalg.norm(_short_way(frm.rotation, to.rotation))
-    )
-
-
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the controller handle, the reading it takes each tick, and the setpoint
     it holds the arm at.
@@ -323,6 +305,9 @@ class _Arm(DriverRun[command.CommandType]):
         # What a delta still owes: a delta is consumed once, and its travel takes more than the one step a
         # streamed pose is paced to
         self._travel_to: geom.Transform3D | None = None
+        # Whether the arm is in position mode. `set_all_positions` needs it, and the controller refuses a
+        # goal without it -- which reads as a dead command channel and sends the run through recovery.
+        self.controlled = False
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
@@ -395,8 +380,8 @@ class _Arm(DriverRun[command.CommandType]):
                 return f'joint {i} reads {value:.4f}, outside [{lower:.4f}, {upper:.4f}]'
         return ''
 
-    def _take_control(self) -> None:
-        """Put the arm in position mode holding where it reads.
+    def take_control(self) -> None:
+        """Put the arm in position mode holding where it reads, and say so through ``controlled``.
 
         The mode change comes first and the setpoint immediately after, so the servo has a goal from the
         tick it starts servoing. Reading first is what makes a session opened mid-run resume without a jump:
@@ -407,7 +392,7 @@ class _Arm(DriverRun[command.CommandType]):
         self.overspeed = bool(np.any(dq > self._dq_max))
         if self.overspeed:
             # Position mode on a joint already past its limit is what faults the controller and drops the
-            # arm. The next tick reads the arm again and takes control once it has slowed.
+            # arm. `controlled` stays false, so nothing is written and `run` asks again once it has slowed.
             self.complain(f'The arm at {self.ip} runs too fast to take control of; waiting for it to slow')
             return
         if outside := self.limit_violation():
@@ -416,13 +401,14 @@ class _Arm(DriverRun[command.CommandType]):
         self._goal_time = _STREAM_GOAL_TIME_S
         self._grip_target = self._grip_wanted = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
+        self.controlled = True
         self._anchor = None  # wherever the arm is now is what a Cartesian target steps on from
         self._travel_to = None  # and nothing is owed the rest of a travel across a new session
         self._arm_unsent, self._grip_unsent = True, True
         self.write()
 
     def __enter__(self) -> '_Arm':
-        self._take_control()
+        self.take_control()
         return self
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
@@ -515,10 +501,28 @@ class _Arm(DriverRun[command.CommandType]):
         return self._anchor if self._anchor is not None else self._kin.fk(self._target)
 
     @staticmethod
+    def _short_way(frm: geom.Rotation, to: geom.Rotation) -> np.ndarray:
+        """The rotation vector from ``frm`` to ``to``, the way round that turns least.
+
+        A quaternion and its negative are the same turn, and `as_rotvec` reads the negative one as nearly a
+        full turn the other way.
+        """
+        turn = (frm.inv * to).as_rotvec
+        angle = float(np.linalg.norm(turn))
+        return turn * (1.0 - 2.0 * np.pi / angle) if angle > np.pi else turn
+
+    @staticmethod
+    def _apart(frm: geom.Transform3D, to: geom.Transform3D) -> tuple[float, float]:
+        """How far ``to`` stands from ``frm``: metres, and radians the short way round."""
+        return float(np.linalg.norm(to.translation - frm.translation)), float(
+            np.linalg.norm(_Arm._short_way(frm.rotation, to.rotation))
+        )
+
+    @staticmethod
     def _towards(frm: geom.Transform3D, to: geom.Transform3D, max_m: float, max_rad: float) -> geom.Transform3D:
         """``to``, brought within ``max_m`` and ``max_rad`` of ``frm``."""
-        step, turn = to.translation - frm.translation, _short_way(frm.rotation, to.rotation)
-        distance, angle = _apart(frm, to)
+        step, turn = to.translation - frm.translation, _Arm._short_way(frm.rotation, to.rotation)
+        distance, angle = _Arm._apart(frm, to)
         if distance > max_m:
             step = step * (max_m / distance)
         if angle > max_rad:
@@ -606,10 +610,11 @@ class _Arm(DriverRun[command.CommandType]):
         Held to what a joint may travel in a tick. Teleoperation is paced by the hand it follows, so this
         only bounds what one wild target can ask the arm for.
         """
-        # Read before `_target_of`, which steps the anchor a delta is measured from
-        is_delta = isinstance(cmd, command.CartesianDelta)
-        self._travel_to = cmd.apply(self.asked_pose) if is_delta else None
+        # Composed before `_target_of`, which steps the anchor a delta is measured from, and kept only
+        # once that has taken the command: one it refuses asks the arm for no travel.
+        goal = cmd.apply(self.asked_pose) if isinstance(cmd, command.CartesianDelta) else None
         self._wanted = self._target_of(cmd)
+        self._travel_to = goal
         self._goal_time = _STREAM_GOAL_TIME_S
 
     def walk(self) -> None:
@@ -621,7 +626,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         if self._travel_to is None or self._goal_time != _STREAM_GOAL_TIME_S:
             return
-        distance, angle = _apart(self.asked_pose, self._travel_to)
+        distance, angle = self._apart(self.asked_pose, self._travel_to)
         goal, last = self._travel_to, distance <= _MAX_STEP_M and angle <= _MAX_STEP_RAD
         if last:
             self._travel_to = None
@@ -631,6 +636,19 @@ class _Arm(DriverRun[command.CommandType]):
         except ValueError as exc:
             self._travel_to = None
             self.complain(f'The arm at {self.ip} stopped short of {goal}: {exc}', key='travel refused')
+
+    def taking_control(self) -> Iterator[pimm.Command]:
+        """Yield until the arm is in position mode, asking again each tick it is not.
+
+        An arm still running too fast to take is left alone: a goal sent before the mode change is refused,
+        and the refusal reads as a dead command channel and sends the run through link recovery.
+        """
+        while not self.controlled and not self.should_stop.value:
+            self.publish()
+            yield self.limiter.wait()
+            self.read()
+            if not self.link_down:
+                self.take_control()
 
     def travel_to(self, joints: np.ndarray, what: str, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
         """Put the arm at ``joints`` and yield until it reads back there.
@@ -699,7 +717,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def write(self) -> None:
         """Put the setpoint on the link, if anything has asked for one since it was last written."""
-        if not (self._arm_unsent or self._grip_unsent):
+        if not self.controlled or not (self._arm_unsent or self._grip_unsent):
             return
         try:
             self._put_goal(self._target, self._arm_unsent)
@@ -740,7 +758,7 @@ class _Arm(DriverRun[command.CommandType]):
                 # The new session holds the arm where it reads, and a move in flight refuses every request
                 # that would resend its target, so waiting out its deadline is all it could do.
                 self.moves.fail(ConnectionError(f'the link to the arm at {self.ip} dropped during the move'))
-            self._take_control()
+            self.take_control()
         # rules-allow: swallowed-error — an arm still out of reach reads ERROR; the next attempt tries again
         except trossen_arm.RuntimeError as exc:
             self.complain(f'The arm at {self.ip} did not take a new session: {exc}')
@@ -820,7 +838,7 @@ def _robot_meta() -> dict[str, Any]:
     return {
         roboarm_keys.ROBOT: 'trossen_wxai',
         roboarm_keys.URDF: ET.tostring(urdf, encoding='unicode'),
-        'meshes': {
+        roboarm_keys.MESHES: {
             name: (mesh_dir / name).read_bytes() for name in sorted({m.get('filename', '') for m in urdf.iter('mesh')})
         },
         roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
@@ -855,6 +873,7 @@ class Robot(pimm.ControlSystem):
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
                 self.robot_meta.emit(_robot_meta())
+                yield from arm.taking_control()
                 yield from arm.travel_to(_HOME_JOINTS, 'the pose it opens at')
 
                 while not should_stop.value:
@@ -864,6 +883,12 @@ class Robot(pimm.ControlSystem):
                         arm.settle()  # a move runs out its deadline on the last reading; nobody waits forever
                         arm.publish()
                         arm.moves.answer()
+                        yield arm.limiter.wait()
+                        continue
+
+                    if not arm.controlled:  # the arm was too fast to take when the session opened
+                        arm.take_control()
+                        arm.publish()
                         yield arm.limiter.wait()
                         continue
 
@@ -910,23 +935,22 @@ class _FakeTrossen:
     kinematics are the driver's own, so the joints it reports are the whole of what it says.
     """
 
+    class _Limit(NamedTuple):
+        position_min: float
+        position_max: float
+        velocity_max: float
+        position_tolerance: float
+
     # What the arm reports for itself, read off a wxai_v0 controller on firmware 1.11.1
     _LIMITS = [
-        (-3.141593, 3.141593, 6.2832, 0.2),
-        (0.0, 3.141593, 6.2832, 0.2),
-        (0.0, 2.356194, 6.2832, 0.2),
-        (-1.570796, 1.570796, 9.4248, 0.4),
-        (-1.570796, 1.570796, 9.4248, 0.4),
-        (-3.141593, 3.141593, 9.4248, 0.4),
-        (0.0, 0.04, 0.25, 0.004),
+        _Limit(-3.141593, 3.141593, 6.2832, 0.2),
+        _Limit(0.0, 3.141593, 6.2832, 0.2),
+        _Limit(0.0, 2.356194, 6.2832, 0.2),
+        _Limit(-1.570796, 1.570796, 9.4248, 0.4),
+        _Limit(-1.570796, 1.570796, 9.4248, 0.4),
+        _Limit(-3.141593, 3.141593, 9.4248, 0.4),
+        _Limit(0.0, 0.04, 0.25, 0.004),
     ]
-
-    class _Limit:
-        def __init__(self, lower: float, upper: float, velocity_max: float, position_tolerance: float):
-            self.position_min = lower
-            self.position_max = upper
-            self.velocity_max = velocity_max
-            self.position_tolerance = position_tolerance
 
     _TICK_US = 5000  # the controller streams faster than the driver reads, so its clock moves every read
 
@@ -950,7 +974,7 @@ class _FakeTrossen:
         self.sessions += 1
 
     def get_joint_limits(self) -> list['_FakeTrossen._Limit']:
-        return [_FakeTrossen._Limit(*limit) for limit in _FakeTrossen._LIMITS]
+        return list(_FakeTrossen._LIMITS)
 
     def get_robot_output(self) -> Any:
         if not self.frozen:
@@ -989,7 +1013,7 @@ class _FakeTrossen:
             goal = np.append(goal[:_ARM_JOINTS], self._gripper_goal)
         step = self._alpha * (goal - self._position)
         # Half of what each joint may do, which is the headroom a servo keeps when it is not faulting.
-        per_tick = np.array([limit[2] for limit in _FakeTrossen._LIMITS]) / (2 * _HZ)
+        per_tick = np.array([limit.velocity_max for limit in _FakeTrossen._LIMITS]) / (2 * _HZ)
         step = np.clip(step, -per_tick, per_tick)
         self._velocity = step * _HZ
         self._position = self._position + step
