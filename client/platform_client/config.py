@@ -1,9 +1,9 @@
 """The key record: where a registration saves its key, and the order every command reads one in.
 
 `register` writes `config.json` under the config directory, mode 0600, holding the platform URL and
-the key together. A command reads the key from `POSITRONIC_PLATFORM_API_KEY`, then from the file
-`--api-key-file` names, then from that record. It reads the platform from its own argument, then
-from `POSITRONIC_PLATFORM_URL`, then from that record.
+the key together. A command reads the key from `POSITRONIC_PLATFORM_API_KEY`, then from that
+record. It reads the platform from its own argument, then from `POSITRONIC_PLATFORM_URL`, then from
+that record.
 """
 
 from __future__ import annotations
@@ -102,29 +102,18 @@ def write_config(directory: Path, config: Config) -> None:
         raise
 
 
-def key_is_given(env: Mapping[str, str], api_key_file: Path | None) -> bool:
-    """Whether the caller names a key, in the environment or in a key file. A named key wins over the record's."""
-    return bool(env.get(API_KEY_ENV)) or api_key_file is not None
+def key_is_given(env: Mapping[str, str]) -> bool:
+    """Whether the caller names a key in the environment. A named key wins over the record's."""
+    return bool(env.get(API_KEY_ENV))
 
 
-def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Config | None) -> ApiKey | None:
-    """The key to call with: from the environment, then from the named file, then from the record."""
+def api_key_from(env: Mapping[str, str], record: Config | None) -> ApiKey | None:
+    """The key to call with: from the environment, then from the record."""
     from_env = env.get(API_KEY_ENV)
     if from_env is not None and not from_env.strip():
         raise SystemExit(f'{API_KEY_ENV} is set to an empty value: put the key in it, or unset it')
     if from_env:
         return ApiKey(from_env)
-    if api_key_file is not None:
-        try:
-            value = api_key_file.read_text(encoding='utf-8').strip()
-        except OSError as exc:
-            raise SystemExit(f'--api-key-file {api_key_file}: {exc.strerror}') from exc
-        except UnicodeDecodeError as exc:
-            # The decoder's own message quotes the offending bytes, which are part of the key.
-            raise SystemExit(f'--api-key-file {api_key_file} is not UTF-8 text') from exc
-        if not value:
-            raise SystemExit(f'--api-key-file {api_key_file} holds no key')
-        return ApiKey(value)
     return record.api_key if record else None
 
 
@@ -151,8 +140,8 @@ def same_platform(one: str, other: str) -> bool:
     return httpx.URL(one.removesuffix('/')) == httpx.URL(other.removesuffix('/'))
 
 
-def record_if_needed(env: Mapping[str, str], api_key_file: Path | None, platform_url: str | None) -> Config | None:
+def record_if_needed(env: Mapping[str, str], platform_url: str | None) -> Config | None:
     """The saved record, or `None` when the caller names both the key and the platform."""
-    if key_is_given(env, api_key_file) and platform_is_given(env, platform_url):
+    if key_is_given(env) and platform_is_given(env, platform_url):
         return None
     return read_config(config_dir(env))

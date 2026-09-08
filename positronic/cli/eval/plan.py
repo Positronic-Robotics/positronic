@@ -173,10 +173,11 @@ def file_plan(plan: EvalPlan, platform_url: str | None = None) -> PlanFiled:
 
 def plan_source(eval: object, from_file: str | None) -> Path | None:
     """The file a whole plan comes from: `--from-file`, else an `--eval` that names an existing file."""
-    named = Path(eval) if isinstance(eval, str) and Path(eval).is_file() else None
-    if from_file is not None and named is not None:
-        raise SystemExit(f'--from-file and --eval={eval} each name a plan file; give one')
-    return Path(from_file) if from_file is not None else named
+    if from_file is not None:
+        if eval is not None:
+            raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
+        return Path(from_file)
+    return Path(eval) if isinstance(eval, str) and Path(eval).is_file() else None
 
 
 def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:

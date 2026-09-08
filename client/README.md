@@ -103,7 +103,6 @@ the key it mints; `platform-register` mints one from GitHub and prints it:
 ```bash
 export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
 uv run positronic account register --alias=<display name>
-export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
 uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random

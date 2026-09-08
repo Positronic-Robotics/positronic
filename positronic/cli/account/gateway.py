@@ -67,8 +67,8 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     """
     # A registration sends no key, so it reads the record only for a platform it does not name.
     needs_record = key_required or not platform_is_given(os.environ, platform_url)
-    record = record_if_needed(os.environ, None, platform_url) if needs_record else None
-    key = api_key_from(os.environ, None, record) if key_required else None
+    record = record_if_needed(os.environ, platform_url) if needs_record else None
+    key = api_key_from(os.environ, record) if key_required else None
     if key_required and key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     # A misconfigured platform — an empty `--platform-url`, or one the client cannot reach.
@@ -77,7 +77,7 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     if (
         key_required
         and record is not None
-        and not key_is_given(os.environ, None)
+        and not key_is_given(os.environ)
         and not same_platform(client_.base_url, record.platform_url)
     ):
         raise SystemExit(

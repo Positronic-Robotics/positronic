@@ -18,18 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 _FORBID_EXTRA = ConfigDict(extra='forbid')
 
 
-def _absolute_url(url: str, whose: str) -> None:
-    """Refuse an address that is not absolute. `httpx.InvalidURL` is not a `ValueError`, so this
-    converts it to one for the model to report."""
-    try:
-        absolute = httpx.URL(url).is_absolute_url
-    except httpx.InvalidURL as e:
-        raise ValueError(f'endpoint {whose!r} names {url!r}, which is not a URL: {e}') from e
-    if not absolute:
-        # The platform judges the scheme; this refuses only an address with no host.
-        raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
-
-
 def _require_unique_names(names: list[str], whose: str) -> None:
     repeated = sorted(name for name, seen in Counter(names).items() if seen > 1)
     if repeated:
@@ -76,6 +64,18 @@ class Cascade(BaseModel):
     # Per external camera the task defines, keyed by the mount name the task gives it.
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
+
+
+def _absolute_url(url: str, whose: str) -> None:
+    """Refuse an address that is not absolute. `httpx.InvalidURL` is not a `ValueError`, so this
+    converts it to one for the model to report."""
+    try:
+        absolute = httpx.URL(url).is_absolute_url
+    except httpx.InvalidURL as e:
+        raise ValueError(f'endpoint {whose!r} names {url!r}, which is not a URL: {e}') from e
+    if not absolute:
+        # The platform judges the scheme; this refuses only an address with no host.
+        raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
 class Endpoint(Cascade):

@@ -180,10 +180,12 @@ def test_a_plan_file_beside_a_policy_image_is_refused(platform, run_command, tmp
     assert platform.seen is None
 
 
-def test_two_plan_files_are_refused(platform, run_command, tmp_path: Path):
+@pytest.mark.parametrize('eval', ['fake.smoke', 'plan.yaml'])
+def test_an_eval_beside_a_plan_file_is_refused(platform, run_command, tmp_path: Path, eval: str):
+    # A name and a second file alike: the file carries the whole plan, and `--eval` would be dropped.
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
-    with pytest.raises(SystemExit, match='each name a plan file'):
-        run_command(run, from_file=named, eval=named)
+    with pytest.raises(SystemExit, match='carries the whole plan; drop --eval'):
+        run_command(run, from_file=named, eval=named if eval == 'plan.yaml' else eval)
     assert platform.seen is None
 
 

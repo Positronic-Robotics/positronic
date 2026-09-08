@@ -104,38 +104,15 @@ def test_a_config_directory_set_to_nothing_is_refused_rather_than_ignored():
         config_dir({CONFIG_DIR_ENV: ''})
 
 
-def test_the_environment_holds_the_key_before_a_file_and_a_file_before_the_record(tmp_path: Path, record: Config):
-    key_file = tmp_path / 'key'
-    key_file.write_text('from-the-file\n')
-
-    assert api_key_from({API_KEY_ENV: 'from-the-environment'}, key_file, record) == 'from-the-environment'
-    assert api_key_from({}, key_file, record) == 'from-the-file'
-    assert api_key_from({}, None, record) == KEY
-    assert api_key_from({}, None, None) is None
+def test_the_environment_holds_the_key_before_the_record(record: Config):
+    assert api_key_from({API_KEY_ENV: 'from-the-environment'}, record) == 'from-the-environment'
+    assert api_key_from({}, record) == KEY
+    assert api_key_from({}, None) is None
 
 
 def test_a_key_variable_set_to_nothing_is_refused_rather_than_ignored(record: Config):
     with pytest.raises(SystemExit, match=API_KEY_ENV):
-        api_key_from({API_KEY_ENV: '  '}, None, record)
-
-
-def test_a_key_file_that_is_missing_or_empty_ends_the_command_naming_it(tmp_path: Path):
-    empty = tmp_path / 'empty'
-    empty.write_text('  \n')
-    with pytest.raises(SystemExit, match='holds no key'):
-        api_key_from({}, empty, None)
-    with pytest.raises(SystemExit, match='absent'):
-        api_key_from({}, tmp_path / 'absent', None)
-
-
-def test_a_key_file_that_is_not_utf8_names_it_and_quotes_none_of_it(tmp_path: Path):
-    key_file = tmp_path / 'key'
-    key_file.write_bytes(b'\xff\xfe secret')
-
-    with pytest.raises(SystemExit) as exit_info:
-        api_key_from({}, key_file, None)
-
-    assert str(exit_info.value) == f'--api-key-file {key_file} is not UTF-8 text'
+        api_key_from({API_KEY_ENV: '  '}, record)
 
 
 def test_the_platform_comes_from_the_argument_then_the_environment_then_the_record(record: Config):
@@ -151,10 +128,9 @@ def test_an_empty_platform_in_the_environment_is_carried_rather_than_read_as_uns
     assert platform_url_from({API_URL_ENV: ''}, None, record) == ''
 
 
-def test_a_caller_names_a_key_or_a_platform_of_their_own(tmp_path: Path):
-    assert key_is_given({API_KEY_ENV: 'k'}, None)
-    assert key_is_given({}, tmp_path / 'key')
-    assert not key_is_given({API_KEY_ENV: ''}, None)
+def test_a_caller_names_a_key_or_a_platform_of_their_own():
+    assert key_is_given({API_KEY_ENV: 'k'})
+    assert not key_is_given({API_KEY_ENV: ''})
     assert platform_is_given({}, 'http://arg.test')
     assert platform_is_given({API_URL_ENV: 'http://env.test'}, None)
     assert not platform_is_given({}, None)
@@ -162,8 +138,8 @@ def test_a_caller_names_a_key_or_a_platform_of_their_own(tmp_path: Path):
 
 def test_a_record_a_command_needs_nothing_from_is_not_read(tmp_path: Path, record: Config):
     env = {CONFIG_DIR_ENV: str(tmp_path), API_KEY_ENV: 'k', API_URL_ENV: 'http://env.test'}
-    assert record_if_needed(env, None, None) is None
-    assert record_if_needed({CONFIG_DIR_ENV: str(tmp_path)}, None, None) == record
+    assert record_if_needed(env, None) is None
+    assert record_if_needed({CONFIG_DIR_ENV: str(tmp_path)}, None) == record
 
 
 def test_a_trailing_slash_names_the_same_platform_and_another_path_does_not():
