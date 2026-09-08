@@ -77,7 +77,7 @@ external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
 `positronic eval run` files that plan with `submissions.create`. `--from-file` names the file, and
-it is the only option that does: an `--eval` value is a name. The same flags state a plan
+no other option does: an `--eval` value is a name. The same flags state a plan
 without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
 `--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
 catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
