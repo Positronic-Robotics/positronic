@@ -69,11 +69,9 @@ def device(monkeypatch):
     return FakeDevice
 
 
-def _driven(device, frames, **kwargs):
+def _driven(device, frames):
     """A driver over ``device`` carrying ``frames``, with its port recorded, run to exhaustion."""
-    camera = linux_video.LinuxVideo(
-        device_path='/dev/null', width=WIDTH, height=HEIGHT, fps=30, pixel_format='YUYV', **kwargs
-    )
+    camera = linux_video.LinuxVideo(device_path='/dev/null', width=WIDTH, height=HEIGHT, fps=30, pixel_format='YUYV')
     emitted = RecordingEmitter()
     camera.frame._bind(emitted)
     device.to_serve = frames

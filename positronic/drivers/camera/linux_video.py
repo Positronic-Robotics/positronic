@@ -70,7 +70,7 @@ class LinuxVideo(pimm.ControlSystem):
                 raw = self._framed(data, frame, 3)  # assume 3 bytes per pixel (RGB/BGR)
                 return None if raw is None else [raw]
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         codec_contexts = {}
 
         def codec_context(codec_name: str) -> av.CodecContext:
