@@ -142,7 +142,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
     @property
     def transport_mode(self) -> TransportMode:
         if self._mode is TransportMode.UNDECIDED:
-            self._mode = TransportMode(self._mode_value.value)
+            with _noting_interrupt():  # reading the manager is where a connection is torn
+                self._mode = TransportMode(self._mode_value.value)
         return self._mode
 
     @property
@@ -289,7 +290,8 @@ class MultiprocessReceiver(SignalReceiver[T]):
     @property
     def transport_mode(self) -> TransportMode:
         if self._mode is TransportMode.UNDECIDED:
-            self._mode = TransportMode(self._mode_value.value)
+            with _noting_interrupt():  # reading the manager is where a connection is torn
+                self._mode = TransportMode(self._mode_value.value)
         return self._mode
 
     @property

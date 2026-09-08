@@ -152,8 +152,8 @@ def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypat
 
 
 def test_a_queue_that_answers_with_anything_but_a_message_says_the_connection_is_torn():
-    """A connection torn by an interrupt answers with what another call asked for, of whatever type it was:
-    the incident that named this produced a float. Reading `.data` off it would hide the interrupt."""
+    """A connection torn by an interrupt answers with what another call asked for, of whatever type that
+    call wanted -- a float as readily as nothing. Reading `.data` off it would hide the interrupt."""
     with World() as world:
         emitter, receiver = world.mp_pipes()
         assert isinstance(receiver, MultiprocessReceiver)
