@@ -423,8 +423,8 @@ def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
 
 
 def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
-    """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
-    front of it, and the preparation before it is its own span rather than part of it."""
+    """The remote inference boundary records ``policy.infer``, and the preparation before it records
+    ``policy.prepare``."""
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
