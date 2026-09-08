@@ -32,6 +32,7 @@ import functools
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -198,6 +199,14 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
         _provider = None
 
 
+def _filename_token(run_id: str) -> str:
+    """``run_id`` reduced to characters a filename may carry. The resource block holds it verbatim, so
+    this only labels the file — a run id naming a path (`../…`) would otherwise write outside the
+    telemetry directory."""
+    token = re.sub(r'[^A-Za-z0-9._-]', '_', run_id).lstrip('.')
+    return token or uuid.uuid4().hex
+
+
 def bind_from_env(process: str):
     """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
 
@@ -213,7 +222,7 @@ def bind_from_env(process: str):
     run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
     # The reduce globs the suffix and reads the process from each file's resource block, so qualifying
     # the name by run costs it nothing.
-    return _bind_to(Path(directory) / f'{process}.{run_id}{SPANS_SUFFIX}', process, run_id)
+    return _bind_to(Path(directory) / f'{process}.{_filename_token(run_id)}{SPANS_SUFFIX}', process, run_id)
 
 
 def force_flush() -> None:

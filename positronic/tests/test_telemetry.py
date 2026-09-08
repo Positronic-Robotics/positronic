@@ -465,6 +465,22 @@ def _env_sidecars(tmp_path):
     return sorted((tmp_path / telemetry.TELEMETRY_SUBDIR).glob(f'*{telemetry.SPANS_SUFFIX}'))
 
 
+@pytest.mark.parametrize('run_id', ['../../escaped', 'a/b', '..', 'has spaces', ''])
+def test_bind_from_env_keeps_a_run_id_inside_the_telemetry_dir(tmp_path, monkeypatch, run_id):
+    """The run id reaches this from an operator's environment and now names a file, so a value naming a
+    path must not write outside the directory that turned recording on."""
+    telemetry_dir = tmp_path / telemetry.TELEMETRY_SUBDIR
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(telemetry_dir))
+    monkeypatch.setenv(ENV_RUN_ID, run_id)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    (path,) = _env_sidecars(tmp_path)
+    assert path.parent == telemetry_dir  # nothing escaped the directory that turned recording on
+    if run_id:
+        assert _run_id(path) == run_id  # the resource block still holds it verbatim
+
+
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
     """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
