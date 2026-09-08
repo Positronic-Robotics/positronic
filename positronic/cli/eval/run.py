@@ -235,11 +235,6 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
 
 
-def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
-    """Every task the source makes, stamped with the run's inference-time policy."""
-    return (replace(task, charge_inference_time=charge) for task in tasks())
-
-
 def _file_for_the_rig(
     eval: object,
     source: Path | None,
@@ -276,6 +271,11 @@ def _file_for_the_rig(
 _NO_POLICY_NAMED = (
     '--policy is required to run here; --policy-image runs it on the platform, and --policy-url on the rig'
 )
+
+
+def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
+    """Every task the source makes, stamped with the run's inference-time policy."""
+    return (replace(task, charge_inference_time=charge) for task in tasks())
 
 
 @cfn.config(eval=unset, policy=policy_cfg.unset)
