@@ -5,6 +5,7 @@ The plan is the one definition of that shape. Unknown fields are rejected: a typ
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Self
 
 import httpx
@@ -16,13 +17,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
 
-# The properties an endpoint may not state: a run lays out one scene, one cap and one preset for
-# its whole sample, so they are per task, and an endpoint overrides only its own count.
-_PER_TASK_PROPERTIES = ('cap_per_episode_sec', 'policy_preset', 'camera_vantage', 'tote_placement', 'clutter')
+
+def _absolute_url(url: str, whose: str) -> None:
+    """Refuse an address that is not absolute. A malformed one raises `httpx.InvalidURL`, which is
+    not a `ValueError`, so it is turned into one here for the model to report."""
+    try:
+        absolute = httpx.URL(url).is_absolute_url
+    except httpx.InvalidURL as e:
+        raise ValueError(f'endpoint {whose!r} names {url!r}, which is not a URL: {e}') from e
+    if not absolute:
+        # The scheme is the platform's to judge; an address with no host reaches nothing.
+        raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
-    repeated = sorted({name for name in names if names.count(name) > 1})
+    repeated = sorted(name for name, seen in Counter(names).items() if seen > 1)
     if repeated:
         raise ValueError(f'{whose} names {", ".join(repeated)} more than once; each entry names one')
 
@@ -90,9 +99,8 @@ class Endpoint(Cascade):
 
     @model_validator(mode='after')
     def _the_kind_carries_its_own_locator(self) -> Self:
-        if self.url is not None and not httpx.URL(self.url).is_absolute_url:
-            # The scheme is the platform's to judge; an address with no host reaches nothing.
-            raise ValueError(f'endpoint {self.name!r} names {self.url!r}, which has no host: give an absolute URL')
+        if self.url is not None:
+            _absolute_url(self.url, self.name)
         if self.kind is EndpointKind.served:
             if self.provider is None or self.spec is None:
                 raise ValueError(f'served endpoint {self.name!r} names no provider or no spec')
@@ -108,9 +116,17 @@ class Endpoint(Cascade):
 
     @model_validator(mode='after')
     def _overrides_only_the_count(self) -> Self:
-        stated = [name for name in _PER_TASK_PROPERTIES if getattr(self, name) is not None]
-        if self.external_cameras:
-            stated.append('external_cameras')
+        # A run lays out one scene, one cap and one preset for its whole sample, so these are per
+        # task, and an endpoint overrides only its own count.
+        per_task = {
+            'cap_per_episode_sec': self.cap_per_episode_sec,
+            'policy_preset': self.policy_preset,
+            'camera_vantage': self.camera_vantage,
+            'tote_placement': self.tote_placement,
+            'clutter': self.clutter,
+            'external_cameras': self.external_cameras or None,
+        }
+        stated = [name for name, value in per_task.items() if value is not None]
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '

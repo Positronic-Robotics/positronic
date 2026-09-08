@@ -50,8 +50,8 @@ An eval is a list of tasks. The platform offers named evals, and a customer comp
 `EvalPlan` names the catalogue tasks to run, the policies (endpoints) to run them on, and the
 episodes each endpoint takes on each task. The count is stated once on the plan; a task states its
 own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
-plan. The scene sits at every level, flat: `tote_placement`, `camera_vantage`, `external_cameras`
-and `clutter`. `episodes_total` is a checksum a caller may state, and `max_cap_per_episode_sec` a
+plan. The scene sits flat on the plan and on a task: `tote_placement`, `camera_vantage`,
+`external_cameras` and `clutter`; an endpoint states only its count. `episodes_total` is a checksum a caller may state, and `max_cap_per_episode_sec` a
 ceiling every task's window sits under.
 
 ```yaml

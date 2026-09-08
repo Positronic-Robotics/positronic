@@ -96,7 +96,7 @@ def write_config(directory: Path, config: Config) -> None:
     path = directory / CONFIG_FILENAME
     descriptor, staged = tempfile.mkstemp(dir=directory, prefix=f'.{CONFIG_FILENAME}.')
     try:
-        with os.fdopen(descriptor, 'w') as staged_file:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as staged_file:
             staged_file.write(config.model_dump_json(indent=2))
         os.replace(staged, path)
     except BaseException:
@@ -118,7 +118,7 @@ def api_key_from(env: Mapping[str, str], api_key_file: Path | None, record: Conf
         return ApiKey(from_env)
     if api_key_file is not None:
         try:
-            value = api_key_file.read_text().strip()
+            value = api_key_file.read_text(encoding='utf-8').strip()
         except OSError as exc:
             raise SystemExit(f'--api-key-file {api_key_file}: {exc.strerror}') from exc
         except UnicodeDecodeError as exc:

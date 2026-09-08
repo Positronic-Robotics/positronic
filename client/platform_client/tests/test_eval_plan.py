@@ -207,3 +207,8 @@ def test_a_count_below_one_is_refused_at_every_level():
 def test_a_clutter_draw_needs_a_range():
     with pytest.raises(ValidationError, match='which is no range'):
         a_plan(clutter={'count_min': 8, 'count_max': 4})
+
+
+def test_a_malformed_url_is_a_validation_error():
+    with pytest.raises(ValidationError, match='is not a URL'):
+        Endpoint.model_validate({'name': 'bad', 'url': 'http://host:bad'})
