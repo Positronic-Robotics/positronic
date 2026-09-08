@@ -9,7 +9,7 @@ from collections import deque
 
 import numpy as np
 
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.policy.base import DelegatingSession, Layer, Session
 
@@ -180,8 +180,11 @@ class TemporalStack(Layer):
 
         def __call__(self, obs, time_ns):
             now = _obs_time(obs)
-            self._buffer.append(now, {k: obs[k] for k in self._keys})
-            return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
+            # Every tick pays the whole of this, the ones the scheduling layer below answers included.
+            with telemetry.span(telemetry_keys.SPAN_POLICY_STACK):
+                self._buffer.append(now, {k: obs[k] for k in self._keys})
+                stacked = self._buffer.sample(now)
+            return self._inner({**obs, **stacked}, time_ns)
 
         def cancel(self):
             self._buffer.reset()

@@ -29,6 +29,7 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
+from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.tests.testing_coutils import EpisodeCaller, ManualDriver, RecordingEmitter, drive_scheduler, drive_until
 
 POLL_PERIOD_NS = round(POLL_PERIOD_SEC * 1e9)
@@ -1938,6 +1939,37 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
 
 
 @pytest.mark.timeout(3.0)
+def test_seal_exports_when_the_harness_owns_the_provider(world, tmp_path, monkeypatch):
+    """The seal runs while the provider it writes to is still bound, so the sealed span is exported."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'run-crash')
+
+    policy = StubPolicy()
+    scene = pimm.calls.ControlSystemHandler[Any, None](Passive())
+    harness = Harness(make_embodiment(prepare_handlers={eval_keys.SCENE: scene}))
+    wire_call(world, harness.prepare[eval_keys.SCENE], scene)
+    harness.ds_command._bind(RecordingEmitter())
+    task = Task(
+        instruction_source='stack',
+        timeout_sec=10.0,
+        prepare_args={eval_keys.SCENE: {}},
+        meta={eval_keys.TRIAL_INDEX: 0},
+    )
+    _ask(world, harness, policy, task)
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with pytest.raises(RuntimeError, match='reset boom'):
+        for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
+            for call in scene.incoming():
+                call.set_exception(RuntimeError('reset boom'))
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    assert episodes[0].attrs.get(telemetry_keys.ATTR_EPISODE_PARTIAL) is True
+
+
 def test_failed_pass_seals_open_episode_span(world, tmp_path):
     """A ``reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
