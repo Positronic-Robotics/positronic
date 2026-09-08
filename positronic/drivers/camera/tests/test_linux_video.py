@@ -43,10 +43,9 @@ class FakeDevice:
         self.format = None
         self.fps = None
         self.closed = False
-        FakeDevice.opened = self
 
     def open(self) -> None:
-        pass
+        FakeDevice.opened = self
 
     def set_format(self, buffer, width, height, pixel_format) -> None:
         self.format = (buffer, width, height, pixel_format)
