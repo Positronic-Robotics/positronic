@@ -81,10 +81,10 @@ class Cascade(BaseModel):
 class Endpoint(Cascade):
     """One policy to run, and where it comes from.
 
-    A `remote` endpoint is an address the caller provides. A `served` endpoint names the provider
-    that starts it (`provider`) and the checkpoint it serves (`spec`), and has no `url`: the
-    platform starts it and records the address. A bare label on a task names one of the plan's
-    endpoints.
+    A `remote` endpoint is an address the caller provides. A `served` endpoint names the checkpoint
+    it serves (`spec`) and has no `url`: the platform starts it and records the address. `provider`
+    names what starts it, and the platform derives one from `spec` when the entry names none. An
+    entry on a task with no `url` and no `spec` names one of the plan's endpoints.
     """
 
     name: str = Field(min_length=1)
@@ -103,8 +103,6 @@ class Endpoint(Cascade):
         if self.url is not None:
             _absolute_url(self.url, self.name)
         if self.kind is EndpointKind.served:
-            if self.provider is None or self.spec is None:
-                raise ValueError(f'served endpoint {self.name!r} names no provider or no spec')
             if self.url is not None:
                 raise ValueError(
                     f'served endpoint {self.name!r} names a url; the platform records the address it serves at'
@@ -137,8 +135,8 @@ class Endpoint(Cascade):
 
     @property
     def names_a_locator(self) -> bool:
-        """Whether this entry says where its policy comes from, or only names one the plan defines."""
-        return self.kind is EndpointKind.served or self.url is not None
+        """Whether this entry says where its policy comes from: a `url`, or the `spec` a served one names."""
+        return self.url is not None or self.spec is not None
 
 
 class TaskNode(Cascade):
@@ -171,7 +169,7 @@ class EvalPlan(Cascade):
     composes.
     """
 
-    tasks: list[TaskNode] = Field(min_length=1)
+    tasks: list[TaskNode] = Field(default_factory=list)
     endpoints: list[Endpoint] = Field(default_factory=list)
     # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
     episodes_total: int | None = Field(default=None, ge=1)
@@ -179,6 +177,12 @@ class EvalPlan(Cascade):
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _names_a_task(self) -> Self:
+        if not self.tasks:
+            raise ValueError('a plan names at least one task')
+        return self
 
     @model_validator(mode='after')
     def _states_a_count(self) -> Self:
@@ -201,8 +205,8 @@ class EvalPlan(Cascade):
         bare = sorted(entry.name for entry in self.endpoints if not entry.names_a_locator)
         if bare:
             raise ValueError(
-                f'the plan defines {", ".join(bare)} with no url and no provider and spec: an endpoint of the '
-                'plan states where its policy comes from, and a bare label on a task names one'
+                f'the plan defines {", ".join(bare)} with no url and no spec: an endpoint of the plan states '
+                'where its policy comes from, and a bare label on a task names one'
             )
         defined = {entry.name for entry in self.endpoints}
         for task in self.tasks:

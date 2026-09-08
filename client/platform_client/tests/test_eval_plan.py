@@ -57,6 +57,11 @@ def test_a_bare_task_id_and_a_bare_endpoint_label_are_the_short_forms():
     assert spoons.endpoints is not None and spoons.endpoints[0].kind is EndpointKind.remote
 
 
+def test_a_plan_names_a_task():
+    with pytest.raises(ValidationError, match='names at least one task'):
+        a_plan(tasks=[])
+
+
 def test_a_plan_states_a_count():
     with pytest.raises(ValidationError, match='states episodes_per_endpoint'):
         EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE]})
@@ -72,11 +77,10 @@ def test_an_endpoint_overrides_only_its_count():
         a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
 
 
-def test_a_served_endpoint_names_its_bring_up_and_no_url():
-    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'provider': 'cohost', 'spec': 'pi05-droid'})
-    assert served.names_a_locator
-    with pytest.raises(ValidationError, match='names no provider or no spec'):
-        Endpoint.model_validate({'name': 'pi05', 'kind': 'served'})
+def test_a_served_endpoint_names_its_spec_and_no_url():
+    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid'})
+    assert served.names_a_locator and served.provider is None
+    assert Endpoint.model_validate({'name': 'pi05', 'kind': 'served'}).names_a_locator is False
     with pytest.raises(ValidationError, match='names a url'):
         Endpoint.model_validate({
             'name': 'pi05',
@@ -172,9 +176,10 @@ def test_an_absolute_endpoint_url_is_left_alone(url: str):
     assert Endpoint(name='baseline', url=url).url == url
 
 
-def test_a_plan_endpoint_states_where_its_policy_comes_from():
+@pytest.mark.parametrize('entry', [{'name': 'bare'}, {'name': 'bare', 'kind': 'served'}])
+def test_a_plan_endpoint_states_where_its_policy_comes_from(entry: dict):
     with pytest.raises(ValidationError, match='states where its policy comes from'):
-        a_plan(endpoints=[{'name': 'bare'}])
+        a_plan(endpoints=[entry])
 
 
 def test_an_endpoint_says_whether_it_names_a_locator():
