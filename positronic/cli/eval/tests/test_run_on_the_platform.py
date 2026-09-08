@@ -130,6 +130,26 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     assert platform.seen is None
 
 
+@pytest.mark.parametrize('stated_off', [{'episodes': False}, {'cap': False}])
+def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, stated_off: dict):
+    # The command line literal-evaluates its values, so `--episodes=False` reaches the run as
+    # `False`. It is a value asked for, like `--episodes=0`, and a platform run has no such flag.
+    with pytest.raises(SystemExit, match='a platform run has no'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **stated_off)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('switched_off', [{'timing': False}, {'charge_inference_time': False}])
+def test_a_platform_run_takes_a_local_switch_stated_off(platform, run_command, switched_off: dict):
+    # The boundary of the refusal above: a switch reads `False` whether it was left off or stated
+    # off, and either way asks for what the platform already does, so it refuses neither.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+
+    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **switched_off)
+
+    assert created.submission_id == SubmissionId.parse(ID)
+
+
 def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):
     platform.answer({'submission_id': ID, 'status': 'pending'})
     argv = ['positronic', 'eval', 'run', '--eval=fake.smoke', '--policy-image=org/p:v1']
