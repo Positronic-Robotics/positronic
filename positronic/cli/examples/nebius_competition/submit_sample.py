@@ -69,7 +69,9 @@ def main() -> None:
 
     key = os.environ.get(API_KEY_ENV)
     if not key:
-        raise SystemExit(f'set {API_KEY_ENV} to the key `positronic account register` printed')
+        # `positronic account register` saves the key in its record, which this script does not read.
+        # `platform-register` prints the export line, so it is the one that helps here.
+        raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
 
     with PlatformClient(args.platform_url, api_key=ApiKey(key)) as client:
         try:

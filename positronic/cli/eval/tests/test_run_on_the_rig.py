@@ -310,6 +310,13 @@ def test_a_repeatable_flag_reads_every_spelling_the_command_line_reaches(value: 
     assert flag_entries(value, '--tasks') == entries
 
 
+@pytest.mark.parametrize('url', ['wss://[::1]', 'ws://[::1]', 'wss://[2001:db8::1]:8443'])
+def test_a_bracketed_ipv6_url_keeps_its_closing_bracket(url: str):
+    # A list arrives bracketed at both ends. A URL may merely END in `]`, and trimming that alone
+    # hands on an address no endpoint will take.
+    assert flag_entries(url, '--policy-url') == [url]
+
+
 @pytest.mark.parametrize('value', ['a,,b', ' '])
 def test_a_repeatable_flag_refuses_an_empty_entry(value: str):
     with pytest.raises(SystemExit, match='empty entry'):
@@ -327,5 +334,8 @@ def test_a_flag_is_given_unless_it_is_unset(value: object, is_given: bool):
 
 
 def test_a_labelled_url_takes_its_label():
-    assert endpoint_of(f'baseline={BASELINE}', 1) == {'name': 'baseline', 'url': BASELINE}
-    assert endpoint_of(BASELINE, 3) == {'name': 'policy3', 'url': BASELINE}
+    assert (endpoint_of(f'baseline={BASELINE}', 1).name, endpoint_of(f'baseline={BASELINE}', 1).url) == (
+        'baseline',
+        BASELINE,
+    )
+    assert (endpoint_of(BASELINE, 3).name, endpoint_of(BASELINE, 3).url) == ('policy3', BASELINE)

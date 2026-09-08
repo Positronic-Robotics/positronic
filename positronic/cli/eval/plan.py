@@ -4,8 +4,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import EvalPlan
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
+from platform_client.ids import TransactionKey
 from platform_client.responses import SubmissionCreateResponse
+from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
@@ -71,7 +73,10 @@ def flag_entries(value: object, flag: str) -> list[str]:
     if isinstance(value, list | tuple):
         entries = [str(entry) for entry in value]
     elif isinstance(value, str):
-        entries = value.removeprefix('[').removesuffix(']').split(',')
+        # Only a pair that brackets the WHOLE value is a list. A URL may end in `]`
+        # (`wss://[::1]`), and trimming that alone would hand on a malformed address.
+        bracketed = value.startswith('[') and value.endswith(']')
+        entries = (value[1:-1] if bracketed else value).split(',')
     else:
         raise SystemExit(f'{flag} takes text; quote a value that reads as a number: \'"{value}"\'')
     stripped = [entry.strip() for entry in entries]
@@ -80,7 +85,7 @@ def flag_entries(value: object, flag: str) -> list[str]:
     return stripped
 
 
-def endpoint_of(spec: str, position: int) -> dict[str, str]:
+def endpoint_of(spec: str, position: int) -> Endpoint:
     """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
 
     A URL carries `=` in a query string, so the part before the first one is a label only where it
@@ -88,8 +93,8 @@ def endpoint_of(spec: str, position: int) -> dict[str, str]:
     """
     label, separator, address = spec.partition('=')
     if separator and ':' not in label and '/' not in label:
-        return {'name': label, 'url': address}
-    return {'name': f'policy{position}', 'url': spec}
+        return Endpoint(name=label, url=address)
+    return Endpoint(name=f'policy{position}', url=spec)
 
 
 def plan_from_flags(
@@ -107,19 +112,22 @@ def plan_from_flags(
     urls = flag_entries(policy_url, '--policy-url')
     if not task_ids or not urls or episodes is None:
         raise SystemExit('a rig run states --tasks, --policy-url and --episodes, or the whole plan in a file')
-    payload: dict[str, object] = {
-        'tasks': task_ids,
-        'endpoints': [endpoint_of(spec, position) for position, spec in enumerate(urls, start=1)],
-        'episodes_per_endpoint': episodes,
-        'cap_per_episode_sec': cap,
-        'policy_preset': preset,
-        'transaction_key': transaction_key,
-        'alias': alias,
-    }
     try:
-        return EvalPlan.model_validate(payload)
+        return EvalPlan(
+            tasks=[TaskNode(task_id=TaskRef(task_id)) for task_id in task_ids],
+            endpoints=[endpoint_of(spec, position) for position, spec in enumerate(urls, start=1)],
+            episodes_per_endpoint=episodes,
+            cap_per_episode_sec=cap,
+            policy_preset=preset,
+            transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
+            alias=alias,
+        )
     except ValidationError as exc:
         raise SystemExit(one_line(exc)) from exc
+    except ValueError as exc:
+        # A field type refuses its own value before the model sees it: a task id that is no id,
+        # an endpoint URL with no host. The message already names what it refused.
+        raise SystemExit(str(exc)) from exc
 
 
 def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCreateResponse:
