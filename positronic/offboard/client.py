@@ -28,6 +28,9 @@ class InferenceSession:
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
+        # What the server reported spending on the last inference, for the caller that times the round
+        # trip. Empty against a server that reports nothing, which leaves that round trip undivided.
+        self.served_timing: dict[str, float] = {}
         self._metadata = self._handshake()
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
@@ -90,6 +93,7 @@ class InferenceSession:
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
         response = deserialise(received)
+        self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:
