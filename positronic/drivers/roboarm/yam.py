@@ -18,7 +18,6 @@ import logging
 from collections.abc import Callable, Generator, Iterator
 from typing import Any
 
-import mujoco as mj
 import numpy as np
 
 import pimm
@@ -26,10 +25,9 @@ from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
-from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
-from .ik import qpos_from_site_pose
+from .kinematics import MjcfKinematics
 from .models import DEFAULT_FRAME
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
@@ -43,8 +41,6 @@ logger = logging.getLogger(__name__)
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
 _JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
-_IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
-_IK_ROT_TOL = 1e-2  # radians
 # Where the driver leaves the chain when it takes control: the menagerie "home" keyframe, folded up and back.
 _PARK_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 # The vendor's observation contract
@@ -102,60 +98,6 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[YamState.STATUS_OFFSET] = status.value
 
 
-class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``DEFAULT_FRAME``, in the arm-base frame.
-
-    ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
-    """
-
-    def __init__(self):
-        model_path = package_assets_path(_MJCF_PATH)
-        self._model = mj.MjModel.from_xml_path(model_path)
-        self._data = mj.MjData(self._model)
-        site = mj.mjtObj.mjOBJ_SITE
-        self._site_id = mj.mj_name2id(self._model, site, DEFAULT_FRAME)
-        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
-        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
-        self._lower, self._upper = ranges[:, 0], ranges[:, 1]
-
-    def fk(self, q: np.ndarray) -> geom.Transform3D:
-        self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)
-        quat = np.empty(4)
-        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
-        return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
-
-    def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
-        """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Solutions are wrapped and clamped into joint range, then FK-verified before acceptance."""
-        for start in (current_q, *_reach_postures(*target.translation[:2])):
-            self._data.qpos[:] = 0.0
-            self._data.qpos[self._qpos_ids] = start
-            qpos, _, success = qpos_from_site_pose(
-                self._model,
-                self._data,
-                self._site_id,
-                self._dof_ids,
-                target.translation,
-                target.rotation.as_quat,
-                rot_weight=0.5,
-            )
-            if not success:
-                continue
-            q = qpos[self._qpos_ids].copy()
-            # A revolute joint at q ± 2π is the same pose; wrap out-of-range entries back in when they fit.
-            q = np.where(q > self._upper, q - 2 * np.pi, q)
-            q = np.where(q < self._lower, q + 2 * np.pi, q)
-            q = np.clip(q, self._lower, self._upper)
-            reached = self.fk(q)
-            rot_err = (reached.rotation.inv * target.rotation).angle
-            rot_err = min(rot_err, 2 * np.pi - rot_err)
-            if np.linalg.norm(reached.translation - target.translation) < _IK_POS_TOL and rot_err < _IK_ROT_TOL:
-                return q
-        return None
-
-
 class _Chain(DriverRun[command.CommandType]):
     """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
@@ -181,7 +123,7 @@ class _Chain(DriverRun[command.CommandType]):
         self.grip_out = grip_out
         self.state = YamState()
         self._base_pose = base_pose
-        self._kin = _Kinematics()
+        self._kin = MjcfKinematics(_MJCF_PATH, DEFAULT_FRAME, _JOINT_NAMES, _reach_postures)
 
     def __enter__(self) -> '_Chain':
         return self
@@ -461,7 +403,7 @@ if __name__ == '__main__':
             pump(0.1)  # the opening move ramps the chain to the park pose over a couple of seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
-        kin = _Kinematics()
+        kin = MjcfKinematics(_MJCF_PATH, DEFAULT_FRAME, _JOINT_NAMES, _reach_postures)
 
         if fake is not None:
             # State round-trip: the parked chain comes back through the driver's FK.
