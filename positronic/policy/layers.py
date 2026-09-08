@@ -80,13 +80,11 @@ class ChunkedSchedule(Layer):
             super().__init__(inner)
             self._trajectory_end: float | None = None
 
-        def reads_observation(self, time_ns):
-            # Mirrors ``__call__``'s guard against the same field, so the two cannot drift. The
-            # call's clock runs at or past the observation's, so this can only answer True where
-            # ``__call__`` then answers None: a window built and unused, never one skipped and wanted.
-            if self._trajectory_end is not None and time_ns / 1e9 < self._trajectory_end:
+        def reads_observation(self, obs, time_ns):
+            # The same guard ``__call__`` makes, against the same instant, so the two cannot disagree.
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return False
-            return self._inner.reads_observation(time_ns)
+            return self._inner.reads_observation(obs, time_ns)
 
         def __call__(self, obs, time_ns):
             if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
@@ -191,7 +189,7 @@ class TemporalStack(Layer):
             # Unconditional, including on the ticks that skip sampling below: a gap here is a hole in
             # the window every later sample is taken from.
             self._buffer.append(now, {k: obs[k] for k in self._keys})
-            if not self._inner.reads_observation(time_ns):
+            if not self._inner.reads_observation(obs, time_ns):
                 return self._inner(obs, time_ns)
             return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
 

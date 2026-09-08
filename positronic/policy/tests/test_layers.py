@@ -336,7 +336,7 @@ class _DecliningSession(Session):
         self.seen = dict(obs)
         return None
 
-    def reads_observation(self, time_ns):
+    def reads_observation(self, obs, time_ns):
         return False
 
 
@@ -353,14 +353,14 @@ class TestReadsObservation:
     """The gate that lets a layer skip building an observation nothing below will read."""
 
     def test_a_session_reads_its_observation_by_default(self):
-        assert _ConstSession(None).reads_observation(0) is True
+        assert _ConstSession(None).reads_observation(_obs(0), 0) is True
 
     def test_a_schedule_reads_nothing_while_its_chunk_plays(self):
         session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 2.0}]))
-        assert session.reads_observation(0) is True  # nothing emitted yet
+        assert session.reads_observation(_obs(0), 0) is True  # nothing emitted yet
         session(_obs(0), 0)  # emits, ending 2 s from now
-        assert session.reads_observation(int(1.0e9)) is False  # mid-chunk
-        assert session.reads_observation(int(3.0e9)) is True  # played out
+        assert session.reads_observation(_obs(1.0), int(1.0e9)) is False  # mid-chunk
+        assert session.reads_observation(_obs(3.0), int(3.0e9)) is True  # played out
 
     def test_the_gate_agrees_with_the_call(self):
         """Both read `_trajectory_end`, in two places, so they are pinned against each other: a call
@@ -368,9 +368,17 @@ class TestReadsObservation:
         session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 2.0}]))
         session(_obs(0), 0)
         for t_ns in (int(0.5e9), int(1.9e9), int(2.0e9), int(2.1e9), int(5.0e9)):
-            declined = not session.reads_observation(t_ns)
+            declined = not session.reads_observation(_obs(t_ns / 1e9), t_ns)
             answered_none = session(_obs(t_ns / 1e9), t_ns) is None
             assert declined is answered_none, f'disagreed at {t_ns} ns'
+
+    def test_the_gate_reads_the_observation_instant_the_call_reads(self):
+        """An observation ahead of the caller's clock: a gate reading the clock would decline, while
+        the call goes through to the inner session — which then gets whatever the layer above kept."""
+        session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 2.0}]))
+        session(_obs(0), 0)
+        assert session.reads_observation(_obs(2.5), int(1.0e9)) is True
+        assert session(_obs(2.5), int(1.0e9)) is not None
 
     def test_a_delegating_session_answers_for_itself(self):
         """A session that wraps another still reads its own observation — a recording tap is the live
@@ -381,7 +389,7 @@ class TestReadsObservation:
                 self.logged = dict(obs)
                 return self._inner(obs, time_ns)
 
-        assert _Tap(_DecliningSession()).reads_observation(0) is True
+        assert _Tap(_DecliningSession()).reads_observation(_obs(0), 0) is True
 
     def test_a_stack_is_not_sampled_when_nothing_below_reads_it(self):
         """The window is the expensive part, and most ticks do not use it. Recording still happens on
