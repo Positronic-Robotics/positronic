@@ -143,6 +143,20 @@ def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypat
         assert receiver.read() is None
 
 
+def test_a_queue_that_answers_with_anything_but_a_message_says_the_connection_is_torn():
+    """A connection torn by an interrupt answers with what another call asked for, of whatever type it was:
+    the incident that named this produced a float. Reading `.data` off it would hide the interrupt."""
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)
+        emitter.emit('before', ts=1)  # settles the channel on the queue transport
+        assert receiver.read() is not None
+        receiver._queue.put(0.5)  # what the torn connection hands back
+
+        with pytest.raises(ConnectionError, match='tore its connection'):
+            receiver.read()
+
+
 class TestQueueEmitter:
     """Test the QueueEmitter class."""
 
