@@ -11,6 +11,8 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
+from positronic import telemetry, telemetry_keys
+
 from . import protocol
 from .protocol import deserialise, serialise, typed_commands
 
@@ -68,12 +70,17 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
-        serialised = serialise(obs)
+        with telemetry.span(telemetry_keys.SPAN_WIRE_SEND) as sending:
+            serialised = serialise(obs)
+            telemetry.set_attrs(sending, **{telemetry_keys.ATTR_WIRE_BYTES: len(serialised)})
+            self._websocket.send(serialised)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
-        self._websocket.send(serialised)
         try:
-            response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+            # Splits the round trip into the upload and the wait: the server's own time is inside the wait,
+            # and an uplink too slow for the payload shows as a send that outlasts it.
+            with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
+                response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be

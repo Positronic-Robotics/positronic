@@ -36,7 +36,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -52,6 +52,8 @@ from positronic.simulator.env_server.telemetry import (
     ATTR_PROCESS_NAME,
     ATTR_PROCESS_PID,
     ATTR_RUN_ID,
+    ENV_RUN_ID,
+    ENV_TELEMETRY_DIR,
     SPANS_SUFFIX,
 )
 
@@ -153,6 +155,13 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
     """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
     resource block carrying this process's identity, and register the provider so ``span`` records. The batch
     processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
+    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
+        yield provider
+
+
+@contextmanager
+def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
+    """``bind``, against the spans file itself rather than the run directory holding it."""
     global _provider
     try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
         from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
@@ -162,7 +171,6 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         from opentelemetry.sdk.trace.sampling import ALWAYS_ON  # noqa: PLC0415
     except ImportError as error:
         raise RuntimeError(_MISSING_EXTRA) from error
-    path = spans_path(out_dir, process)
     path.parent.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
         ATTR_RUN_ID: run_id,
@@ -187,6 +195,18 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         provider.force_flush()
         provider.shutdown()
         _provider = None
+
+
+def bind_from_env(process: str):
+    """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
+
+    Inert while the two env vars are unset, and while a provider is already bound.
+    """
+    directory = os.environ.get(ENV_TELEMETRY_DIR)
+    run_id = os.environ.get(ENV_RUN_ID)
+    if directory is None or run_id is None or _provider is not None:
+        return nullcontext()
+    return _bind_to(Path(directory) / f'{process}{SPANS_SUFFIX}', process, run_id)
 
 
 def force_flush() -> None:
