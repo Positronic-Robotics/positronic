@@ -292,7 +292,11 @@ class _Chain(DriverRun[command.CommandType]):
         """
         try:
             target = self.to_joints(call.request, q)
-            if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
+            arrived = yield from self.move_to(target, grip)
+            # The loop read nothing for the whole travel, so what was streamed at the chain in the meantime
+            # says where it was wanted on the way here.
+            self.moves.finished(self.clock.now())
+            if arrived is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return target, grip
         except Exception as exc:

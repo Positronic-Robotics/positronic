@@ -45,7 +45,6 @@ class Moves(Generic[T]):
         self._async_move = async_move
         # A setpoint written before this says where the device was wanted on the way to where it now is
         self._stale_before = 0.0
-        self._handed_out = False
         self._call: pimm.calls.Call[T, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._tol = 0.0
@@ -99,21 +98,25 @@ class Moves(Generic[T]):
         nobody waits on, or nothing.
 
         A call comes first: a setpoint says where the device is wanted now, and the move that follows it
-        puts the device somewhere else. A device a move already owns is asked for nothing, and the setpoints
-        streamed at it while it travels are let go for the same reason -- including where the driver was
-        held inside the call for the whole travel and polled nothing in between.
+        puts the device somewhere else. A device a move already owns is asked for nothing, and neither is
+        one whose move has settled and whose asker is still owed the news: a setpoint written in between
+        arrived after the move and is what the device does next.
         """
-        if self._handed_out and not self.busy:
-            # A driver held inside the call polls again as soon as the travel is over, so this is the tick
-            # it ended on. One that keeps the move in flight says when it ended itself, in ``settle``.
-            self._stale_before, self._handed_out = now, False
-        newest = self.take_newest_setpoint()
         if self.busy:
             return None
+        newest = self.take_newest_setpoint()
         if (call := next(self._sync_move.incoming(), None)) is not None:
-            self._handed_out = True
             return call
         return newest
+
+    def finished(self, now: float) -> None:
+        """The travel a driver was held inside is over, as of ``now``.
+
+        A driver that keeps its move in flight has ``settle`` for this. One that blocks for the whole
+        travel reads nothing while it moves, so every setpoint written before it returns says where the
+        device was wanted on the way to the pose it now holds.
+        """
+        self._stale_before = now
 
     def accept(
         self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
@@ -121,7 +124,6 @@ class Moves(Generic[T]):
         """Take `call` as the move in flight, aiming at `target` within `tol`, with `timeout_s` to get there."""
         self._call, self._target, self._tol = call, target, tol
         self._deadline = now + timeout_s
-        self._handed_out = False  # the move is in flight, and ``settle`` says which tick it ends on
 
     def fail(self, exc: BaseException) -> None:
         """Hand a settled move its own outcome, and `exc` to one still in flight. Both, if there are both."""
