@@ -51,6 +51,16 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 # too, that trip being asynchronous; it is the tick carrying a `policy.encode`.
 ATTR_POLICY_ANSWERED = 'policy.answered'
 
+# One episode's waypoint account, totalled over its command channels. A round emits only the newest waypoint
+# that has come due, so ``DROPPED`` counts the ones it overtook and ``EMITTED + DROPPED`` is what came due;
+# ``SCHEDULED`` also covers what a fresh chunk replaced before its time. Lateness rides as a sum and a maximum
+# rather than a percentile, because those are what the reduce can total across episodes exactly.
+ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
+ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
+ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
+ATTR_WAYPOINTS_LATE_SUM_MS = 'episode.waypoints.late_sum_ms'
+ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
+
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
