@@ -12,8 +12,8 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     ACTIVE_STATUSES,
-    REQUEST_STOPPED_STATUSES,
-    REQUEST_TERMINAL_STATUSES,
+    PLAN_STOPPED_STATUSES,
+    PLAN_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
     CameraVantage,
@@ -22,9 +22,9 @@ from platform_client.enums import (
     KeyStatus,
     OnExhausted,
     Placement,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
-    RequestStatus,
     SubmissionStatus,
 )
 
@@ -76,7 +76,7 @@ QUOTA_SUBJECT_VALUES = {'INVALID': 0, 'user': 1, 'tenant': 2}
 
 BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
-REQUEST_STATUS_VALUES = {
+PLAN_STATUS_VALUES = {
     'INVALID': 0,
     'received': 1,
     'filed': 2,
@@ -101,7 +101,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (OnExhausted, ON_EXHAUSTED_VALUES),
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
-    (RequestStatus, REQUEST_STATUS_VALUES),
+    (PlanStatus, PLAN_STATUS_VALUES),
     (EndpointKind, ENDPOINT_KIND_VALUES),
     (Placement, PLACEMENT_VALUES),
     (CameraVantage, CAMERA_VANTAGE_VALUES),
@@ -128,11 +128,11 @@ def test_the_status_sets_partition_the_decided_from_the_undecided():
     assert ACTIVE_STATUSES | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
 
 
-def test_the_request_terminal_set_is_what_the_coordinator_is_finished_with():
-    assert REQUEST_TERMINAL_STATUSES == {RequestStatus.done, RequestStatus.cancelled, RequestStatus.errored}
-    for waiting in (RequestStatus.received, RequestStatus.filed, RequestStatus.blocked):
-        assert waiting not in REQUEST_TERMINAL_STATUSES
+def test_the_plan_terminal_set_is_what_the_coordinator_is_finished_with():
+    assert PLAN_TERMINAL_STATUSES == {PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored}
+    for waiting in (PlanStatus.received, PlanStatus.filed, PlanStatus.blocked):
+        assert waiting not in PLAN_TERMINAL_STATUSES
 
 
 def test_the_stopped_set_is_where_an_error_travels():
-    assert REQUEST_STOPPED_STATUSES == {RequestStatus.blocked, RequestStatus.errored}
+    assert PLAN_STOPPED_STATUSES == {PlanStatus.blocked, PlanStatus.errored}

@@ -21,14 +21,14 @@ from platform_client import routes
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
+from platform_client.eval_plan import EvalPlan
 from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.requests import (
     CancelRequest,
+    EvalGetQuery,
+    EvalListQuery,
     RankingsQuery,
     RegisterRequest,
-    RequestCreate,
-    RequestGetQuery,
-    RequestListQuery,
     SubmissionCreateRequest,
     SubmissionGetQuery,
 )
@@ -36,11 +36,11 @@ from platform_client.responses import (
     BoardListResponse,
     CancelResponse,
     MeResponse,
+    PlanFiled,
+    PlanListResponse,
+    PlanView,
     RankingsResponse,
     RegisterResponse,
-    RequestCreated,
-    RequestListResponse,
-    RequestView,
     SubmissionCreateResponse,
     SubmissionListResponse,
     SubmissionView,
@@ -144,6 +144,11 @@ class PlatformClient:
         self._client = client
         self.api_key = resolve_api_key(api_key)
 
+    @property
+    def base_url(self) -> str:
+        """The platform this client reaches, as it resolved it."""
+        return str(self._client.base_url)
+
     # --- endpoints ---------------------------------------------------------------------------
 
     def register(self, request: RegisterRequest) -> RegisterResponse:
@@ -187,17 +192,17 @@ class PlatformClient:
         """The boards this caller can read: the public ones, plus their tenant's once a key is set."""
         return self._get(routes.RANKINGS_LIST, BoardListResponse, auth=Auth.OPTIONAL)
 
-    def run_eval(self, request: RequestCreate) -> RequestCreated:
-        """File one rollout request. Needs a customer grant: a key without one is refused `forbidden`."""
-        return self._post(routes.EVALS_RUN, request, RequestCreated)
+    def run_eval(self, plan: EvalPlan) -> PlanFiled:
+        """File one eval plan. Needs a customer grant: a key without one is refused `forbidden`."""
+        return self._post(routes.EVALS_RUN, plan, PlanFiled)
 
-    def get_eval(self, request_id: PlanId) -> RequestView:
-        return self._get(routes.EVALS_GET, RequestView, query=RequestGetQuery(id=request_id))
+    def get_eval(self, plan_id: PlanId) -> PlanView:
+        return self._get(routes.EVALS_GET, PlanView, query=EvalGetQuery(id=plan_id))
 
-    def list_evals(self, *, after: PlanId | None = None, limit: int | None = None) -> RequestListResponse:
-        """One page of the caller's requests, oldest first. Pass a page's `next` as `after` for the page after it."""
-        query = RequestListQuery(after=after, limit=limit)
-        return self._get(routes.EVALS_LIST, RequestListResponse, query=query)
+    def list_evals(self, *, after: PlanId | None = None, limit: int | None = None) -> PlanListResponse:
+        """One page of the caller's plans, oldest first. Pass a page's `next` as `after` for the page after it."""
+        query = EvalListQuery(after=after, limit=limit)
+        return self._get(routes.EVALS_LIST, PlanListResponse, query=query)
 
     def catalog_evals(self) -> EvalListResponse:
         """The evals `evals.run` takes by name, for this key's grant."""

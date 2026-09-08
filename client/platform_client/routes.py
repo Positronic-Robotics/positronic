@@ -16,7 +16,7 @@ SUBMISSIONS_GET = f'{API_PREFIX}/submissions.get'
 SUBMISSIONS_CANCEL = f'{API_PREFIX}/submissions.cancel'
 RANKINGS_GET = f'{API_PREFIX}/rankings.get'
 RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
-# A plan a caller composes, filed and read back: the rig's door, beside the competition's `submissions.*`.
+# A plan a caller composes, filed and read back: the rig's door, beside the `submissions.*` one.
 EVALS_RUN = f'{API_PREFIX}/evals.run'
 EVALS_GET = f'{API_PREFIX}/evals.get'
 EVALS_LIST = f'{API_PREFIX}/evals.list'

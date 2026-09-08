@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.5.0"
+uv add "positronic-platform-client==0.6.0"
 ```
 
 `platform_client` never imports `positronic`. One command ships here, `platform-register`, which
@@ -75,15 +75,17 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run --eval=<file>` files that plan with `evals.run`; `--eval=<name>` runs a named
-eval. `eval status` and `eval list` read a filed plan back by its id, as they read a submission. The
-platform records the plan, the rollouts coordinator runs it on the lab rig, and a `blocked` plan
-waits on what its `error` names. A key needs a customer grant for `evals.run`; a key without one is
-refused `forbidden`.
+`positronic eval run` files that plan with `evals.run`: `--from-file` names the file, and so does
+`--eval` where its value names one. The same flags state a plan without a file — `--policy-url`
+(repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap`, `--preset` and `--scene KEY=VALUE`. Two
+or more endpoints make one blind sample. `eval status` and `eval list` read a filed plan back by its
+id, as they read a submission. The platform records the plan, the rollouts coordinator runs it on
+the lab rig, and a `blocked` plan waits on what its `error` names. A key needs a customer grant for
+`evals.run`; a key without one is refused `forbidden`.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `evals.run`
 takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
-competition's evals. A customer grant adds the rig's evals and tasks, filtered to the entries
+evals a submission names. A customer grant adds the rig's evals and tasks, filtered to the entries
 offered to the grant's client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
@@ -93,9 +95,9 @@ bookkeeping and adds no field of its own to the ask, so the two never drift.
 ## From the command line
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
-runs an eval here when given a policy, and on the platform when given a policy image.
-`account register` registers with a credential you already hold; `platform-register` mints one
-from GitHub:
+runs an eval here when given a policy, on the platform when given a policy image, and on the lab rig
+when given a policy URL. `account register` registers with a credential you already hold and saves
+the key it mints; `platform-register` mints one from GitHub and prints it:
 
 ```bash
 export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
@@ -103,9 +105,11 @@ uv run positronic account register --alias=<display name>
 export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval status --submission-id=<hex id>
+uv run positronic eval run --policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+uv run positronic eval status --id=<hex id>
 uv run positronic eval list
-uv run positronic eval cancel --submission-id=<hex id>
+uv run positronic eval cancel --id=<hex id>
+uv run positronic eval catalog
 ```
 
 `positronic/cli/examples/` runs the whole flow end to end.
@@ -117,7 +121,8 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 | Variable | Holds |
 |---|---|
 | `POSITRONIC_PLATFORM_URL` | a platform other than the default one, overridden per call by `--platform-url` |
-| `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment only, so it never reaches a process listing |
+| `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment or the saved record, never an argument, so it reaches no process listing |
+| `POSITRONIC_PLATFORM_CONFIG_DIR` | where `positronic account register` saves that record, else `~/.config/positronic-platform` |
 | `POSITRONIC_PLATFORM_CREDENTIAL` | the identity `register` registers with — read the same way, for the same reason |
 
 Boards have no command yet — `PlatformClient.list_boards` and `.rankings` read them from Python, the

@@ -137,12 +137,12 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 
 
 @unique
-class RequestStatus(IntEnum):
-    """A customer request's lifecycle: received -> filed -> running -> done|cancelled|errored.
+class PlanStatus(IntEnum):
+    """A filed plan's lifecycle: received -> filed -> running -> done|cancelled|errored.
 
     `received` is the gateway's own row, and every status from `filed` on is what the coordinator
-    reports. `blocked` is a stop and not an end: the request waits on what `error` names, and a
-    later report moves it on.
+    reports. `blocked` is a stop and not an end: the plan waits on what `error` names, and a later
+    report moves it on.
     """
 
     INVALID = 0
@@ -157,7 +157,7 @@ class RequestStatus(IntEnum):
 
 @unique
 class EndpointKind(IntEnum):
-    """Where a request's policy comes from: an address the caller holds up, or a checkpoint the platform serves."""
+    """Where a plan's policy comes from: an address the caller holds up, or a checkpoint the platform serves."""
 
     INVALID = 0
     remote = 1
@@ -187,12 +187,8 @@ class CameraVantage(IntEnum):
     phail = 2
 
 
-# A request the coordinator has finished with, one way or another.
-REQUEST_TERMINAL_STATUSES: frozenset[RequestStatus] = frozenset({
-    RequestStatus.done,
-    RequestStatus.cancelled,
-    RequestStatus.errored,
-})
+# A plan the coordinator has finished with, one way or another.
+PLAN_TERMINAL_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored})
 
-# A request that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
-REQUEST_STOPPED_STATUSES: frozenset[RequestStatus] = frozenset({RequestStatus.blocked, RequestStatus.errored})
+# A plan that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
+PLAN_STOPPED_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.blocked, PlanStatus.errored})

@@ -90,12 +90,22 @@ def test_a_served_endpoint_names_its_bring_up_and_no_url():
 def test_a_scene_is_flat_on_every_level():
     plan = a_plan(
         tote_placement='random',
+        camera_vantage='phail',
         external_cameras={'side': 'left'},
         tasks=[{'task_id': SPOONS, 'tote_placement': 'left'}],
     )
     assert plan.tote_placement is Placement.random
     assert plan.tasks[0].tote_placement is Placement.left
     assert plan.external_cameras == {'side': Placement.left}
+    sent = plan.model_dump(mode='json')
+    assert sent['tote_placement'] == 'random'
+    assert sent['camera_vantage'] == 'phail'
+    assert sent['external_cameras'] == {'side': 'left'}
+
+
+def test_a_scene_value_outside_the_closed_set_is_refused():
+    with pytest.raises(ValidationError):
+        a_plan(tote_placement='middle')
 
 
 def test_every_cap_sits_under_the_ceiling():
@@ -107,3 +117,93 @@ def test_every_cap_sits_under_the_ceiling():
 def test_an_unknown_field_is_refused():
     with pytest.raises(ValidationError, match='extra'):
         a_plan(scene={'tote_placement': 'left'})
+
+
+def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
+    # The plan runs `own` at 3 and `bare` at its own 10. The task runs `bare` by label at the
+    # task's 5, since the definition states none; `two` at its own 2; `five` at the task's 5.
+    plan = a_plan(
+        tasks=[
+            'a',
+            {
+                'task_id': 'b',
+                'episodes_per_endpoint': 5,
+                'endpoints': [
+                    'bare',
+                    {'name': 'two', 'url': 'wss://two.example/ws', 'episodes_per_endpoint': 2},
+                    {'name': 'five', 'url': 'wss://five.example/ws'},
+                ],
+            },
+        ],
+        endpoints=[{'name': 'own', 'url': 'wss://own.example/ws', 'episodes_per_endpoint': 3}, {'name': 'bare'}],
+    )
+    first, second = plan.tasks
+    assert [plan.episodes_on(first, entry) for entry in plan.task_endpoints(first)] == [3, 10]
+    assert [plan.episodes_on(second, entry) for entry in plan.task_endpoints(second)] == [5, 2, 5]
+    assert plan.resolved_episodes_total == 25
+    # The count leaves on the wire under its own name, and comes back.
+    sent = plan.endpoints[0].model_dump(mode='json')
+    assert sent['episodes_per_endpoint'] == 3 and Endpoint.model_validate(sent) == plan.endpoints[0]
+
+
+def test_a_remote_endpoint_names_no_bring_up():
+    with pytest.raises(ValidationError, match='only a served endpoint carries'):
+        Endpoint(name='gyros', provider='droid_cohost')
+
+
+def test_an_endpoint_url_names_a_host():
+    """An address with no host reaches nothing, and it counts as a locator all the way to the
+    platform, which refuses the plan after it is filed."""
+    with pytest.raises(ValidationError, match='no host'):
+        Endpoint(name='gyros', url='/ws')
+    with pytest.raises(ValidationError, match='no host'):
+        Endpoint(name='gyros', url='gyros.example/ws')
+
+
+@pytest.mark.parametrize('url', ['wss://gyros.example/ws', 'https://gyros.example/ws', 'http://localhost:8080/ws'])
+def test_an_absolute_endpoint_url_is_left_alone(url: str):
+    """The boundary: the scheme is the platform's to judge — it dials wss:// as readily as https://
+    — so this refuses an address with no host and nothing else."""
+    assert Endpoint(name='gyros', url=url).url == url
+
+
+def test_an_endpoint_says_whether_it_names_a_locator():
+    assert Endpoint(name='gyros').names_a_locator is False
+    assert Endpoint(name='gyros', url='wss://x/ws').names_a_locator is True
+
+
+def test_a_plan_names_each_task_and_each_endpoint_once():
+    with pytest.raises(ValidationError, match='more than once'):
+        a_plan(tasks=[SPOONS, SPOONS])
+    with pytest.raises(ValidationError, match='more than once'):
+        a_plan(endpoints=[GYROS, GYROS])
+    with pytest.raises(ValidationError, match='more than once'):
+        TaskNode.model_validate({'task_id': SPOONS, 'endpoints': [{'name': 'e'}, {'name': 'e'}]})
+
+
+def test_a_task_endpoint_naming_no_locator_names_one_the_plan_defines():
+    with pytest.raises(ValidationError, match='name no endpoint the plan defines'):
+        a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['elsewhere']}])
+    # An entry that carries its own address needs no definition.
+    a_plan(endpoints=[], tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'elsewhere', 'url': 'wss://x/ws'}]}])
+
+
+def test_every_task_runs_on_at_least_one_endpoint():
+    with pytest.raises(ValidationError, match='runs on no endpoint'):
+        a_plan(endpoints=[])
+    with pytest.raises(ValidationError):
+        TaskNode.model_validate({'task_id': SPOONS, 'endpoints': []})
+
+
+def test_a_count_below_one_is_refused_at_every_level():
+    with pytest.raises(ValidationError):
+        a_plan(episodes_per_endpoint=0)
+    with pytest.raises(ValidationError):
+        a_plan(tasks=[{'task_id': SPOONS, 'episodes_per_endpoint': 0}])
+    with pytest.raises(ValidationError):
+        Endpoint(name='e', episodes_per_endpoint=0)
+
+
+def test_a_clutter_draw_needs_a_range():
+    with pytest.raises(ValidationError, match='which is no range'):
+        a_plan(clutter={'count_min': 8, 'count_max': 4})

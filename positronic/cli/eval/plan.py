@@ -1,0 +1,162 @@
+"""The half of `positronic eval run` that files an eval plan for the rig.
+
+Not a command of its own: running an eval is one act, and where it runs is an argument to it.
+"""
+
+from collections.abc import Mapping
+from pathlib import Path
+
+import yaml
+from platform_client.enums import CameraVantage, Placement
+from platform_client.eval_plan import EvalPlan
+from platform_client.responses import PlanFiled
+from platform_client.slug import Slugged
+from pydantic import TypeAdapter, ValidationError
+
+from positronic.cli.account.gateway import gateway
+
+# What `--scene` takes: `tote_placement=<side>`, `camera_vantage=<vantage>`, and `camera.<mount>=<side>`.
+SCENE_TOTE = 'tote_placement'
+SCENE_VANTAGE = 'camera_vantage'
+SCENE_CAMERA_PREFIX = 'camera.'
+SCENE_CAMERAS = 'external_cameras'
+
+_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
+_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
+
+
+def one_line(exc: ValidationError) -> str:
+    return '; '.join(f'{".".join(str(part) for part in error["loc"])}: {error["msg"]}' for error in exc.errors())
+
+
+def repeated(value: object, flag: str) -> list[str]:
+    """The entries of a flag that takes more than one, in either spelling the command line reaches.
+
+    A CLI value is read with `ast.literal_eval`, which takes `[a,b]` as a list and keeps the text of
+    anything it cannot read — a hyphen or a `=` inside the brackets is enough. So splitting the text
+    on the comma is what makes `--tasks=[a,b]` and `--tasks=a-b,c-d` one list.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list | tuple):
+        entries = [str(entry) for entry in value]
+    elif isinstance(value, str):
+        entries = value.removeprefix('[').removesuffix(']').split(',')
+    else:
+        raise SystemExit(f'{flag} takes text; quote a value that reads as a number: \'"{value}"\'')
+    stripped = [entry.strip() for entry in entries]
+    if not all(stripped):
+        raise SystemExit(f'{flag} carries an empty entry: {value!r}')
+    return stripped
+
+
+def endpoint_of(spec: str, position: int) -> dict[str, str]:
+    """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
+
+    A URL carries `=` in a query string, so the part before the first one is a label only where it
+    names no scheme and no path.
+    """
+    label, separator, address = spec.partition('=')
+    if separator and ':' not in label and '/' not in label:
+        return {'name': label, 'url': address}
+    return {'name': f'policy{position}', 'url': spec}
+
+
+def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
+    """`--scene KEY=VALUE` pairs as the plan's own scene fields. An unknown key is a `SystemExit`."""
+    scene: dict[str, object] = {}
+    cameras: dict[str, Placement] = {}
+    for pair in pairs:
+        key, has_value, value = pair.partition('=')
+        if not has_value:
+            raise SystemExit(f'--scene takes KEY=VALUE, not {pair!r}')
+        if key in scene or key.removeprefix(SCENE_CAMERA_PREFIX) in cameras:
+            raise SystemExit(f'--scene {key} is given twice: the plan would carry only the last one')
+        try:
+            if key == SCENE_TOTE:
+                scene[key] = _PLACEMENT.validate_python(value)
+            elif key == SCENE_VANTAGE:
+                scene[key] = _VANTAGE.validate_python(value)
+            elif key.startswith(SCENE_CAMERA_PREFIX) and len(key) > len(SCENE_CAMERA_PREFIX):
+                cameras[key.removeprefix(SCENE_CAMERA_PREFIX)] = _PLACEMENT.validate_python(value)
+            else:
+                raise SystemExit(
+                    f'--scene takes {SCENE_TOTE}, {SCENE_VANTAGE} or {SCENE_CAMERA_PREFIX}<mount>, not {key!r}'
+                )
+        except ValidationError as exc:
+            raise SystemExit(f'--scene {pair}: {one_line(exc)}') from exc
+    if cameras:
+        scene[SCENE_CAMERAS] = cameras
+    return scene
+
+
+def read_plan(path: Path) -> EvalPlan:
+    """The whole plan, from a file. `yaml.safe_load` reads JSON too, so one reader takes both forms."""
+    try:
+        payload = yaml.safe_load(path.read_bytes())
+    except OSError as exc:
+        raise SystemExit(f'{path}: {exc.strerror}') from exc
+    except yaml.YAMLError as exc:
+        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
+    try:
+        return EvalPlan.model_validate(payload)
+    except ValidationError as exc:
+        raise SystemExit(f'{path}: {one_line(exc)}') from exc
+
+
+def plan_from_flags(
+    *,
+    policy_url: object,
+    tasks: object,
+    episodes: int | None,
+    cap: int | None,
+    preset: str | None,
+    scene: object,
+    transaction_key: str | None,
+) -> EvalPlan:
+    """The plan the rig flags state."""
+    task_ids = repeated(tasks, '--tasks')
+    urls = repeated(policy_url, '--policy-url')
+    if not task_ids or not urls or episodes is None:
+        raise SystemExit('a rig run states --tasks, --policy-url and --episodes, or the whole plan in a file')
+    payload: dict[str, object] = {
+        'tasks': task_ids,
+        'endpoints': [endpoint_of(spec, position) for position, spec in enumerate(urls, start=1)],
+        'episodes_per_endpoint': episodes,
+        'cap_per_episode_sec': cap,
+        'policy_preset': preset,
+        'transaction_key': transaction_key,
+        **scene_from_pairs(repeated(scene, '--scene')),
+    }
+    try:
+        return EvalPlan.model_validate(payload)
+    except ValidationError as exc:
+        raise SystemExit(one_line(exc)) from exc
+
+
+def file_plan(plan: EvalPlan, platform_url: str | None = None) -> PlanFiled:
+    """File one plan with `evals.run`, print what came back, and return it.
+
+    The plan names the tasks and the policies each runs, so it is the whole of the ask. Two or more
+    endpoints make one blind sample: the operator is told no policy, and each episode records which
+    one served it. `positronic eval status` reads the plan back by the id this prints.
+    """
+    with gateway(platform_url) as client:
+        filed = client.run_eval(plan)
+    print(filed.model_dump_json(indent=2))
+    return filed
+
+
+def plan_source(eval: object, from_file: str | None) -> Path | None:
+    """The file a whole plan comes from: `--from-file`, else an `--eval` that names an existing file."""
+    named = Path(eval) if isinstance(eval, str) and Path(eval).is_file() else None
+    if from_file is not None and named is not None:
+        raise SystemExit(f'--from-file and --eval={eval} each name a plan file; give one')
+    return Path(from_file) if from_file is not None else named
+
+
+def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:
+    """Stop where a plan file and the flags that state a plan both name one."""
+    twice = sorted(flag for flag, value in stated.items() if value)
+    if twice:
+        raise SystemExit(f'{source} carries the whole plan; drop {", ".join(twice)}')

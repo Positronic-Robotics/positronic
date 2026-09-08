@@ -24,10 +24,13 @@ from pathlib import Path
 import pytest
 from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV
+from platform_client.config import CONFIG_DIR_ENV
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUBMISSION = '5f3a91c2b7d40e18'
+PLAN = '2a'
+TASK = 'eight-spoons-into-grey-tote'
 AT = '2026-03-04T05:06:07Z'
 
 # One canned answer per route, each the shape its response model requires. A submission is finished
@@ -88,6 +91,13 @@ ANSWERS: dict[str, object] = {
             }
         ],
     },
+    routes.EVALS_RUN: {'plan_id': PLAN, 'status': 'received'},
+    routes.EVALS_GET: {'plan_id': PLAN, 'status': 'filed', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}},
+    routes.EVALS_LIST: {
+        'plans': [{'plan_id': PLAN, 'status': 'filed', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}}]
+    },
+    routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
+    routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiment': 'franka', 'task': 'spoons into a tote'}]},
     routes.RANKINGS_LIST: {
         'boards': [
             {
@@ -147,13 +157,17 @@ def platform_url() -> Iterator[str]:
         server.server_close()
 
 
-def run_from_a_clean_environment(command: list[str], *, platform_url: str) -> subprocess.CompletedProcess:
+def run_from_a_clean_environment(
+    command: list[str], *, platform_url: str, config_dir: Path
+) -> subprocess.CompletedProcess:
     """Run one documented command as a user with nothing installed would."""
     # An inherited interpreter or import path would let the command succeed on packages `uv run`
-    # never had to provide, which is exactly the claim under test.
+    # never had to provide, which is exactly the claim under test. The config directory is this
+    # test's own, so `account register` does not write over the key record of the box it runs on.
     env = {
         'PATH': os.environ['PATH'],
         'HOME': os.environ['HOME'],
+        CONFIG_DIR_ENV: str(config_dir),
         API_URL_ENV: platform_url,
         API_KEY_ENV: 'pk_live_fake',
         CREDENTIAL_ENV: 'token',
@@ -172,9 +186,22 @@ DOCUMENTED_COMMANDS = {
         '--eval=fake.smoke',
         '--policy-image=org/policy:v1',
     ],
-    'eval-status': ['uv', 'run', 'positronic', 'eval', 'status', f'--submission-id={SUBMISSION}'],
+    'eval-run-on-the-rig': [
+        'uv',
+        'run',
+        'positronic',
+        'eval',
+        'run',
+        '--policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws',
+        f'--tasks={TASK}',
+        '--episodes=10',
+        '--cap=180',
+        '--scene=tote_placement=random',
+    ],
+    'eval-status': ['uv', 'run', 'positronic', 'eval', 'status', f'--id={SUBMISSION}'],
     'eval-list': ['uv', 'run', 'positronic', 'eval', 'list'],
-    'eval-cancel': ['uv', 'run', 'positronic', 'eval', 'cancel', f'--submission-id={SUBMISSION}'],
+    'eval-cancel': ['uv', 'run', 'positronic', 'eval', 'cancel', f'--id={SUBMISSION}'],
+    'eval-catalog': ['uv', 'run', 'positronic', 'eval', 'catalog'],
     'walkthrough': ['uv', 'run', 'positronic/cli/examples/walkthrough.py'],
     'submit-sample': [
         'uv',
@@ -186,10 +213,12 @@ DOCUMENTED_COMMANDS = {
 
 
 @pytest.mark.parametrize('command', DOCUMENTED_COMMANDS.values(), ids=DOCUMENTED_COMMANDS.keys())
-def test_a_documented_command_runs_with_nothing_installed(command: list[str], platform_url: str, uv: str):
+def test_a_documented_command_runs_with_nothing_installed(
+    command: list[str], platform_url: str, uv: str, tmp_path: Path
+):
     # Through the resolved `uv`, so what ran is the one the fixture found rather than whatever a
     # subprocess PATH would have picked.
-    result = run_from_a_clean_environment([uv, *command[1:]], platform_url=platform_url)
+    result = run_from_a_clean_environment([uv, *command[1:]], platform_url=platform_url, config_dir=tmp_path)
     assert result.returncode == 0, f'{" ".join(command)} failed:\n{result.stdout}\n{result.stderr}'
 
 
@@ -212,7 +241,7 @@ def cited_commands() -> set[tuple[str, ...]]:
 def _shape(command: list[str]) -> tuple[str, ...]:
     """A command's path and the NAMES of its options, with every value dropped.
 
-    The values differ by construction — a README carries `--submission-id=<hex id>` where this test
+    The values differ by construction — a README carries `--id=<hex id>` where this test
     runs a real one — but the names must not, or a README could rename an option to something the
     CLI does not accept and this check would go on passing.
     """

@@ -18,11 +18,21 @@ uv run positronic account register --alias=<display name>
 export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval status --submission-id=<hex id>
+uv run positronic eval status --id=<hex id>
 ```
 
 `eval run` is the same command that runs an eval on the machine in front of you; a policy image in
-place of a policy is what sends it to the platform.
+place of a policy is what sends it to the platform, and a policy URL is what files a plan for the
+lab rig:
+
+```bash
+uv run positronic eval catalog
+uv run positronic eval run --policy-url=gyros=wss://gyros.example/ws,ziyi=wss://ziyi.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+```
+
+Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode
+records which one served it. `--from-file` takes the whole plan as YAML or JSON instead, and so does
+`--eval` where its value names a file.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list, and naming one

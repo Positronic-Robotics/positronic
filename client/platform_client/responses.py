@@ -11,13 +11,13 @@ from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
 from platform_client.enums import (
-    REQUEST_STOPPED_STATUSES,
+    PLAN_STOPPED_STATUSES,
     BoardVisibility,
     KeyStatus,
     OnExhausted,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
-    RequestStatus,
     SubmissionStatus,
 )
 from platform_client.evals import EvalRef
@@ -157,8 +157,9 @@ class SubmissionListResponse(BaseModel):
 STATUS_FIELD = 'status'
 
 # The field every view identifies a submission by, named for the same reason: a renderer that
-# excludes it by a stale literal prints it twice.
+# excludes it by a stale literal prints it twice. `PLAN_ID_FIELD` is the plan view's own.
 ID_FIELD = 'id'
+PLAN_ID_FIELD = 'plan_id'
 
 
 class _TaggedView(BaseModel):
@@ -305,15 +306,18 @@ class RankingsResponse(BaseModel):
     rankings: list[RankingRow] = Field(default_factory=list)
 
 
-class RequestCreated(BaseModel):
-    """`requests.create` — a fresh request, or the one an earlier create under the same key made."""
+class PlanFiled(BaseModel):
+    """`evals.run` — a fresh plan, or the one an earlier call under the same key filed."""
 
-    request_id: PlanId
-    status: Slugged[RequestStatus]
+    plan_id: PlanId
+    status: Slugged[PlanStatus]
 
 
 class EpisodeCounts(BaseModel):
-    """What a request asked for and where it stands: `total` is fixed at create; the other two move as episodes land."""
+    """What a plan asked for and where it stands.
+
+    `total` is fixed when the plan is filed; the other two move as episodes land.
+    """
 
     total: int = Field(ge=0)
     done: int = Field(ge=0)
@@ -321,7 +325,7 @@ class EpisodeCounts(BaseModel):
 
 
 class RunSummary(BaseModel):
-    """One launch that served the request.
+    """One launch that served the plan.
 
     `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
     """
@@ -331,17 +335,15 @@ class RunSummary(BaseModel):
     ended_at: AwareDatetime | None = None
 
 
-class RequestView(BaseModel):
-    """`requests.get`, and one row of `requests.list`.
+class PlanView(BaseModel):
+    """`evals.get`, and one row of `evals.list`.
 
-    `slug` names the request once the coordinator files it. `artifacts` is the prefix the episodes
-    land under, once one exists. `error` says why a `blocked` request waits, or why an `errored` one
-    stopped.
+    `artifacts` is the prefix the episodes land under, once one exists. `error` says why a `blocked`
+    plan waits, or why an `errored` one stopped.
     """
 
-    request_id: PlanId
-    status: Slugged[RequestStatus]
-    slug: str | None = None
+    plan_id: PlanId
+    status: Slugged[PlanStatus]
     episodes: EpisodeCounts
     runs: list[RunSummary] = Field(default_factory=list)
     artifacts: str | None = None
@@ -349,16 +351,16 @@ class RequestView(BaseModel):
 
     @model_validator(mode='after')
     def _an_error_travels_with_a_stopped_status(self) -> Self:
-        if self.error is not None and self.status not in REQUEST_STOPPED_STATUSES:
-            raise ValueError(f'an error on a {self.status.name} request')
+        if self.error is not None and self.status not in PLAN_STOPPED_STATUSES:
+            raise ValueError(f'an error on a {self.status.name} plan')
         return self
 
 
-class RequestListResponse(BaseModel):
-    """`requests.list` — one page, oldest first.
+class PlanListResponse(BaseModel):
+    """`evals.list` — one page, oldest first.
 
     `next` is the cursor for the page after it, and is absent on the last page.
     """
 
-    requests: list[RequestView] = Field(default_factory=list)
+    plans: list[PlanView] = Field(default_factory=list)
     next: PlanId | None = None

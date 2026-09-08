@@ -9,12 +9,10 @@ from positronic.eval import keys as eval_keys
 
 
 @cfn.config()
-def placeholder():
-    # Lets ``--eval=.sim.positronic.stack_cubes`` resolve relative to this package; never instantiated.
-    raise SystemExit(
-        '--eval is required: a config to run here (--eval=.sim.positronic.stack_cubes), '
-        'or the name of one the platform offers (--eval=robolab.public_subset, with --policy-image)'
-    )
+def unset():
+    """No eval. It lives in this package so a relative ``--eval=.sim.positronic.stack_cubes`` still resolves
+    against it, and instantiates to None rather than raising, so the absence is a value ``run`` can act on."""
+    return None
 
 
 def spec(**selection) -> dict[str, Any]:

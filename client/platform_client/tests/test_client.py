@@ -22,34 +22,28 @@ from platform_client.enums import (
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
-    RequestStatus,
     SubmissionStatus,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import (
-    CancelRequest,
-    EndpointAsk,
-    RegisterRequest,
-    RequestCreate,
-    SubmissionCreateRequest,
-    TaskAsk,
-)
+from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     BoardListResponse,
     CancelResponse,
     MeResponse,
     PendingSubmissionView,
+    PlanFiled,
+    PlanListResponse,
+    PlanView,
     RankingsResponse,
     RegisterResponse,
-    RequestCreated,
-    RequestListResponse,
-    RequestView,
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
@@ -526,42 +520,27 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
         _ = caught.value.quota
 
 
-# --- requests -----------------------------------------------------------------------------------
+# --- eval plans ---------------------------------------------------------------------------------
 
-ASK = RequestCreate(
-    tasks=[TaskAsk(task_id=TaskRef('eight-spoons-into-grey-tote'))],
-    endpoints=[EndpointAsk(name='gyros', url='wss://gyros.example/ws')],
+PLAN = EvalPlan(
+    tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
+    endpoints=[Endpoint(name='gyros', url='wss://gyros.example/ws')],
     episodes_per_endpoint=10,
 )
 
-REQUEST_VIEW = {
-    'request_id': '2a',
-    'status': 'filed',
-    'slug': '2026-09-04-runway-ziyi',
-    'episodes': {'total': 10, 'done': 0, 'outstanding': 10},
-    'runs': [],
-}
+PLAN_VIEW = {'plan_id': '2a', 'status': 'filed', 'episodes': {'total': 10, 'done': 0, 'outstanding': 10}, 'runs': []}
 
 
-def test_requests_create_posts_the_ask_and_parses_the_id():
-    gateway = Gateway(200, {'request_id': '2a', 'status': 'received'})
-    response = make_client(gateway).run_eval(ASK)
+def test_evals_run_posts_the_plan_and_parses_the_id():
+    gateway = Gateway(200, {'plan_id': '2a', 'status': 'received'})
+    response = make_client(gateway).run_eval(PLAN)
 
-    assert isinstance(response, RequestCreated)
-    assert response.request_id == PlanId(0x2A) and response.status is RequestStatus.received
+    assert isinstance(response, PlanFiled)
+    assert response.plan_id == PlanId(0x2A) and response.status is PlanStatus.received
     assert gateway.request().url.path == routes.EVALS_RUN
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
     body = gateway.body()
-    assert body['tasks'] == [
-        {
-            'task_id': 'eight-spoons-into-grey-tote',
-            'episodes_per_endpoint': None,
-            'cap_per_episode_sec': None,
-            'policy_preset': None,
-            'scene': None,
-            'endpoints': None,
-        }
-    ]
+    assert body['tasks'][0]['task_id'] == 'eight-spoons-into-grey-tote'
     assert body['endpoints'][0] == {
         'name': 'gyros',
         'kind': 'remote',
@@ -569,34 +548,40 @@ def test_requests_create_posts_the_ask_and_parses_the_id():
         'provider': None,
         'spec': None,
         'episodes_per_endpoint': None,
+        'cap_per_episode_sec': None,
+        'policy_preset': None,
+        'tote_placement': None,
+        'camera_vantage': None,
+        'external_cameras': {},
+        'clutter': None,
     }
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
 
 
-def test_requests_get_sends_the_hex_id_and_parses_the_view():
-    gateway = Gateway(200, REQUEST_VIEW)
+def test_evals_get_sends_the_hex_id_and_parses_the_view():
+    gateway = Gateway(200, PLAN_VIEW)
     view = make_client(gateway).get_eval(PlanId(0x2A))
 
-    assert isinstance(view, RequestView)
-    assert view.status is RequestStatus.filed and view.episodes.outstanding == 10
+    assert isinstance(view, PlanView)
+    assert view.status is PlanStatus.filed and view.episodes.outstanding == 10
     assert gateway.request().url.path == routes.EVALS_GET
     assert dict(gateway.request().url.params) == {'id': '2a'}
 
 
-def test_requests_list_sends_the_cursor_and_parses_the_next():
-    gateway = Gateway(200, {'requests': [REQUEST_VIEW], 'next': '2a'})
+def test_evals_list_sends_the_cursor_and_parses_the_next():
+    gateway = Gateway(200, {'plans': [PLAN_VIEW], 'next': '2a'})
     page = make_client(gateway).list_evals(after=PlanId(0x1F), limit=1)
 
-    assert isinstance(page, RequestListResponse)
-    assert [row.request_id for row in page.requests] == [PlanId(0x2A)] and page.next == PlanId(0x2A)
+    assert isinstance(page, PlanListResponse)
+    assert [row.plan_id for row in page.plans] == [PlanId(0x2A)] and page.next == PlanId(0x2A)
     assert gateway.request().url.path == routes.EVALS_LIST
     assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
 
 
-def test_requests_list_asks_for_the_first_page_with_nothing_in_the_query():
-    gateway = Gateway(200, {'requests': []})
+def test_evals_list_asks_for_the_first_page_with_nothing_in_the_query():
+    gateway = Gateway(200, {'plans': []})
     page = make_client(gateway).list_evals()
-    assert page.requests == [] and page.next is None
+    assert page.plans == [] and page.next is None
     assert dict(gateway.request().url.params) == {}
 
 
@@ -612,6 +597,6 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).run_eval(ASK)
+        make_client(gateway).run_eval(PLAN)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None

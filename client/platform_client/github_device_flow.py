@@ -304,7 +304,7 @@ def platform_url_is_allowed(base_url: str, *, plaintext_http: bool) -> bool:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """The flags a registration takes, on this command and on `positronic-platform register`."""
+    """The flags a registration takes."""
     parser.add_argument('--alias', default=None, help='the display name for this account')
     parser.add_argument(
         '--rotate', action='store_true', help='mint a new key for an account that is already registered'

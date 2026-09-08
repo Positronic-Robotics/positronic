@@ -1,9 +1,9 @@
-"""The task reference a rollout request names."""
+"""The task reference an eval plan names."""
 
 from __future__ import annotations
 
 import pytest
-from platform_client.requests import TaskAsk
+from platform_client.eval_plan import TaskNode
 from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
@@ -23,9 +23,9 @@ def test_a_value_that_could_never_be_a_catalogue_key_is_refused_here(value: str)
 def test_an_id_this_client_has_never_heard_of_still_reaches_the_platform():
     # The catalogue lives on the server; a client that curated its own copy would refuse a task
     # added this morning until someone remembered to release it.
-    assert TaskAsk.model_validate({'task_id': 'a-task-added-this-morning'}).task_id == 'a-task-added-this-morning'
+    assert TaskNode.model_validate({'task_id': 'a-task-added-this-morning'}).task_id == 'a-task-added-this-morning'
 
 
 def test_the_boundary_refuses_a_malformed_id():
     with pytest.raises(ValidationError):
-        TaskAsk.model_validate({'task_id': 'Eight Spoons'})
+        TaskNode.model_validate({'task_id': 'Eight Spoons'})

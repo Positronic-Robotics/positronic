@@ -1,15 +1,16 @@
 """`positronic account register`, over a stub platform transport."""
 
-import shlex
+import os
 
 import pytest
 from platform_client import routes
+from platform_client.config import config_dir, read_config
 
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.register import register
 
 
-def test_register_prints_the_export_line_for_a_minted_key(platform, run_command, capsys):
+def test_register_saves_the_minted_key_in_the_record(platform, run_command, capsys):
     platform.answer({
         'user_id': 'a0',
         'artifact_location': 's3://b/users/a0/',
@@ -22,24 +23,26 @@ def test_register_prints_the_export_line_for_a_minted_key(platform, run_command,
     assert platform.request.url.path == routes.USERS_REGISTER
     assert 'authorization' not in platform.request.headers
     assert platform.body == {'credential': 'token', 'alias': 'demo', 'rotate': False}
+    saved = read_config(config_dir(os.environ))
+    assert saved is not None and saved.api_key == 'pk_new'
     out = capsys.readouterr().out
     assert 'user a0 (created)' in out
-    assert f'export {gateway_module.API_KEY_ENV}=pk_new' in out
+    # The record holds the key, so the command names the file and prints none of it.
+    assert 'pk_new' not in out
 
 
-def test_an_export_line_survives_a_key_holding_shell_characters(platform, run_command, capsys):
-    # The key is opaque; pasting an unquoted export line would run the `;` and drop the rest.
+def test_the_key_is_recorded_against_the_platform_it_was_minted_on(platform, run_command):
     platform.answer({
         'user_id': 'a0',
         'artifact_location': 's3://b/users/a0/',
-        'api_key': 'pk a$b;rm -rf /',
+        'api_key': 'pk_new',
         'key_status': 'created',
     })
 
-    run_command(register)
+    run_command(register, platform_url='http://other.test')
 
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith('export '))
-    assert shlex.split(line)[1] == f'{gateway_module.API_KEY_ENV}=pk a$b;rm -rf /'
+    saved = read_config(config_dir(os.environ))
+    assert saved is not None and saved.platform_url.startswith('http://other.test')
 
 
 def test_register_refuses_when_no_credential_is_in_the_environment(platform, run_command, monkeypatch):
@@ -64,3 +67,5 @@ def test_register_says_no_key_came_back_for_an_existing_registration(platform, r
     run_command(register)
 
     assert 'no key issued' in capsys.readouterr().out
+    # A repeat registration mints none, and the record already on disk stays as it is.
+    assert read_config(config_dir(os.environ)) is None
