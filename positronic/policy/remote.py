@@ -32,7 +32,7 @@ def _prepare_value(value: Any) -> Any:
     return value
 
 
-def _prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
+def prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
     if not compress_images:
         return dict(obs)
     return {key: _prepare_value(value) for key, value in obs.items()}
@@ -48,7 +48,7 @@ def round_trip(
     encode is not inference.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
-        prepared = _prepare_obs(obs, compress_images)
+        prepared = prepare_obs(obs, compress_images)
     infer_start_ns = time.time_ns()
     try:
         return ws_session.infer(prepared)
