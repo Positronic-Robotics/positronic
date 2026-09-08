@@ -135,17 +135,6 @@ class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[TrossenState.STATUS_OFFSET] = status.value
 
 
-def _reach_postures(x: float, y: float) -> list[np.ndarray]:
-    """IK warm-start candidates for reaching toward base-frame point (x, y).
-
-    Joint 0 swung to the target's azimuth, the arm unfolded to two heights. The arm rests on the lower limit
-    of joints 1 and 2, where half the directions have no solution at all, so a seed away from there is what
-    lets IK find one.
-    """
-    azimuth = np.arctan2(y, x)
-    return [np.array([azimuth, 1.571, 1.178, 0.0, 0.0, 0.0]), np.array([azimuth, 1.2, 1.5, 0.0, 0.4, 0.0])]
-
-
 class _Kinematics:
     """FK/IK on the vendored MJCF at ``ee_site``, in the arm base frame.
 
@@ -168,6 +157,17 @@ class _Kinematics:
         mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
+    @staticmethod
+    def _reach_postures(x: float, y: float) -> list[np.ndarray]:
+        """IK warm-start candidates for reaching toward base-frame point (x, y).
+
+        Joint 0 swung to the target's azimuth, the arm unfolded to two heights. The arm rests on the lower
+        limit of joints 1 and 2, where half the directions have no solution at all, so a seed away from
+        there is what lets IK find one.
+        """
+        azimuth = np.arctan2(y, x)
+        return [np.array([azimuth, 1.571, 1.178, 0.0, 0.0, 0.0]), np.array([azimuth, 1.2, 1.5, 0.0, 0.4, 0.0])]
+
     def ik(
         self, target: geom.Transform3D, current_q: np.ndarray, max_jump: float | np.ndarray | None = None
     ) -> np.ndarray | None:
@@ -185,7 +185,7 @@ class _Kinematics:
         A target that is reached costs about a quarter of a millisecond, and one that is not costs every
         seed's full search — more than a tick.
         """
-        seeds = (current_q,) if max_jump is not None else (current_q, *_reach_postures(*target.translation[:2]))
+        seeds = (current_q,) if max_jump is not None else (current_q, *self._reach_postures(*target.translation[:2]))
         for start in seeds:
             self._data.qpos[:] = 0.0
             self._data.qpos[self._qpos_ids] = start
@@ -539,10 +539,13 @@ class _Arm(DriverRun[command.CommandType]):
         # are position-servoed, so `PositionControl` names the law already running.
         command.require_native_mode(cmd, 'Trossen')
         match cmd:
+            # A joint-space target moves the arm off whatever pose a Cartesian stream last asked for, so
+            # the anchor the next Cartesian step measures from is where those joints put the end effector.
             case command.JointPosition(positions):
-                target = np.asarray(positions, dtype=np.float64)
+                target, self._anchor = np.asarray(positions, dtype=np.float64), None
             case command.JointDelta(velocities=delta):
                 target = (self._target if streamed else self.q) + np.asarray(delta, dtype=np.float64)
+                self._anchor = None
             case command.CartesianPosition(pose):
                 target = self._ik(pose, streamed=streamed)
             case command.CartesianDelta() as delta_cmd:
@@ -598,7 +601,9 @@ class _Arm(DriverRun[command.CommandType]):
             target = self._target_of(call.request, streamed=False)
             travel = float(np.max(np.abs(target - self.q)))
             self._target = self._wanted = target
-            self._travel_to = None
+            # The arm ends this move where the plan puts it, so that is what the next Cartesian step
+            # measures from, and nothing is owed the rest of a travel the move interrupted.
+            self._anchor = self._travel_to = None
             self._goal_time = max(_MIN_MOVE_TIME_S, travel / _MOVE_SPEED)
             self._arm_unsent = True
             self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
@@ -676,8 +681,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     def stand_down(self) -> None:
         """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
+        if self.moves.active:
+            # Nothing sends the target again: a move in flight refuses every request, and the setpoint now
+            # holds where the arm reads.
+            self.moves.fail(RuntimeError(f'the arm at {self.ip} ran too fast to finish the move'))
         self._target = self._wanted = self.q
-        self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
+        self._goal_time, self._arm_unsent, self._travel_to = _STREAM_GOAL_TIME_S, True, None
         self.write()
 
     def publish(self) -> None:

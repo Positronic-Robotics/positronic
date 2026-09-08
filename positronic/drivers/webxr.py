@@ -47,9 +47,10 @@ def _parse_controller_data(data: dict):
             rotation = np.array(data[CONTROLLERS][side][ORIENTATION], dtype=np.float64)
             buttons = np.array(data[CONTROLLERS][side][BUTTONS], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
-            if buttons.size < _TELEOP_BUTTONS:
+            if buttons.ndim != 1 or buttons.size < _TELEOP_BUTTONS:
                 raise ValueError(
-                    f'The {side} controller sends {buttons.size} buttons; teleoperation needs {_TELEOP_BUTTONS}'
+                    f'The {side} controller sends buttons shaped {buttons.shape}; teleoperation reads '
+                    f'{_TELEOP_BUTTONS} of them, one after another'
                 )
             buttons_dict[side] = buttons
 
