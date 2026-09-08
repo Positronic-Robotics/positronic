@@ -35,6 +35,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -200,12 +201,15 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
 def bind_from_env(process: str):
     """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
 
-    Inert while the two env vars are unset, and while a provider is already bound.
+    The directory turns recording on. An unset run id is minted here, so a fixed one in an operator's
+    environment cannot merge two runs into a single file under a single name.
+
+    Inert while the directory is unset, and while a provider is already bound.
     """
     directory = os.environ.get(ENV_TELEMETRY_DIR)
-    run_id = os.environ.get(ENV_RUN_ID)
-    if directory is None or run_id is None or _provider is not None:
+    if directory is None or _provider is not None:
         return nullcontext()
+    run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
     return _bind_to(Path(directory) / f'{process}{SPANS_SUFFIX}', process, run_id)
 
 

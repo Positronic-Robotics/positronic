@@ -460,8 +460,18 @@ def _run_id(path):
     return _resource_attrs(path)[telemetry.ATTR_RUN_ID]
 
 
+def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
+    """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    assert _run_id(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+
+
 def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch):
-    """What an attended rollout gets: two env vars, and the same sidecar the eval CLI writes."""
+    """An attended rollout sets two env vars and gets the sidecar the eval CLI writes."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
     monkeypatch.setenv(ENV_RUN_ID, 'rollout-1')
     with telemetry.bind_from_env(HARNESS_PROCESS):
