@@ -18,7 +18,6 @@ from platform_client.config import (
     platform_url_from,
     read_config,
     record_if_needed,
-    same_platform,
     write_config,
 )
 from platform_client.ids import ApiKey
@@ -140,9 +139,3 @@ def test_a_record_a_command_needs_nothing_from_is_not_read(tmp_path: Path, recor
     env = {CONFIG_DIR_ENV: str(tmp_path), API_KEY_ENV: 'k', API_URL_ENV: 'http://env.test'}
     assert record_if_needed(env, None) is None
     assert record_if_needed({CONFIG_DIR_ENV: str(tmp_path)}, None) == record
-
-
-def test_a_trailing_slash_names_the_same_platform_and_another_path_does_not():
-    assert same_platform('https://platform.test/', 'https://platform.test')
-    assert not same_platform('https://platform.test', 'https://other.test')
-    assert not same_platform('https://platform.test/v1', 'https://platform.test')

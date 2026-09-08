@@ -12,15 +12,7 @@ from contextlib import contextmanager
 from typing import TypeVar
 
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV, PlatformClient
-from platform_client.config import (
-    REGISTER_COMMAND,
-    api_key_from,
-    key_is_given,
-    platform_is_given,
-    platform_url_from,
-    record_if_needed,
-    same_platform,
-)
+from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.errors import PlatformError
 from platform_client.ids import Id64
 from pydantic import ValidationError
@@ -61,30 +53,16 @@ def refusing_bad_input() -> Iterator[None]:
 def gateway(platform_url: str | None = None, *, key_required: bool = True) -> Iterator[PlatformClient]:
     """A client on the configured platform, reporting a refusal by it as a CLI failure.
 
-    The key comes from the environment, then from the record `register` saved. A saved key is valid
-    only on the platform it was minted on, so a command that needs one and names another platform is
-    refused. `register` needs none: it registers on the platform it names, whatever the record holds.
+    One client, one platform: the key comes from the environment, then from the record `register`
+    saved. `register` sends no key, so it reads none.
     """
-    # A registration sends no key, so it reads the record only for a platform it does not name.
-    needs_record = key_required or not platform_is_given(os.environ, platform_url)
-    record = record_if_needed(os.environ, platform_url) if needs_record else None
+    record = record_if_needed(os.environ, platform_url)
     key = api_key_from(os.environ, record) if key_required else None
     if key_required and key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     # A misconfigured platform — an empty `--platform-url`, or one the client cannot reach.
     with refusing_bad_input():
         client_ = PlatformClient(platform_url_from(os.environ, platform_url, record), api_key=key)
-    if (
-        key_required
-        and record is not None
-        and not key_is_given(os.environ)
-        and not same_platform(client_.base_url, record.platform_url)
-    ):
-        raise SystemExit(
-            f'the saved key belongs to {record.platform_url}, and this command names {client_.base_url}: '
-            f'set {API_KEY_ENV} to a key for that platform, or register there with '
-            f'`{REGISTER_COMMAND} --platform-url={client_.base_url}`'
-        )
     with client_ as client:
         try:
             yield client

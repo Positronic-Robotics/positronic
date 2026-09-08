@@ -41,8 +41,8 @@ def checked_api_key(value: str) -> str:
 def checked_platform_url(value: str) -> str:
     """The record's platform, or a `ValueError` that `read_config` reports as a malformed record.
 
-    `same_platform` and the client both parse this value, so a record holding `http://host:bad`
-    would otherwise end the command with an `httpx.InvalidURL` traceback naming no file.
+    The client parses this value, so a record holding `http://host:bad` would otherwise end the
+    command with an `httpx.InvalidURL` traceback naming no file.
     """
     try:
         require_absolute_url(value, 'platform_url')
@@ -133,11 +133,6 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: 
     if from_env is not None:
         return from_env
     return record.platform_url if record else None
-
-
-def same_platform(one: str, other: str) -> bool:
-    """Whether two URLs name one platform. Both are parsed, and a trailing slash is ignored."""
-    return httpx.URL(one.removesuffix('/')) == httpx.URL(other.removesuffix('/'))
 
 
 def record_if_needed(env: Mapping[str, str], platform_url: str | None) -> Config | None:

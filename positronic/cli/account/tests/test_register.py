@@ -46,9 +46,8 @@ def test_the_key_is_recorded_against_the_platform_it_was_minted_on(platform, run
     assert saved is not None and saved.platform_url.startswith('http://other.test')
 
 
-def test_a_record_for_another_platform_does_not_stop_a_registration(platform, run_command, monkeypatch):
-    # The saved key belongs to the platform it was minted on; a registration sends no key, so the
-    # record has nothing to say about where it goes.
+def test_a_registration_goes_to_the_platform_it_names_whatever_the_record_holds(platform, run_command, monkeypatch):
+    # A registration sends no key, so the record has nothing to say about where it goes.
     write_config(config_dir(os.environ), Config(platform_url='http://gateway.test', api_key=ApiKey('pk_old')))
     monkeypatch.delenv(gateway_module.API_KEY_ENV)
     monkeypatch.delenv(gateway_module.API_URL_ENV)
@@ -63,7 +62,7 @@ def test_a_record_for_another_platform_does_not_stop_a_registration(platform, ru
 
 def test_a_registration_naming_its_platform_reads_no_key_and_no_record(platform, run_command, monkeypatch):
     # A blank key variable and a file that is no record each end a command that needs a key; a
-    # registration needs none, and its platform is named, so neither is read.
+    # registration needs none, and names its platform, so neither is read.
     (config_dir(os.environ)).mkdir(parents=True)
     (config_dir(os.environ) / CONFIG_FILENAME).write_text('not a record')
     monkeypatch.setenv(gateway_module.API_KEY_ENV, '  ')

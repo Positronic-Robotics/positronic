@@ -4,12 +4,8 @@ The gateway plumbing every command shares — the key, the URL, a refusal — is
 commands that require a key.
 """
 
-import os
-
 import pytest
 from platform_client import routes
-from platform_client.config import Config, config_dir, write_config
-from platform_client.ids import ApiKey
 
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.conftest import AT, ID
@@ -174,16 +170,6 @@ def test_an_unconfigured_url_leaves_the_client_on_its_default_platform(platform,
     run_command(list_runs)
 
     assert platform.base_url is None
-
-
-def test_a_command_needing_a_key_refuses_a_platform_the_saved_key_was_not_minted_on(platform, run_command, monkeypatch):
-    write_config(config_dir(os.environ), Config(platform_url='http://gateway.test', api_key=ApiKey('pk_old')))
-    monkeypatch.delenv(gateway_module.API_KEY_ENV)
-    monkeypatch.delenv(gateway_module.API_URL_ENV)
-
-    with pytest.raises(SystemExit, match='the saved key belongs to http://gateway.test'):
-        run_command(list_runs, platform_url='http://other.test')
-    assert platform.seen is None
 
 
 def test_the_platform_url_argument_overrides_the_environment(platform, run_command):
