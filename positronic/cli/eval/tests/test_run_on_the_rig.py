@@ -173,6 +173,13 @@ def test_a_plan_file_carrying_a_transaction_key_takes_no_flag(platform, run_comm
     assert platform.seen is None
 
 
+def test_a_plan_file_beside_a_policy_image_is_refused(platform, run_command, tmp_path: Path):
+    named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
+    with pytest.raises(SystemExit, match='names a plan file, and --policy-image'):
+        run_command(run, eval=named, policy_image='org/p:v1')
+    assert platform.seen is None
+
+
 def test_two_plan_files_are_refused(platform, run_command, tmp_path: Path):
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
     with pytest.raises(SystemExit, match='each name a plan file'):
@@ -307,6 +314,24 @@ def test_scene_pairs_become_the_plans_own_fields():
 def test_a_scene_pair_that_names_no_field_or_no_side_is_refused(pair: str):
     with pytest.raises(SystemExit):
         scene_from_pairs([pair])
+
+
+@pytest.mark.parametrize('pairs', [['camera.side=left', 'side=right'], ['side=right', 'camera.side=left']])
+def test_a_mount_spelled_like_a_scene_field_is_not_that_field(pairs: list[str]):
+    # `side` is no scene field, so the refusal names it; a mount of that name is a different key.
+    with pytest.raises(SystemExit, match="not 'side'"):
+        scene_from_pairs(pairs)
+
+
+@pytest.mark.parametrize(
+    'pairs',
+    [['camera.tote_placement=left', 'tote_placement=right'], ['tote_placement=right', 'camera.tote_placement=left']],
+)
+def test_a_mount_named_like_a_scene_field_is_read_in_either_order(pairs: list[str]):
+    assert scene_from_pairs(pairs) == {
+        'tote_placement': Placement.right,
+        'external_cameras': {'tote_placement': Placement.left},
+    }
 
 
 @pytest.mark.parametrize(

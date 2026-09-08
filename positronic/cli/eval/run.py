@@ -315,6 +315,8 @@ def run(
         return None
 
     if policy_image is not None:
+        if source is not None:
+            raise SystemExit(f'--eval={eval!r} names a plan file, and --policy-image runs an eval by name; pass one')
         if not isinstance(eval, str):
             raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
         # The platform owns its own trial sweep, its own output and its own telemetry.
@@ -324,22 +326,30 @@ def run(
     if source is not None or any(given(value) for value in rig_only.values()):
         # The rig records under the client's own prefix, and a plan carries no alias.
         _refuse({**local_only, '--alias': alias}, 'rig')
-        if source is not None:
-            refusing_a_second_source(source, rig_only)
-            return file_plan(read_plan(source, transaction_key), platform_url)
-        if eval is not None:
-            raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
-        return file_plan(
-            plan_from_flags(
-                policy_url=policy_url,
-                tasks=tasks,
-                episodes=episodes,
-                cap=cap,
-                preset=preset,
-                scene=scene,
-                transaction_key=transaction_key,
-            ),
+        return _file_for_the_rig(
+            eval,
+            source,
+            rig_only,
             platform_url,
+            policy_url=policy_url,
+            tasks=tasks,
+            episodes=episodes,
+            cap=cap,
+            preset=preset,
+            scene=scene,
+            transaction_key=transaction_key,
         )
 
     raise SystemExit(_NO_POLICY_NAMED)
+
+
+def _file_for_the_rig(
+    eval: object, source: Path | None, rig_only: dict[str, object], platform_url: str | None, **plan_flags
+) -> PlanFiled:
+    """File the plan a file states, else the plan the flags state."""
+    if source is not None:
+        refusing_a_second_source(source, rig_only)
+        return file_plan(read_plan(source, plan_flags['transaction_key']), platform_url)
+    if eval is not None:
+        raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
+    return file_plan(plan_from_flags(**plan_flags), platform_url)

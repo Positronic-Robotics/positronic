@@ -96,15 +96,16 @@ def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
         key, has_value, value = pair.partition('=')
         if not has_value:
             raise SystemExit(f'--scene takes KEY=VALUE, not {pair!r}')
-        if key in scene or key.removeprefix(SCENE_CAMERA_PREFIX) in cameras:
+        mount = key.removeprefix(SCENE_CAMERA_PREFIX) if key.startswith(SCENE_CAMERA_PREFIX) else ''
+        if key in scene or mount in cameras:
             raise SystemExit(f'--scene {key} is given twice: the plan would carry only the last one')
         try:
             if key == SCENE_TOTE:
                 scene[key] = _PLACEMENT.validate_python(value)
             elif key == SCENE_VANTAGE:
                 scene[key] = _VANTAGE.validate_python(value)
-            elif key.startswith(SCENE_CAMERA_PREFIX) and len(key) > len(SCENE_CAMERA_PREFIX):
-                cameras[key.removeprefix(SCENE_CAMERA_PREFIX)] = _PLACEMENT.validate_python(value)
+            elif mount:
+                cameras[mount] = _PLACEMENT.validate_python(value)
             else:
                 raise SystemExit(
                     f'--scene takes {SCENE_TOTE}, {SCENE_VANTAGE} or {SCENE_CAMERA_PREFIX}<mount>, not {key!r}'

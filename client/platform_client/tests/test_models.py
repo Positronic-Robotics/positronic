@@ -33,6 +33,7 @@ from platform_client.requests import (
 )
 from platform_client.responses import (
     ID_FIELD,
+    PLAN_ID_FIELD,
     QUOTA_SUBMISSIONS_CONCURRENT,
     QUOTA_SUBMISSIONS_DAY,
     STATUS_FIELD,
@@ -385,6 +386,10 @@ def test_the_published_field_names_are_ones_every_variant_declares(variant: type
     # `positronic eval status` prints these two on its header line and excludes them from the body
     # by these names, so a name that outlived its field would print it twice.
     assert {ID_FIELD, STATUS_FIELD} <= set(variant.model_fields)
+
+
+def test_the_published_plan_field_names_are_ones_the_plan_view_declares():
+    assert {PLAN_ID_FIELD, STATUS_FIELD} <= set(PlanView.model_fields)
 
 
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():

@@ -16,6 +16,7 @@ from platform_client.config import (
     REGISTER_COMMAND,
     api_key_from,
     key_is_given,
+    platform_is_given,
     platform_url_from,
     record_if_needed,
     same_platform,
@@ -64,8 +65,10 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     only on the platform it was minted on, so a command that needs one and names another platform is
     refused. `register` needs none: it registers on the platform it names, whatever the record holds.
     """
-    record = record_if_needed(os.environ, None, platform_url)
-    key = api_key_from(os.environ, None, record)
+    # A registration sends no key, so it reads the record only for a platform it does not name.
+    needs_record = key_required or not platform_is_given(os.environ, platform_url)
+    record = record_if_needed(os.environ, None, platform_url) if needs_record else None
+    key = api_key_from(os.environ, None, record) if key_required else None
     if key_required and key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     # A misconfigured platform — an empty `--platform-url`, or one the client cannot reach.
