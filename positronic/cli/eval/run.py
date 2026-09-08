@@ -246,7 +246,6 @@ def _file_for_the_rig(
     episodes: int | None,
     cap: int | None,
     preset: str | None,
-    scene: object,
     transaction_key: str | None,
 ) -> PlanFiled:
     """File the plan a file states, else the plan the flags state."""
@@ -256,13 +255,7 @@ def _file_for_the_rig(
     if eval is not None:
         raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
     plan = plan_from_flags(
-        policy_url=policy_url,
-        tasks=tasks,
-        episodes=episodes,
-        cap=cap,
-        preset=preset,
-        scene=scene,
-        transaction_key=transaction_key,
+        policy_url=policy_url, tasks=tasks, episodes=episodes, cap=cap, preset=preset, transaction_key=transaction_key
     )
     return file_plan(plan, platform_url)
 
@@ -292,7 +285,6 @@ def run(
     episodes: int | None = None,
     cap: int | None = None,
     preset: str | None = None,
-    scene: str | list[str] | None = None,
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
@@ -303,8 +295,8 @@ def run(
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
-    lab rig: the tasks (``--tasks``), the count per endpoint (``--episodes``) and the scene
-    (``--scene``), or the whole plan in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
+    lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
+    in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
     make one blind sample. The platform answers a submission id or a plan id, which ``positronic
     eval status`` reads.
 
@@ -316,15 +308,15 @@ def run(
     """
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
-    local_only = {'--output-dir': output_dir, '--charge-inference-time': charge_inference_time, '--timing': timing}
-    rig_only = {
-        '--policy-url': policy_url,
-        '--tasks': tasks,
-        '--episodes': episodes,
-        '--cap': cap,
-        '--preset': preset,
-        '--scene': scene,
+    # A switch reads `False` whether it was left off or stated off, and either way it asks for what
+    # every other place already does, so it is normalised to unstated here. Every other flag is
+    # unstated only as `None`, which is what makes `--episodes=False` a value and refused like `0`.
+    local_only = {
+        '--output-dir': output_dir,
+        '--charge-inference-time': charge_inference_time or None,
+        '--timing': timing or None,
     }
+    rig_only = {'--policy-url': policy_url, '--tasks': tasks, '--episodes': episodes, '--cap': cap, '--preset': preset}
     source = plan_source(eval, from_file)
 
     if isinstance(eval, Eval) or policy is not None:
@@ -368,7 +360,6 @@ def run(
             episodes=episodes,
             cap=cap,
             preset=preset,
-            scene=scene,
             transaction_key=transaction_key,
         )
 

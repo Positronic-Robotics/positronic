@@ -5,12 +5,10 @@ from pathlib import Path
 
 import pytest
 from platform_client import routes
-from platform_client.enums import CameraVantage, Placement
-from platform_client.eval_plan import EvalPlan
 from platform_client.ids import PlanId
 
 from positronic.cli.conftest import KEY
-from positronic.cli.eval.plan import endpoint_of, flag_entries, given, scene_from_pairs
+from positronic.cli.eval.plan import endpoint_of, flag_entries, given
 from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
@@ -25,7 +23,6 @@ FLAGS = {
     'episodes': 10,
     'cap': 180,
     'preset': 'example_candidate',
-    'scene': 'tote_placement=random,camera.side=left',
 }
 
 
@@ -63,8 +60,6 @@ def test_the_flags_state_a_plan_and_it_is_filed(platform, run_command, capsys):
     assert body['episodes_per_endpoint'] == 10
     assert body['cap_per_episode_sec'] == 180
     assert body['policy_preset'] == 'example_candidate'
-    assert body['tote_placement'] == 'random'
-    assert body['external_cameras'] == {'side': 'left'}
     assert json.loads(capsys.readouterr().out)['plan_id'] == '2a'
 
 
@@ -228,8 +223,7 @@ def test_a_local_run_refuses_what_only_a_rig_run_can_mean(platform, run_command,
 
 
 @pytest.mark.parametrize(
-    'rig_only',
-    [{'policy_url': BASELINE}, {'preset': 'p'}, {'scene': 'tote_placement=left'}, {'episodes': 0}, {'cap': 0}],
+    'rig_only', [{'policy_url': BASELINE}, {'preset': 'p'}, {'episodes': 0}, {'cap': 0}, {'episodes': False}]
 )
 def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
     with pytest.raises(SystemExit, match='a platform run has no'):
@@ -242,6 +236,17 @@ def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_comman
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)
     assert platform.seen is None
+
+
+@pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': False}])
+def test_a_rig_run_takes_a_switch_stated_off(platform, run_command, switch: dict):
+    # A switch off asks for what a rig run already does, so it reads as one left off rather than as
+    # a value the rig has no flag for.
+    platform.answer(FILED)
+
+    run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)
+
+    assert platform.request.url.path == routes.EVALS_RUN
 
 
 def test_a_run_naming_no_policy_is_told_the_three_places(platform, run_command):
@@ -292,59 +297,11 @@ def test_a_repeatable_flag_read_as_a_number_is_refused():
         flag_entries(10, '--tasks')
 
 
-@pytest.mark.parametrize(('value', 'is_given'), [(None, False), (False, False), (0, True), ('', True), (True, True)])
-def test_a_flag_is_given_unless_it_is_unset_or_a_switch_left_off(value: object, is_given: bool):
+@pytest.mark.parametrize(('value', 'is_given'), [(None, False), (False, True), (0, True), ('', True), (True, True)])
+def test_a_flag_is_given_unless_it_is_unset(value: object, is_given: bool):
     assert given(value) is is_given
 
 
 def test_a_labelled_url_takes_its_label():
     assert endpoint_of(f'baseline={BASELINE}', 1) == {'name': 'baseline', 'url': BASELINE}
     assert endpoint_of(BASELINE, 3) == {'name': 'policy3', 'url': BASELINE}
-
-
-def test_scene_pairs_become_the_plans_own_fields():
-    # The reader validates each side here, so a value outside the closed set never reaches the wire.
-    assert scene_from_pairs(['tote_placement=random', 'camera_vantage=droid', 'camera.side=left']) == {
-        'tote_placement': Placement.random,
-        'camera_vantage': CameraVantage.droid,
-        'external_cameras': {'side': Placement.left},
-    }
-    assert scene_from_pairs([]) == {}
-
-
-@pytest.mark.parametrize('pair', ['tote_placement', 'tote=left', 'camera.=left', 'tote_placement=middle'])
-def test_a_scene_pair_that_names_no_field_or_no_side_is_refused(pair: str):
-    with pytest.raises(SystemExit):
-        scene_from_pairs([pair])
-
-
-@pytest.mark.parametrize('pairs', [['camera.side=left', 'side=right'], ['side=right', 'camera.side=left']])
-def test_a_mount_spelled_like_a_scene_field_is_not_that_field(pairs: list[str]):
-    # `side` is no scene field, so the refusal names it; a mount of that name is a different key.
-    with pytest.raises(SystemExit, match="not 'side'"):
-        scene_from_pairs(pairs)
-
-
-@pytest.mark.parametrize(
-    'pairs',
-    [['camera.tote_placement=left', 'tote_placement=right'], ['tote_placement=right', 'camera.tote_placement=left']],
-)
-def test_a_mount_named_like_a_scene_field_is_read_in_either_order(pairs: list[str]):
-    assert scene_from_pairs(pairs) == {
-        'tote_placement': Placement.right,
-        'external_cameras': {'tote_placement': Placement.left},
-    }
-
-
-@pytest.mark.parametrize(
-    'pairs', [['tote_placement=left', 'tote_placement=right'], ['camera.side=left', 'camera.side=right']]
-)
-def test_a_scene_key_given_twice_is_refused(pairs: list[str]):
-    with pytest.raises(SystemExit, match='given twice'):
-        scene_from_pairs(pairs)
-
-
-def test_the_scene_keys_are_fields_the_plan_declares():
-    # A key this reader accepts that the model does not carry would be dropped in silence.
-    scene = scene_from_pairs(['tote_placement=left', 'camera_vantage=droid', 'camera.side=right'])
-    assert set(scene) <= set(EvalPlan.model_fields)

@@ -4,19 +4,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from platform_client.enums import CameraVantage, Placement
 from platform_client.eval_plan import EvalPlan
 from platform_client.responses import PlanFiled
-from platform_client.slug import Slugged
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
 
-# What `--scene` takes: `tote_placement=<side>`, `camera_vantage=<vantage>`, and `camera.<mount>=<side>`.
-SCENE_TOTE = 'tote_placement'
-SCENE_VANTAGE = 'camera_vantage'
-SCENE_CAMERA_PREFIX = 'camera.'
-SCENE_CAMERAS = 'external_cameras'
 # The plan field `--transaction-key` states beside a plan file.
 TRANSACTION_KEY_FIELD = 'transaction_key'
 
@@ -59,8 +52,8 @@ def read_plan(path: Path, transaction_key: str | None = None) -> EvalPlan:
 
 
 def given(value: object) -> bool:
-    """Whether a flag was given. An unstated flag is `None`, or `False` for a switch, so `0` and `""` are given."""
-    return value is not None and value is not False
+    """Whether a flag was given. An unstated flag is `None`, so `0`, `""` and `False` are values."""
+    return value is not None
 
 
 def flag_entries(value: object, flag: str) -> list[str]:
@@ -84,39 +77,6 @@ def flag_entries(value: object, flag: str) -> list[str]:
     return stripped
 
 
-_PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
-_VANTAGE: TypeAdapter[CameraVantage] = TypeAdapter(Slugged[CameraVantage])
-
-
-def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
-    """`--scene KEY=VALUE` pairs as the plan's own scene fields. An unknown key is a `SystemExit`."""
-    scene: dict[str, object] = {}
-    cameras: dict[str, Placement] = {}
-    for pair in pairs:
-        key, has_value, value = pair.partition('=')
-        if not has_value:
-            raise SystemExit(f'--scene takes KEY=VALUE, not {pair!r}')
-        mount = key.removeprefix(SCENE_CAMERA_PREFIX) if key.startswith(SCENE_CAMERA_PREFIX) else ''
-        if key in scene or mount in cameras:
-            raise SystemExit(f'--scene {key} is given twice: the plan would carry only the last one')
-        try:
-            if key == SCENE_TOTE:
-                scene[key] = _PLACEMENT.validate_python(value)
-            elif key == SCENE_VANTAGE:
-                scene[key] = _VANTAGE.validate_python(value)
-            elif mount:
-                cameras[mount] = _PLACEMENT.validate_python(value)
-            else:
-                raise SystemExit(
-                    f'--scene takes {SCENE_TOTE}, {SCENE_VANTAGE} or {SCENE_CAMERA_PREFIX}<mount>, not {key!r}'
-                )
-        except ValidationError as exc:
-            raise SystemExit(f'--scene {pair}: {one_line(exc)}') from exc
-    if cameras:
-        scene[SCENE_CAMERAS] = cameras
-    return scene
-
-
 def endpoint_of(spec: str, position: int) -> dict[str, str]:
     """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
 
@@ -136,7 +96,6 @@ def plan_from_flags(
     episodes: int | None,
     cap: int | None,
     preset: str | None,
-    scene: object,
     transaction_key: str | None,
 ) -> EvalPlan:
     """The plan the rig flags state."""
@@ -151,7 +110,6 @@ def plan_from_flags(
         'cap_per_episode_sec': cap,
         'policy_preset': preset,
         'transaction_key': transaction_key,
-        **scene_from_pairs(flag_entries(scene, '--scene')),
     }
     try:
         return EvalPlan.model_validate(payload)

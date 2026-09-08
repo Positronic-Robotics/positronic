@@ -26,7 +26,7 @@ place of a policy sends it to the platform, and a policy URL files a plan for th
 
 ```bash
 uv run positronic eval catalog
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
 ```
 
 Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode

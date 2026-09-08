@@ -77,7 +77,8 @@ external_cameras: {side: random}         # per mount, by the task's name for it
 
 `positronic eval run` files that plan with `evals.run`. `--from-file` names the file. `--eval`
 also names it when its value is the path of an existing file. The same flags state a plan without a file — `--policy-url`
-(repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap`, `--preset` and `--scene KEY=VALUE`. Two
+(repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and `--preset`. The scene fields come
+from a plan file; a run stated in flags takes what each task's catalogue entry gives it. Two
 or more endpoints make one blind sample: the operator is told no policy, and each episode records
 which one served it. `eval status` and `eval list` read a filed plan back by its
 id, as they read a submission. The platform records the plan, the rollouts coordinator runs it on
@@ -105,7 +106,7 @@ export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
 uv run positronic account register --alias=<display name>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --scene=tote_placement=random
+uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>
