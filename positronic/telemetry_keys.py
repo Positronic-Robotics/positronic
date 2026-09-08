@@ -32,10 +32,9 @@ ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
 
-# One episode's waypoint account, totalled over its command channels. A round emits only the newest waypoint
-# that has come due, so ``DROPPED`` counts the ones it overtook and ``EMITTED + DROPPED`` is what came due;
-# ``SCHEDULED`` also covers what a fresh chunk replaced before its time. Lateness rides as a sum and a maximum
-# rather than a percentile, because those are what the reduce can total across episodes exactly.
+# One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint a round
+# overtook, so ``EMITTED + DROPPED`` is what came due and ``SCHEDULED`` also covers what a fresh chunk
+# replaced first.
 ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
 ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
