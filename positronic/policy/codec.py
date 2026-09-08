@@ -17,7 +17,7 @@ from typing import Any, final, overload
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic import geom
+from positronic import geom, telemetry, telemetry_keys
 from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise, lazy_sequence
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
@@ -114,7 +114,9 @@ class _CodecSession(DelegatingSession):
         self._codec = codec
 
     def __call__(self, obs, time_ns):
-        encoded = self._codec.encode(obs)
+        codec_name = {telemetry_keys.ATTR_CODEC: type(self._codec).__name__}
+        with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
+            encoded = self._codec.encode(obs)
         action = self._inner(encoded, time_ns)
         if action is None:
             return None

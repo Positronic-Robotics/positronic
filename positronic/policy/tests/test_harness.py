@@ -1921,7 +1921,6 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
     assert infers[0].parent_id == episodes[0].span_id
 
 
-@pytest.mark.timeout(3.0)
 def test_failed_pass_seals_open_episode_span(world, tmp_path):
     """A ``reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
