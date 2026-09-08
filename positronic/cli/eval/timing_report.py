@@ -157,9 +157,9 @@ class WaypointReport:
     channels.
 
     ``dropped`` counts a waypoint a round overtook, so ``dropped_share`` is a fraction of
-    ``emitted + dropped``, not of ``scheduled``, which also covers what a fresh chunk replaced first. The
-    distribution behind the lateness figures is per channel in the episode's own statics; a percentile of
-    the pass is not recoverable from here.
+    ``emitted + dropped``; ``scheduled`` also covers what a fresh chunk replaced first. The distribution
+    behind the lateness figures is per channel in the episode's own statics; a percentile of the pass is
+    not recoverable from here.
     """
 
     scheduled: int

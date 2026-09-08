@@ -735,8 +735,8 @@ def _waypoint_fixture(telemetry_dir):
 
 
 def test_the_waypoint_account_sums_over_the_pass(tmp_path):
-    """Counts add, the drop share is of what came due rather than of what was scheduled, the lateness mean is
-    the pass's own emissions divided into the pass's own sum, and the maximum is the worse episode's."""
+    """Counts add, the drop share is of what came due, the lateness mean is the pass's own emissions divided
+    into the pass's own sum, and the maximum is the worse episode's."""
     _waypoint_fixture(tmp_path / TELEMETRY_SUBDIR)
     report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
 
@@ -745,8 +745,8 @@ def test_the_waypoint_account_sums_over_the_pass(tmp_path):
     assert waypoints.scheduled == 200
     assert waypoints.emitted == 40
     assert waypoints.dropped == 40
-    assert waypoints.dropped_share == pytest.approx(0.5)  # 40 of the 80 that came due, not of the 200 scheduled
-    assert waypoints.mean_late_ms == pytest.approx(2.0)  # 80 ms over 40 emissions, so the busier episode weighs more
+    assert waypoints.dropped_share == pytest.approx(0.5)  # 40 of the 80 that came due
+    assert waypoints.mean_late_ms == pytest.approx(2.0)  # 80 ms over the pass's own 40 emissions
     assert waypoints.max_late_ms == pytest.approx(20.0)
 
 

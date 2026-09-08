@@ -1756,8 +1756,8 @@ def test_a_round_that_finds_one_waypoint_due_counts_no_drop():
 
 @pytest.mark.timeout(3.0)
 def test_lateness_is_measured_against_the_waypoint_that_went_out():
-    """The waypoint sent at 25 ms was due at 20, so it is 5 ms late — not the 25 the round is past the oldest
-    waypoint it overtook."""
+    """The waypoint sent at 25 ms was due at 20, so it is 5 ms late. A round measured against the oldest
+    waypoint it overtook would read 25."""
     harness, _ = _harness_recording_commands()
 
     _play_round(harness, due_ms=[0, 10, 20], now_ms=25)
@@ -2663,7 +2663,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
 @pytest.mark.timeout(5.0)
 def test_the_episode_span_carries_the_same_waypoint_account_as_the_meta(world, tmp_path):
     """Under ``telemetry.bind`` the episode span carries the waypoint totals over every command channel, and
-    they are the episode statics' own per-channel figures added up: one measurement, two sinks."""
+    they are the episode statics' own per-channel figures added up."""
     policy = ChunkPolicy()
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
