@@ -700,7 +700,10 @@ class _Arm(DriverRun[command.CommandType]):
             # holds where the arm reads.
             self.moves.fail(RuntimeError(f'the arm at {self.ip} ran too fast to finish the move'))
         self._target = self._wanted = self.q
-        self._goal_time, self._arm_unsent, self._travel_to = _STREAM_GOAL_TIME_S, True, None
+        # Where the arm reads is what the next Cartesian step measures from: it is not where it was asked
+        # to be, and nothing is owed the rest of a travel it was stopped in.
+        self._anchor = self._travel_to = None
+        self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
         self.write()
 
     def publish(self) -> None:
