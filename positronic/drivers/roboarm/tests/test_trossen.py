@@ -567,6 +567,40 @@ def test_a_cartesian_delta_composes_onto_the_pose_the_joints_put_the_arm_at():
     np.testing.assert_allclose(_ee(states).translation, started + np.array([0.0, 0.01, 0.0]), atol=2e-3)
 
 
+def test_a_delta_longer_than_one_step_is_walked_the_whole_way():
+    """A delta is consumed once, and it asks for a travel: paced to a step a tick, the rest of it would
+    have nowhere to live and the arm would stop a step in."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    started = _ee(states).translation.copy()
+    travel = np.array([0.0, 0.05, 0.0])  # more than three times `_MAX_STEP_M`
+    assert np.linalg.norm(travel) > trossen_driver._MAX_STEP_M
+
+    commands.push(command.CartesianDelta(geom.Transform3D(travel)))
+    _settle(loop)  # nothing else is streamed at the arm
+
+    np.testing.assert_allclose(_ee(states).translation, started + travel, atol=2e-3)
+
+
+def test_a_pose_the_stream_stops_at_holds_the_arm_a_step_in():
+    """A pose says where the arm is wanted now, and the next one supersedes it. An arm whose stream stops
+    holds where it stands rather than finishing a travel nobody is asking for any more."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    started = _ee(states).translation.copy()
+
+    commands.push(command.CartesianPosition(geom.Transform3D(started + np.array([0.0, 0.05, 0.0]))))
+    _settle(loop)  # the stream stops after that one pose
+
+    assert np.linalg.norm(_ee(states).translation - started) < trossen_driver._MAX_STEP_M + 2e-3
+
+
 def test_a_cartesian_target_out_of_reach_is_solved_one_step_at_a_time():
     """A teleoperator reaching past the arm asks for a target that runs away from it."""
     arm = FakeArm()
