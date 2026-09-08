@@ -80,10 +80,8 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
-# What an endpoint states: its name, its kind, where its policy comes from, and its own count. A run
-# lays out one scene, one cap and one preset for its whole sample, so every other field of `Cascade`
-# is per task. This names what an endpoint may state rather than what it may not: a field added to
-# `Cascade` later is then refused on an endpoint, where a list of the forbidden ones would take it.
+# What an endpoint may state, rather than what it may not: a field added to `Cascade` later is then
+# refused on an endpoint, where a list of the forbidden ones would take it.
 _ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
 
 

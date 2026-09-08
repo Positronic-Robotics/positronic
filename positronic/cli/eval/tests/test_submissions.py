@@ -41,7 +41,7 @@ def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys
 
 
 def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):
-    # A run the platform executes itself reports no episode count, so only the rig's carries a tail.
+    # One row of each kind: the platform-run row and the rig row that carries a count.
     platform.answer({
         'submissions': [
             {**ROW, 'alias': 'demo', 'eval': 'fake.smoke'},

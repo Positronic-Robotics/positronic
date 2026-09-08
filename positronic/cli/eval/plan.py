@@ -120,8 +120,7 @@ def plan_from_flags(
 def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCreateResponse:
     """File one plan with `submissions.create`, print what came back, and return it.
 
-    Two or more endpoints make one blind sample: the operator is told no policy, and each episode
-    records which one served it. `positronic eval status` reads the run back by the id this prints.
+    `positronic eval status` reads the run back by the id this prints.
     """
     with gateway(platform_url) as client:
         filed = client.create_submission(plan)

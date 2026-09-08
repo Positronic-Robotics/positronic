@@ -1,9 +1,8 @@
 """The key record: where a registration saves its key, and the order every command reads one in.
 
 `register` writes `config.json` under the config directory, mode 0600, holding the platform URL and
-the key together. A command reads the key from `POSITRONIC_PLATFORM_API_KEY`, then from that
-record. It reads the platform from its own argument, then from `POSITRONIC_PLATFORM_URL`, then from
-that record.
+the key together. A command reads the key from `POSITRONIC_PLATFORM_API_KEY` and the platform from
+its own argument, then from `POSITRONIC_PLATFORM_URL`, and falls back to that record for either.
 """
 
 from __future__ import annotations

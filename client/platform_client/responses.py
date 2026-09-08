@@ -253,7 +253,7 @@ class CancelledSubmissionView(_TaggedView):
 
 
 class BlockedSubmissionView(_TaggedView):
-    """Paused, not decided: it waits on what `reason` names, and a later report moves it on."""
+    """A blocked run, and the `reason` it waits on."""
 
     id: SubmissionId
     reason: str | None = None
