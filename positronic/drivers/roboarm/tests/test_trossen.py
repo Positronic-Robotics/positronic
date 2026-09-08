@@ -12,6 +12,7 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
+GRIP_SPEED_M_S = 0.25  # what the controller reports the finger drive may do
 GRIP_TRAVEL_M = 0.04  # the gripper joint's range, which the arm reports and grip is normalized against
 JOGGED = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
 # Mid-range on every joint. The arm rests on the lower limit of joints 1 and 2, where Cartesian targets have
@@ -143,7 +144,7 @@ def test_an_open_grip_reaches_the_arm_as_the_joint_at_its_upper_limit():
     driver.target_grip._bind(grip)
 
     grip.push(0.0)
-    next(loop)
+    _settle(loop, 40)  # the fingers are paced by their own velocity limit
 
     assert arm.gripper_goals[-1] == pytest.approx(GRIP_TRAVEL_M)
 
@@ -155,9 +156,27 @@ def test_a_closed_grip_reaches_the_arm_as_the_joint_at_its_lower_limit():
     driver.target_grip._bind(grip)
 
     grip.push(1.0)
-    next(loop)
+    _settle(loop, 40)
 
     assert arm.gripper_goals[-1] == pytest.approx(0.0)
+
+
+def test_the_fingers_are_never_asked_for_more_than_they_may_travel_in_a_tick():
+    """A trigger let go of asks for the whole range at once, which is metres a second past the joint's own
+    limit -- and a joint past its limit faults the controller."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    grip = ManualCommandReceiver()
+    driver.target_grip._bind(grip)
+    grip.push(1.0)  # the fingers start closed and are asked to stay there
+    next(loop)
+    was = arm.gripper_goals[-1]
+
+    grip.push(0.0)  # from closed to fully open in one message
+    next(loop)
+
+    travelled = abs(arm.gripper_goals[-1] - was) * trossen_driver._HZ
+    assert travelled < GRIP_SPEED_M_S, travelled
 
 
 def test_the_joint_the_arm_reports_comes_back_as_a_normalized_grip():
@@ -615,6 +634,57 @@ def test_a_cartesian_target_out_of_reach_is_solved_one_step_at_a_time():
 
     step = np.linalg.norm(_ee(states).translation - started)
     assert step < trossen_driver._MAX_STEP_M + 1e-6
+
+
+def test_a_pose_streamed_after_a_joint_move_steps_from_where_the_joints_put_the_arm(world):
+    """The rig is readied by a joint move between episodes, and a Cartesian step measured from the pose the
+    stream asked for before it would drive the arm back towards the last episode's target."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+
+    away = geom.Transform3D(_ee(states).translation + np.array([0.0, 0.06, 0.0]), _ee(states).rotation)
+    for _ in range(40):  # a teleoperator drives the arm away from home
+        commands.push(command.CartesianPosition(away))
+        _settle(loop, 10)
+
+    answer = caller(command.JointPosition(HOME))
+    for _ in range(400):
+        if answer.done():
+            break
+        next(loop)
+    answer.result()
+    _settle(loop)  # the arm takes up the last of the travel with nothing streamed at it
+    homed = _ee(states).translation.copy()
+
+    commands.push(command.CartesianPosition(_ee(states)))  # asked to stand where it now is
+    _settle(loop, 20)
+
+    np.testing.assert_allclose(_ee(states).translation, homed, atol=2e-3)
+
+
+def test_an_arm_that_runs_too_fast_tells_the_move_it_was_making(world):
+    """Standing down holds the arm where it reads, and a move in flight refuses every request that could
+    send its target again -- so nothing would finish it and its asker would wait out the deadline."""
+    arm = FakeArm()
+    clock = MockClock()
+    driver, _, loop = _driven(arm, clock)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    next(loop)
+
+    answer = caller(command.JointPosition(JOGGED))
+    next(loop)
+    arm.velocities = np.full(6, 10.0)  # past every joint's limit
+    next(loop)
+
+    assert clock.now() < trossen_driver._MOVE_TIMEOUT_S, 'the move waited out its deadline'
+    with pytest.raises(RuntimeError, match='ran too fast'):
+        answer.result()
 
 
 def test_a_streamed_turn_is_walked_the_whole_way_by_an_arm_that_sags():

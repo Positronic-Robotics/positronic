@@ -176,6 +176,14 @@ class Leader(pimm.ControlSystem):
         # joint, and a NaN makes the travel time itself NaN, both with the arm already servoing.
         if target.shape != (_ARM_JOINTS,) or not np.all(np.isfinite(target)):
             raise ValueError(f'A leader takes {_ARM_JOINTS} finite joint positions, and this names {target}')
+        # Clipped to what this arm reports, as the follower clips the same pose to what its own controller
+        # reports: a leader sent past its limit is refused, and then the two cannot meet.
+        limits = driver.get_joint_limits()
+        lower = np.array([limits[i].position_min for i in range(_ARM_JOINTS)])
+        upper = np.array([limits[i].position_max for i in range(_ARM_JOINTS)])
+        if np.any(target < lower) or np.any(target > upper):
+            logger.warning(f'The leader at {self._ip} was asked for {target}, outside [{lower}, {upper}]')
+            target = np.clip(target, lower, upper)
         positions = np.asarray(driver.get_all_positions(), dtype=np.float64)
         seconds = max(_MIN_MOVE_TIME_S, float(np.max(np.abs(target - positions[:_ARM_JOINTS]))) / _MOVE_SPEED)
         held = float(np.clip(positions[_GRIPPER_JOINT], closed, closed + travel))

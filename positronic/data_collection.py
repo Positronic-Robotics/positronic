@@ -56,10 +56,6 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler) -> set[str]:
     return hands
 
 
-def _check_error(is_error, was_error):
-    return is_error, is_error and not was_error
-
-
 # Where the hand ends and its shake begins. Measured over three minutes of teleoperation: 84% of the
 # controller's movement sits below 1 Hz, 2% between 8 and 15 Hz — the tremor a hand always carries — and
 # 8% above 15 Hz, which no hand does and the pose stream brings on its own. A cut here keeps 88% of the
@@ -101,7 +97,14 @@ class _Tracker:
         logging.info('Stopped tracking')
 
     def _steadied(self, pose: geom.Transform3D, ts_ns: int) -> geom.Transform3D:
-        """``pose`` with the hand's own shake taken out, as a first-order lag on both halves."""
+        """``pose`` with the hand's own shake taken out, as a first-order lag on both halves.
+
+        A pose that is not a number is dropped rather than filtered: the lag keeps what it is given, so one
+        NaN would sit in it and every pose after it would come back NaN until the run was started again.
+        """
+        if not np.all(np.isfinite(pose.translation)) or not np.all(np.isfinite(pose.rotation.as_quat)):
+            logging.warning('The headset sent a pose that is not a number, and it is dropped')
+            return self._steady if self._steady is not None else pose
         if self._steady is None:
             self._steady, self._steady_at = pose, ts_ns
             return pose
@@ -232,6 +235,8 @@ class DataCollectionController(pimm.ControlSystem):
         # An arm driven by a leader has no controller to press, and the session runs off `session_events`
         # instead — so no buttons is a rig without them, not a rig whose operator has not pressed yet.
         self.buttons_receiver = pimm.DefaultingReceiver(self, default={'left': None, 'right': None})
+        # What the arm last read as: it holds still until a reset clears the error, so nothing is sent
+        self.arm_in_error = False
         # A keyboard carries these on a rig whose operator holds the leader.
         self.session_events = pimm.ControlSystemReceiver[SessionEvent](self)
         # What the leader publishes, on a rig driven by one.
@@ -402,13 +407,15 @@ class DataCollectionController(pimm.ControlSystem):
             return None, grip
         return roboarm.command.JointPosition(leader), grip
 
-    def _in_error(self, state: pimm.Message[RoboarmState], was_error: bool) -> bool:
-        """Whether the arm reads ERROR, told to the operator on the tick it starts to."""
-        in_error, entered_error = _check_error(state.data.status == roboarm.RobotStatus.ERROR, was_error)
-        if entered_error:
+    def _note_error(self, state: pimm.Message[RoboarmState]) -> None:
+        """Follow the arm's error state, and tell the operator on the tick it starts.
+
+        The state is ``self.arm_in_error``; an arm in error holds still until a reset clears it.
+        """
+        was_error, self.arm_in_error = self.arm_in_error, state.data.status == roboarm.RobotStatus.ERROR
+        if self.arm_in_error and not was_error:
             logging.error('The arm is in error. It holds still until a reset clears the error.')
             self.sound.emit(_SOMETHING_WENT_WRONG)
-        return in_error
 
     def _asked_of_the_arm(
         self, source: Any, hands: set[str], buttons: ButtonHandler, state: pimm.Message[RoboarmState] | None
@@ -423,7 +430,6 @@ class DataCollectionController(pimm.ControlSystem):
         button_handler = ButtonHandler()
 
         recording = False
-        in_error = False
 
         while not should_stop.value:
             try:
@@ -450,8 +456,8 @@ class DataCollectionController(pimm.ControlSystem):
                 if grip is not None:
                     self.target_grip.emit(grip)
                 if source.on and state is not None:
-                    in_error = self._in_error(state, in_error)
-                    if not in_error and cmd is not None:
+                    self._note_error(state)
+                    if not self.arm_in_error and cmd is not None:
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)

@@ -6,7 +6,7 @@
 URDF = 'urdf'
 CONTROL_FRAME = 'control_frame'
 JOINT_NAMES = 'joint_names'
-# What the arm is, as its driver names it. Every driver writes it into the metadata it publishes.
+# The arm a driver names itself, where its metadata carries one.
 ROBOT = 'robot'
 # The gripper spec the viewer drives: the signal it reads, the joints it moves, their travel at full closure.
 GRIPPER = 'gripper'
