@@ -135,8 +135,13 @@ def platform_url_from(env: Mapping[str, str], platform_url: str | None, record: 
     return record.platform_url if record else None
 
 
-def record_if_needed(env: Mapping[str, str], platform_url: str | None) -> Config | None:
-    """The saved record, or `None` when the caller names both the key and the platform."""
-    if key_is_given(env) and platform_is_given(env, platform_url):
+def record_if_needed(env: Mapping[str, str], platform_url: str | None, *, key_required: bool = True) -> Config | None:
+    """The saved record, or `None` when it has nothing left to supply.
+
+    It supplies two values, the key and the platform. A command that needs no key and names its
+    platform reads neither, so `register` replaces a malformed record instead of exiting on it.
+    """
+    needs_key = key_required and not key_is_given(env)
+    if not needs_key and platform_is_given(env, platform_url):
         return None
     return read_config(config_dir(env))

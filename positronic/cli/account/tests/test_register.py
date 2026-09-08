@@ -73,6 +73,27 @@ def test_a_registration_naming_its_platform_reads_no_key_and_no_record(platform,
     assert platform.request.url.path == routes.USERS_REGISTER
 
 
+def test_a_registration_naming_its_platform_replaces_a_malformed_record(platform, run_command, monkeypatch):
+    # A registration sends no key and names its platform, so the record has nothing to give it.
+    # Reading one lets a malformed record refuse the very command that rewrites it.
+    config_dir(os.environ).mkdir(parents=True)
+    (config_dir(os.environ) / CONFIG_FILENAME).write_text('not a record')
+    monkeypatch.delenv(gateway_module.API_KEY_ENV)
+    monkeypatch.delenv(gateway_module.API_URL_ENV)
+    platform.answer({
+        'user_id': 'a0',
+        'artifact_location': 's3://b/users/a0/',
+        'api_key': 'pk_new',
+        'key_status': 'created',
+    })
+
+    run_command(register, platform_url='http://other.test')
+
+    assert platform.request.url.path == routes.USERS_REGISTER
+    saved = read_config(config_dir(os.environ))
+    assert saved is not None and saved.api_key == 'pk_new'
+
+
 def test_register_refuses_when_no_credential_is_in_the_environment(platform, run_command, monkeypatch):
     monkeypatch.delenv(gateway_module.CREDENTIAL_ENV)
     with pytest.raises(SystemExit) as raised:

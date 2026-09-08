@@ -139,3 +139,10 @@ def test_a_record_a_command_needs_nothing_from_is_not_read(tmp_path: Path, recor
     env = {CONFIG_DIR_ENV: str(tmp_path), API_KEY_ENV: 'k', API_URL_ENV: 'http://env.test'}
     assert record_if_needed(env, None) is None
     assert record_if_needed({CONFIG_DIR_ENV: str(tmp_path)}, None) == record
+
+
+def test_a_command_needing_no_key_reads_no_record_for_a_platform_it_names(tmp_path: Path, record: Config):
+    # `register` sends no key, so a named platform leaves the record nothing to give.
+    env = {CONFIG_DIR_ENV: str(tmp_path)}
+    assert record_if_needed(env, 'http://arg.test', key_required=False) is None
+    assert record_if_needed(env, None, key_required=False) == record

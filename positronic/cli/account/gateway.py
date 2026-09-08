@@ -54,9 +54,9 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     """A client on the configured platform, reporting a refusal by it as a CLI failure.
 
     One client, one platform: the key comes from the environment, then from the record `register`
-    saved. `register` sends no key, so it reads none.
+    saved. `register` sends no key, so a registration naming its platform reads no record.
     """
-    record = record_if_needed(os.environ, platform_url)
+    record = record_if_needed(os.environ, platform_url, key_required=key_required)
     key = api_key_from(os.environ, record) if key_required else None
     if key_required and key is None:
         raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
