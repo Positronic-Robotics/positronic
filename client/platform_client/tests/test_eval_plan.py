@@ -263,15 +263,34 @@ def test_every_task_runs_on_at_least_one_endpoint():
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': []})
 
 
+IMAGE_ENDPOINT = [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}]
+
+
 def test_a_plan_naming_an_eval_states_the_policy_that_runs_it():
-    # The catalogue supplies a named eval's tasks, so `tasks` is empty and the per-task endpoint
-    # check reads nothing. Without this the plan files with no policy at all.
+    # The catalogue supplies a named eval's tasks, so `tasks` is empty and every check that iterates
+    # them reads nothing. Without this the plan files with no policy at all.
     with pytest.raises(ValidationError, match='defines no endpoint'):
         EvalPlan.model_validate({'eval': 'robolab.public_subset'})
     # One plan-level endpoint is enough, which is the shape `plan_of_image` builds.
+    EvalPlan.model_validate({'eval': 'robolab.public_subset', 'endpoints': IMAGE_ENDPOINT})
+
+
+def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_it():
+    # The same empty-`tasks` seam: the cap a catalogue task would inherit is stated on the plan, so
+    # it is checked there rather than through a task the plan does not have.
+    with pytest.raises(ValidationError, match='over its own ceiling'):
+        EvalPlan.model_validate({
+            'eval': 'robolab.public_subset',
+            'endpoints': IMAGE_ENDPOINT,
+            'cap_per_episode_sec': 120,
+            'max_cap_per_episode_sec': 100,
+        })
+    # A cap under the ceiling passes, and a task's own override is still checked.
     EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
-        'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}],
+        'endpoints': IMAGE_ENDPOINT,
+        'cap_per_episode_sec': 90,
+        'max_cap_per_episode_sec': 100,
     })
 
 

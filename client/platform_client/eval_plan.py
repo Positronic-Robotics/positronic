@@ -240,13 +240,6 @@ class EvalPlan(Cascade):
                 f'the plan defines {", ".join(bare)} with no url and no spec: an endpoint of the plan states '
                 'where its policy comes from, and a bare label on a task names one'
             )
-        if self.names_an_eval and not self.tasks and not self.endpoints:
-            # The catalogue supplies the tasks of a named eval, so the loop below reads nothing and
-            # every other check passes. The plan still has to say what runs them.
-            raise ValueError(
-                f'the plan names {self.eval} and defines no endpoint: the catalogue supplies its tasks, '
-                'and the plan supplies the policy that runs them'
-            )
         defined = {entry.name for entry in self.endpoints}
         for task in self.tasks:
             if task.endpoints is None and not self.endpoints:
@@ -264,12 +257,32 @@ class EvalPlan(Cascade):
         return self
 
     @model_validator(mode='after')
+    def _a_named_eval_states_what_runs_it(self) -> Self:
+        """A named eval states no task, so every check that iterates `tasks` reads nothing.
+
+        Anything the catalogue's tasks take from the plan is checked here, or at the level that
+        states it. Today that is the policy: the catalogue supplies the tasks, the plan the endpoint.
+        """
+        if self.names_an_eval and not self.tasks and not self.endpoints:
+            raise ValueError(
+                f'the plan names {self.eval} and defines no endpoint: the catalogue supplies its tasks, '
+                'and the plan supplies the policy that runs them'
+            )
+        return self
+
+    @model_validator(mode='after')
     def _every_cap_sits_under_the_ceiling(self) -> Self:
         ceiling = self.max_cap_per_episode_sec
         if ceiling is None:
             return self
+        # The plan's own cap is checked here rather than through a task that inherits it: a named
+        # eval states no task, and a loop over `tasks` would read nothing and pass.
+        if self.cap_per_episode_sec is not None and self.cap_per_episode_sec > ceiling:
+            raise ValueError(
+                f'the plan takes {self.cap_per_episode_sec} s per episode, over its own ceiling of {ceiling} s'
+            )
         for task in self.tasks:
-            cap = task.cap_per_episode_sec if task.cap_per_episode_sec is not None else self.cap_per_episode_sec
+            cap = task.cap_per_episode_sec
             if cap is not None and cap > ceiling:
                 raise ValueError(
                     f'task {task.task_id!r} takes {cap} s per episode, over the plan ceiling of {ceiling} s'

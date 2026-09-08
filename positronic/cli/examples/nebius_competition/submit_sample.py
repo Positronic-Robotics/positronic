@@ -11,7 +11,7 @@ Assumes a key you already hold; `../walkthrough.py` covers registration. Re-runn
 `--transaction-key` returns the original submission rather than spending quota twice.
 
 The command-line equivalent is `positronic eval run --eval=robolab.public_subset
---policy-image=...`, then `positronic eval status --submission-id=...`.
+--policy-image=...`, then `positronic eval status --id=...`.
 """
 
 from __future__ import annotations

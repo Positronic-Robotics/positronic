@@ -108,6 +108,16 @@ def test_register_carries_back_a_minted_key():
     assert response.key_status is KeyStatus.created
 
 
+def test_a_minted_key_that_is_blank_is_a_malformed_response():
+    # The record refuses a blank key too, but a command builds that record after the request has
+    # returned, where the refusal is a traceback out of a mint already spent. One owner, here.
+    gateway = Gateway(
+        200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': '  ', 'key_status': 'created'}
+    )
+    with pytest.raises(ValidationError, match='no api_key came with it'):
+        make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
+
+
 def test_register_keeps_the_key_it_is_given_so_the_next_call_is_authenticated():
     gateway = Gateway(
         200,

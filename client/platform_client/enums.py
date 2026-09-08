@@ -63,6 +63,7 @@ class ReasonCode(IntEnum):
 class SubmissionStatus(IntEnum):
     """The lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
 
+    `blocked` interrupts it at any point before an end state, and a later report moves it on.
     `submitting` is the internal claim state; the gateway reports it as `pending`, so it never
     reaches a caller.
     """
