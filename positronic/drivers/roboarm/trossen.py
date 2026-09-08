@@ -861,9 +861,6 @@ class _FakeTrossen:
         self.cleaned_up = False
         self.sessions += 1
 
-    def get_error_information(self) -> str:
-        return 'No error'
-
     def get_joint_limits(self) -> list['_FakeTrossen._Limit']:
         return [_FakeTrossen._Limit(*limit) for limit in _FakeTrossen._LIMITS]
 
