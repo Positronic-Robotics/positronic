@@ -73,16 +73,16 @@ class Session(ABC):
         ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
         """
 
-    def reads_observation(self, time_ns: int) -> bool:
-        """Whether a call made at ``time_ns`` would read the observation it is given.
+    def reads_observation(self, obs: Mapping[str, Any], time_ns: int) -> bool:
+        """Whether the call this query precedes would read the observation it is given.
 
         Answering False permits the caller to hand over whatever it already has instead of building
         what this session asked for, so a session whose ``__call__`` reads the observation must answer
         True — including one that only records it. The call happens either way.
 
-        ``time_ns`` is the caller's clock, the same reading ``__call__`` takes, so this asks nothing of
-        the observation itself: a served pipeline runs these layers over observations the harness
-        never stamped.
+        It takes what ``__call__`` takes, so a session deciding on a field decides on the same value in
+        both: a query answered against the caller's clock and a call answered against the observation's
+        own stamp disagree wherever the two readings straddle a boundary.
         """
         return True
 
