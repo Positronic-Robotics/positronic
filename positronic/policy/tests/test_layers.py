@@ -636,6 +636,18 @@ class TestRestrictImageSize:
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
         assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
+    def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
+        """A stack over the parallel bar scales to the same pixels as the frames taken one at a time."""
+        rng = np.random.default_rng(0)
+        stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        codec = RestrictImageSize(64, 48)
+        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
+        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
+
+    def test_a_stack_under_the_parallel_bar_still_scales(self):
+        stack = np.zeros((RestrictImageSize._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
+        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
+
     def test_nested_images_are_reached(self):
         result = RestrictImageSize(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
         assert result['video']['cam'].shape == (48, 64, 3)
