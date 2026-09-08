@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from platform_client import routes
-from platform_client.ids import PlanId
+from platform_client.ids import SubmissionId
 
 from positronic.cli.conftest import KEY
 from positronic.cli.eval.plan import endpoint_of, flag_entries, given
@@ -15,7 +15,7 @@ SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
 BASELINE = 'wss://baseline.example/ws'
 CANDIDATE = 'wss://candidate.example/ws'
-FILED = {'plan_id': '2a', 'status': 'received'}
+FILED = {'submission_id': '2a', 'status': 'pending'}
 
 FLAGS = {
     'policy_url': f'baseline={BASELINE},candidate={CANDIDATE}',
@@ -48,8 +48,8 @@ def test_the_flags_state_a_plan_and_it_is_filed(platform, run_command, capsys):
     filed = run_command(run, **FLAGS)
 
     # Returned as well as printed, so a caller holding the function has the id without scraping stdout.
-    assert filed.plan_id == PlanId(0x2A)
-    assert platform.request.url.path == routes.EVALS_RUN
+    assert filed.submission_id == SubmissionId(0x2A)
+    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
     body = platform.body
     assert [task['task_id'] for task in body['tasks']] == [SPOONS, MUG]
@@ -60,7 +60,7 @@ def test_the_flags_state_a_plan_and_it_is_filed(platform, run_command, capsys):
     assert body['episodes_per_endpoint'] == 10
     assert body['cap_per_episode_sec'] == 180
     assert body['policy_preset'] == 'example_candidate'
-    assert json.loads(capsys.readouterr().out)['plan_id'] == '2a'
+    assert json.loads(capsys.readouterr().out)['submission_id'] == '2a'
 
 
 def test_a_bracketed_list_states_the_same_plan_as_the_comma_form(platform, run_command):
@@ -102,6 +102,7 @@ def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
         'url': 'wss://h/ws?mode=native',
         'provider': None,
         'spec': None,
+        'image': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,
@@ -125,7 +126,7 @@ def test_a_plan_file_is_filed_whole(platform, run_command, tmp_path: Path, name:
 
     run_command(run, from_file=a_plan_file(tmp_path, name, payload))
 
-    assert platform.request.url.path == routes.EVALS_RUN
+    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.body['episodes_per_endpoint'] == 4
     assert [task['task_id'] for task in platform.body['tasks']] == [SPOONS]
 
@@ -142,7 +143,7 @@ def test_an_eval_naming_an_existing_file_is_that_file(platform, run_command, tmp
 
     run_command(run, eval=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML))
 
-    assert platform.request.url.path == routes.EVALS_RUN
+    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.body['episodes_per_endpoint'] == 4
 
 
@@ -246,7 +247,7 @@ def test_a_rig_run_takes_a_switch_stated_off(platform, run_command, switch: dict
 
     run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)
 
-    assert platform.request.url.path == routes.EVALS_RUN
+    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
 
 
 def test_a_run_naming_no_policy_is_told_the_three_places(platform, run_command):

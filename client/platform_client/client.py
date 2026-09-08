@@ -2,7 +2,7 @@
 
     with PlatformClient() as client:
         client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
-        client.create_submission(SubmissionCreateRequest(policy_image=..., eval=...))
+        client.create_submission(EvalPlan(tasks=..., endpoints=..., episodes_per_endpoint=...))
 
 The platform is `base_url`, else `POSITRONIC_PLATFORM_URL`, else production; the key is `api_key`,
 else `POSITRONIC_PLATFORM_API_KEY`, else whatever `register` came back with. A non-2xx raises
@@ -22,23 +22,18 @@ from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import EvalPlan
-from platform_client.ids import ApiKey, PlanId, SubmissionId
+from platform_client.ids import ApiKey, SubmissionId
 from platform_client.requests import (
     CancelRequest,
-    EvalGetQuery,
-    EvalListQuery,
     RankingsQuery,
     RegisterRequest,
-    SubmissionCreateRequest,
     SubmissionGetQuery,
+    SubmissionListQuery,
 )
 from platform_client.responses import (
     BoardListResponse,
     CancelResponse,
     MeResponse,
-    PlanFiled,
-    PlanListResponse,
-    PlanView,
     RankingsResponse,
     RegisterResponse,
     SubmissionCreateResponse,
@@ -165,12 +160,18 @@ class PlatformClient:
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
 
-    def create_submission(self, request: SubmissionCreateRequest) -> SubmissionCreateResponse:
-        return self._post(routes.SUBMISSIONS_CREATE, request, SubmissionCreateResponse)
+    def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
+        """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
+        is refused `forbidden`."""
+        return self._post(routes.SUBMISSIONS_CREATE, plan, SubmissionCreateResponse)
 
-    def list_submissions(self) -> SubmissionListResponse:
-        """The caller's own submissions — or every user's, for an admin or service principal."""
-        return self._get(routes.SUBMISSIONS_LIST, SubmissionListResponse)
+    def list_submissions(
+        self, *, after: SubmissionId | None = None, limit: int | None = None
+    ) -> SubmissionListResponse:
+        """One page of the caller's submissions, oldest first — or every user's, for an admin or
+        service principal. Pass a page's `next` as `after` for the page after it."""
+        query = SubmissionListQuery(after=after, limit=limit)
+        return self._get(routes.SUBMISSIONS_LIST, SubmissionListResponse, query=query)
 
     # The view is a discriminated union rather than a model, so it validates through an adapter.
     # Built once, because building one costs more than the validation it then does.
@@ -192,20 +193,8 @@ class PlatformClient:
         """The boards this caller can read: the public ones, plus their tenant's once a key is set."""
         return self._get(routes.RANKINGS_LIST, BoardListResponse, auth=Auth.OPTIONAL)
 
-    def run_eval(self, plan: EvalPlan) -> PlanFiled:
-        """File one eval plan. Needs a customer grant: a key without one is refused `forbidden`."""
-        return self._post(routes.EVALS_RUN, plan, PlanFiled)
-
-    def get_plan(self, plan_id: PlanId) -> PlanView:
-        return self._get(routes.EVALS_GET, PlanView, query=EvalGetQuery(id=plan_id))
-
-    def list_plans(self, *, after: PlanId | None = None, limit: int | None = None) -> PlanListResponse:
-        """One page of the caller's plans, oldest first. Pass a page's `next` as `after` for the page after it."""
-        query = EvalListQuery(after=after, limit=limit)
-        return self._get(routes.EVALS_LIST, PlanListResponse, query=query)
-
     def catalog_evals(self) -> EvalListResponse:
-        """The evals `submissions.create` takes by name, for this key's grant."""
+        """The evals a plan names, for this key's grant. The catalogue expands one into its tasks."""
         return self._get(routes.CATALOG_EVALS, EvalListResponse)
 
     def catalog_tasks(self) -> TaskListResponse:

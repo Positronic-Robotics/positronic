@@ -61,7 +61,7 @@ class ReasonCode(IntEnum):
 
 @unique
 class SubmissionStatus(IntEnum):
-    """The submission lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
+    """The lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
 
     `submitting` is the internal claim state; the gateway reports it as `pending`, so it never
     reaches a caller.
@@ -74,6 +74,8 @@ class SubmissionStatus(IntEnum):
     finished = 4
     errored = 5
     cancelled = 6
+    # Paused rather than decided: it waits on what `reason` names, and a later report moves it on.
+    blocked = 7
 
 
 @unique
@@ -117,7 +119,8 @@ class BoardVisibility(IntEnum):
     tenant = 2
 
 
-# Charged, undecided, still holding a concurrency slot.
+# Charged, undecided, still holding a concurrency slot. `blocked` is charged and undecided too, and
+# holds no slot, so it is in neither this set nor the terminal one.
 ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.pending,
     SubmissionStatus.submitting,
@@ -137,31 +140,14 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 
 
 @unique
-class PlanStatus(IntEnum):
-    """A filed plan's lifecycle: received -> filed -> running -> done|cancelled|errored.
-
-    The gateway sets `received`; the coordinator reports every status from `filed` on. `blocked`
-    pauses the plan: it waits on what `error` names, and a later report moves it on.
-    """
-
-    INVALID = 0
-    received = 1
-    filed = 2
-    running = 3
-    done = 4
-    cancelled = 5
-    errored = 6
-    blocked = 7
-
-
-@unique
 class EndpointKind(IntEnum):
-    """Where a plan's policy comes from: an address the caller provides (`remote`), or a checkpoint the
-    platform serves (`served`)."""
+    """Where a policy comes from: an address the caller provides (`remote`), a checkpoint the
+    platform serves (`served`), or a container image the platform runs (`image`)."""
 
     INVALID = 0
     remote = 1
     served = 2
+    image = 3
 
 
 @unique
@@ -185,10 +171,3 @@ class CameraVantage(IntEnum):
     INVALID = 0
     droid = 1
     phail = 2
-
-
-# A plan the coordinator reports no later status for.
-PLAN_TERMINAL_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored})
-
-# A plan that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
-PLAN_STOPPED_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.blocked, PlanStatus.errored})

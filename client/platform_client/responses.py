@@ -10,18 +10,9 @@ from __future__ import annotations
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import (
-    PLAN_STOPPED_STATUSES,
-    BoardVisibility,
-    KeyStatus,
-    OnExhausted,
-    PlanStatus,
-    QuotaSubject,
-    ReasonCode,
-    SubmissionStatus,
-)
+from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, PlanId, SubmissionId, UserId
+from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
@@ -75,6 +66,28 @@ class ArtifactRefs(BaseModel):
     """Where a finished submission's outputs are readable."""
 
     result: str
+
+
+class EpisodeCounts(BaseModel):
+    """What a run asked for and where it stands.
+
+    `total` is fixed when the plan is filed; the other two move as episodes land.
+    """
+
+    total: int = Field(default=0, ge=0)
+    done: int = Field(default=0, ge=0)
+    outstanding: int = Field(default=0, ge=0)
+
+
+class RunSummary(BaseModel):
+    """One launch that served the plan.
+
+    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
+    """
+
+    run_tag: str
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
 
 
 # The outcomes that mint a key. `existing` is the one that does not.
@@ -140,26 +153,35 @@ class SubmissionCreateResponse(_ReasonBearing):
 
 
 class SubmissionListRow(_ReasonBearing):
-    """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users."""
+    """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users.
+
+    `eval` is the name the catalogue expanded, and is absent on a run that stated its own tasks.
+    """
 
     id: SubmissionId
     user_id: UserId
     alias: str | None = None
-    eval: EvalRef
+    eval: EvalRef | None = None
+    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     received_at: AwareDatetime
 
 
 class SubmissionListResponse(BaseModel):
+    """`submissions.list` — one page, oldest first.
+
+    `next` is the cursor for the page after it, and is absent on the last page.
+    """
+
     submissions: list[SubmissionListRow] = Field(default_factory=list)
+    next: SubmissionId | None = None
 
 
 # The field the view union discriminates on, named so a rename moves the discriminator with it.
 STATUS_FIELD = 'status'
 
 # The field every view identifies a submission by, named for the same reason: a renderer that
-# excludes it by a stale literal prints it twice. `PLAN_ID_FIELD` is the same field on a plan view.
+# excludes it by a stale literal prints it twice.
 ID_FIELD = 'id'
-PLAN_ID_FIELD = 'plan_id'
 
 
 class _TaggedView(BaseModel):
@@ -170,6 +192,10 @@ class _TaggedView(BaseModel):
     """
 
     status: Slugged[SubmissionStatus]
+    # What the run asked for and what it has landed, and the launches that served it. A run the
+    # platform executes itself reports one launch; a plan the lab rig serves reports one per start.
+    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
+    runs: list[RunSummary] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
@@ -226,6 +252,14 @@ class CancelledSubmissionView(_TaggedView):
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
 
 
+class BlockedSubmissionView(_TaggedView):
+    """Paused, not decided: it waits on what `reason` names, and a later report moves it on."""
+
+    id: SubmissionId
+    reason: str | None = None
+    status: Slugged[SubmissionStatus] = SubmissionStatus.blocked
+
+
 def _status_tag(value: Any) -> str | None:
     """The status slug a `submissions.get` payload selects its variant by.
 
@@ -245,7 +279,8 @@ SubmissionView = Annotated[
     | Annotated[RunningSubmissionView, Tag(slug_of(SubmissionStatus.running))]
     | Annotated[ErroredSubmissionView, Tag(slug_of(SubmissionStatus.errored))]
     | Annotated[FinishedSubmissionView, Tag(slug_of(SubmissionStatus.finished))]
-    | Annotated[CancelledSubmissionView, Tag(slug_of(SubmissionStatus.cancelled))],
+    | Annotated[CancelledSubmissionView, Tag(slug_of(SubmissionStatus.cancelled))]
+    | Annotated[BlockedSubmissionView, Tag(slug_of(SubmissionStatus.blocked))],
     Discriminator(_status_tag),
 ]
 
@@ -304,63 +339,3 @@ class RankingsResponse(BaseModel):
     eval: EvalRef
     primary_metric: str
     rankings: list[RankingRow] = Field(default_factory=list)
-
-
-class PlanFiled(BaseModel):
-    """`evals.run` — a new plan, or the plan an earlier call with the same `transaction_key` filed."""
-
-    plan_id: PlanId
-    status: Slugged[PlanStatus]
-
-
-class EpisodeCounts(BaseModel):
-    """What a plan asked for and where it stands.
-
-    `total` is fixed when the plan is filed; the other two move as episodes land.
-    """
-
-    total: int = Field(ge=0)
-    done: int = Field(ge=0)
-    outstanding: int = Field(ge=0)
-
-
-class RunSummary(BaseModel):
-    """One launch that served the plan.
-
-    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
-    """
-
-    run_tag: str
-    started_at: AwareDatetime | None = None
-    ended_at: AwareDatetime | None = None
-
-
-class PlanView(BaseModel):
-    """`evals.get`, and one row of `evals.list`.
-
-    `artifacts` is the prefix the episodes land under, once one exists. `error` says why a `blocked`
-    plan waits, or why an `errored` one stopped.
-    """
-
-    plan_id: PlanId
-    status: Slugged[PlanStatus]
-    episodes: EpisodeCounts
-    runs: list[RunSummary] = Field(default_factory=list)
-    artifacts: str | None = None
-    error: str | None = None
-
-    @model_validator(mode='after')
-    def _an_error_travels_with_a_stopped_status(self) -> Self:
-        if self.error is not None and self.status not in PLAN_STOPPED_STATUSES:
-            raise ValueError(f'an error on a {self.status.name} plan')
-        return self
-
-
-class PlanListResponse(BaseModel):
-    """`evals.list` — one page, oldest first.
-
-    `next` is the cursor for the page after it, and is absent on the last page.
-    """
-
-    plans: list[PlanView] = Field(default_factory=list)
-    next: PlanId | None = None

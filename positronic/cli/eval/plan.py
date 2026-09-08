@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from platform_client.eval_plan import EvalPlan
-from platform_client.responses import PlanFiled
+from platform_client.responses import SubmissionCreateResponse
 from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
@@ -117,14 +117,14 @@ def plan_from_flags(
         raise SystemExit(one_line(exc)) from exc
 
 
-def file_plan(plan: EvalPlan, platform_url: str | None = None) -> PlanFiled:
-    """File one plan with `evals.run`, print what came back, and return it.
+def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCreateResponse:
+    """File one plan with `submissions.create`, print what came back, and return it.
 
     Two or more endpoints make one blind sample: the operator is told no policy, and each episode
-    records which one served it. `positronic eval status` reads the plan back by the id this prints.
+    records which one served it. `positronic eval status` reads the run back by the id this prints.
     """
     with gateway(platform_url) as client:
-        filed = client.run_eval(plan)
+        filed = client.create_submission(plan)
     print(filed.model_dump_json(indent=2))
     return filed
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from platform_client.enums import EndpointKind, Placement
-from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode
+from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.evals import EvalRef
+from platform_client.policy_images import PolicyImage
 from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
@@ -177,8 +179,36 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
 
 
 def test_a_remote_endpoint_names_no_bring_up():
-    with pytest.raises(ValidationError, match='only a served endpoint carries'):
+    with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
         Endpoint(name='baseline', provider='droid_cohost')
+    with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
+        Endpoint(name='baseline', image=PolicyImage('org/policy:v1'))
+
+
+def test_an_image_endpoint_names_the_image_and_nothing_else():
+    entry = Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/policy@sha256:abc'))
+    assert entry.names_a_locator and entry.url is None
+    with pytest.raises(ValidationError, match='the platform runs the image'):
+        Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/p:v1'), url='wss://h/ws')
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', image=PolicyImage('org/p:v1'))
+
+
+def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
+    # The catalogue expands the name into the tasks and the count each takes, so the plan states
+    # neither. That is the whole of what a submission chose before a plan could state its own tasks.
+    plan = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), alias='demo')
+    assert plan.names_an_eval and not plan.tasks and plan.episodes_per_endpoint is None
+    assert [entry.image for entry in plan.endpoints] == ['org/policy@sha256:abc']
+    assert plan.alias == 'demo'
+    assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
+
+
+def test_a_plan_takes_its_tasks_from_itself_or_from_an_eval_and_not_from_both():
+    with pytest.raises(ValidationError, match='it takes its tasks from one'):
+        a_plan(eval='robolab.public_subset')
+    with pytest.raises(ValidationError, match='names at least one task, or the eval'):
+        EvalPlan.model_validate({'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
 
 
 def test_an_endpoint_url_names_a_host():

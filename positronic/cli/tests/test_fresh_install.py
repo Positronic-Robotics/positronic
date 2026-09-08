@@ -29,7 +29,6 @@ from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUBMISSION = '5f3a91c2b7d40e18'
-PLAN = '2a'
 TASK = 'eight-spoons-into-grey-tote'
 AT = '2026-03-04T05:06:07Z'
 
@@ -72,7 +71,14 @@ ANSWERS: dict[str, object] = {
     },
     routes.SUBMISSIONS_LIST: {
         'submissions': [
-            {'id': SUBMISSION, 'user_id': 'a0', 'status': 'finished', 'eval': 'fake.smoke', 'received_at': AT}
+            {
+                'id': SUBMISSION,
+                'user_id': 'a0',
+                'status': 'finished',
+                'eval': 'fake.smoke',
+                'episodes': {'total': 20, 'done': 20, 'outstanding': 0},
+                'received_at': AT,
+            }
         ]
     },
     routes.SUBMISSIONS_CANCEL: {'status': 'cancelled', 'refunded': True},
@@ -90,11 +96,6 @@ ANSWERS: dict[str, object] = {
                 'submitted_at': AT,
             }
         ],
-    },
-    routes.EVALS_RUN: {'plan_id': PLAN, 'status': 'received'},
-    routes.EVALS_GET: {'plan_id': PLAN, 'status': 'filed', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}},
-    routes.EVALS_LIST: {
-        'plans': [{'plan_id': PLAN, 'status': 'filed', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}}]
     },
     routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
     routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiment': 'franka', 'task': 'spoons into a tote'}]},

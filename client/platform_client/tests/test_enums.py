@@ -12,8 +12,6 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     ACTIVE_STATUSES,
-    PLAN_STOPPED_STATUSES,
-    PLAN_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
     CameraVantage,
@@ -22,7 +20,6 @@ from platform_client.enums import (
     KeyStatus,
     OnExhausted,
     Placement,
-    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
@@ -66,6 +63,7 @@ SUBMISSION_STATUS_VALUES = {
     'finished': 4,
     'errored': 5,
     'cancelled': 6,
+    'blocked': 7,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
@@ -76,18 +74,7 @@ QUOTA_SUBJECT_VALUES = {'INVALID': 0, 'user': 1, 'tenant': 2}
 
 BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
-PLAN_STATUS_VALUES = {
-    'INVALID': 0,
-    'received': 1,
-    'filed': 2,
-    'running': 3,
-    'done': 4,
-    'cancelled': 5,
-    'errored': 6,
-    'blocked': 7,
-}
-
-ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2}
+ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2, 'image': 3}
 
 PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
 
@@ -101,7 +88,6 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (OnExhausted, ON_EXHAUSTED_VALUES),
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
-    (PlanStatus, PLAN_STATUS_VALUES),
     (EndpointKind, ENDPOINT_KIND_VALUES),
     (Placement, PLACEMENT_VALUES),
     (CameraVantage, CAMERA_VANTAGE_VALUES),
@@ -124,15 +110,10 @@ def test_no_value_is_reused(enum_cls: type[IntEnum], expected: dict[str, int]):
 
 
 def test_the_status_sets_partition_the_decided_from_the_undecided():
+    # `blocked` is the third case: undecided like an active one, and holding no slot, so it belongs
+    # to neither set. Naming it here keeps the three together covering every status.
     assert ACTIVE_STATUSES & TERMINAL_STATUSES == frozenset()
-    assert ACTIVE_STATUSES | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
-
-
-def test_the_plan_terminal_set_is_what_the_coordinator_is_finished_with():
-    assert PLAN_TERMINAL_STATUSES == {PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored}
-    for waiting in (PlanStatus.received, PlanStatus.filed, PlanStatus.blocked):
-        assert waiting not in PLAN_TERMINAL_STATUSES
-
-
-def test_the_stopped_set_is_where_an_error_travels():
-    assert PLAN_STOPPED_STATUSES == {PlanStatus.blocked, PlanStatus.errored}
+    assert SubmissionStatus.blocked not in ACTIVE_STATUSES | TERMINAL_STATUSES
+    assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
+        SubmissionStatus.INVALID
+    }

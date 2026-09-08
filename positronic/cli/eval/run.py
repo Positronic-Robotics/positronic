@@ -10,7 +10,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
-from platform_client.responses import PlanFiled, SubmissionCreateResponse
+from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
@@ -247,7 +247,7 @@ def _file_for_the_rig(
     cap: int | None,
     preset: str | None,
     transaction_key: str | None,
-) -> PlanFiled:
+) -> SubmissionCreateResponse:
     """File the plan a file states, else the plan the flags state."""
     if source is not None:
         refusing_a_second_source(source, rig_only)
@@ -288,7 +288,7 @@ def run(
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
-) -> SubmissionCreateResponse | PlanFiled | None:
+) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
@@ -297,8 +297,8 @@ def run(
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
     in a file (``--from-file``, or ``--eval`` naming one). Two or more ``--policy-url``
-    make one blind sample. The platform answers a submission id or a plan id, which ``positronic
-    eval status`` reads.
+    make one blind sample. Every place answers a submission id, which ``positronic eval status``
+    reads.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.

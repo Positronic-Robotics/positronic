@@ -22,26 +22,22 @@ from platform_client.enums import (
     ErrorCode,
     KeyStatus,
     OnExhausted,
-    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, PlanId, SubmissionId
+from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
+from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     BoardListResponse,
     CancelResponse,
     MeResponse,
     PendingSubmissionView,
-    PlanFiled,
-    PlanListResponse,
-    PlanView,
     RankingsResponse,
     RegisterResponse,
     SubmissionCreateResponse,
@@ -175,23 +171,20 @@ def test_create_submission_sends_the_run_defining_fields():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
     client = make_client(gateway)
 
-    response = client.create_submission(
-        SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
-    )
+    response = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
 
     assert isinstance(response, SubmissionCreateResponse)
     assert response.submission_id == 0x1F
     assert response.status is SubmissionStatus.pending
     assert gateway.request().url.path == routes.SUBMISSIONS_CREATE
-    assert gateway.body()['policy_image'] == 'org/policy:v1'
+    assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
+    assert gateway.body()['eval'] == 'fake.smoke'
     assert gateway.body()['transaction_key'] is None
 
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'errored', 'reason_code': 'image_unpullable'})
-    response = make_client(gateway).create_submission(
-        SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
-    )
+    response = make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
     assert response.status is SubmissionStatus.errored
     assert response.reason_code is ReasonCode.image_unpullable
 
@@ -242,9 +235,7 @@ def test_a_numeric_id_is_refused_at_the_boundary():
     # The wire contract is hex text. Decoding the body first would have taken the number.
     gateway = Gateway(200, {'submission_id': 31, 'status': 'pending'})
     with pytest.raises(ValidationError):
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
 
 
 def test_cancel_submission_posts_the_id():
@@ -331,9 +322,7 @@ def test_an_error_envelope_becomes_the_typed_exception():
         },
     )
     with pytest.raises(PlatformError) as raised:
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
 
     assert raised.value.code is ErrorCode.bad_request
     assert raised.value.reason_code is ReasonCode.image_unpullable
@@ -438,9 +427,6 @@ def test_every_endpoint_has_exactly_one_method():
         'cancel_submission',
         'rankings',
         'list_boards',
-        'run_eval',
-        'get_plan',
-        'list_plans',
         'catalog_evals',
         'catalog_tasks',
     }
@@ -462,9 +448,7 @@ def test_an_unknown_eval_comes_back_carrying_the_ones_on_offer():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smokey'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smokey')))
     assert caught.value.evals == ['fake.smoke', 'robolab.public_subset']
 
 
@@ -528,16 +512,22 @@ PLAN = EvalPlan(
     episodes_per_endpoint=10,
 )
 
-PLAN_VIEW = {'plan_id': '2a', 'status': 'filed', 'episodes': {'total': 10, 'done': 0, 'outstanding': 10}, 'runs': []}
+SUBMISSION_ROW = {
+    'id': '2a',
+    'user_id': 'a0',
+    'status': 'running',
+    'episodes': {'total': 10, 'done': 0, 'outstanding': 10},
+    'received_at': '2026-03-04T05:06:07Z',
+}
 
 
-def test_evals_run_posts_the_plan_and_parses_the_id():
-    gateway = Gateway(200, {'plan_id': '2a', 'status': 'received'})
-    response = make_client(gateway).run_eval(PLAN)
+def test_create_submission_posts_a_whole_plan_and_parses_the_id():
+    gateway = Gateway(200, {'submission_id': '2a', 'status': 'pending'})
+    response = make_client(gateway).create_submission(PLAN)
 
-    assert isinstance(response, PlanFiled)
-    assert response.plan_id == PlanId(0x2A) and response.status is PlanStatus.received
-    assert gateway.request().url.path == routes.EVALS_RUN
+    assert isinstance(response, SubmissionCreateResponse)
+    assert response.submission_id == SubmissionId(0x2A) and response.status is SubmissionStatus.pending
+    assert gateway.request().url.path == routes.SUBMISSIONS_CREATE
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
     body = gateway.body()
     assert body['tasks'][0]['task_id'] == 'eight-spoons-into-grey-tote'
@@ -547,6 +537,7 @@ def test_evals_run_posts_the_plan_and_parses_the_id():
         'url': 'wss://baseline.example/ws',
         'provider': None,
         'spec': None,
+        'image': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,
@@ -558,30 +549,38 @@ def test_evals_run_posts_the_plan_and_parses_the_id():
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
 
 
-def test_evals_get_sends_the_hex_id_and_parses_the_view():
-    gateway = Gateway(200, PLAN_VIEW)
-    view = make_client(gateway).get_plan(PlanId(0x2A))
+def test_a_run_carries_its_episode_counts_into_the_view():
+    gateway = Gateway(
+        200,
+        {
+            'id': '2a',
+            'status': 'running',
+            'running_since': '2026-03-04T05:06:07Z',
+            'episodes': {'total': 10, 'done': 3, 'outstanding': 7},
+        },
+    )
+    view = make_client(gateway).get_submission(SubmissionId(0x2A))
 
-    assert isinstance(view, PlanView)
-    assert view.status is PlanStatus.filed and view.episodes.outstanding == 10
-    assert gateway.request().url.path == routes.EVALS_GET
+    assert view.status is SubmissionStatus.running and view.episodes.outstanding == 7
+    assert gateway.request().url.path == routes.SUBMISSIONS_GET
     assert dict(gateway.request().url.params) == {'id': '2a'}
 
 
-def test_evals_list_sends_the_cursor_and_parses_the_next():
-    gateway = Gateway(200, {'plans': [PLAN_VIEW], 'next': '2a'})
-    page = make_client(gateway).list_plans(after=PlanId(0x1F), limit=1)
+def test_list_submissions_sends_the_cursor_and_parses_the_next():
+    gateway = Gateway(200, {'submissions': [SUBMISSION_ROW], 'next': '2a'})
+    page = make_client(gateway).list_submissions(after=SubmissionId(0x1F), limit=1)
 
-    assert isinstance(page, PlanListResponse)
-    assert [row.plan_id for row in page.plans] == [PlanId(0x2A)] and page.next == PlanId(0x2A)
-    assert gateway.request().url.path == routes.EVALS_LIST
+    assert isinstance(page, SubmissionListResponse)
+    assert [row.id for row in page.submissions] == [SubmissionId(0x2A)] and page.next == SubmissionId(0x2A)
+    assert page.submissions[0].episodes.total == 10
+    assert gateway.request().url.path == routes.SUBMISSIONS_LIST
     assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
 
 
-def test_evals_list_asks_for_the_first_page_with_nothing_in_the_query():
-    gateway = Gateway(200, {'plans': []})
-    page = make_client(gateway).list_plans()
-    assert page.plans == [] and page.next is None
+def test_list_submissions_asks_for_the_first_page_with_nothing_in_the_query():
+    gateway = Gateway(200, {'submissions': []})
+    page = make_client(gateway).list_submissions()
+    assert page.submissions == [] and page.next is None
     assert dict(gateway.request().url.params) == {}
 
 
@@ -597,6 +596,6 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).run_eval(PLAN)
+        make_client(gateway).create_submission(PLAN)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None

@@ -20,12 +20,13 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert created.submission_id == SubmissionId.parse(ID)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
-    assert platform.body == {
-        'policy_image': 'org/p:v1',
-        'eval': 'fake.smoke',
-        'alias': None,
-        'transaction_key': 'retry-1',
-    }
+    # A policy image is one endpoint of a plan, and the eval names the tasks the catalogue expands.
+    body = platform.body
+    assert body['eval'] == 'fake.smoke' and body['tasks'] == []
+    assert [(entry['name'], entry['kind'], entry['image']) for entry in body['endpoints']] == [
+        ('policy', 'image', 'org/p:v1')
+    ]
+    assert body['alias'] is None and body['transaction_key'] == 'retry-1'
     out = capsys.readouterr().out
     assert f'submission {ID} (pending)' in out
     assert 'digest sha256:abc' in out

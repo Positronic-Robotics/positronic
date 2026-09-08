@@ -12,32 +12,29 @@ from platform_client.enums import (
     ErrorCode,
     KeyStatus,
     OnExhausted,
-    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, PlanId, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
-    EvalGetQuery,
-    EvalListQuery,
     RankingsQuery,
     RegisterRequest,
-    SubmissionCreateRequest,
     SubmissionGetQuery,
+    SubmissionListQuery,
 )
 from platform_client.responses import (
     ID_FIELD,
-    PLAN_ID_FIELD,
     QUOTA_SUBMISSIONS_CONCURRENT,
     QUOTA_SUBMISSIONS_DAY,
     STATUS_FIELD,
     ArtifactRefs,
+    BlockedSubmissionView,
     BoardListResponse,
     BoardSummary,
     CancelledSubmissionView,
@@ -47,9 +44,6 @@ from platform_client.responses import (
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
-    PlanFiled,
-    PlanListResponse,
-    PlanView,
     QuotaLimit,
     RankingRow,
     RankingsResponse,
@@ -99,8 +93,6 @@ CREDITS = QuotaLimit(
     on_exhausted=OnExhausted.meter,
 )
 
-PLAN = PlanId(0x2A)
-
 ASK = EvalPlan.model_validate({
     'tasks': [
         'eight-spoons-into-grey-tote',
@@ -128,12 +120,8 @@ ASK = EvalPlan.model_validate({
     'transaction_key': 'round-1',
 })
 
-VIEW = PlanView(
-    plan_id=PLAN,
-    status=PlanStatus.running,
-    episodes=EpisodeCounts(total=24, done=3, outstanding=21),
-    runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
-    artifacts='s3://inference/example/040926/candidate-0/',
+PLAN_OF_AN_IMAGE = plan_of_image(
+    PolicyImage('org/policy@sha256:abc'), EvalRef('fake.smoke'), alias='demo', transaction_key=TransactionKey('key-1')
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
@@ -145,12 +133,7 @@ MODELS: list[BaseModel] = [
     CREDITS,
     ArtifactRefs(result='s3://pp-artifacts/users/a0/submissions/1f/result.json'),
     RegisterRequest(credential='token', alias='demo', rotate=True),
-    SubmissionCreateRequest(
-        policy_image=PolicyImage('org/policy:v1'),
-        eval=EvalRef('fake.smoke'),
-        alias='demo',
-        transaction_key=TransactionKey('key-1'),
-    ),
+    PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
     RankingsQuery(board=BoardRef('smoke')),
@@ -212,19 +195,14 @@ MODELS: list[BaseModel] = [
         endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
         episodes_per_endpoint=1,
     ),
-    EvalGetQuery(id=PLAN),
-    EvalListQuery(after=PLAN, limit=50),
-    EvalListQuery(),
-    PlanFiled(plan_id=PLAN, status=PlanStatus.received),
-    VIEW,
-    PlanView(
-        plan_id=PLAN,
-        status=PlanStatus.errored,
-        episodes=EpisodeCounts(total=1, done=0, outstanding=1),
-        error='no task named it',
+    SubmissionListQuery(after=SUB, limit=50),
+    SubmissionListQuery(),
+    BlockedSubmissionView(
+        id=SUB,
+        episodes=EpisodeCounts(total=24, done=3, outstanding=21),
+        runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
+        reason='the rig is not ready',
     ),
-    PlanListResponse(plans=[VIEW], next=PLAN),
-    PlanListResponse(),
 ]
 
 
@@ -261,8 +239,7 @@ def test_ids_and_statuses_leave_as_wire_values():
 
 def test_a_request_rejects_an_unknown_field():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({
-            'policy_image': 'i',
+        EvalPlan.model_validate({
             'eval': 'fake.smoke',
             'evals': 'fake.smoke',  # a plausible typo of eval
         })
@@ -270,17 +247,18 @@ def test_a_request_rejects_an_unknown_field():
 
 def test_a_policy_image_the_registry_could_never_resolve_is_refused_here():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({
-            'policy_image': 'org/policy@',  # a digest separator with nothing behind it
+        EvalPlan.model_validate({
             'eval': 'fake.smoke',
+            # a digest separator with nothing behind it
+            'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/policy@'}],
         })
 
 
 def test_a_digest_pinned_image_is_taken_whole_and_parsed():
-    request = SubmissionCreateRequest(policy_image=PolicyImage('org/policy@sha256:abc'), eval=EvalRef('fake.smoke'))
-    assert isinstance(request.policy_image, PolicyImage)
-    assert request.policy_image.name == 'org/policy'
-    assert request.policy_image.digest == 'sha256:abc'
+    image = PLAN_OF_AN_IMAGE.endpoints[0].image
+    assert isinstance(image, PolicyImage)
+    assert image.name == 'org/policy'
+    assert image.digest == 'sha256:abc'
 
 
 def test_a_reason_code_is_refused_on_a_status_that_did_not_fail():
@@ -348,7 +326,7 @@ def test_an_id_reaches_the_query_string_in_its_hex_wire_form():
 
 def test_an_empty_transaction_key_is_a_client_bug_not_an_absent_one():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({'policy_image': 'i', 'eval': 'fake.smoke', 'transaction_key': ''})
+        EvalPlan.model_validate({'eval': 'fake.smoke', 'transaction_key': ''})
 
 
 @pytest.mark.parametrize(
@@ -388,10 +366,6 @@ def test_the_published_field_names_are_ones_every_variant_declares(variant: type
     assert {ID_FIELD, STATUS_FIELD} <= set(variant.model_fields)
 
 
-def test_the_published_plan_field_names_are_ones_the_plan_view_declares():
-    assert {PLAN_ID_FIELD, STATUS_FIELD} <= set(PlanView.model_fields)
-
-
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():
     # `submitting` is an internal state the union has no variant for; a gateway building a pending
     # view from such a record must fail here rather than emit a tag no caller can route.
@@ -410,11 +384,16 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
     # The discriminator computes a tag from the payload's slug, so a tag spelled any other way names
     # a wire value nothing produces and the variant becomes unreachable.
     variants = get_args(get_args(SubmissionView)[0])
-    assert len(variants) == 5
     for variant in variants:
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
+    # Every status a caller can see carries a variant. `submitting` is internal and INVALID is the
+    # unset sentinel, so a status added with no variant of its own is what this catches.
+    internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
+    assert {get_args(variant)[1].tag for variant in variants} == {
+        slug_of(status) for status in SubmissionStatus if status not in internal
+    }
 
 
 def test_a_minted_outcome_without_its_key_is_refused():
@@ -592,14 +571,15 @@ def test_every_status_a_caller_can_see_is_kept(status: str):
     assert SubmissionCreateResponse.model_validate({'submission_id': 'ff', 'status': status}).status.name == status
 
 
-def test_a_view_carries_an_error_only_when_it_stopped():
-    stopped = {'plan_id': '2a', 'episodes': {'total': 1, 'done': 0, 'outstanding': 1}, 'error': 'x'}
-    assert PlanView.model_validate({**stopped, 'status': 'blocked'}).status is PlanStatus.blocked
-    assert PlanView.model_validate({**stopped, 'status': 'errored'}).error == 'x'
-    with pytest.raises(ValidationError, match='an error on a running plan'):
-        PlanView.model_validate({**stopped, 'status': 'running'})
+def test_only_the_blocked_view_says_what_a_run_waits_on():
+    # `reason` lives on the one variant it can be true of, so no status check is needed to keep it
+    # off the others: a running payload carrying one selects a variant that declares no such field.
+    blocked = {'id': '2a', 'status': 'blocked', 'reason': 'the rig is not ready'}
+    assert SUBMISSION_VIEWS.validate_python(blocked).reason == 'the rig is not ready'
+    with pytest.raises(ValidationError):
+        SUBMISSION_VIEWS.validate_python({**blocked, 'status': 'running'})
 
 
 def test_a_limit_below_one_is_refused():
     with pytest.raises(ValidationError):
-        EvalListQuery(limit=0)
+        SubmissionListQuery(limit=0)

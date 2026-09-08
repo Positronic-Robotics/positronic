@@ -10,7 +10,9 @@ from typing import Self
 
 import httpx
 from platform_client.enums import CameraVantage, EndpointKind, Placement
+from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
+from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -82,7 +84,7 @@ def _absolute_url(url: str, whose: str) -> None:
 # lays out one scene, one cap and one preset for its whole sample, so every other field of `Cascade`
 # is per task. This names what an endpoint may state rather than what it may not: a field added to
 # `Cascade` later is then refused on an endpoint, where a list of the forbidden ones would take it.
-_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'episodes_per_endpoint'})
+_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
 
 
 class Endpoint(Cascade):
@@ -91,7 +93,8 @@ class Endpoint(Cascade):
     A `remote` endpoint is an address the caller provides. A `served` endpoint names the checkpoint
     it serves (`spec`) and has no `url`: the platform starts it and records the address. `provider`
     names what starts it, and the platform derives one from `spec` when the entry names none. An
-    entry on a task with no `url` and no `spec` names one of the plan's endpoints.
+    `image` endpoint names the container image the platform runs the policy from. An entry on a task
+    carrying no locator at all names one of the plan's endpoints.
     """
 
     name: str = Field(min_length=1)
@@ -99,6 +102,9 @@ class Endpoint(Cascade):
     url: str | None = Field(default=None, min_length=1)
     provider: str | None = Field(default=None, min_length=1)
     spec: str | None = Field(default=None, min_length=1)
+    # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
+    # process instead of spending a round trip to learn it.
+    image: PolicyImage | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -114,9 +120,17 @@ class Endpoint(Cascade):
                 raise ValueError(
                     f'served endpoint {self.name!r} names a url; the platform records the address it serves at'
                 )
-        elif self.provider is not None or self.spec is not None:
+            if self.image is not None:
+                raise ValueError(f'served endpoint {self.name!r} names an image, which only an image endpoint carries')
+        elif self.kind is EndpointKind.image:
+            if self.url is not None or self.provider is not None or self.spec is not None:
+                raise ValueError(
+                    f'image endpoint {self.name!r} names a url, a provider or a spec; the platform runs the image'
+                )
+        elif self.provider is not None or self.spec is not None or self.image is not None:
             raise ValueError(
-                f'remote endpoint {self.name!r} names a provider or a spec, which only a served endpoint carries'
+                f'remote endpoint {self.name!r} names a provider, a spec or an image, which only a served or an '
+                'image endpoint carries'
             )
         return self
 
@@ -139,8 +153,9 @@ class Endpoint(Cascade):
 
     @property
     def names_a_locator(self) -> bool:
-        """Whether this entry says where its policy comes from: a `url`, or the `spec` a served one names."""
-        return self.url is not None or self.spec is not None
+        """Whether this entry says where its policy comes from: a `url`, the `spec` a served one
+        names, or the `image` the platform runs."""
+        return self.url is not None or self.spec is not None or self.image is not None
 
 
 class TaskNode(Cascade):
@@ -165,16 +180,22 @@ class TaskNode(Cascade):
 
 
 class EvalPlan(Cascade):
-    """`evals.run` — one eval to run: the tasks, the endpoints each task runs, and the count per endpoint.
+    """`submissions.create` — one eval to run: the tasks, the endpoints each task runs, and the
+    count per endpoint.
 
     The plan states the count once. A task may override it for that task, and an endpoint for that
-    endpoint. The plan carries no client field: the gateway reads the client from the key's grant.
-    A named eval the platform offers is a plan the registry holds; this model is the plan a caller
-    composes.
+    endpoint. It either states its own tasks or names an eval the platform offers, and the catalogue
+    expands that name into the same tasks. The plan carries no client field: the gateway reads the
+    client from the key's grant.
     """
 
     tasks: list[TaskNode] = Field(default_factory=list)
+    # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
+    # names an eval, and both arrive at the same set.
+    eval: EvalRef | None = None
     endpoints: list[Endpoint] = Field(default_factory=list)
+    # What a reader calls this run. It names nothing and identifies nothing.
+    alias: str | None = None
     # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
     episodes_total: int | None = Field(default=None, ge=1)
     # The upper bound on every leaf's cap: a mistyped cap costs minutes at the rig.
@@ -182,15 +203,25 @@ class EvalPlan(Cascade):
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
 
+    @property
+    def names_an_eval(self) -> bool:
+        """Whether the catalogue supplies this plan's tasks, rather than the plan itself.
+
+        Nothing here counts the leaves of such a plan: the expansion happens at the platform.
+        """
+        return self.eval is not None
+
     @model_validator(mode='after')
     def _names_a_task(self) -> Self:
-        if not self.tasks:
-            raise ValueError('a plan names at least one task')
+        if self.tasks and self.names_an_eval:
+            raise ValueError(f'a plan states tasks and names the eval {str(self.eval)!r}: it takes its tasks from one')
+        if not self.tasks and not self.names_an_eval:
+            raise ValueError('a plan names at least one task, or the eval whose tasks it runs')
         return self
 
     @model_validator(mode='after')
     def _states_a_count(self) -> Self:
-        if self.episodes_per_endpoint is None:
+        if self.episodes_per_endpoint is None and not self.names_an_eval:
             raise ValueError('a plan states episodes_per_endpoint; a task or an endpoint overrides it')
         return self
 
@@ -243,6 +274,8 @@ class EvalPlan(Cascade):
 
     @model_validator(mode='after')
     def _the_checksum_matches(self) -> Self:
+        if self.names_an_eval:
+            return self
         if self.episodes_total is not None and self.episodes_total != self.resolved_episodes_total:
             raise ValueError(
                 f'episodes_total states {self.episodes_total}, and the leaves sum to {self.resolved_episodes_total}'
@@ -269,5 +302,30 @@ class EvalPlan(Cascade):
 
     @property
     def resolved_episodes_total(self) -> int:
-        """Every episode this plan asks for: per task, the count of each endpoint it runs on."""
+        """Every episode this plan asks for: per task, the count of each endpoint it runs on.
+
+        A plan that names an eval states no task here, so this counts nothing until the catalogue
+        expands the name.
+        """
         return sum(self.episodes_on(task, entry) for task in self.tasks for entry in self.task_endpoints(task))
+
+
+# The name the one endpoint of an image run carries. Such a run serves one policy, so nothing picks
+# it out by name, and the model asks every endpoint for one.
+IMAGE_ENDPOINT_NAME = 'policy'
+
+
+def plan_of_image(
+    image: PolicyImage, eval_name: EvalRef, *, alias: str | None = None, transaction_key: TransactionKey | None = None
+) -> EvalPlan:
+    """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
+
+    The catalogue expands the name into tasks and the count each takes, so such a plan states
+    neither. It is the whole of what a caller chose before a plan could state its own tasks.
+    """
+    return EvalPlan(
+        eval=eval_name,
+        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, image=image)],
+        alias=alias,
+        transaction_key=transaction_key,
+    )

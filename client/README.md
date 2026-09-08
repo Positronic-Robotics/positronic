@@ -48,7 +48,8 @@ tailnet: pass `--plaintext-http` to reach it.
 
 An eval is a list of tasks. The platform offers named evals, and a customer composes one: an
 `EvalPlan` names the catalogue tasks to run, the policies (endpoints) to run them on, and the
-episodes each endpoint takes on each task. The plan states the count once. A task may override it for that task, and an endpoint may
+episodes each endpoint takes on each task. A plan either states its own `tasks` or names an `eval`
+the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
 plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras` and `clutter`. An
 endpoint states only its count. `episodes_total` is a checksum a caller may state.
@@ -75,18 +76,22 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `evals.run`. `--from-file` names the file. `--eval`
-also names it when its value is the path of an existing file. The same flags state a plan without a file — `--policy-url`
-(repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and `--preset`. The scene fields come
-from a plan file; a run stated in flags takes what each task's catalogue entry gives it. Two
-or more endpoints make one blind sample: the operator is told no policy, and each episode records
-which one served it. `eval status` and `eval list` read a filed plan back by its
-id, as they read a submission. The platform records the plan, the rollouts coordinator runs it on
-the lab rig, and a `blocked` plan waits on what its `error` names. A key needs a customer grant for
-`evals.run`; a key without one is refused `forbidden`.
+`positronic eval run` files that plan with `submissions.create`. `--from-file` names the file.
+`--eval` also names it when its value is the path of an existing file. The same flags state a plan
+without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
+`--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
+catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
+policy, and each episode records which one served it. `eval status` and `eval list` read it back by
+the submission id every run carries. The platform records the plan, the rollouts coordinator runs
+it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
+tasks needs a customer grant; a key without one is refused `forbidden`.
 
-`positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `eval run
---policy-image` takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
+A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names the
+eval whose tasks it runs, which is what a submission was before a plan could state its own tasks.
+`plan_of_image` builds that shape.
+
+`positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
+names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
 evals a submission can name. A customer grant adds the rig's evals and tasks, filtered to the entries
 offered to the grant's client.
 
@@ -138,13 +143,13 @@ same on every board you appear on.
 
 ```python
 from platform_client.client import PlatformClient
+from platform_client.eval_plan import plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import SubmissionCreateRequest
 
 with PlatformClient(api_key=key) as client:
     created = client.create_submission(
-        SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('robolab.public_subset'))
+        plan_of_image(PolicyImage('org/policy:v1'), EvalRef('robolab.public_subset'))
     )
     view = client.get_submission(created.submission_id)
 ```
