@@ -1,6 +1,5 @@
 """Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
-import os
 from typing import Any
 
 import numpy as np
@@ -11,6 +10,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import codec as codec_module
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Layer, Policy, Session
@@ -647,12 +647,12 @@ class TestRestrictImageSize:
 
     def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
         """A pool wins nothing on a single core, and costs threads to raise."""
-        monkeypatch.setattr(os, 'cpu_count', lambda: 1)
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 1)
         codec = RestrictImageSize(64, 48)
         assert codec._workers(codec._PARALLEL_FROM + 4) == 1
 
-    def test_the_pool_is_bounded_by_the_core_count(self, monkeypatch):
-        monkeypatch.setattr(os, 'cpu_count', lambda: 2)
+    def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 2)
         codec = RestrictImageSize(64, 48)
         assert codec._workers(codec._MAX_WORKERS * 4) == 2
 

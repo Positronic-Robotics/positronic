@@ -438,6 +438,16 @@ class FlipGrip(Codec):
         return {'name': self.WIRE_NAME}
 
 
+def _usable_cpus() -> int:
+    """CPUs this process may run on — its affinity mask where the platform publishes one, else the
+    host's count. FOOTGUN: neither reads a cgroup CPU quota, so a container limited by `--cpus` and
+    not by a mask still reads the host's cores.
+    """
+    if hasattr(os, 'sched_getaffinity'):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
     h, w = image.shape[:2]
     scale = min(1.0, width / w, height / h)
@@ -490,9 +500,7 @@ class RestrictImageSize(Codec):
         usable CPU, and below ``_PARALLEL_FROM`` it costs more to raise than the frames take."""
         if frames < self._PARALLEL_FROM:
             return 1
-        # FOOTGUN: `cpu_count` reports the machine, not a cgroup quota, so a container pinned to one
-        # core of many still reads as many and takes the threaded path.
-        return max(1, min(frames, self._MAX_WORKERS, os.cpu_count() or 1))
+        return max(1, min(frames, self._MAX_WORKERS, _usable_cpus()))
 
     def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
         """Every frame of one stack, scaled. Pillow drops the GIL for a resize and the frames are
