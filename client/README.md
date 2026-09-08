@@ -86,9 +86,8 @@ the submission id every run carries. The platform records the plan, the rollouts
 it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
 tasks needs a customer grant; a key without one is refused `forbidden`.
 
-A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names the
-eval whose tasks it runs, which is what a submission was before a plan could state its own tasks.
-`plan_of_image` builds that shape.
+A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
+the eval whose tasks it runs. `plan_of_image` builds that shape.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the

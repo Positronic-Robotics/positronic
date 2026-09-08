@@ -196,7 +196,7 @@ def test_an_image_endpoint_names_the_image_and_nothing_else():
 
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
     # The catalogue expands the name into the tasks and the count each takes, so the plan states
-    # neither. That is the whole of what a submission chose before a plan could state its own tasks.
+    # neither.
     plan = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), alias='demo')
     assert plan.names_an_eval and not plan.tasks and plan.episodes_per_endpoint is None
     assert [entry.image for entry in plan.endpoints] == ['org/policy@sha256:abc']

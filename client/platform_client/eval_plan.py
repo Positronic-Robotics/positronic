@@ -321,7 +321,7 @@ def plan_of_image(
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The catalogue expands the name into tasks and the count each takes, so such a plan states
-    neither. It is the whole of what a caller chose before a plan could state its own tasks.
+    neither.
     """
     return EvalPlan(
         eval=eval_name,
