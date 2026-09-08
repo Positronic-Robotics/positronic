@@ -61,7 +61,8 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     """A client on the configured platform, reporting a refusal by it as a CLI failure.
 
     The key comes from the environment, then from the record `register` saved. A saved key is valid
-    only on the platform it was minted on, so a command that names another platform is refused.
+    only on the platform it was minted on, so a command that needs one and names another platform is
+    refused. `register` needs none: it registers on the platform it names, whatever the record holds.
     """
     record = record_if_needed(os.environ, None, platform_url)
     key = api_key_from(os.environ, None, record)
@@ -71,7 +72,8 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     with refusing_bad_input():
         client_ = PlatformClient(platform_url_from(os.environ, platform_url, record), api_key=key)
     if (
-        record is not None
+        key_required
+        and record is not None
         and not key_is_given(os.environ, None)
         and not same_platform(client_.base_url, record.platform_url)
     ):

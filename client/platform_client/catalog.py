@@ -37,7 +37,7 @@ class TaskSummary(BaseModel):
 
 
 class EvalSummary(BaseModel):
-    """`catalog.evals` — one eval `evals.run` accepts by name.
+    """`catalog.evals` — one eval `submissions.create` accepts by name, with a policy image.
 
     `tasks` names what the eval runs, in the embodiment's own spelling. `composable` is true for an
     eval built from catalogue tasks: a caller may compose a plan over the same tasks. A pinned eval

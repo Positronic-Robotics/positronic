@@ -84,8 +84,8 @@ id, as they read a submission. The platform records the plan, the rollouts coord
 the lab rig, and a `blocked` plan waits on what its `error` names. A key needs a customer grant for
 `evals.run`; a key without one is refused `forbidden`.
 
-`positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `evals.run`
-takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
+`positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `eval run
+--policy-image` takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
 evals a submission can name. A customer grant adds the rig's evals and tasks, filtered to the entries
 offered to the grant's client.
 

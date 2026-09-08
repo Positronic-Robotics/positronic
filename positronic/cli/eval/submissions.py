@@ -92,7 +92,7 @@ def cancel(id: str, platform_url: str | None = None):
 
 @cfn.config()
 def catalog(platform_url: str | None = None):
-    """Print what this key may name: the evals `eval run` takes by name, and the tasks a plan composes.
+    """Print what this key may name: the evals `eval run --policy-image` takes by name, and the tasks a plan composes.
 
     A key with no customer grant composes no plan, so `catalog.tasks` refuses it; the evals print, and
     the refusal goes to stderr.

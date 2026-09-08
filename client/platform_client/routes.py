@@ -21,6 +21,6 @@ RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
 EVALS_RUN = f'{API_PREFIX}/evals.run'
 EVALS_GET = f'{API_PREFIX}/evals.get'
 EVALS_LIST = f'{API_PREFIX}/evals.list'
-# What the platform offers the caller: the evals `evals.run` takes by name, and the tasks a plan may name.
+# What the platform offers the caller: the evals `submissions.create` takes by name, and the tasks a plan may name.
 CATALOG_EVALS = f'{API_PREFIX}/catalog.evals'
 CATALOG_TASKS = f'{API_PREFIX}/catalog.tasks'

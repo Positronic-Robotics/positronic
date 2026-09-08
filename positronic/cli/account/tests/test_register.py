@@ -4,7 +4,8 @@ import os
 
 import pytest
 from platform_client import routes
-from platform_client.config import config_dir, read_config
+from platform_client.config import Config, config_dir, read_config, write_config
+from platform_client.ids import ApiKey
 
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.register import register
@@ -43,6 +44,21 @@ def test_the_key_is_recorded_against_the_platform_it_was_minted_on(platform, run
 
     saved = read_config(config_dir(os.environ))
     assert saved is not None and saved.platform_url.startswith('http://other.test')
+
+
+def test_a_record_for_another_platform_does_not_stop_a_registration(platform, run_command, monkeypatch):
+    # The saved key belongs to the platform it was minted on; a registration sends no key, so the
+    # record has nothing to say about where it goes.
+    write_config(config_dir(os.environ), Config(platform_url='http://gateway.test', api_key=ApiKey('pk_old')))
+    monkeypatch.delenv(gateway_module.API_KEY_ENV)
+    monkeypatch.delenv(gateway_module.API_URL_ENV)
+    platform.answer({'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
+
+    run_command(register, platform_url='http://other.test')
+
+    assert platform.base_url == 'http://other.test'
+    assert platform.request.url.path == routes.USERS_REGISTER
+    assert 'authorization' not in platform.request.headers
 
 
 def test_register_refuses_when_no_credential_is_in_the_environment(platform, run_command, monkeypatch):

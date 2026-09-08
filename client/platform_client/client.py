@@ -205,7 +205,7 @@ class PlatformClient:
         return self._get(routes.EVALS_LIST, PlanListResponse, query=query)
 
     def catalog_evals(self) -> EvalListResponse:
-        """The evals `evals.run` takes by name, for this key's grant."""
+        """The evals `submissions.create` takes by name, for this key's grant."""
         return self._get(routes.CATALOG_EVALS, EvalListResponse)
 
     def catalog_tasks(self) -> TaskListResponse:

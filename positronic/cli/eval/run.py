@@ -16,7 +16,7 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
-from positronic.cli.eval.plan import file_plan, plan_from_flags, plan_source, read_plan, refusing_a_second_source
+from positronic.cli.eval.plan import file_plan, given, plan_from_flags, plan_source, read_plan, refusing_a_second_source
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.eval import Embodiment, Eval, Observation, Task
@@ -227,10 +227,10 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """Stop on an argument the chosen place of `run` cannot honour.
 
-    Dropping one silently hands back a run the caller believes they shaped. Every "not asked for"
-    value is falsy, which is what makes the test the value itself.
+    Dropping one silently hands back a run the caller believes they shaped. `--episodes=0` is asked
+    for, and this run has no such flag to refuse it as a value.
     """
-    asked = sorted(flag for flag, value in inapplicable.items() if value)
+    asked = sorted(flag for flag, value in inapplicable.items() if given(value))
     if asked:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
 
@@ -321,12 +321,12 @@ def run(
         _refuse({**local_only, '--from-file': from_file, **rig_only}, 'platform')
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
-    if source is not None or any(rig_only.values()):
+    if source is not None or any(given(value) for value in rig_only.values()):
         # The rig records under the client's own prefix, and a plan carries no alias.
         _refuse({**local_only, '--alias': alias}, 'rig')
         if source is not None:
             refusing_a_second_source(source, rig_only)
-            return file_plan(read_plan(source), platform_url)
+            return file_plan(read_plan(source, transaction_key), platform_url)
         if eval is not None:
             raise SystemExit(f'--eval={eval!r} names no plan file: the rig runs a plan, not a name')
         return file_plan(

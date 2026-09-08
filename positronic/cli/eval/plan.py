@@ -17,6 +17,50 @@ SCENE_TOTE = 'tote_placement'
 SCENE_VANTAGE = 'camera_vantage'
 SCENE_CAMERA_PREFIX = 'camera.'
 SCENE_CAMERAS = 'external_cameras'
+# The plan field `--transaction-key` states beside a plan file.
+TRANSACTION_KEY_FIELD = 'transaction_key'
+
+
+class _OneValuePerKey(yaml.SafeLoader):
+    """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
+    two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen: set[str] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if isinstance(key, str) and key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f'{key!r} is given twice', key_node.start_mark)
+            if isinstance(key, str):
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def read_plan(path: Path, transaction_key: str | None = None) -> EvalPlan:
+    """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
+
+    `--transaction-key` is the one plan field the command line states beside a file: a key names
+    one filing, and the file names the plan. A file that carries its own key takes no flag.
+    """
+    try:
+        payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
+    except OSError as exc:
+        raise SystemExit(f'{path}: {exc.strerror}') from exc
+    except yaml.YAMLError as exc:
+        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
+    if transaction_key is not None and isinstance(payload, dict):
+        if TRANSACTION_KEY_FIELD in payload:
+            raise SystemExit(f'{path} carries {TRANSACTION_KEY_FIELD}; drop --transaction-key')
+        payload = {**payload, TRANSACTION_KEY_FIELD: transaction_key}
+    try:
+        return EvalPlan.model_validate(payload)
+    except ValidationError as exc:
+        raise SystemExit(f'{path}: {one_line(exc)}') from exc
+
+
+def given(value: object) -> bool:
+    """Whether a flag was given. An unstated flag is `None`, or `False` for a switch, so `0` and `""` are given."""
+    return value is not None and value is not False
 
 
 def flag_entries(value: object, flag: str) -> list[str]:
@@ -38,47 +82,6 @@ def flag_entries(value: object, flag: str) -> list[str]:
     if not all(stripped):
         raise SystemExit(f'{flag} carries an empty entry: {value!r}')
     return stripped
-
-
-def endpoint_of(spec: str, position: int) -> dict[str, str]:
-    """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
-
-    A URL carries `=` in a query string, so the part before the first one is a label only where it
-    names no scheme and no path.
-    """
-    label, separator, address = spec.partition('=')
-    if separator and ':' not in label and '/' not in label:
-        return {'name': label, 'url': address}
-    return {'name': f'policy{position}', 'url': spec}
-
-
-class _OneValuePerKey(yaml.SafeLoader):
-    """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
-    two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
-
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
-        seen: set[str] = set()
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if isinstance(key, str) and key in seen:
-                raise yaml.constructor.ConstructorError(None, None, f'{key!r} is given twice', key_node.start_mark)
-            if isinstance(key, str):
-                seen.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
-def read_plan(path: Path) -> EvalPlan:
-    """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms."""
-    try:
-        payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
-    except OSError as exc:
-        raise SystemExit(f'{path}: {exc.strerror}') from exc
-    except yaml.YAMLError as exc:
-        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
-    try:
-        return EvalPlan.model_validate(payload)
-    except ValidationError as exc:
-        raise SystemExit(f'{path}: {one_line(exc)}') from exc
 
 
 _PLACEMENT: TypeAdapter[Placement] = TypeAdapter(Slugged[Placement])
@@ -111,6 +114,18 @@ def scene_from_pairs(pairs: list[str]) -> dict[str, object]:
     if cameras:
         scene[SCENE_CAMERAS] = cameras
     return scene
+
+
+def endpoint_of(spec: str, position: int) -> dict[str, str]:
+    """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
+
+    A URL carries `=` in a query string, so the part before the first one is a label only where it
+    names no scheme and no path.
+    """
+    label, separator, address = spec.partition('=')
+    if separator and ':' not in label and '/' not in label:
+        return {'name': label, 'url': address}
+    return {'name': f'policy{position}', 'url': spec}
 
 
 def plan_from_flags(
@@ -165,6 +180,6 @@ def plan_source(eval: object, from_file: str | None) -> Path | None:
 
 def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:
     """Exit when a plan file and plan flags are both given: one source states the plan."""
-    twice = sorted(flag for flag, value in stated.items() if value)
+    twice = sorted(flag for flag, value in stated.items() if given(value))
     if twice:
         raise SystemExit(f'{source} carries the whole plan; drop {", ".join(twice)}')

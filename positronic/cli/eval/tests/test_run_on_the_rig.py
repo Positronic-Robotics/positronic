@@ -10,7 +10,7 @@ from platform_client.eval_plan import EvalPlan
 from platform_client.ids import PlanId
 
 from positronic.cli.conftest import KEY
-from positronic.cli.eval.plan import endpoint_of, flag_entries, scene_from_pairs
+from positronic.cli.eval.plan import endpoint_of, flag_entries, given, scene_from_pairs
 from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
@@ -158,6 +158,21 @@ def test_a_plan_file_beside_a_plan_flag_is_refused(platform, run_command, tmp_pa
     assert platform.seen is None
 
 
+def test_a_transaction_key_beside_a_plan_file_is_filed_with_the_plan(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), transaction_key='round-1')
+
+    assert platform.body['transaction_key'] == 'round-1'
+
+
+def test_a_plan_file_carrying_a_transaction_key_takes_no_flag(platform, run_command, tmp_path: Path):
+    keyed = PLAN_YAML + 'transaction_key: round-1\n'
+    with pytest.raises(SystemExit, match='carries transaction_key; drop --transaction-key'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', keyed), transaction_key='round-2')
+    assert platform.seen is None
+
+
 def test_two_plan_files_are_refused(platform, run_command, tmp_path: Path):
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
     with pytest.raises(SystemExit, match='each name a plan file'):
@@ -203,7 +218,10 @@ def test_a_local_run_refuses_what_only_a_rig_run_can_mean(platform, run_command,
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('rig_only', [{'policy_url': BASELINE}, {'preset': 'p'}, {'scene': 'tote_placement=left'}])
+@pytest.mark.parametrize(
+    'rig_only',
+    [{'policy_url': BASELINE}, {'preset': 'p'}, {'scene': 'tote_placement=left'}, {'episodes': 0}, {'cap': 0}],
+)
 def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
     with pytest.raises(SystemExit, match='a platform run has no'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', **rig_only)
@@ -263,6 +281,11 @@ def test_a_repeatable_flag_refuses_an_empty_entry(value: str):
 def test_a_repeatable_flag_read_as_a_number_is_refused():
     with pytest.raises(SystemExit, match='quote'):
         flag_entries(10, '--tasks')
+
+
+@pytest.mark.parametrize(('value', 'is_given'), [(None, False), (False, False), (0, True), ('', True), (True, True)])
+def test_a_flag_is_given_unless_it_is_unset_or_a_switch_left_off(value: object, is_given: bool):
+    assert given(value) is is_given
 
 
 def test_a_labelled_url_takes_its_label():
