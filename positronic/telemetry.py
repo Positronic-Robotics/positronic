@@ -201,8 +201,8 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
 def bind_from_env(process: str):
     """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
 
-    The directory turns recording on. An unset run id is minted here, so a fixed one in an operator's
-    environment cannot merge two runs into a single file under a single name.
+    The directory turns recording on. A fixed run id in an operator's environment would merge two runs
+    into a single file under a single name, so an unset one is minted here instead.
 
     Inert while the directory is unset, and while a provider is already bound.
     """

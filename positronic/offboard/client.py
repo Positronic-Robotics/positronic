@@ -72,15 +72,15 @@ class InferenceSession:
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        # Each span is the socket alone, so the pair reads as the uplink and then the wait the server's
-        # own time sits inside. An uplink too slow for the payload shows as a send outlasting its bytes.
+        # The pair reads as the uplink and then the wait the server's own time sits inside: each span
+        # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
             self._websocket.send(serialised)
 
         try:
             with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
-                response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+                received = self._websocket.recv(timeout=self._infer_timeout)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -89,6 +89,7 @@ class InferenceSession:
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
+        response = deserialise(received)
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:
