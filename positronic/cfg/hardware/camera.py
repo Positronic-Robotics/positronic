@@ -24,8 +24,7 @@ arducam_right = arducam_left.override(
 )
 
 
-# rules-allow: primitive-type — a device path is the `str` `linuxpy.Device` takes and `LinuxVideo` hands
-# it, spelled the way the arducam configurations above spell theirs
+# rules-allow: primitive-type — a device path is the `str` `linuxpy.Device` takes and `LinuxVideo` hands it
 # The four RealSense D405 of the Trossen station. A D405 enumerates as a plain UVC device with six video
 # nodes, of which `-video-index4` carries the colour stream. The serial in the link is the USB one, which
 # is not the serial the RealSense SDK reports for the same camera.
