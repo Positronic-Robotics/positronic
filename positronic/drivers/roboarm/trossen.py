@@ -22,7 +22,9 @@ itself once either half stops working, and resumes from wherever it finds the ar
 
 import contextlib
 import logging
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -33,6 +35,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
 from positronic.drivers.utils import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
 
@@ -88,7 +91,15 @@ _COMMANDED_SHARE = 0.1
 _HOME_JOINTS = np.array([0.0, 1.571, 1.178, 0.0, 0.0, 0.0])
 _REST_JOINTS = np.zeros(6)
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
+_URDF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.urdf'
+_MESH_DIR = 'assets/mujoco/trossen_wxai/assets'
 _EE_SITE = 'ee_site'
+# The URDF link at the pose the controller reports, 0.156 m along the flange's x axis. It is `ee_site` of
+# the MJCF: the driver solves against the MJCF and the codecs against the URDF, so the two must agree.
+_EE_LINK = 'ee_gripper_link'
+# The carriage joints the fingers ride on. A positive joint value opens them, and the viewer closes a
+# gripper by driving its joints to `grip * travel` -- so the two cannot be reconciled by a travel alone.
+_FINGER_JOINTS = ('right_carriage_joint', 'left_carriage_joint')
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after clamping
 _IK_ROT_TOL = 1e-2  # radians
@@ -791,6 +802,32 @@ def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
                 logger.error(f'The session with the arm at {ip} did not close: {exc}')
 
 
+def _robot_meta() -> dict[str, Any]:
+    """The model an episode carries: the arm the viewer draws and the codecs solve against.
+
+    The vendored URDF names its meshes the way its own package does; the viewer looks each one up by the
+    name the URDF gives, so both are shortened to the file beside this model.
+
+    # TODO(#gripper-spec): no `gripper`. The viewer drives a gripper's joints to `grip * travel`, and
+    # `grip` is 1 when the fingers are closed -- but this arm's carriage joints open at their positive end
+    # and close at zero, which no single `travel` expresses.
+    """
+    urdf = ET.fromstring(Path(package_assets_path(_URDF_PATH)).read_text())
+    for mesh in urdf.iter('mesh'):
+        mesh.set('filename', Path(mesh.get('filename', '')).name)
+    add_default_frame(urdf, _EE_LINK)
+    mesh_dir = Path(package_assets_path(_MESH_DIR))
+    return {
+        roboarm_keys.ROBOT: 'trossen_wxai',
+        roboarm_keys.URDF: ET.tostring(urdf, encoding='unicode'),
+        'meshes': {
+            name: (mesh_dir / name).read_bytes() for name in sorted({m.get('filename', '') for m in urdf.iter('mesh')})
+        },
+        roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
+        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+    }
+
+
 class Robot(pimm.ControlSystem):
     """Drives one Trossen WidowX AI arm over Ethernet, in the arm base frame.
 
@@ -817,9 +854,7 @@ class Robot(pimm.ControlSystem):
         with _opened(self._connect, self._ip) as driver:
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
-                # TODO: carry the URDF, which lives in `trossen_arm_description`. `roboarm_keys.CONTROL_FRAME`
-                # names a frame in it, so it waits for the same change.
-                self.robot_meta.emit({roboarm_keys.ROBOT: 'trossen_wxai', roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES)})
+                self.robot_meta.emit(_robot_meta())
                 yield from arm.travel_to(_HOME_JOINTS, 'the pose it opens at')
 
                 while not should_stop.value:
