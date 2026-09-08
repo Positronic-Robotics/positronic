@@ -291,11 +291,13 @@ class _Chain(DriverRun[command.CommandType]):
         Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
         """
         try:
-            target = self.to_joints(call.request, q)
-            arrived = yield from self.move_to(target, grip)
-            # The loop read nothing for the whole travel, so what was streamed at the chain in the meantime
-            # says where it was wanted on the way here.
-            self.moves.finished(self.clock.now())
+            target = self.to_joints(call.request, q)  # a target the chain cannot hold is refused first
+            try:
+                arrived = yield from self.move_to(target, grip)
+            finally:
+                # The chain travelled, however that ended, and the loop read nothing while it did: what was
+                # streamed at it in the meantime says where it was wanted on the way here.
+                self.moves.finished()
             if arrived is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return target, grip
@@ -379,7 +381,7 @@ class Robot(pimm.ControlSystem):
                     grip_target = float(grip)
 
                 q = chain.observations()[_JOINT_POS]
-                asked = chain.moves.next_request(clock.now())
+                asked = chain.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
                 elif asked is not None:

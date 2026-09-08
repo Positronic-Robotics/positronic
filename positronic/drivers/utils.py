@@ -43,8 +43,6 @@ class Moves(Generic[T]):
     def __init__(self, sync_move: pimm.calls.ControlSystemHandler[T, None], async_move: pimm.SignalReceiver[T]):
         self._sync_move = sync_move
         self._async_move = async_move
-        # A setpoint written before this says where the device was wanted on the way to where it now is
-        self._stale_before = 0.0
         self._call: pimm.calls.Call[T, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._tol = 0.0
@@ -81,42 +79,39 @@ class Moves(Generic[T]):
         return self._target
 
     def take_newest_setpoint(self) -> T | None:
-        """The newest setpoint streamed at the device, letting go of every setpoint older than it, and of
-        every one written before the move the device last made was over.
+        """The newest setpoint streamed at the device, letting go of every setpoint older than it.
 
         A transport that queues setpoints hands the oldest over first, and a setpoint says where the device
         is wanted now, not where it was wanted when the setpoint was written.
         """
         latest = None
         while (message := self._async_move.read()) is not None and message.updated:
-            if message.ts * 1e-9 >= self._stale_before:  # the transport stamps in nanoseconds
-                latest = message.data
+            latest = message.data
         return latest
 
-    def next_request(self, now: float) -> pimm.calls.Call[T, None] | T | None:
+    def next_request(self) -> pimm.calls.Call[T, None] | T | None:
         """What the device is asked for now: a call whose asker waits to hear it arrive, a streamed setpoint
         nobody waits on, or nothing.
 
         A call comes first: a setpoint says where the device is wanted now, and the move that follows it
         puts the device somewhere else. A device a move already owns is asked for nothing, and neither is
-        one whose move has settled and whose asker is still owed the news: a setpoint written in between
-        arrived after the move and is what the device does next.
+        one whose move has settled and whose asker is still owed the news. The stream is read only when a
+        setpoint is what comes back, so a call refused before the device moved leaves it where it stands.
         """
         if self.busy:
             return None
-        newest = self.take_newest_setpoint()
         if (call := next(self._sync_move.incoming(), None)) is not None:
             return call
-        return newest
+        return self.take_newest_setpoint()
 
-    def finished(self, now: float) -> None:
-        """The travel a driver was held inside is over, as of ``now``.
+    def finished(self) -> None:
+        """The move that owned the device is over, so what was streamed at it while it travelled goes.
 
-        A driver that keeps its move in flight has ``settle`` for this. One that blocks for the whole
-        travel reads nothing while it moves, so every setpoint written before it returns says where the
-        device was wanted on the way to the pose it now holds.
+        Those setpoints say where the device was wanted on the way to the pose it now holds, and applying
+        one would drive it straight back off that pose. A driver that keeps its move in flight has
+        ``settle`` for this; one held inside the call for the whole travel says so itself.
         """
-        self._stale_before = now
+        self.take_newest_setpoint()
 
     def accept(
         self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
@@ -145,12 +140,12 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         if bool(np.all(np.abs(np.asarray(position) - np.asarray(self._target)) < self._tol)):
             self._settled, self._call, self.errored = (self._call, None), None, False
-            self._stale_before = now
+            self.finished()
             return MoveStatus.ARRIVED
         if now >= self._deadline:
             short = TimeoutError(f'stopped at {np.round(position, 3)}, short of {np.round(self._target, 3)}')
             self._settled, self._call, self.errored = (self._call, short), None, True
-            self._stale_before = now
+            self.finished()
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
 
@@ -223,7 +218,7 @@ def grip_setpoint(moves: Moves[float], grip: float, now: float) -> float | None:
         # A width streamed at fingers a move owns is older than where the move puts them.
         moves.take_newest_setpoint()
         return grip if moves.settle(grip, now) is MoveStatus.GAVE_UP else None
-    asked = moves.next_request(now)
+    asked = moves.next_request()
     if isinstance(asked, pimm.calls.Call):
         with pimm.calls.raise_to(asked):  # a width the fingers cannot be put at is the asker's to hear about
             target = _clamped(asked.request)

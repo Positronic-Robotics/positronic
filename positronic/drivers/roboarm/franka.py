@@ -260,10 +260,13 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         cmd = call.request
         try:
-            arrived = yield from self.move_to(self.to_joints(cmd), cmd.mode)
-            # The loop read nothing for the whole travel, so what was streamed at the arm in the meantime
-            # says where it was wanted on the way here.
-            self.moves.finished(self.clock.now())
+            target = self.to_joints(cmd)  # a target the arm cannot hold is refused before it moves
+            try:
+                arrived = yield from self.move_to(target, cmd.mode)
+            finally:
+                # The arm travelled, however that ended, and the loop read nothing while it did: what was
+                # streamed at it in the meantime says where it was wanted on the way here.
+                self.moves.finished()
             if arrived is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
@@ -501,7 +504,7 @@ class Robot(pimm.ControlSystem):
                     yield arm.limiter.wait()
                     continue
 
-                asked = arm.moves.next_request(clock.now())
+                asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     with brakes.opened():
                         yield from arm.sync_move(asked)

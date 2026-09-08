@@ -249,30 +249,30 @@ def test_a_settled_move_holds_the_device_against_the_next_one(asking):
     """Taking another move first would put BUSY over the state the settled move's asker is owed."""
     ask, moves, _ = asking
     ask(0.0)
-    accepted = moves.next_request(0.0)
+    accepted = moves.next_request()
     assert isinstance(accepted, pimm.calls.Call)
     moves.accept(accepted, 0.0, TOL, now=0.0, timeout_s=3.0)
     ask(1.0)
 
     assert moves.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
-    assert moves.next_request(0.0) is None, 'settled, and its asker not yet told'
+    assert moves.next_request() is None, 'settled, and its asker not yet told'
 
     moves.answer()
-    assert isinstance(moves.next_request(0.0), pimm.calls.Call)
+    assert isinstance(moves.next_request(), pimm.calls.Call)
 
 
 def test_a_device_still_travelling_is_asked_for_nothing(asking):
     """A setpoint applied mid-travel fights the move, and its asker is owed the arrival it was promised."""
     ask, moves, stream = asking
     ask(1.0)
-    travelling = moves.next_request(0.0)
+    travelling = moves.next_request()
     assert isinstance(travelling, pimm.calls.Call)
     moves.accept(travelling, 1.0, TOL, now=0.0, timeout_s=3.0)
 
     stream.push(0.25)
     ask(0.5)
 
-    assert moves.next_request(0.0) is None
+    assert moves.next_request() is None
     assert moves.settle(0.0, now=0.1) is MoveStatus.MOVING
 
 
@@ -281,32 +281,32 @@ def test_a_setpoint_written_while_a_blocking_move_travelled_is_let_go(asking):
     it now holds -- and applying it would drive the device straight back off the target it was asked for."""
     ask, moves, stream = asking
     ask(1.0)
-    call = moves.next_request(now=0.0)
+    call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
 
-    stream.push(0.25, ts=int(0.5e9))  # written while the device travelled, and never polled for
+    stream.push(0.25)  # written while the device travelled, and never polled for
     call.set_result(None)
-    moves.finished(1.0)  # the driver blocked for the whole travel and says when it ended
+    moves.finished()  # the driver blocked for the whole travel and says so on its way out
 
-    assert moves.next_request(now=1.5) is None
+    assert moves.next_request() is None
 
-    stream.push(0.75, ts=int(2.0e9))
-    assert moves.next_request(now=2.5) == 0.75
+    stream.push(0.75)
+    assert moves.next_request() == 0.75
 
 
 def test_a_setpoint_written_after_a_blocking_move_ended_survives_the_wait_for_the_next_poll(asking):
-    """A blocking driver yields to its limiter before it polls again, so the tick it polls on is later than
-    the tick the travel ended on. A setpoint written in between is newer than the move."""
+    """A blocking driver yields to its limiter before it polls again, so a setpoint can arrive between the
+    end of the travel and the poll. It was written after the move, and is what the device does next."""
     ask, moves, stream = asking
     ask(1.0)
-    call = moves.next_request(now=0.0)
+    call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
     call.set_result(None)
-    moves.finished(1.0)
+    moves.finished()
 
-    stream.push(0.25, ts=int(1.5e9))  # written after the travel, while the driver slept
+    stream.push(0.25)  # written after the travel, while the driver slept
 
-    assert moves.next_request(now=2.0) == 0.25
+    assert moves.next_request() == 0.25
 
 
 def test_a_call_refused_before_the_device_moved_leaves_the_stream_alone(asking):
@@ -314,13 +314,13 @@ def test_a_call_refused_before_the_device_moved_leaves_the_stream_alone(asking):
     says where it was wanted on the way anywhere."""
     ask, moves, stream = asking
     ask(1.0)
-    call = moves.next_request(now=0.0)
+    call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
     call.set_exception(ValueError('out of reach'))  # refused before the device took a step
 
-    stream.push(0.25, ts=int(0.5e9))
+    stream.push(0.25)
 
-    assert moves.next_request(now=1.0) == 0.25
+    assert moves.next_request() == 0.25
 
 
 def test_a_setpoint_written_while_a_settled_move_waits_to_be_answered_is_kept(asking):
@@ -328,16 +328,16 @@ def test_a_setpoint_written_while_a_settled_move_waits_to_be_answered_is_kept(as
     setpoint that arrives in between was written after the move ended."""
     ask, moves, stream = asking
     ask(1.0)
-    call = moves.next_request(now=0.0)
+    call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
     moves.accept(call, 1.0, TOL, now=0.0, timeout_s=3.0)
     assert moves.settle(1.0, now=0.1) is MoveStatus.ARRIVED
 
-    stream.push(0.25, ts=int(0.2e9))  # settled, and its asker not yet told
-    assert moves.next_request(now=0.3) is None
+    stream.push(0.25)  # settled, and its asker not yet told
+    assert moves.next_request() is None
 
     moves.answer()
-    assert moves.next_request(now=0.4) == 0.25
+    assert moves.next_request() == 0.25
 
 
 def test_a_setpoint_written_after_a_move_arrived_is_kept(asking):
@@ -345,15 +345,15 @@ def test_a_setpoint_written_after_a_move_arrived_is_kept(asking):
     limiter sleeps. A setpoint written in between is newer than the move, and is what the device does next."""
     ask, moves, stream = asking
     ask(1.0)
-    call = moves.next_request(now=0.0)
+    call = moves.next_request()
     assert isinstance(call, pimm.calls.Call)
     moves.accept(call, 1.0, TOL, now=0.0, timeout_s=3.0)
     assert moves.settle(1.0, now=0.1) is MoveStatus.ARRIVED
     moves.answer()
 
-    stream.push(0.25, ts=int(0.15e9))  # written while the driver slept, and after the move was over
+    stream.push(0.25)  # written while the driver slept, and after the move was over
 
-    assert moves.next_request(now=0.2) == 0.25
+    assert moves.next_request() == 0.25
 
 
 def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_both():

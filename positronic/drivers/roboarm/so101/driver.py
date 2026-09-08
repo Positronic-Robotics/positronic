@@ -234,7 +234,7 @@ class Robot(pimm.ControlSystem):
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     arm.hold_grip(grip)
                 arm.settle()
-                asked = arm.moves.next_request(clock.now())
+                asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     arm.sync_move(asked)
                 elif asked is not None:
