@@ -16,6 +16,10 @@ SUBMISSIONS_GET = f'{API_PREFIX}/submissions.get'
 SUBMISSIONS_CANCEL = f'{API_PREFIX}/submissions.cancel'
 RANKINGS_GET = f'{API_PREFIX}/rankings.get'
 RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
-REQUESTS_CREATE = f'{API_PREFIX}/requests.create'
-REQUESTS_GET = f'{API_PREFIX}/requests.get'
-REQUESTS_LIST = f'{API_PREFIX}/requests.list'
+# A plan a caller composes, filed and read back: the rig's door, beside the competition's `submissions.*`.
+EVALS_RUN = f'{API_PREFIX}/evals.run'
+EVALS_GET = f'{API_PREFIX}/evals.get'
+EVALS_LIST = f'{API_PREFIX}/evals.list'
+# What the platform offers the caller: the evals `evals.run` takes by name, and the tasks a plan may name.
+CATALOG_EVALS = f'{API_PREFIX}/catalog.evals'
+CATALOG_TASKS = f'{API_PREFIX}/catalog.tasks'

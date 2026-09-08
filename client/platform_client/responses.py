@@ -21,7 +21,7 @@ from platform_client.enums import (
     SubmissionStatus,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, RequestId, SubmissionId, UserId
+from platform_client.ids import ApiKey, PlanId, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
@@ -308,7 +308,7 @@ class RankingsResponse(BaseModel):
 class RequestCreated(BaseModel):
     """`requests.create` — a fresh request, or the one an earlier create under the same key made."""
 
-    request_id: RequestId
+    request_id: PlanId
     status: Slugged[RequestStatus]
 
 
@@ -339,7 +339,7 @@ class RequestView(BaseModel):
     stopped.
     """
 
-    request_id: RequestId
+    request_id: PlanId
     status: Slugged[RequestStatus]
     slug: str | None = None
     episodes: EpisodeCounts
@@ -361,4 +361,4 @@ class RequestListResponse(BaseModel):
     """
 
     requests: list[RequestView] = Field(default_factory=list)
-    next: RequestId | None = None
+    next: PlanId | None = None

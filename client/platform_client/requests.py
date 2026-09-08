@@ -12,7 +12,7 @@ import httpx
 from platform_client.boards import BoardRef
 from platform_client.enums import CameraVantage, EndpointKind, Placement
 from platform_client.evals import EvalRef
-from platform_client.ids import RequestId, SubmissionId, TransactionKey
+from platform_client.ids import PlanId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
@@ -234,7 +234,7 @@ class RequestGetQuery(BaseModel):
 
     model_config = _FORBID_EXTRA
 
-    id: RequestId
+    id: PlanId
 
 
 class RequestListQuery(BaseModel):
@@ -242,5 +242,5 @@ class RequestListQuery(BaseModel):
 
     model_config = _FORBID_EXTRA
 
-    after: RequestId | None = None
+    after: PlanId | None = None
     limit: int | None = Field(default=None, gt=0)

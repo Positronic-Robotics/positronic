@@ -37,7 +37,7 @@ from platform_client.client import (
 )
 from platform_client.enums import CameraVantage, KeyStatus, Placement
 from platform_client.errors import PlatformError
-from platform_client.ids import ApiKey, RequestId, TransactionKey, UserId
+from platform_client.ids import ApiKey, PlanId, TransactionKey, UserId
 from platform_client.requests import EndpointAsk, RequestCreate, SceneAsk, TaskAsk
 from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
@@ -340,25 +340,25 @@ def _register(args: argparse.Namespace, env: Mapping[str, str]) -> None:
 def _create(args: argparse.Namespace, env: Mapping[str, str]) -> None:
     ask = ask_from_args(args)
     with _client(args, env) as client:
-        _show(client.requests_create(ask))
+        _show(client.run_eval(ask))
 
 
-def _request_id(raw: str) -> RequestId:
+def _request_id(raw: str) -> PlanId:
     try:
-        return RequestId.parse(raw)
+        return PlanId.parse(raw)
     except ValueError as exc:
         raise SystemExit(f'not a request id: {raw!r} (the hex id `requests create` printed)') from exc
 
 
 def _get(args: argparse.Namespace, env: Mapping[str, str]) -> None:
     with _client(args, env) as client:
-        _show(client.requests_get(_request_id(args.id)))
+        _show(client.get_eval(_request_id(args.id)))
 
 
 def _list(args: argparse.Namespace, env: Mapping[str, str]) -> None:
     after = _request_id(args.after) if args.after is not None else None
     with _client(args, env) as client:
-        _show(client.requests_list(after=after, limit=args.limit))
+        _show(client.list_evals(after=after, limit=args.limit))
 
 
 def _refusal(exc: PlatformError) -> str:

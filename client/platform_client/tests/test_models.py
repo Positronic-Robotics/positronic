@@ -22,7 +22,7 @@ from platform_client.enums import (
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, RequestId, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, PlanId, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -104,7 +104,7 @@ CREDITS = QuotaLimit(
     on_exhausted=OnExhausted.meter,
 )
 
-REQUEST = RequestId(0x2A)
+REQUEST = PlanId(0x2A)
 
 SCENE = SceneAsk(
     tote_placement=Placement.random, camera_vantage=CameraVantage.phail, external_cameras={'side': Placement.left}

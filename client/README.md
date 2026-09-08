@@ -15,10 +15,10 @@ platform installs it on its own, at the exact version it was written against:
 uv add "positronic-platform-client==0.5.0"
 ```
 
-`platform_client` never imports `positronic`. Two commands ship here: `platform-register`, and
-`positronic-platform`, which registers and then files and reads rollout requests. The commands that
-drive an eval, `positronic eval run` and `positronic account`, ship with `positronic`, which depends
-on this package.
+`platform_client` never imports `positronic`. One command ships here, `platform-register`, which
+mints a key from GitHub. The commands that drive an eval, `positronic eval run`, `eval status`,
+`eval list`, `eval catalog` and `positronic account`, ship with `positronic`, which depends on this
+package.
 
 ## Registering
 
@@ -44,42 +44,51 @@ Run `platform-register --rotate` to mint a new key on a machine that lost it.
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
 tailnet: pass `--plaintext-http` to reach it.
 
-## Rollout requests
+## Eval plans
 
-A customer files a rollout request: the catalogue tasks to run, the policies to run them on, and
-the episodes each policy takes on each task. The count is stated once on the request; a task states
-its own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
-request. The platform records it, the rollouts coordinator files it and runs it, and the request's
-status reads back through the same key. A `blocked` request waits on what its `error` names, and a
-later report moves it on. A key needs a customer grant for these calls; a key without one is
-refused `forbidden`.
+An eval is a list of tasks. The platform offers named evals, and a customer composes one: an
+`EvalPlan` names the catalogue tasks to run, the policies (endpoints) to run them on, and the
+episodes each endpoint takes on each task. The count is stated once on the plan; a task states its
+own for itself, and an endpoint states its own for that endpoint, so a 10 + 10 + 2 round is one
+plan. The scene sits at every level, flat: `tote_placement`, `camera_vantage`, `external_cameras`
+and `clutter`. `episodes_total` is a checksum a caller may state, and `max_cap_per_episode_sec` a
+ceiling every task's window sits under.
 
-```bash
-positronic-platform register --alias='<display name>'
-positronic-platform requests create --tasks eight-spoons-into-grey-tote \
-    --endpoints gyros=wss://host/ws --episodes-per-endpoint 10 --cap 180 --preset runway_ziyi \
-    --scene tote_placement=random --scene camera.side=left
-positronic-platform requests create --from request.json
-positronic-platform requests get <hex id>
-positronic-platform requests list --after <hex id> --limit 50
+```yaml
+tasks:
+  - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
+  - task_id: marker-in-mug               # a mapping overrides for that task alone
+    episodes_per_endpoint: 2
+    cap_per_episode_sec: 120
+    endpoints: [ziyi]                    # a list replaces the plan's list for this task
+endpoints:
+  - name: gyros
+    url: wss://gyros.example/ws
+  - name: ziyi
+    url: wss://ziyi.example/ws
+episodes_per_endpoint: 10
+episodes_total: 22
+cap_per_episode_sec: 180
+max_cap_per_episode_sec: 300
+policy_preset: runway_ziyi
+tote_placement: random                   # left | right | random | none
+external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`--from` takes a whole `RequestCreate` as JSON, which is how a served endpoint, a per-task override
-or a per-endpoint count is filed; the flags cover the common round. `--scene` takes `tote_placement=<side>`,
-`camera_vantage=<vantage>` and `camera.<mount>=<side>`, where a side is `left`, `right`, `random`
-or `none`. Every command prints its answer as JSON, so an agent reads it back as the models in
-`platform_client.responses`.
+`positronic eval run --eval=<file>` files that plan with `evals.run`; `--eval=<name>` runs a named
+eval. `eval status` and `eval list` read a filed plan back by its id, as they read a submission. The
+platform records the plan, the rollouts coordinator runs it on the lab rig, and a `blocked` plan
+waits on what its `error` names. A key needs a customer grant for `evals.run`; a key without one is
+refused `forbidden`.
 
-`register` runs the same GitHub device flow as `platform-register` and then writes
-`~/.config/positronic-platform/config.json`, mode 0600, holding the platform's URL and the key
-together. The key never appears on a command line: a command reads it from
-`POSITRONIC_PLATFORM_API_KEY`, else from the file `--api-key-file` names, else from that record.
-The platform is `--platform-url`, else `POSITRONIC_PLATFORM_URL`, else that record, else the default
-below. `POSITRONIC_PLATFORM_CONFIG_DIR` names another config directory.
+`positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals `evals.run`
+takes by name, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
+competition's evals. A customer grant adds the rig's evals and tasks, filtered to the entries
+offered to the grant's client.
 
-From Python, `PlatformClient.requests_create`, `.requests_get` and `.requests_list` take and answer
-the same models; `requests_list` pages oldest first, and a page's `next` is the `after` of the page
-after it.
+From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
+`platform_client.catalog`. The coordinator's own request record extends `EvalPlan` with its
+bookkeeping and adds no field of its own to the ask, so the two never drift.
 
 ## From the command line
 

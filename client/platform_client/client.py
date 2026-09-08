@@ -19,8 +19,9 @@ from typing import Any, ClassVar, Self, TypeVar
 import httpx
 from platform_client import routes
 from platform_client.boards import BoardRef
+from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
-from platform_client.ids import ApiKey, RequestId, SubmissionId
+from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
@@ -186,17 +187,25 @@ class PlatformClient:
         """The boards this caller can read: the public ones, plus their tenant's once a key is set."""
         return self._get(routes.RANKINGS_LIST, BoardListResponse, auth=Auth.OPTIONAL)
 
-    def requests_create(self, request: RequestCreate) -> RequestCreated:
+    def run_eval(self, request: RequestCreate) -> RequestCreated:
         """File one rollout request. Needs a customer grant: a key without one is refused `forbidden`."""
-        return self._post(routes.REQUESTS_CREATE, request, RequestCreated)
+        return self._post(routes.EVALS_RUN, request, RequestCreated)
 
-    def requests_get(self, request_id: RequestId) -> RequestView:
-        return self._get(routes.REQUESTS_GET, RequestView, query=RequestGetQuery(id=request_id))
+    def get_eval(self, request_id: PlanId) -> RequestView:
+        return self._get(routes.EVALS_GET, RequestView, query=RequestGetQuery(id=request_id))
 
-    def requests_list(self, *, after: RequestId | None = None, limit: int | None = None) -> RequestListResponse:
+    def list_evals(self, *, after: PlanId | None = None, limit: int | None = None) -> RequestListResponse:
         """One page of the caller's requests, oldest first. Pass a page's `next` as `after` for the page after it."""
         query = RequestListQuery(after=after, limit=limit)
-        return self._get(routes.REQUESTS_LIST, RequestListResponse, query=query)
+        return self._get(routes.EVALS_LIST, RequestListResponse, query=query)
+
+    def catalog_evals(self) -> EvalListResponse:
+        """The evals `evals.run` takes by name, for this key's grant."""
+        return self._get(routes.CATALOG_EVALS, EvalListResponse)
+
+    def catalog_tasks(self) -> TaskListResponse:
+        """The tasks a plan may compose, for this key's grant. A key with no customer grant is refused `forbidden`."""
+        return self._get(routes.CATALOG_TASKS, TaskListResponse)
 
     # --- plumbing ----------------------------------------------------------------------------
 

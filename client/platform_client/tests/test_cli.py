@@ -145,7 +145,7 @@ def test_the_key_and_the_platform_are_read_from_the_config_directory(config, gat
     cli.main(['requests', 'get', '2a'])
 
     sent = gateway.request()
-    assert str(sent.url) == f'{PLATFORM}{routes.REQUESTS_GET}?id=2a'
+    assert str(sent.url) == f'{PLATFORM}{routes.EVALS_GET}?id=2a'
     assert sent.headers['authorization'] == f'Bearer {KEY}'
 
 
@@ -359,7 +359,7 @@ def test_create_from_flags_posts_the_ask(config, gateway, capsys):
     ])
 
     sent = gateway.request()
-    assert sent.url.path == routes.REQUESTS_CREATE
+    assert sent.url.path == routes.EVALS_RUN
     body = json.loads(sent.content)
     assert [task['task_id'] for task in body['tasks']] == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert [(entry['name'], entry['url']) for entry in body['endpoints']] == [

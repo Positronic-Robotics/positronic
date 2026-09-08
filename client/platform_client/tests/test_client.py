@@ -29,7 +29,7 @@ from platform_client.enums import (
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, RequestId, SubmissionId
+from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -444,9 +444,11 @@ def test_every_endpoint_has_exactly_one_method():
         'cancel_submission',
         'rankings',
         'list_boards',
-        'requests_create',
-        'requests_get',
-        'requests_list',
+        'run_eval',
+        'get_eval',
+        'list_evals',
+        'catalog_evals',
+        'catalog_tasks',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))
@@ -543,11 +545,11 @@ REQUEST_VIEW = {
 
 def test_requests_create_posts_the_ask_and_parses_the_id():
     gateway = Gateway(200, {'request_id': '2a', 'status': 'received'})
-    response = make_client(gateway).requests_create(ASK)
+    response = make_client(gateway).run_eval(ASK)
 
     assert isinstance(response, RequestCreated)
-    assert response.request_id == RequestId(0x2A) and response.status is RequestStatus.received
-    assert gateway.request().url.path == routes.REQUESTS_CREATE
+    assert response.request_id == PlanId(0x2A) and response.status is RequestStatus.received
+    assert gateway.request().url.path == routes.EVALS_RUN
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
     body = gateway.body()
     assert body['tasks'] == [
@@ -573,27 +575,27 @@ def test_requests_create_posts_the_ask_and_parses_the_id():
 
 def test_requests_get_sends_the_hex_id_and_parses_the_view():
     gateway = Gateway(200, REQUEST_VIEW)
-    view = make_client(gateway).requests_get(RequestId(0x2A))
+    view = make_client(gateway).get_eval(PlanId(0x2A))
 
     assert isinstance(view, RequestView)
     assert view.status is RequestStatus.filed and view.episodes.outstanding == 10
-    assert gateway.request().url.path == routes.REQUESTS_GET
+    assert gateway.request().url.path == routes.EVALS_GET
     assert dict(gateway.request().url.params) == {'id': '2a'}
 
 
 def test_requests_list_sends_the_cursor_and_parses_the_next():
     gateway = Gateway(200, {'requests': [REQUEST_VIEW], 'next': '2a'})
-    page = make_client(gateway).requests_list(after=RequestId(0x1F), limit=1)
+    page = make_client(gateway).list_evals(after=PlanId(0x1F), limit=1)
 
     assert isinstance(page, RequestListResponse)
-    assert [row.request_id for row in page.requests] == [RequestId(0x2A)] and page.next == RequestId(0x2A)
-    assert gateway.request().url.path == routes.REQUESTS_LIST
+    assert [row.request_id for row in page.requests] == [PlanId(0x2A)] and page.next == PlanId(0x2A)
+    assert gateway.request().url.path == routes.EVALS_LIST
     assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
 
 
 def test_requests_list_asks_for_the_first_page_with_nothing_in_the_query():
     gateway = Gateway(200, {'requests': []})
-    page = make_client(gateway).requests_list()
+    page = make_client(gateway).list_evals()
     assert page.requests == [] and page.next is None
     assert dict(gateway.request().url.params) == {}
 
@@ -610,6 +612,6 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).requests_create(ASK)
+        make_client(gateway).run_eval(ASK)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None
