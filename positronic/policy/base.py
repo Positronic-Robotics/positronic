@@ -73,6 +73,19 @@ class Session(ABC):
         ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
         """
 
+    def reads_observation(self, time_ns: int) -> bool:
+        """Whether a call made at ``time_ns`` would read the observation it is given.
+
+        Answering False permits the caller to hand over whatever it already has instead of building
+        what this session asked for, so a session whose ``__call__`` reads the observation must answer
+        True — including one that only records it. The call happens either way.
+
+        ``time_ns`` is the caller's clock, the same reading ``__call__`` takes, so this asks nothing of
+        the observation itself: a served pipeline runs these layers over observations the harness
+        never stamped.
+        """
+        return True
+
     @property
     def meta(self) -> dict[str, Any]:
         """What this session reports about its model and its episode."""

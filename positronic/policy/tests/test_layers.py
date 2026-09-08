@@ -12,7 +12,7 @@ from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import Layer, Policy, Session
+from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -324,6 +324,79 @@ class TestSetControlMode:
         assert decoded[f'{keys.ROBOT_COMMAND}.left'].mode == IMPEDANCE
         assert decoded[f'{keys.ROBOT_COMMAND}.right'].mode == IMPEDANCE
         np.testing.assert_array_equal(decoded[keys.TARGET_JOINTS], np.zeros(7))
+
+
+class _DecliningSession(Session):
+    """A session that reads no observation — what a remote one answers with a round trip in flight."""
+
+    def __init__(self):
+        self.seen: dict[str, Any] = {}
+
+    def __call__(self, obs, time_ns):
+        self.seen = dict(obs)
+        return None
+
+    def reads_observation(self, time_ns):
+        return False
+
+
+class _CapturingInner(Session):
+    def __init__(self):
+        self.seen: dict[str, Any] = {}
+
+    def __call__(self, obs, time_ns):
+        self.seen = dict(obs)
+        return None
+
+
+class TestReadsObservation:
+    """The gate that lets a layer skip building an observation nothing below will read."""
+
+    def test_a_session_reads_its_observation_by_default(self):
+        assert _ConstSession(None).reads_observation(0) is True
+
+    def test_a_schedule_reads_nothing_while_its_chunk_plays(self):
+        session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 2.0}]))
+        assert session.reads_observation(0) is True  # nothing emitted yet
+        session(_obs(0), 0)  # emits, ending 2 s from now
+        assert session.reads_observation(int(1.0e9)) is False  # mid-chunk
+        assert session.reads_observation(int(3.0e9)) is True  # played out
+
+    def test_the_gate_agrees_with_the_call(self):
+        """Both read `_trajectory_end`, in two places, so they are pinned against each other: a call
+        that answers None is one the gate would have declined."""
+        session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 2.0}]))
+        session(_obs(0), 0)
+        for t_ns in (int(0.5e9), int(1.9e9), int(2.0e9), int(2.1e9), int(5.0e9)):
+            declined = not session.reads_observation(t_ns)
+            answered_none = session(_obs(t_ns / 1e9), t_ns) is None
+            assert declined is answered_none, f'disagreed at {t_ns} ns'
+
+    def test_a_delegating_session_answers_for_itself(self):
+        """A session that wraps another still reads its own observation — a recording tap is the live
+        case. Forwarding the inner answer would let a layer above hand it something else to log."""
+
+        class _Tap(DelegatingSession):
+            def __call__(self, obs, time_ns):
+                self.logged = dict(obs)
+                return self._inner(obs, time_ns)
+
+        assert _Tap(_DecliningSession()).reads_observation(0) is True
+
+    def test_a_stack_is_not_sampled_when_nothing_below_reads_it(self):
+        """The window is the expensive part, and most ticks do not use it. Recording still happens on
+        every tick — the history it builds is what the next real call is sampled from."""
+        inner = _DecliningSession()
+        session = TemporalStack(keys=('cam',), offsets_sec=(-0.2, 0.0)).make_session(inner)
+        session({**_obs(0), 'cam': np.zeros((4, 4, 3), np.uint8)}, 0)
+        assert inner.seen['cam'].shape == (4, 4, 3), 'passed through unstacked'
+
+    def test_a_stack_is_sampled_when_something_below_reads_it(self):
+        inner = _CapturingInner()
+        session = TemporalStack(keys=('cam',), offsets_sec=(-0.2, 0.0)).make_session(inner)
+        session({**_obs(0), 'cam': np.zeros((4, 4, 3), np.uint8)}, 0)
+        # A stacked entry carries the window's length on a new leading axis.
+        assert inner.seen['cam'].shape == (2, 4, 4, 3)
 
 
 class TestTemporalStack:
