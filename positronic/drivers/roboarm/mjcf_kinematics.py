@@ -7,7 +7,7 @@ Its own module rather than beside the placo ``Kinematics``: that one imports ``p
 ``hardware`` extra carries, and a driver that solves against an MJCF must not need it.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 import mujoco as mj
 import numpy as np
@@ -40,7 +40,7 @@ class MjcfKinematics:
         mjcf_path: str,
         site: str,
         joint_names: Sequence[str],
-        reach_postures: Callable[[geom.Transform3D], list[np.ndarray]],
+        reach_postures: Callable[[geom.Transform3D], Iterable[np.ndarray]],
     ):
         # rules-allow: primitive-type — `package_assets_path(relative_path: str) -> str` owns the join, and
         # every caller spells the model this way
@@ -71,7 +71,7 @@ class MjcfKinematics:
         ``max_jump`` bounds how far the solution may sit from ``current_q``, per joint or over all of them,
         and the search stops at the live posture: the arm keeps the shape it has, and a pose it can reach
         only in another one comes back as nothing. Without it the reach postures are tried too, so the arm
-        may change shape to get there -- which swings the end effector, and is for a move somebody waits on.
+        may change shape to get there.
 
         A solution is wrapped and clamped into joint range and then FK-verified, so a target the arm cannot
         reach comes back as nothing rather than as the nearest thing the solver stopped at.
