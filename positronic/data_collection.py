@@ -92,7 +92,14 @@ class _Tracker:
         logging.info('Stopped tracking')
 
     def _steadied(self, pose: geom.Transform3D, ts_ns: int) -> geom.Transform3D:
-        """``pose`` with the hand's own shake taken out, as a first-order lag on both halves."""
+        """``pose`` with the hand's own shake taken out, as a first-order lag on both halves.
+
+        A pose that is not a number is dropped rather than filtered: the lag keeps what it is given, so one
+        NaN would sit in it and every pose after it would come back NaN until the run was started again.
+        """
+        if not np.all(np.isfinite(pose.translation)) or not np.all(np.isfinite(pose.rotation.as_quat)):
+            logging.warning('The headset sent a pose that is not a number, and it is dropped')
+            return self._steady if self._steady is not None else pose
         if self._steady is None:
             self._steady, self._steady_at = pose, ts_ns
             return pose
@@ -355,7 +362,7 @@ def main(
 
         if stream_video_to_webxr is not None:
             # `connect` types a receiver wrapper as carrying the emitter's own type, and `pimm.map` is what
-            # changes it; #691 gives `connect` the overload that says so.
+            # changes it.
             world.connect(
                 camera_emitters[stream_video_to_webxr],
                 webxr.frame,

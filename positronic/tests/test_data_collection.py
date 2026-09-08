@@ -89,6 +89,20 @@ def test_the_tracker_follows_a_hand_that_means_it():
     assert np.linalg.norm(where.translation) > 0.19
 
 
+def test_a_pose_that_is_not_a_number_does_not_settle_in_the_filter():
+    """The lag keeps what it is given, so one NaN would sit in it and every pose after it would come back
+    NaN -- the arm would take no target again until the run was started afresh."""
+    tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
+    tracker.turn_on(geom.Transform3D())
+    good = tracker.update(geom.Transform3D(np.array([0.1, 0.0, 0.0])), 10_000_000)
+
+    tracker.update(geom.Transform3D(np.array([np.nan, 0.0, 0.0])), 20_000_000)
+    after = tracker.update(geom.Transform3D(np.array([0.1, 0.0, 0.0])), 30_000_000)
+
+    assert np.all(np.isfinite(good.translation))
+    assert np.all(np.isfinite(after.translation))
+
+
 def test_the_tracker_reads_a_negated_quaternion_as_the_turn_it_is():
     """A rotation and its negated quaternion are the same turn, and a hand holding still sends either."""
     tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)

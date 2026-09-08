@@ -12,6 +12,7 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
+GRIP_SPEED_M_S = 0.25  # what the controller reports the finger drive may do
 GRIP_TRAVEL_M = 0.04  # the gripper joint's range, which the arm reports and grip is normalized against
 JOGGED = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
 # Mid-range on every joint. The arm rests on the lower limit of joints 1 and 2, where Cartesian targets have
@@ -143,7 +144,7 @@ def test_an_open_grip_reaches_the_arm_as_the_joint_at_its_upper_limit():
     driver.target_grip._bind(grip)
 
     grip.push(0.0)
-    next(loop)
+    _settle(loop, 40)  # the fingers are paced by their own velocity limit
 
     assert arm.gripper_goals[-1] == pytest.approx(GRIP_TRAVEL_M)
 
@@ -155,9 +156,27 @@ def test_a_closed_grip_reaches_the_arm_as_the_joint_at_its_lower_limit():
     driver.target_grip._bind(grip)
 
     grip.push(1.0)
-    next(loop)
+    _settle(loop, 40)
 
     assert arm.gripper_goals[-1] == pytest.approx(0.0)
+
+
+def test_the_fingers_are_never_asked_for_more_than_they_may_travel_in_a_tick():
+    """A trigger let go of asks for the whole range at once, which is metres a second past the joint's own
+    limit -- and a joint past its limit faults the controller."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    grip = ManualCommandReceiver()
+    driver.target_grip._bind(grip)
+    grip.push(1.0)  # the fingers start closed and are asked to stay there
+    next(loop)
+    was = arm.gripper_goals[-1]
+
+    grip.push(0.0)  # from closed to fully open in one message
+    next(loop)
+
+    travelled = abs(arm.gripper_goals[-1] - was) * trossen_driver._HZ
+    assert travelled < GRIP_SPEED_M_S, travelled
 
 
 def test_the_joint_the_arm_reports_comes_back_as_a_normalized_grip():

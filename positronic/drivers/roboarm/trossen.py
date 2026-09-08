@@ -287,6 +287,10 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_travel = float(limits[_GRIPPER_JOINT].position_max - limits[_GRIPPER_JOINT].position_min)
         self._grip_closed = float(limits[_GRIPPER_JOINT].position_min)
         self._grip_open = float(limits[_GRIPPER_JOINT].position_max)
+        # What the fingers may travel in a tick, as a share of the range grip is normalized against. The
+        # whole range asked for at once is metres a second past the limit, which is what faults a joint.
+        grip_speed = float(limits[_GRIPPER_JOINT].velocity_max) * _VELOCITY_HEADROOM
+        self._grip_step_max = grip_speed / _HZ / self._grip_travel
         self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
         self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
         self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a streamed setpoint may move in a tick
@@ -308,7 +312,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._wanted = self._target.copy()
         self._goal_time = _STREAM_GOAL_TIME_S
         self._anchor: geom.Transform3D | None = None  # the pose last asked for, which the next steps on from
-        self._grip_target = self._grip_of(self._output)
+        self._grip_target = self._grip_wanted = self._grip_of(self._output)
         self._arm_unsent, self._grip_unsent = False, False
         # The two halves of the link, which fail apart. Neither is `Moves.errored`, which says the arm is
         # not where the driver put it: a link that drops says nothing about the move.
@@ -382,11 +386,18 @@ class _Arm(DriverRun[command.CommandType]):
         the arm is wherever it ended up, not where the last session was driving it.
         """
         self._output = self.driver.get_robot_output()
+        dq = np.abs(np.asarray(self._output.joint.arm.velocities, dtype=np.float64))
+        self.overspeed = bool(np.any(dq > self._dq_max))
+        if self.overspeed:
+            # Position mode on a joint already past its limit is what faults the controller and drops the
+            # arm. The next tick reads the arm again and takes control once it has slowed.
+            self.complain(f'The arm at {self.ip} runs too fast to take control of; waiting for it to slow')
+            return
         if outside := self.limit_violation():
             self.complain(f'The arm at {self.ip} may refuse position mode: {outside}')
         self._target = self._wanted = self.q
         self._goal_time = _STREAM_GOAL_TIME_S
-        self._grip_target = self._grip_of(self._output)
+        self._grip_target = self._grip_wanted = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
         self._anchor = None  # wherever the arm is now is what a Cartesian target steps on from
         self._travel_to = None  # and nothing is owed the rest of a travel across a new session
@@ -452,11 +463,14 @@ class _Arm(DriverRun[command.CommandType]):
             self._goal_time, self._arm_unsent, self._travel_to = _STREAM_GOAL_TIME_S, True, None
 
     def advance(self) -> None:
-        """Move the setpoint one tick's travel towards the joints last asked for.
+        """Move the setpoint one tick's travel towards what was last asked for, fingers included.
 
         A move the firmware is planning owns the setpoint until it arrives: it is making its own trajectory
         there, and a setpoint moved under it would be a new move every tick.
         """
+        grip_step = float(np.clip(self._grip_wanted - self._grip_target, -self._grip_step_max, self._grip_step_max))
+        if grip_step:
+            self._grip_target, self._grip_unsent = self._grip_target + grip_step, True
         if self._goal_time != _STREAM_GOAL_TIME_S:
             return
         step = np.clip(self._wanted - self._target, -self._step_max, self._step_max)
@@ -467,12 +481,12 @@ class _Arm(DriverRun[command.CommandType]):
         """Hold the fingers at ``grip``, and refuse one that is not a number.
 
         ``np.clip`` carries a NaN through, and the controller takes whatever finger position it is handed.
+        ``advance`` walks the setpoint there, by what the finger drive may travel in a tick.
         """
         if not np.isfinite(grip):
             self.complain(f'The arm at {self.ip} was asked to grip at {grip}', key='grip refused')
             return
-        self._grip_target = float(np.clip(grip, 0.0, 1.0))
-        self._grip_unsent = True
+        self._grip_wanted, self._grip_unsent = float(np.clip(grip, 0.0, 1.0)), True
 
     @property
     def asked_pose(self) -> geom.Transform3D:
