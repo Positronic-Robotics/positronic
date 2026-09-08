@@ -315,9 +315,8 @@ def run(
     """
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
-    # A switch reads `False` whether it was left off or stated off, and either way it asks for what
-    # every other place already does, so it is normalised to unstated here. Every other flag is
-    # unstated only as `None`, which is what makes `--episodes=False` a value and refused like `0`.
+    # A switch stated off asks for what every other place already does, so it normalises to unstated.
+    # Only a switch does: `--episodes=False` stays a value, and is refused like `--episodes=0`.
     local_only = {
         '--output-dir': output_dir,
         '--charge-inference-time': charge_inference_time or None,

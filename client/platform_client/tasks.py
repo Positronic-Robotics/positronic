@@ -11,9 +11,8 @@ import re
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
-# The id shape the rollouts catalogue accepts (`rollouts_contract.tasks.is_task_id`): lowercase
-# words joined by single hyphens, at most five. It is repeated here because neither distribution
-# imports the other.
+# The id shape the rollouts catalogue accepts, copied from `rollouts_contract.tasks.is_task_id`
+# because neither distribution imports the other.
 MAX_ID_WORDS = 5
 _TASK_ID = re.compile(rf'[a-z0-9]+(?:-[a-z0-9]+){{0,{MAX_ID_WORDS - 1}}}')
 TASK_ID_HINT = f'lowercase words joined by single hyphens, at most {MAX_ID_WORDS}'
