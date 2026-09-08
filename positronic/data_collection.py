@@ -168,16 +168,15 @@ class _Follow:
         self.on = False
         self._armed = False
 
-    def met(self, leader: np.ndarray, follower: np.ndarray) -> bool:
-        """Whether the follower may copy the leader: it may once the session has armed it and every joint
-        of the two is within ``_MEET_RAD`` of the other's, and goes on doing so until something turns it
-        off. An arm the operator has not asked for holds still, however close the two stand."""
-        if not self._armed:
-            return False
-        if not self.on and leader.shape == follower.shape and np.max(np.abs(leader - follower)) <= _MEET_RAD:
+    def take_up(self, leader: np.ndarray, follower: np.ndarray) -> None:
+        """Let the follower copy the leader, once the session has armed it and every joint of the two is
+        within ``_MEET_RAD`` of the other's. It goes on copying until something turns it off, and an arm
+        the operator has not asked for holds still however close the two stand."""
+        if not self._armed or self.on:
+            return
+        if leader.shape == follower.shape and np.max(np.abs(leader - follower)) <= _MEET_RAD:
             self.on = True
             logging.info('The arm met its leader and follows it now')
-        return self.on
 
 
 class OperatorPosition(Enum):
@@ -331,6 +330,14 @@ class DataCollectionController(pimm.ControlSystem):
             logging.error(f'The rig was not parked: {e}')
             self.sound.emit(_SOMETHING_WENT_WRONG)
 
+    def _forget_presses(self, buttons: ButtonHandler) -> None:
+        """Take the buttons as they stand, so a press made in front of a travelling arm is not read as new.
+
+        ``_drop_readings`` lets the messages go, and the handler reports an edge against the last reading it
+        saw: a button released before a travel and held during it would read as pressed the moment it ends.
+        """
+        _parse_buttons(self.buttons_receiver.value, buttons)
+
     def _abandon(self, recording: bool) -> None:
         """Give up the recording that runs, if one does."""
         if not recording:
@@ -390,7 +397,8 @@ class DataCollectionController(pimm.ControlSystem):
         if joints is None or state is None or not joints.updated:
             return None, grip
         leader = np.asarray(joints.data, dtype=np.float64)
-        if not follow.met(leader, np.asarray(state.data.q, dtype=np.float64)):
+        follow.take_up(leader, np.asarray(state.data.q, dtype=np.float64))
+        if not follow.on:
             return None, grip
         return roboarm.command.JointPosition(leader), grip
 
@@ -431,10 +439,12 @@ class DataCollectionController(pimm.ControlSystem):
                     self._abandon(recording)
                     recording = False
                     yield from self._ready(source, should_stop)
+                    self._forget_presses(button_handler)
                 elif asked is SessionEvent.PARK:
                     self._abandon(recording)
                     recording = False
                     yield from self._park(source, should_stop)
+                    self._forget_presses(button_handler)
 
                 cmd, grip = self._asked_of_the_arm(source, hands, button_handler, state)
                 if grip is not None:

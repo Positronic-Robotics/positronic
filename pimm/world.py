@@ -6,12 +6,12 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
-import signal
 import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -75,6 +75,28 @@ class QueueEmitter(SignalEmitter[T]):
                 self._queue.put_nowait(Message(data, ts))
             except (Empty, Full):
                 pass
+
+
+# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
+# that connection then holds half a message: the next call over it returns what another one asked for, so
+# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
+_interrupted = False
+
+
+@contextmanager
+def _noting_interrupt() -> Iterator[None]:
+    """Record an interrupt taken inside the block, and let it go on.
+
+    A connection is torn by an interrupt that lands in the middle of a call over it, so every process that
+    reaches a transport records its own -- there is nowhere else the tearing can happen, and no process has
+    to have had a handler installed for it.
+    """
+    global _interrupted
+    try:
+        yield
+    except KeyboardInterrupt:
+        _interrupted = True
+        raise
 
 
 class MultiprocessEmitter(SignalEmitter[T]):
@@ -143,8 +165,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, ts: int) -> bool:
-        if _interrupted:
-            return False
         msg = Message(data, ts)
         success = False
 
@@ -192,9 +212,12 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         return True
 
+    @_noting_interrupt()
     def emit(self, data: T, ts: int = -1):
+        if _interrupted:
+            return
         ts = ts if ts >= 0 else self._clock.now_ns()
-        mode = self._ensure_mode(data)
+        mode = self._ensure_mode(data)  # itself a call to the manager, so it sits inside the guard
 
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
@@ -222,18 +245,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def __del__(self):
         # Last-resort cleanup when user code forgets to close the emitter.
         self.close()
-
-
-# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
-# that connection then holds half a message: the next call over it returns what another one asked for, so
-# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
-_interrupted = False
-
-
-def _note_interrupt(signum, frame):
-    global _interrupted
-    _interrupted = True
-    raise KeyboardInterrupt
 
 
 class MultiprocessReceiver(SignalReceiver[T]):
@@ -286,17 +297,15 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return self.transport_mode is TransportMode.SHARED_MEMORY
 
     def _read_queue(self) -> Message[T] | None:
-        if _interrupted:
-            return None
         try:
             message = self._queue.get_nowait()
         except Empty:
             message = None
         else:
-            if message is None:
+            if not isinstance(message, Message):
                 # An interrupt that lands inside a manager call leaves that connection holding half a
-                # message, and every read after it comes back as something the queue never carried.
-                raise ConnectionError('the queue was read after an interrupt tore its connection')
+                # message, and every read after it comes back as whatever another call asked for.
+                raise ConnectionError(f'the queue was read after an interrupt tore its connection: {message!r}')
             self._last_queue_message = Message(message.data, message.ts, True)
             if self._mode is TransportMode.UNDECIDED:
                 self._mode = TransportMode.QUEUE
@@ -354,8 +363,11 @@ class MultiprocessReceiver(SignalReceiver[T]):
             self._up_value.value = False
             return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
 
+    @_noting_interrupt()
     def read(self) -> Message[T] | None:
-        mode = self.transport_mode
+        if _interrupted:
+            return None
+        mode = self.transport_mode  # itself a call to the manager, so it sits inside the guard
 
         if mode is TransportMode.SHARED_MEMORY:
             return self._read_shared_memory()
@@ -496,7 +508,6 @@ class _CallAnsweringLoop:
 def _bg_wrapper(
     run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
-    signal.signal(signal.SIGINT, _note_interrupt)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.

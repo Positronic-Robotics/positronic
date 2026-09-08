@@ -527,10 +527,13 @@ class _Arm(DriverRun[command.CommandType]):
         # are position-servoed, so `PositionControl` names the law already running.
         command.require_native_mode(cmd, 'Trossen')
         match cmd:
+            # A joint-space target moves the arm off whatever pose a Cartesian stream last asked for, so
+            # the anchor the next Cartesian step measures from is where those joints put the end effector.
             case command.JointPosition(positions):
-                target = np.asarray(positions, dtype=np.float64)
+                target, self._anchor = np.asarray(positions, dtype=np.float64), None
             case command.JointDelta(velocities=delta):
                 target = (self._target if streamed else self.q) + np.asarray(delta, dtype=np.float64)
+                self._anchor = None
             case command.CartesianPosition(pose):
                 target = self._ik(pose, streamed=streamed)
             case command.CartesianDelta() as delta_cmd:
@@ -586,7 +589,9 @@ class _Arm(DriverRun[command.CommandType]):
             target = self._target_of(call.request, streamed=False)
             travel = float(np.max(np.abs(target - self.q)))
             self._target = self._wanted = target
-            self._travel_to = None
+            # The arm ends this move where the plan puts it, so that is what the next Cartesian step
+            # measures from, and nothing is owed the rest of a travel the move interrupted.
+            self._anchor = self._travel_to = None
             self._goal_time = max(_MIN_MOVE_TIME_S, travel / _MOVE_SPEED)
             self._arm_unsent = True
             self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
@@ -635,8 +640,12 @@ class _Arm(DriverRun[command.CommandType]):
         self._reconnect_at = now
         logger.info(f'Opening a new session with the arm at {self.ip}')
         try:
-            with contextlib.suppress(trossen_arm.RuntimeError):  # the old session is what failed
+            try:
                 self.driver.cleanup()
+            # rules-allow: swallowed-error — the session being closed is the one that failed, and the
+            # replacement still has to be opened
+            except trossen_arm.RuntimeError as exc:
+                logger.error(f'The old session with the arm at {self.ip} did not close: {exc}')
             _configure(self.driver, self.ip, _RECONNECT_TIMEOUT_S)
             if self.moves.active:
                 # The new session holds the arm where it reads, and a move in flight refuses every request
@@ -656,8 +665,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     def stand_down(self) -> None:
         """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
+        if self.moves.active:
+            # Nothing sends the target again: a move in flight refuses every request, and the setpoint now
+            # holds where the arm reads.
+            self.moves.fail(RuntimeError(f'the arm at {self.ip} ran too fast to finish the move'))
         self._target = self._wanted = self.q
-        self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
+        self._goal_time, self._arm_unsent, self._travel_to = _STREAM_GOAL_TIME_S, True, None
         self.write()
 
     def publish(self) -> None:

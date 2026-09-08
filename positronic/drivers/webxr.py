@@ -34,18 +34,24 @@ _LOG_CONFIG = {
 _TELEOP_BUTTONS = 6
 
 
+# The fields of the payload the headset sends, and the hands it sends one for.
+CONTROLLERS, POSITION, ORIENTATION, BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
+SIDES = ('right', 'left')
+
+
 def _parse_controller_data(data: dict):
-    controller_positions: dict[str, geom.Transform3D | None] = {'left': None, 'right': None}
-    buttons_dict: dict[str, np.ndarray | None] = {'left': None, 'right': None}
-    for side in ['right', 'left']:
-        if data['controllers'][side] is not None:
-            translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
-            rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
-            buttons = np.array(data['controllers'][side]['buttons'], dtype=np.float64)
+    controller_positions: dict[str, geom.Transform3D | None] = dict.fromkeys(SIDES)
+    buttons_dict: dict[str, np.ndarray | None] = dict.fromkeys(SIDES)
+    for side in SIDES:
+        if data[CONTROLLERS][side] is not None:
+            translation = np.array(data[CONTROLLERS][side][POSITION], dtype=np.float64)
+            rotation = np.array(data[CONTROLLERS][side][ORIENTATION], dtype=np.float64)
+            buttons = np.array(data[CONTROLLERS][side][BUTTONS], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
-            if buttons.size < _TELEOP_BUTTONS:
+            if buttons.ndim != 1 or buttons.size < _TELEOP_BUTTONS:
                 raise ValueError(
-                    f'The {side} controller sends {buttons.size} buttons; teleoperation needs {_TELEOP_BUTTONS}'
+                    f'The {side} controller sends buttons shaped {buttons.shape}; teleoperation reads '
+                    f'{_TELEOP_BUTTONS} of them, one after another'
                 )
             buttons_dict[side] = buttons
 
