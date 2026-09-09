@@ -1,7 +1,7 @@
 """Measure what one observation window costs per image codec: bytes, encode time, decode time.
 
 Replays a recorded episode's cameras through the rig-side bound, then encodes each temporal-stack
-window as one JPEG per frame, which is what the wire carries, and as one h264 GOP. JPEG encodes
+window as one JPEG per frame, which the wire carries, and as one h264 GOP. JPEG encodes
 single-threaded through ``encode_jpeg``; h264 encodes with x264's own frame threading.
 
 Usage
