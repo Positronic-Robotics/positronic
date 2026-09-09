@@ -28,6 +28,11 @@ from positronic.telemetry import (
 )
 from positronic.telemetry_keys import (
     ATTR_EPISODE_VIRTUAL_S,
+    ATTR_WAYPOINTS_DROPPED,
+    ATTR_WAYPOINTS_EMITTED,
+    ATTR_WAYPOINTS_LATE_MAX_MS,
+    ATTR_WAYPOINTS_LATE_SUM_MS,
+    ATTR_WAYPOINTS_SCHEDULED,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -685,3 +690,104 @@ def test_a_telemetry_directory_holding_no_spans_is_not_reported_as_untimed(tmp_p
     (tmp_path / TELEMETRY_SUBDIR).mkdir()
     with pytest.raises(ValueError, match='carries no spans'):
         timing_report(run_dir=str(tmp_path))
+
+
+def _waypoint_fixture(telemetry_dir):
+    """One pass, two episodes carrying waypoint accounts that differ in every field, so a sum, a share, an
+    emission-weighted mean and a maximum are each told apart from the others."""
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+            _span(
+                SPAN_EPISODE,
+                0,
+                40,
+                'ep0',
+                'pass0',
+                {
+                    ATTR_EPISODE_VIRTUAL_S: 20.0,
+                    ATTR_WAYPOINTS_SCHEDULED: 100,
+                    ATTR_WAYPOINTS_EMITTED: 10,
+                    ATTR_WAYPOINTS_DROPPED: 30,
+                    ATTR_WAYPOINTS_LATE_SUM_MS: 50.0,
+                    ATTR_WAYPOINTS_LATE_MAX_MS: 20.0,
+                },
+            ),
+            _span(
+                SPAN_EPISODE,
+                50,
+                90,
+                'ep1',
+                'pass0',
+                {
+                    ATTR_EPISODE_VIRTUAL_S: 20.0,
+                    ATTR_WAYPOINTS_SCHEDULED: 100,
+                    ATTR_WAYPOINTS_EMITTED: 30,
+                    ATTR_WAYPOINTS_DROPPED: 10,
+                    ATTR_WAYPOINTS_LATE_SUM_MS: 30.0,
+                    ATTR_WAYPOINTS_LATE_MAX_MS: 12.0,
+                },
+            ),
+        ],
+    )
+
+
+def test_the_waypoint_account_sums_over_the_pass(tmp_path):
+    """Counts add, the drop share is of what came due, the lateness mean is the pass's own emissions divided
+    into the pass's own sum, and the maximum is the worse episode's."""
+    _waypoint_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    assert report.waypoints is not None
+    waypoints = report.waypoints
+    assert waypoints.scheduled == 200
+    assert waypoints.emitted == 40
+    assert waypoints.dropped == 40
+    assert waypoints.dropped_share == pytest.approx(0.5)  # 40 of the 80 that came due
+    assert waypoints.mean_late_ms == pytest.approx(2.0)  # 80 ms over the pass's own 40 emissions
+    assert waypoints.max_late_ms == pytest.approx(20.0)
+
+
+def test_render_shows_the_waypoint_account(tmp_path):
+    _waypoint_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    rendered = _render(report).splitlines()
+
+    assert 'waypoints:           200 scheduled, 40 emitted, 40 dropped' in rendered
+    assert 'waypoint drops:        50.0% of the waypoints that came due' in rendered
+    assert 'waypoint late mean:  2.0 ms (max 20.0)' in rendered
+
+
+def test_a_pass_whose_episodes_carry_no_waypoint_account_reports_none(tmp_path):
+    """A run that scheduled no waypoint reduces to no waypoint block at all, rather than to a row of zeros
+    that reads as a loop keeping perfect time."""
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    assert report.waypoints is None
+    assert not any(line.startswith('waypoint') for line in _render(report).splitlines())
+
+
+def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_path):
+    """A directory holding passes from either side of the account's arrival reduces over the episodes that
+    carry one, and reports how many that was — an episode that measured nothing is not one that dropped
+    nothing."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    _waypoint_fixture(telemetry_dir)
+    _write_lines(
+        telemetry_dir / f'older{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EVAL_PASS, 200, 300, 'pass1'),
+            _span(SPAN_EPISODE, 210, 250, 'ep2', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 3
+    assert report.waypoints is not None
+    assert report.waypoints.episodes == 2
+    assert report.waypoints.scheduled == 200  # the uninstrumented episode adds no zero of its own
+    assert 'waypoints:           200 scheduled, 40 emitted, 40 dropped over 2 of 3 episodes' in _render(report)
