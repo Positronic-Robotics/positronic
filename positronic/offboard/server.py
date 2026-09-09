@@ -7,7 +7,8 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -177,6 +178,31 @@ def _declared_stack(local: Layer | None) -> dict[str, Any]:
             'layers the rig runs there, starting with a scheduler such as ChunkedSchedule'
         )
     return local.to_spec()
+
+
+class _ServedTiming:
+    """What one inference cost the server, in milliseconds on the server's own clock.
+
+    Every figure is a duration. ``served_ms`` opens when the observation arrives and brackets the
+    phases inside it.
+    """
+
+    def __init__(self) -> None:
+        self._opened = time.perf_counter()
+        self._phases: dict[str, float] = {}
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._phases[name] = (time.perf_counter() - started) * 1000.0
+
+    def report(self) -> dict[str, float]:
+        """The phases closed so far, under the span bracketing them. FOOTGUN: read while encoding, so
+        it carries no encode of its own — the answer's serialisation is outside every figure here."""
+        return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
 
 
 class PolicyServer:
@@ -352,13 +378,22 @@ class PolicyServer:
                     message = await websocket.receive_bytes()
                     self._last_activity = time.monotonic()
                     try:
-                        raw_obs = deserialise(message)
+                        timing = _ServedTiming()
+                        with timing.phase(protocol.TIMING_DECODE):
+                            raw_obs = deserialise(message)
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
                         # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        async with self._infer_lock:
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        await websocket.send_bytes(serialise({protocol.RESULT: actions}))
+                        with timing.phase(protocol.TIMING_QUEUED):
+                            await self._infer_lock.acquire()
+                        try:
+                            with timing.phase(protocol.TIMING_INFER):
+                                # The server's clock is not the rig's.
+                                actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                        finally:
+                            self._infer_lock.release()
+                        with timing.phase(protocol.TIMING_ENCODE):
+                            answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                        await websocket.send_bytes(answer)
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
                         await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
