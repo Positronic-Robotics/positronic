@@ -439,7 +439,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
     estimate the report derives from them."""
-    endpoint, _ = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint, _ = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
     session, rt = open_session(endpoint)
     encoded_at: list[int] = []
 
@@ -503,7 +503,7 @@ def test_unknown_declared_entry_fails_before_motion():
 
 def test_compression_follows_the_server_declaration(open_session):
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
-    endpoint, mock_session = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
@@ -511,7 +511,7 @@ def test_compression_follows_the_server_declaration(open_session):
 
 
 def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
-    endpoint, mock_session = _mock_endpoint({'compress_images': False}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: False}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
