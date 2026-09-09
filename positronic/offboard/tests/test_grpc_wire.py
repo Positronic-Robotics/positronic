@@ -438,3 +438,18 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     # Without the guard this answers the first observation's actions, against the second's state.
     with pytest.raises(wire.PeerDisconnected):
         session.infer({'image': 'test'})
+
+
+def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
+    """gRPC stops reading the request iterator then, so a write would wait out a whole timeout."""
+    server, _policy = both_wires
+    conn = grpc_wire.GrpcClientConnection(f'{server.host}:{server.grpc_port}', f'{wire.SESSION_PATH}/unknown-model', '')
+    try:
+        conn.recv(timeout=10.0)
+        # The server refuses the model in a frame, then ends the stream with that status.
+        with pytest.raises(grpc.RpcError):
+            conn.recv(timeout=10.0)
+        with pytest.raises(wire.PeerDisconnected):
+            conn.send(b'an observation the stream can no longer carry')
+    finally:
+        conn.close()

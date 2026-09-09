@@ -157,6 +157,10 @@ fi
 GRPC_HOST=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
   | jq -r "[.status.public_endpoints[]? | select(startswith(\"https://port${GRPC_PORT}-\"))] | first // empty" \
   | sed 's|^https://||')
+if [ -z "$GRPC_HOST" ]; then
+  echo "The endpoint serves no https:// URL for port ${GRPC_PORT}. Check: nebius ai endpoint get $ID" >&2
+  exit 1
+fi
 GRPC_URL="grpcs://${GRPC_HOST}:443"
 
 cat <<BANNER

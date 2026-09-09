@@ -252,7 +252,11 @@ class InferenceClient:
         # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
         # answers. The pings keep it open.
         websocket = connect(
-            self.session_url, open_timeout=self.open_timeout, additional_headers=self.headers, ping_interval=20.0
+            self.session_url,
+            open_timeout=self.open_timeout,
+            additional_headers=self.headers,
+            ping_interval=20.0,
+            max_size=wire.MAX_MESSAGE_BYTES,
         )
         return wire.WebsocketClientConnection(websocket)
 

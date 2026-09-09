@@ -133,6 +133,7 @@ class GrpcClientConnection:
         self._outbox: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._inbox: queue.SimpleQueue[bytes | BaseException] = queue.SimpleQueue()
         self._closed = False
+        self._ended = False
         call = self._channel.stream_stream(METHOD_PATH, request_serializer=None, response_deserializer=None)
         self._responses = call(self._requests(), metadata=metadata)
         self._reader = threading.Thread(target=self._read, name='grpc-session-reader', daemon=True)
@@ -154,26 +155,25 @@ class GrpcClientConnection:
         finally:
             self._responses.cancel()
 
-    def _refuse_if_closed(self) -> None:
-        """Refuse a closed session, whose inbox may still hold a reply that arrived during ``close``.
-
-        A timed-out inference closes here, so reading that reply would pair one observation's actions
-        with the next observation's state.
-        """
-        if self._closed:
-            raise wire.PeerDisconnected(f'The session on {self._target} is closed')
-
     def send(self, message: bytes) -> None:
-        self._refuse_if_closed()
+        # Past either of these gRPC has stopped reading the request iterator, so the write would sit in
+        # the outbox while ``recv`` waited out a whole inference timeout on an inbox nothing refills.
+        if self._closed or self._ended:
+            raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)
 
     def recv(self, timeout: float | None = None) -> bytes:
-        self._refuse_if_closed()
+        # A closed session's inbox may hold a reply that arrived during ``close``, which would pair one
+        # observation's actions with the next observation's state.
+        if self._closed:
+            raise wire.PeerDisconnected(f'The session on {self._target} is closed')
         try:
             answer = self._inbox.get(timeout=timeout)
         except queue.Empty:
             raise TimeoutError(f'No message from {self._target} within {timeout}s') from None
         if isinstance(answer, BaseException):
+            # What ended the stream is queued once, so the caller learns why before writes are refused.
+            self._ended = True
             raise answer
         return answer
 
