@@ -112,13 +112,11 @@ def validated_build_id(value: str) -> str:
 
 
 class FileKind(StrEnum):
-    """What a rebuild and a host do with one file the export wrote."""
+    """Which part of the output directory a file sits in."""
 
-    # A page or an API response. A rebuild rewrites it.
+    # Neither the build nor the assets: a page or an API response.
     PAGE = 'page'
-    # A recording or a download. A rebuild never rewrites it.
     BUILD = 'build'
-    # A script, a style or a viewer file. Every export the host serves shares one copy.
     ASSET = 'asset'
 
 
