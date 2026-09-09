@@ -156,12 +156,17 @@ class WaypointReport:
     """How well the loop kept the trajectory's schedule, summed over the pass's episodes and their command
     channels.
 
-    ``dropped`` counts a waypoint a round overtook, so ``dropped_share`` is a fraction of
-    ``emitted + dropped``; ``scheduled`` also covers what a fresh chunk replaced first. The distribution
+    ``dropped_share`` is a fraction of ``emitted + dropped``, the waypoints that came due. The distribution
     behind the lateness figures is per channel in the episode's own statics; a percentile of the pass is
     not recoverable from here.
+
+    ``episodes`` is how many of the pass's episodes carried an account, which is what every figure here
+    covers. A directory holding passes from either side of this account's arrival reduces to fewer than the
+    pass's episodes, and the report says so rather than counting an episode that measured nothing as one
+    that dropped nothing.
     """
 
+    episodes: int
     scheduled: int
     emitted: int
     dropped: int
@@ -388,6 +393,17 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
 
 
 @dataclass
+class _EpisodeWaypoints:
+    """One episode's waypoint totals over its command channels, as its span carries them."""
+
+    scheduled: int
+    emitted: int
+    dropped: int
+    late_sum_ms: float
+    late_max_ms: float
+
+
+@dataclass
 class _EpisodeTiming:
     """One episode's wall aggregate reduced from its span subtree; fields are seconds unless named otherwise.
     ``env_step_s`` is the client env-step wall (materialisation included); ``materialize_s`` is that
@@ -402,11 +418,20 @@ class _EpisodeTiming:
     policy_wait_s: float
     overhead_s: float
     infer_ms: list[float]
-    waypoints_scheduled: int
-    waypoints_emitted: int
-    waypoints_dropped: int
-    late_sum_ms: float
-    late_max_ms: float
+    waypoints: _EpisodeWaypoints | None
+
+
+def _episode_waypoints(episode: SpanRec) -> _EpisodeWaypoints | None:
+    """One episode's waypoint account, or ``None`` for a span that carries none."""
+    if ATTR_WAYPOINTS_SCHEDULED not in episode.attrs:
+        return None
+    return _EpisodeWaypoints(
+        scheduled=int(episode.attrs[ATTR_WAYPOINTS_SCHEDULED]),
+        emitted=int(episode.attrs[ATTR_WAYPOINTS_EMITTED]),
+        dropped=int(episode.attrs[ATTR_WAYPOINTS_DROPPED]),
+        late_sum_ms=float(episode.attrs[ATTR_WAYPOINTS_LATE_SUM_MS]),
+        late_max_ms=float(episode.attrs[ATTR_WAYPOINTS_LATE_MAX_MS]),
+    )
 
 
 def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _EpisodeTiming:
@@ -435,30 +460,7 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
         policy_wait_s=policy_wait_s,
         overhead_s=max(wall_s - measured, 0.0),
         infer_ms=infer_ms,
-        waypoints_scheduled=int(episode.attrs.get(ATTR_WAYPOINTS_SCHEDULED, 0)),
-        waypoints_emitted=int(episode.attrs.get(ATTR_WAYPOINTS_EMITTED, 0)),
-        waypoints_dropped=int(episode.attrs.get(ATTR_WAYPOINTS_DROPPED, 0)),
-        late_sum_ms=float(episode.attrs.get(ATTR_WAYPOINTS_LATE_SUM_MS, 0.0)),
-        late_max_ms=float(episode.attrs.get(ATTR_WAYPOINTS_LATE_MAX_MS, 0.0)),
-    )
-
-
-def _waypoint_report(timings: list[_EpisodeTiming]) -> WaypointReport | None:
-    """The pass's waypoint account, or ``None`` where no episode carries one — a run that played no
-    trajectory, and a sidecar whose episodes hold no waypoint attributes, reduce the same way."""
-    scheduled = sum(t.waypoints_scheduled for t in timings)
-    if not scheduled:
-        return None
-    emitted = sum(t.waypoints_emitted for t in timings)
-    dropped = sum(t.waypoints_dropped for t in timings)
-    due = emitted + dropped
-    return WaypointReport(
-        scheduled=scheduled,
-        emitted=emitted,
-        dropped=dropped,
-        dropped_share=(dropped / due) if due else 0.0,
-        mean_late_ms=(sum(t.late_sum_ms for t in timings) / emitted) if emitted else 0.0,
-        max_late_ms=max((t.late_max_ms for t in timings), default=0.0),
+        waypoints=_episode_waypoints(episode),
     )
 
 
@@ -507,6 +509,31 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int
     return {
         parent: (min(e.start_ns for e in group), max(e.end_ns for e in group)) for parent, group in by_parent.items()
     }
+
+
+def _waypoint_report(timings: list[_EpisodeTiming]) -> WaypointReport | None:
+    """The pass's waypoint account over the episodes that carried one, or ``None`` where none did."""
+    accounts = [t.waypoints for t in timings if t.waypoints is not None]
+    if not accounts:
+        return None
+    if len(accounts) < len(timings):
+        logger.warning(
+            '%d of %d episode(s) carry no waypoint account; every waypoint figure covers the rest',
+            len(timings) - len(accounts),
+            len(timings),
+        )
+    emitted = sum(a.emitted for a in accounts)
+    dropped = sum(a.dropped for a in accounts)
+    due = emitted + dropped
+    return WaypointReport(
+        episodes=len(accounts),
+        scheduled=sum(a.scheduled for a in accounts),
+        emitted=emitted,
+        dropped=dropped,
+        dropped_share=(dropped / due) if due else 0.0,
+        mean_late_ms=(sum(a.late_sum_ms for a in accounts) / emitted) if emitted else 0.0,
+        max_late_ms=max((a.late_max_ms for a in accounts), default=0.0),
+    )
 
 
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
@@ -638,7 +665,8 @@ def _render(report: PassReport) -> str:
     if report.waypoints is not None:
         way = report.waypoints
         lines += [
-            f'waypoints:           {way.scheduled} scheduled, {way.emitted} emitted, {way.dropped} dropped',
+            f'waypoints:           {way.scheduled} scheduled, {way.emitted} emitted, {way.dropped} dropped'
+            + (f' over {way.episodes} of {report.episodes} episodes' if way.episodes < report.episodes else ''),
             f'waypoint drops:      {way.dropped_share * 100:>6.1f}% of the waypoints that came due',
             f'waypoint late mean:  {way.mean_late_ms:.1f} ms (max {way.max_late_ms:.1f})',
         ]

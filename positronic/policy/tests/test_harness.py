@@ -1755,6 +1755,23 @@ def test_a_round_that_finds_one_waypoint_due_counts_no_drop():
 
 
 @pytest.mark.timeout(3.0)
+def test_a_fresh_chunk_counts_the_waypoints_it_replaced_after_their_time():
+    """A chunk landing on a late round replaces waypoints that had already come due. They go out on no
+    round, so they are drops; the ones still ahead of the round are not."""
+    harness, recorder = _harness_recording_commands()
+    channel = keys.ROBOT_COMMAND
+    harness._schedules[channel].extend((ms * 1_000_000, f'waypoint@{ms}ms') for ms in (0, 10, 20, 30))
+    harness._fidelity[channel].count_scheduled(4)
+
+    harness._reschedule([{keys.ACTION_TIMESTAMP: 0.03, channel: 'fresh'}], _FrozenClock(25 * 1_000_000))
+
+    account = _schedule_account(harness, channel)
+    assert account[_schedule_key(channel, eval_keys.DROPPED)] == 3  # 0, 10 and 20 ms; the 30 ms one was early
+    assert account[_schedule_key(channel, eval_keys.SCHEDULED)] == 5
+    assert not _emitted_commands(recorder)
+
+
+@pytest.mark.timeout(3.0)
 def test_lateness_is_measured_against_the_waypoint_that_went_out():
     """The waypoint sent at 25 ms was due at 20, so it is 5 ms late. A round measured against the oldest
     waypoint it overtook would read 25."""

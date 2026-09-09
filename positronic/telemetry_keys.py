@@ -32,9 +32,7 @@ ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
 
-# One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint a round
-# overtook, so ``EMITTED + DROPPED`` is what came due and ``SCHEDULED`` also covers what a fresh chunk
-# replaced first.
+# One episode's waypoint account, totalled over its command channels.
 ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
 ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'

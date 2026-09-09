@@ -769,3 +769,25 @@ def test_a_pass_whose_episodes_carry_no_waypoint_account_reports_none(tmp_path):
 
     assert report.waypoints is None
     assert not any(line.startswith('waypoint') for line in _render(report).splitlines())
+
+
+def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_path):
+    """A directory holding passes from either side of the account's arrival reduces over the episodes that
+    carry one, and reports how many that was — an episode that measured nothing is not one that dropped
+    nothing."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    _waypoint_fixture(telemetry_dir)
+    _write_lines(
+        telemetry_dir / f'older{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EVAL_PASS, 200, 300, 'pass1'),
+            _span(SPAN_EPISODE, 210, 250, 'ep2', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 3
+    assert report.waypoints is not None
+    assert report.waypoints.episodes == 2
+    assert report.waypoints.scheduled == 200  # the uninstrumented episode adds no zero of its own
+    assert 'waypoints:           200 scheduled, 40 emitted, 40 dropped over 2 of 3 episodes' in _render(report)
