@@ -26,16 +26,26 @@ StartServer = Callable[..., tuple[str, int, PolicyServer]]
 
 @pytest.fixture
 def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown."""
+    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown.
+
+    ``grpc=True`` also serves the gRPC wire, on a port of its own that ``PolicyServer.grpc_port`` names.
+    """
     running: list[tuple[uvicorn.Server, threading.Thread]] = []
 
-    def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
-        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
+    def start(pipeline, *, grpc: bool = False, **server_kwargs) -> tuple[str, int, PolicyServer]:
+        grpc_port = _find_free_port() if grpc else None
+        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), grpc_port=grpc_port, **server_kwargs)
         uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
 
         async def _run():
             await server._startup()
-            await uv_server.serve()
+            # Started first, so the websocket port answering means both wires are up.
+            grpc_server = await server._start_grpc() if grpc_port is not None else None
+            try:
+                await uv_server.serve()
+            finally:
+                if grpc_server is not None:
+                    await grpc_server.stop(grace=None)
 
         thread = threading.Thread(target=asyncio.run, args=(_run(),), daemon=True)
         thread.start()
@@ -104,7 +114,7 @@ def make_mock_policy() -> Callable[..., MagicMock]:
     return _make_mock_policy
 
 
-class _DictSource(ModelSource):
+class DictSource(ModelSource):
     """Multi-model source over ready policies; the dict's first key is the default."""
 
     def __init__(self, policies: Mapping[str, Policy]):
@@ -153,5 +163,5 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
 def multi_policy_server(
     start_server: StartServer, mock_policy_registry: dict[str, MagicMock]
 ) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, _server = start_server(ChunkedSchedule() | remote | _DictSource(mock_policy_registry))
+    host, port, _server = start_server(ChunkedSchedule() | remote | DictSource(mock_policy_registry))
     return host, port, mock_policy_registry

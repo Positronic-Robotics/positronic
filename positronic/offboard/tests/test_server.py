@@ -19,6 +19,7 @@ from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
+from positronic.offboard.wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
@@ -304,7 +305,7 @@ def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0),
 
 def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> InferenceSession:
     uri = f'ws://{host}:{port}/api/v1/session?' + urllib.parse.urlencode(query)
-    return InferenceSession(connect(uri))
+    return InferenceSession(WebsocketClientConnection(connect(uri)))
 
 
 @pytest.fixture
@@ -359,7 +360,8 @@ def test_model_id_is_named_by_path_not_query(param_server):
     with pytest.raises(RuntimeError, match='model_id'):
         _param_session(host, port, [('model_id', 'other')])
 
-    session = InferenceSession(connect(f'ws://{host}:{port}/api/v1/session/other?pad_start=false'))
+    uri = f'ws://{host}:{port}/api/v1/session/other?pad_start=false'
+    session = InferenceSession(WebsocketClientConnection(connect(uri)))
     try:
         assert session.metadata['checkpoint_id'] == 'other'
         assert session.metadata['local_stack']['seq'][0]['args']['pad_start'] is False
@@ -484,7 +486,9 @@ def test_session_outlives_an_idle_ingress_window(authed_endpoint):
     session = InferenceClient(url, headers={AUTH_HEADER: bearer(token)}).new_session()
     try:
         time.sleep(_IDLE_WINDOW_SEC)
-        assert session._websocket.ping().wait(timeout=30.0)
+        conn = session._conn
+        assert isinstance(conn, WebsocketClientConnection), "the idle window is the websocket wire's"
+        assert conn._websocket.ping().wait(timeout=30.0)
     finally:
         session.close()
 

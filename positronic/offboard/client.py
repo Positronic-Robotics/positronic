@@ -6,12 +6,12 @@ from enum import Enum
 from http import HTTPStatus
 from typing import Any
 
+import grpc
 import httpx
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 from websockets.sync.client import connect
-from websockets.sync.connection import Connection
 
-from . import protocol
+from . import grpc_wire, protocol, wire
 from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
@@ -23,8 +23,10 @@ DEFAULT_INFER_TIMEOUT = 180.0
 
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
-        self._websocket = websocket
+    """One session over one open connection, whichever wire carries it."""
+
+    def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+        self._conn = conn
         self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
 
@@ -35,7 +37,7 @@ class InferenceSession:
         """
         try:
             while True:
-                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
+                response = deserialise(self._conn.recv(timeout=timeout_per_message))
                 if protocol.ERROR in response:
                     raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
                 try:
@@ -71,14 +73,14 @@ class InferenceSession:
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
-        self._websocket.send(serialised)
+        self._conn.send(serialised)
         try:
-            response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+            response = deserialise(self._conn.recv(timeout=self._infer_timeout))
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
             # reused — a subsequent ``infer`` fails loudly on the closed socket instead.
-            self._websocket.close()
+            self._conn.close()
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
@@ -90,15 +92,7 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
-        state_before_close = self._websocket.state.name
-        self._websocket.close()
-        # A close that times out still reaches CLOSED locally; only the close code says the server answered.
-        logger.info(
-            'InferenceSession.close: state %s -> %s, close code %s',
-            state_before_close,
-            self._websocket.state.name,
-            self._websocket.close_code,
-        )
+        logger.info('InferenceSession.close: %s', self._conn.close())
 
 
 def _session_path(path: str, url: str) -> str:
@@ -107,10 +101,10 @@ def _session_path(path: str, url: str) -> str:
     A URL naming no model — a bare host, or the endpoint with or without a trailing slash — addresses the
     endpoint itself, which serves whatever the server pinned.
     """
-    if path.rstrip('/') in ('', '/api/v1/session'):
-        return '/api/v1/session'
-    if not path.startswith('/api/v1/session/'):
-        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
+    if path.rstrip('/') in ('', wire.SESSION_PATH):
+        return wire.SESSION_PATH
+    if not path.startswith(f'{wire.SESSION_PATH}/'):
+        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
     # Kept as written, percent-encoding included, so the server decodes exactly the id whoever handed out
     # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
     # repo, say), whose own slashes stay separators.
@@ -122,11 +116,44 @@ class _ConnectOutcome(Enum):
     SURFACE = 'surface'
 
 
+class _Refusal(Enum):
+    """What a refused connect says about the server."""
+
+    COLD = 'cold'  # still coming up; retry to the deadline
+    FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
+    FINAL = 'final'  # the endpoint is saying no; surface at once
+
+
+_COLD_GRPC_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
+
+
+def _refusal(e: Exception) -> _Refusal:
+    """How to read a refused connect, over either wire.
+
+    Each gRPC code stands for the HTTP status its wire twin answers: ``PERMISSION_DENIED`` for 403,
+    ``UNAVAILABLE`` for 503, ``RESOURCE_EXHAUSTED`` for 429.
+    """
+    if isinstance(e, InvalidStatus):
+        status = e.response.status_code
+        if status == HTTPStatus.FORBIDDEN:
+            return _Refusal.FORBIDDEN
+        if status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS:
+            return _Refusal.COLD
+        return _Refusal.FINAL
+    # A gRPC error carries its code as a `Call`; anything else says nothing about the server.
+    if isinstance(e, grpc.Call):
+        code = e.code()
+        if code is grpc.StatusCode.PERMISSION_DENIED:
+            return _Refusal.FORBIDDEN
+        return _Refusal.COLD if code in _COLD_GRPC_CODES else _Refusal.FINAL
+    return _Refusal.COLD
+
+
 class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
-    403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
-    ``connect_deadline``.
+    A refusal both wires answer for a cold backend and for a refused credential — HTTP 403, gRPC
+    ``PERMISSION_DENIED`` — gets a few attempts rather than the whole ``connect_deadline``.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
@@ -136,15 +163,17 @@ class _ConnectRetries:
 
     def take(self, e: Exception) -> _ConnectOutcome:
         """Spend a refused connect against the budget."""
-        if not isinstance(e, InvalidStatus):
-            return _ConnectOutcome.RETRY
-        status = e.response.status_code
-        if status == HTTPStatus.FORBIDDEN:
+        refusal = _refusal(e)
+        if refusal is _Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         else:
-            again = status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+            again = refusal is _Refusal.COLD
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
+
+
+# The URL scheme that puts a session on the gRPC wire.
+_GRPC_SCHEME = 'grpc'
 
 
 class InferenceClient:
@@ -155,6 +184,9 @@ class InferenceClient:
     port defaults to the scheme's own, 443 for TLS and 80 otherwise. Everything the URL says about the
     session — the model id it names and the query it carries as session params — reaches the server exactly
     as written, so every session opened here serves that model with those params.
+
+    ``grpc://`` names the same session on the gRPC wire, which the server offers on a port of its own. That
+    port carries sessions alone, so ``list_models`` needs the HTTP URL.
 
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
@@ -174,12 +206,12 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', _GRPC_SCHEME):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
         secure = split.scheme in ('https', 'wss')
-        ws_scheme = 'wss' if secure else 'ws'
+        session_scheme = _GRPC_SCHEME if split.scheme == _GRPC_SCHEME else ('wss' if secure else 'ws')
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
@@ -189,12 +221,29 @@ class InferenceClient:
         # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever wrote
         # the URL knows whether `true` means the bool or the string.
         query = f'?{split.query}' if split.query else ''
-        self.session_url = f'{ws_scheme}://{netloc}{_session_path(split.path, url)}{query}'
-        self.api_url = f'{http_scheme}://{netloc}/api/v1'
+        self._session_path = _session_path(split.path, url)
+        self._query = split.query
+        self._grpc_target = f'{host}:{port}' if split.scheme == _GRPC_SCHEME else None
+        self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
+        self.api_url = None if self._grpc_target else f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
+
+    def _connect(self) -> wire.ClientConnection:
+        """One session's connection, over the wire the URL names."""
+        if self._grpc_target is not None:
+            return grpc_wire.GrpcClientConnection(
+                self._grpc_target, self._session_path, self._query, self.headers, self.open_timeout
+            )
+        # A proxy between here and the server closes a connection it has read nothing from, often
+        # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
+        # answers. The pings keep it open.
+        websocket = connect(
+            self.session_url, open_timeout=self.open_timeout, additional_headers=self.headers, ping_interval=20.0
+        )
+        return wire.WebsocketClientConnection(websocket)
 
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
@@ -202,30 +251,30 @@ class InferenceClient:
         backoff = 1.0
         retries = _ConnectRetries()
         while True:
-            ws = None
+            conn = None
             try:
-                # A proxy between here and the server closes a connection it has read nothing from, often
-                # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
-                # answers. The pings keep it open.
-                ws = connect(
-                    self.session_url,
-                    open_timeout=self.open_timeout,
-                    additional_headers=self.headers,
-                    ping_interval=20.0,
-                )
-                return InferenceSession(ws, infer_timeout=self.infer_timeout)
+                conn = self._connect()
+                return InferenceSession(conn, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
             # A cold backend fails before the session is ready in several ways: the connect times out, the edge
             # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
-            # 502/503 while the backend boots), or it accepts the socket and then drops or stalls the status
-            # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
-            # yet", so retry within the deadline instead of letting one kill the run.
-            except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
-                if ws is not None:
-                    ws.close()
+            # 502/503 while the backend boots), it refuses the gRPC call (``RpcError``), or it accepts the
+            # connection and then drops or stalls the status handshake inside ``InferenceSession``
+            # (``ConnectionClosed``/``PeerDisconnected``/``TimeoutError``). All mean "not ready yet", so retry
+            # within the deadline instead of letting one kill the run.
+            except (
+                TimeoutError,
+                ssl.SSLError,
+                ConnectionClosed,
+                InvalidHandshake,
+                grpc.RpcError,
+                wire.PeerDisconnected,
+            ) as e:
+                if conn is not None:
+                    conn.close()
                 if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:
@@ -238,6 +287,8 @@ class InferenceClient:
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
+        if self.api_url is None:
+            raise ValueError(f'{self.session_url} names the gRPC session port; list the models over HTTP')
         response = httpx.get(f'{self.api_url}/models', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']

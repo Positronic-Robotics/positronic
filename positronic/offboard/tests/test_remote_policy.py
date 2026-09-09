@@ -102,7 +102,9 @@ class TestInferenceClientHeaders:
 
             mock_connect.assert_called_once()
             assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=DEFAULT_INFER_TIMEOUT)
+            conn = mock_session_cls.call_args.args[0]
+            assert conn._websocket is mock_connect.return_value
+            assert mock_session_cls.call_args.kwargs['infer_timeout'] == DEFAULT_INFER_TIMEOUT
 
     def test_new_session_without_headers_passes_none(self):
         with (
