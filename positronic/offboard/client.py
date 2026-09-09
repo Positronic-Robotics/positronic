@@ -90,12 +90,12 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
-        before = self._websocket.state.name
+        state_before_close = self._websocket.state.name
         self._websocket.close()
         # A close that times out still reaches CLOSED locally; only the close code says the server answered.
         logger.info(
             'InferenceSession.close: state %s -> %s, close code %s',
-            before,
+            state_before_close,
             self._websocket.state.name,
             self._websocket.close_code,
         )
