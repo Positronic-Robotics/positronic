@@ -33,10 +33,8 @@ _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
-# A front between the two ends closes a connection it has read nothing from — the Nebius managed
-# ingress after ~90s — and one inference sends nothing until it answers. The client pings through
-# that silence, and the server must tolerate the pings: gRPC's own server defaults are a five-minute
-# floor and two strikes, which answer a 20s ping with ``GOAWAY too_many_pings``.
+# A front closes a connection it has read nothing from — ~90s on the Nebius managed ingress — and one
+# inference sends nothing until it answers, so the client pings through that silence.
 _PING_EVERY_MS = 20_000
 _PING_ANSWER_TIMEOUT_MS = 10_000
 _PING_TOLERATED_EVERY_MS = 10_000
@@ -79,6 +77,7 @@ def _client_options() -> list[tuple[str, int]]:
 def _server_options() -> list[tuple[str, int]]:
     return [
         *_MESSAGE_SIZE_OPTIONS,
+        # gRPC's own defaults, a five-minute floor and two strikes, answer a 20s ping with GOAWAY.
         ('grpc.http2.min_ping_interval_without_data_ms', _PING_TOLERATED_EVERY_MS),
         ('grpc.http2.max_ping_strikes', 0),
     ]
@@ -248,8 +247,7 @@ async def serve(
     ``authorized`` reads the session headers and refuses before the session opens, as the websocket
     wire refuses the upgrade.
 
-    The port is plaintext. An authenticated deployment puts a TLS edge in front of it, which terminates
-    TLS and hands this server the HTTP/2 stream, so no shape needs a certificate here.
+    The port is plaintext; a TLS edge in front of it is what serves an authenticated endpoint.
     """
 
     async def _serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
