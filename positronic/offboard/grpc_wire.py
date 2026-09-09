@@ -6,6 +6,7 @@ generic handler with no serialiser hands each frame over as it arrived.
 
 import logging
 import queue
+import ssl
 import threading
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -32,8 +33,67 @@ _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
+# A front between the two ends closes a connection it has read nothing from — the Nebius managed
+# ingress after ~90s — and one inference sends nothing until it answers. The client pings through
+# that silence, and the server must tolerate the pings: gRPC's own server defaults are a five-minute
+# floor and two strikes, which answer a 20s ping with ``GOAWAY too_many_pings``.
+_PING_EVERY_MS = 20_000
+_PING_ANSWER_TIMEOUT_MS = 10_000
+_PING_TOLERATED_EVERY_MS = 10_000
+
 # How long ``close`` waits for the server to end the stream, so its own session cleanup runs.
 _CLOSE_TIMEOUT_SEC = 5.0
+
+# A path no handler serves, so asking why a channel is down never opens a session on a server that
+# turns out to be up after all.
+_PROBE_PATH = f'/{SERVICE}/ChannelProbe'
+
+# What gRPC's own status details call a certificate the client's roots do not cover.
+_UNVERIFIABLE_CERTIFICATE = 'CERTIFICATE_VERIFY_FAILED'
+
+
+def _why_not_ready(channel: grpc.Channel, timeout: float) -> str:
+    """What gRPC says stopped the channel coming up. Its readiness future carries only that it did not."""
+    probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
+    try:
+        next(probe(iter(()), timeout=timeout))
+    except grpc.RpcError as e:
+        return e.details() or ''
+    except StopIteration:
+        return ''
+    return ''
+
+
+def _client_options() -> list[tuple[str, int]]:
+    return [
+        *_MESSAGE_SIZE_OPTIONS,
+        ('grpc.keepalive_time_ms', _PING_EVERY_MS),
+        ('grpc.keepalive_timeout_ms', _PING_ANSWER_TIMEOUT_MS),
+        # Both of gRPC's own client throttles stop the pings during exactly the silent wait they
+        # exist for: it sends two and stops, and it spaces them five minutes apart.
+        ('grpc.http2.max_pings_without_data', 0),
+        ('grpc.http2.min_time_between_pings_ms', _PING_EVERY_MS),
+    ]
+
+
+def _server_options() -> list[tuple[str, int]]:
+    return [
+        *_MESSAGE_SIZE_OPTIONS,
+        ('grpc.http2.min_ping_interval_without_data_ms', _PING_TOLERATED_EVERY_MS),
+        ('grpc.http2.max_ping_strikes', 0),
+    ]
+
+
+def channel_credentials() -> grpc.ChannelCredentials:
+    """The roots a ``grpcs://`` channel verifies the edge against: the system's own."""
+    return grpc.ssl_channel_credentials()
+
+
+def _channel(target: str, secure: bool) -> grpc.Channel:
+    options = _client_options()
+    if secure:
+        return grpc.secure_channel(target, channel_credentials(), options=options)
+    return grpc.insecure_channel(target, options=options)
 
 
 class GrpcClientConnection:
@@ -41,6 +101,9 @@ class GrpcClientConnection:
 
     A reader thread drains the response stream into a queue, because the stream itself has no
     per-message timeout and ``recv`` needs one.
+
+    ``secure`` dials over TLS, which is the shape an authenticated endpoint takes: a TLS edge in front
+    of the server's plaintext gRPC port.
     """
 
     def __init__(
@@ -50,13 +113,19 @@ class GrpcClientConnection:
         query: str,
         headers: Mapping[str, str] | None = None,
         open_timeout: float = 10.0,
+        secure: bool = False,
     ):
         self._target = target
-        self._channel = grpc.insecure_channel(target, options=_MESSAGE_SIZE_OPTIONS)
+        self._channel = _channel(target, secure)
         try:
             grpc.channel_ready_future(self._channel).result(timeout=open_timeout)
         except grpc.FutureTimeoutError:
+            details = _why_not_ready(self._channel, timeout=open_timeout)
             self._channel.close()
+            if _UNVERIFIABLE_CERTIFICATE in details:
+                # The same exception the websocket wire raises here, so one connect loop reads a
+                # misconfigured edge as permanent over either wire rather than retrying its deadline out.
+                raise ssl.SSLCertVerificationError(f'gRPC channel to {target}: {details}') from None
             raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
         # gRPC metadata keys are lower case, and they are the same header names the websocket wire sends.
         metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
@@ -178,6 +247,9 @@ async def serve(
 
     ``authorized`` reads the session headers and refuses before the session opens, as the websocket
     wire refuses the upgrade.
+
+    The port is plaintext. An authenticated deployment puts a TLS edge in front of it, which terminates
+    TLS and hands this server the HTTP/2 stream, so no shape needs a certificate here.
     """
 
     async def _serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
@@ -193,7 +265,7 @@ async def serve(
             await context.abort(grpc.StatusCode.INTERNAL, str(e))
 
     handler = grpc.stream_stream_rpc_method_handler(_serve_one, request_deserializer=None, response_serializer=None)
-    server = grpc.aio.server(options=_MESSAGE_SIZE_OPTIONS)
+    server = grpc.aio.server(options=_server_options())
     server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
     bound = server.add_insecure_port(_bind_target(host, port))
     if bound == 0:

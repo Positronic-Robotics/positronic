@@ -1,10 +1,24 @@
 """The gRPC wire: one session runs over it exactly as it runs over the websocket."""
 
+import asyncio
+import datetime
+import pathlib
+import queue
+import ssl
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Generator
 from unittest.mock import ANY, MagicMock
 
 import configuronic as cfn
 import grpc
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+from cryptography.x509.oid import NameOID
 
 from positronic.offboard import grpc_wire, wire
 from positronic.offboard import keys as offboard_keys
@@ -141,17 +155,145 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
 
 
-@pytest.mark.parametrize('url', ['grpcs://gpu-host:9000', 'tcp://gpu-host:9000'])
-def test_an_unknown_scheme_is_refused(url):
+def _self_signed(host: str) -> tuple[bytes, bytes]:
+    """A certificate and key for ``host``, PEM encoded, valid from yesterday."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    day = datetime.timedelta(days=1)
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509
+        .CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - day)
+        .not_valid_after(now + day)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    private = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+    return certificate.public_bytes(Encoding.PEM), private
+
+
+async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        while chunk := await reader.read(65536):
+            writer.write(chunk)
+            await writer.drain()
+    except OSError:
+        pass
+    finally:
+        writer.close()
+
+
+@pytest.fixture
+def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]:
+    """Starts a TLS front over a plaintext gRPC port, the shape an authenticated endpoint takes.
+
+    It terminates TLS, selects HTTP/2 over ALPN and copies the bytes on, so the client and the server
+    speak one h2 connection end to end and the server holds no certificate. Answers the front's own
+    port and the root to verify it against.
+    """
+    stops: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
+
+    def start(backend_host: str, backend_port: int) -> tuple[int, bytes]:
+        certificate, private = _self_signed('localhost')
+        started: queue.SimpleQueue = queue.SimpleQueue()
+
+        async def _serve_edge() -> None:
+            with tempfile.TemporaryDirectory() as keys:
+                chain, key_file = pathlib.Path(keys, 'chain.pem'), pathlib.Path(keys, 'key.pem')
+                chain.write_bytes(certificate)
+                key_file.write_bytes(private)
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(chain, key_file)
+                context.set_alpn_protocols(['h2'])
+
+                async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+                    backend_r, backend_w = await asyncio.open_connection(backend_host, backend_port)
+                    await asyncio.gather(_copy(reader, backend_w), _copy(backend_r, writer))
+
+                edge = await asyncio.start_server(_handle, 'localhost', 0, ssl=context)
+                stop = asyncio.Event()
+                started.put((edge.sockets[0].getsockname()[1], asyncio.get_running_loop(), stop))
+                async with edge:
+                    await stop.wait()
+
+        threading.Thread(target=asyncio.run, args=(_serve_edge(),), daemon=True).start()
+        port, loop, stop = started.get(timeout=5.0)
+        stops.append((loop, stop))
+        return port, certificate
+
+    yield start
+    for loop, stop in stops:
+        loop.call_soon_threadsafe(stop.set)
+
+
+@pytest.fixture
+def edged(tls_edge, monkeypatch) -> Callable[[PolicyServer], str]:
+    """The ``grpcs://`` URL of a server reached through a TLS edge, with the client trusting its root."""
+
+    def url(server: PolicyServer) -> str:
+        port, root = tls_edge(server.host, server.grpc_port)
+        monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(root))
+        return f'grpcs://localhost:{port}'
+
+    return url
+
+
+def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
+    server, policy = both_wires
+    session = InferenceClient(edged(server)).new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        obs = {'image': 'test'}
+        assert session.infer(obs) == [{'action': [1, 2, 3]}]
+        policy._mock_session.assert_called_with(obs, ANY)
+    finally:
+        session.close()
+
+
+def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
+    session = InferenceClient(edged(authed_server), headers={AUTH_HEADER: bearer(_TOKEN)}).new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+    finally:
+        session.close()
+
+
+def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, monkeypatch):
+    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
+    with pytest.raises(grpc.RpcError) as refused:
+        InferenceClient(edged(authed_server)).new_session()
+    assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
+
+
+def test_an_unknown_scheme_is_refused():
     with pytest.raises(ValueError, match='Unsupported scheme'):
-        InferenceClient(url)
+        InferenceClient('tcp://gpu-host:9000')
 
 
-def test_a_grpc_url_names_the_session_port_alone():
-    client = InferenceClient('grpc://gpu-host:9000')
-    assert client.session_url == 'grpc://gpu-host:9000/api/v1/session'
+@pytest.mark.parametrize('url', ['grpc://gpu-host:9000', 'grpcs://gpu-host:9000'])
+def test_a_grpc_url_names_the_session_port_alone(url):
+    client = InferenceClient(url)
+    assert client.session_url == f'{url}/api/v1/session'
     with pytest.raises(ValueError, match='gRPC session port'):
         client.list_models()
+
+
+@pytest.mark.parametrize(
+    ('url', 'target', 'secure'),
+    [
+        ('grpc://gpu-host', 'gpu-host:80', False),
+        ('grpcs://gpu-host', 'gpu-host:443', True),
+        ('grpcs://gpu-host:9000', 'gpu-host:9000', True),
+    ],
+)
+def test_the_scheme_fixes_the_port_and_the_tls(url, target, secure):
+    client = InferenceClient(url)
+    assert (client._grpc_target, client._grpc_secure) == (target, secure)
 
 
 @pytest.mark.parametrize(
@@ -209,3 +351,50 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
         client.new_session()
     assert opened, 'the session never opened a connection'
     assert opened[0]._closed, 'the refused session left its connection open'
+
+
+# Long enough for the client to send more pings than gRPC's own server default tolerates.
+_SILENCE_SEC = 8.0
+
+
+@pytest.fixture
+def chatty_client(monkeypatch) -> None:
+    """Pings often enough that a silence measured in seconds stands in for one measured in minutes."""
+    monkeypatch.setattr(grpc_wire, '_PING_EVERY_MS', 500)
+
+
+def _silent_then_infer(server: PolicyServer) -> list[dict]:
+    session = InferenceClient(grpc_url(server)).new_session()
+    try:
+        time.sleep(_SILENCE_SEC)
+        return session.infer({'image': 'test'})
+    finally:
+        session.close()
+
+
+def test_a_session_answers_after_a_silence_no_frame_crossed(both_wires, chatty_client):
+    """One inference can outlast a front's idle close, so the wire's own pings hold the stream open."""
+    assert _silent_then_infer(both_wires[0]) == [{'action': [1, 2, 3]}]
+
+
+def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
+    start_server, make_mock_policy, chatty_client, monkeypatch
+):
+    """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``."""
+    monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(grpc_wire._MESSAGE_SIZE_OPTIONS))
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
+    with pytest.raises(grpc.RpcError, match='Too many pings'):
+        _silent_then_infer(server)
+
+
+def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_edge, monkeypatch):
+    """A root that does not cover the edge is permanent, so it surfaces on the first attempt."""
+    port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
+    unrelated, _key = _self_signed('localhost')
+    monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(unrelated))
+    client = InferenceClient(f'grpcs://localhost:{port}', open_timeout=2.0, connect_deadline=20.0)
+    started = time.monotonic()
+    with pytest.raises(ssl.SSLCertVerificationError, match=grpc_wire._UNVERIFIABLE_CERTIFICATE):
+        client.new_session()
+    assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'

@@ -172,21 +172,22 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-# The URL scheme that puts a session on the gRPC wire.
-_GRPC_SCHEME = 'grpc'
+# The URL schemes that put a session on the gRPC wire: plaintext, and behind a TLS edge.
+_GRPC_SCHEMES = ('grpc', 'grpcs')
 
 
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
     Accepted URL forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
-    each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't); the
-    port defaults to the scheme's own, 443 for TLS and 80 otherwise. Everything the URL says about the
-    session — the model id it names and the query it carries as session params — reaches the server exactly
-    as written, so every session opened here serves that model with those params.
+    each with an optional ``?query``. ``https``/``wss``/``grpcs`` enable TLS (bare or ``http``/``ws``/``grpc``
+    forms don't); the port defaults to the scheme's own, 443 for TLS and 80 otherwise. Everything the URL
+    says about the session — the model id it names and the query it carries as session params — reaches
+    the server exactly as written, so every session opened here serves that model with those params.
 
-    ``grpc://`` names the same session on the gRPC wire, which the server offers on a port of its own. That
-    port carries sessions alone, so ``list_models`` needs the HTTP URL.
+    ``grpc://`` names the same session on the gRPC wire, which the server offers on a port of its own, and
+    ``grpcs://`` names that port behind a TLS edge. Either port carries sessions alone, so ``list_models``
+    needs the HTTP URL.
 
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
@@ -206,12 +207,13 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', _GRPC_SCHEME):
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', *_GRPC_SCHEMES):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        secure = split.scheme in ('https', 'wss')
-        session_scheme = _GRPC_SCHEME if split.scheme == _GRPC_SCHEME else ('wss' if secure else 'ws')
+        grpc_wired = split.scheme in _GRPC_SCHEMES
+        secure = split.scheme in ('https', 'wss', 'grpcs')
+        session_scheme = split.scheme if grpc_wired else ('wss' if secure else 'ws')
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
@@ -223,7 +225,8 @@ class InferenceClient:
         query = f'?{split.query}' if split.query else ''
         self._session_path = _session_path(split.path, url)
         self._query = split.query
-        self._grpc_target = f'{host}:{port}' if split.scheme == _GRPC_SCHEME else None
+        self._grpc_target = f'{host}:{port}' if grpc_wired else None
+        self._grpc_secure = secure
         self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
         self.api_url = None if self._grpc_target else f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
@@ -235,7 +238,12 @@ class InferenceClient:
         """One session's connection, over the wire the URL names."""
         if self._grpc_target is not None:
             return grpc_wire.GrpcClientConnection(
-                self._grpc_target, self._session_path, self._query, self.headers, self.open_timeout
+                self._grpc_target,
+                self._session_path,
+                self._query,
+                self.headers,
+                self.open_timeout,
+                secure=self._grpc_secure,
             )
         # A proxy between here and the server closes a connection it has read nothing from, often
         # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
