@@ -26,7 +26,7 @@ from positronic.policy.spec import PolicySource, remote
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
-def _mock_ws_session(metadata=None):
+def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
     session.infer.return_value = {'action': 'test'}
@@ -34,20 +34,20 @@ def _mock_ws_session(metadata=None):
 
 
 def _mock_remote_policy(metadata=None, infer_return=None):
-    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_ws)."""
-    mock_ws = _mock_ws_session(metadata)
+    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_session)."""
+    mock_session = _mock_session(metadata)
     if infer_return is not None:
-        mock_ws.infer.return_value = infer_return
+        mock_session.infer.return_value = infer_return
     policy = RemotePolicy('localhost:0')
     policy._endpoint._client = MagicMock()
-    policy._endpoint._client.new_session.return_value = mock_ws
-    return policy, mock_ws
+    policy._endpoint._client.new_session.return_value = mock_session
+    return policy, mock_session
 
 
 def _mock_endpoint(metadata=None, infer_return=None):
     """The bare wire connection, with no declared stack in front of it."""
-    policy, mock_ws = _mock_remote_policy(metadata, infer_return)
-    return policy._endpoint, mock_ws
+    policy, mock_session = _mock_remote_policy(metadata, infer_return)
+    return policy._endpoint, mock_session
 
 
 def _make_image(h, w):
@@ -316,8 +316,8 @@ def test_remote_session_normalizes_single_dict(open_session):
 
 
 def test_remote_session_passes_through_none(open_session):
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.return_value = None
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.return_value = None
     session, rt = open_session(endpoint)
 
     assert round_trip(session, rt, {}) is None
@@ -327,7 +327,7 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
     """A session never waits. Every call while the round trip is in flight answers ``None``, and none of
     them starts a second round trip."""
     chunk = [{'a': 1, 'timestamp': 0.0}]
-    endpoint, mock_ws = _mock_endpoint()
+    endpoint, mock_session = _mock_endpoint()
     started, release = threading.Event(), threading.Event()
 
     def blocked(obs):
@@ -335,13 +335,13 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
         assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
         return chunk
 
-    mock_ws.infer.side_effect = blocked
+    mock_session.infer.side_effect = blocked
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
     assert started.wait(ANSWER_SEC), 'the round-trip never started'
     assert session({}, 0) is None
-    assert mock_ws.infer.call_count == 1
+    assert mock_session.infer.call_count == 1
 
     release.set()
     rt.wait(ANSWER_SEC)
@@ -360,7 +360,7 @@ def test_opening_a_session_without_a_runtime_is_refused():
 def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     """A cancelled session drops the chunk it waited for, because that chunk applies to a world the cancel
     says has gone, and it asks for a new one."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -370,14 +370,14 @@ def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     assert session({}, 0) is None  # the cancelled answer, read and thrown away
     assert session({}, 0) is None  # a round-trip of its own
     rt.wait(ANSWER_SEC)
-    assert mock_ws.infer.call_count == 2
+    assert mock_session.infer.call_count == 2
 
 
 def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
     """A dropped chunk drops no failure. The session reads a cancelled answer, so a stalled server raises
     to the caller that asked for the episode."""
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -391,8 +391,8 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
 def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
     """A cancel ends with the round trip it was made against, even when that round trip fails. A caller
     that catches the failure and keeps the session gets the next chunk."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
+    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    mock_session.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -407,14 +407,14 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
 def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
     """A runtime closes before the session it serves. A caller that closes the websocket under a round trip
     gets an error that names the order, and not a failure on a dead socket."""
-    endpoint, mock_ws = _mock_endpoint()
+    endpoint, mock_session = _mock_endpoint()
     release = threading.Event()
 
     def blocked(obs):
         assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
         return None
 
-    mock_ws.infer.side_effect = blocked
+    mock_session.infer.side_effect = blocked
     session, _rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -460,8 +460,8 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
 def test_records_infer_span_when_inference_raises(tmp_path, open_session):
     """A round trip that raises still records the time it took to fail, and the answer raises it again at
     the call that reads it."""
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
@@ -486,7 +486,7 @@ def test_empty_declaration_fails_before_motion():
 
 def test_declared_stack_built_at_session_open(open_session):
     """The server-declared local stack runs in front of the connection."""
-    policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    policy, mock_session = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(policy)
 
     assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 1.0}]
@@ -503,19 +503,19 @@ def test_unknown_declared_entry_fails_before_motion():
 
 def test_compression_follows_the_server_declaration(open_session):
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
-    endpoint, mock_ws = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({'compress_images': True}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
+    assert isinstance(mock_session.infer.call_args.args[0]['cam'], dict)
 
 
 def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
-    endpoint, mock_ws = _mock_endpoint({'compress_images': False}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({'compress_images': False}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
+    assert isinstance(mock_session.infer.call_args.args[0]['cam'], np.ndarray)
 
 
 # rules-allow: hardcoded-keys — the command mapping below is spelled the way a server sends it. Reading
