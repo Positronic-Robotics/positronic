@@ -41,6 +41,10 @@ export IMAGE_TAG=local
 The GR00T environment is `/opt/gr00t-venv` (Python 3.12, upstream locked dependencies).
 Positronic has a separate environment at `/positronic/.venv`. Training and serving require a CUDA GPU.
 
+The checkpoint also loads the gated `nvidia/Cosmos-Reason2-2B` backbone. The Hugging Face account
+must have access to it, with its token available inside the container through `HF_TOKEN`,
+`HF_TOKEN_PATH`, or the mounted Hugging Face cache's `token` file.
+
 ## Convert and fine-tune
 
 From Positronic's `docker` directory:

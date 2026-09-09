@@ -365,4 +365,5 @@ COMMANDS = {
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(COMMANDS)
+    with pos3.mirror():
+        cfn.cli(COMMANDS)
