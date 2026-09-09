@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from multiprocessing.pool import ThreadPool
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -110,6 +111,17 @@ def validated_build_id(value: str) -> str:
     return value
 
 
+class FileKind(StrEnum):
+    """Where one file the export wrote sits."""
+
+    # A page or an API response; a rebuild rewrites it.
+    PAGE = 'page'
+    # A recording or a download under `build/<build_id>/`; a rebuild never rewrites it.
+    BUILD = 'build'
+    # One of the app's own scripts, styles and viewer files under `static/`.
+    ASSET = 'asset'
+
+
 @dataclass(frozen=True)
 class ExportedFile:
     """One file the export wrote, at `path` under the output directory."""
@@ -117,6 +129,7 @@ class ExportedFile:
     path: PurePosixPath
     content_type: str
     size: int
+    kind: FileKind
 
 
 # `mimetypes` answers for neither on every box.
@@ -205,8 +218,16 @@ class _Output:
             raise ValueError(f'{path} is not in the export plan')
         return self.directory.joinpath(*path.parts)
 
+    @staticmethod
+    def _kind(path: PurePosixPath) -> FileKind:
+        if path.parts[0] == BUILD_DIR:
+            return FileKind.BUILD
+        if path.parts[0] == ASSET_ROUTE:
+            return FileKind.ASSET
+        return FileKind.PAGE
+
     def _record(self, path: PurePosixPath, content_type: str, size: int) -> ExportedFile:
-        written = ExportedFile(path, content_type, size)
+        written = ExportedFile(path, content_type, size, self._kind(path))
         self.files.append(written)
         return written
 
@@ -351,8 +372,11 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
     ]
 
 
-def _asset_files() -> list[tuple[PurePosixPath, Path]]:
-    """The app's own scripts, styles and viewer, each with its path under `static/`."""
+def asset_files() -> list[tuple[PurePosixPath, Path]]:
+    """The app's own scripts, styles and viewer, each as its path under `static/` and the file to copy from.
+
+    The pages request them at the host root, so a host serves one copy for every export under it.
+    """
     static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
     return [(PurePosixPath(ASSET_ROUTE) / file.relative_to(static_dir).as_posix(), file) for file in files]
@@ -525,11 +549,11 @@ def export_static(
             ),
             *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
         ]
-        asset_files = _asset_files() if assets else []
-        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in asset_files)))
+        assets_to_copy = asset_files() if assets else []
+        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in assets_to_copy)))
         _build_recordings(full, workers)
         _write_serving(out, plans)
-    for path, file in asset_files:
+    for path, file in assets_to_copy:
         out.copy(path, file)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
     return out.files

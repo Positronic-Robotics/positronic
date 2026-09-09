@@ -22,15 +22,17 @@ from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import EpisodeTransform, Identity
+from positronic.dataset.transforms.episode import EpisodeTransform, Identity, KeepStatic
 from positronic.server import export, positronic_server
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
+    FileKind,
     _fetch,
     _Output,
     asset_content_type,
+    asset_files,
     export_static,
     filter_sets,
     large_file_links_under,
@@ -39,11 +41,13 @@ from positronic.server.export import (
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
     MAX_COMPONENT_BYTES,
+    VIEWER_DIR,
     ColumnConfig,
     GroupTableConfig,
     TableConfig,
     app_state,
     download_link,
+    viewer_version,
 )
 
 OUTCOME = 'eval.outcome'
@@ -81,15 +85,6 @@ GROUPS = {
 }
 
 
-class _KeepStatic(EpisodeTransform):
-    def __init__(self, kept: tuple[str, ...]):
-        self._kept = frozenset(kept)
-
-    def __call__(self, episode: Episode) -> Episode:
-        static = {name: value for name, value in episode.static.items() if name in self._kept}
-        return EpisodeContainer({**episode.signals, **static}, meta=episode.meta)
-
-
 def a_dataset(root: Path, *statics: dict) -> Dataset:
     """One episode per static-value dict, each four joint samples long."""
     with LocalDatasetWriter(root) as writer:
@@ -123,7 +118,7 @@ def dataset(tmp_path):
 
 
 def shown(dataset):
-    return TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'notes', 'artifacts')))
+    return TransformedDataset(dataset, KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'notes', 'artifacts')))
 
 
 def an_export(dataset, out, **overrides):
@@ -307,6 +302,24 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert not [path for path in without if path.startswith('static/')]
     assert 'static/app.js' in with_assets and 'static/styles.css' in with_assets
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
+
+
+def test_every_file_carries_the_kind_its_path_says(dataset, tmp_path):
+    written = an_export(dataset, tmp_path / 'out', build_id='bld', assets=True)
+
+    by_kind = {kind: {str(file.path) for file in written if file.kind is kind} for kind in FileKind}
+    assert by_kind[FileKind.PAGE] == {str(f.path) for f in written if f.path.parts[0] not in ('build', 'static')}
+    assert by_kind[FileKind.BUILD] == {str(f.path) for f in written if f.path.parts[0] == 'build'}
+    assert by_kind[FileKind.ASSET] == {str(f.path) for f in written if f.path.parts[0] == 'static'}
+    assert all(by_kind.values())
+
+
+def test_the_asset_list_holds_the_viewer_of_the_release_the_pages_load():
+    viewer = PurePosixPath('static', VIEWER_DIR, viewer_version())
+    listed = [(path, file) for path, file in asset_files() if path.is_relative_to(viewer)]
+
+    assert listed
+    assert all(file.is_file() for _, file in listed)
 
 
 def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
@@ -585,7 +598,7 @@ class _Reversed(Dataset):
 
 
 def test_a_full_dataset_without_a_download_the_shown_dataset_links_is_refused_before_a_write(dataset, tmp_path):
-    without_notes = TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'artifacts')))
+    without_notes = TransformedDataset(dataset, KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'artifacts')))
 
     with pytest.raises(ValueError, match="no download at 'notes'"):
         an_export(dataset, tmp_path / 'out', full_dataset=without_notes)
@@ -628,7 +641,7 @@ def test_a_full_dataset_whose_download_matches_the_shown_one_in_type_and_size_an
 def test_a_hidden_download_of_the_full_dataset_under_a_key_no_link_carries_is_left_alone(tmp_path):
     """The export links the shown dataset's downloads; the full dataset only has to hold those."""
     full = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down', 'notes': 'n' * 2000, '': 'h' * 2000})
-    shown_only = TransformedDataset(full, _KeepStatic((keys.TASK, 'notes')))
+    shown_only = TransformedDataset(full, KeepStatic((keys.TASK, 'notes')))
 
     files = paths_of(
         export_static(

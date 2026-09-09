@@ -3,7 +3,7 @@ import pytest
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
-from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
+from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, KeepStatic, Rename
 
 from ...tests.utils import DummySignal, DummyTransform
 
@@ -185,6 +185,19 @@ def test_identity_transform_empty_returns_original(sig_simple):
 
     # Should return the original episode unchanged
     assert result is ep
+
+
+def test_keep_static_keeps_the_signals_the_meta_and_the_named_static_values_only(sig_simple):
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'test'}, meta={'origin': 'unit'})
+
+    kept = KeepStatic(['id'])(ep)
+
+    assert set(kept.keys()) == {'s', 'id'}
+    assert [v for v, _ in kept['s']] == [v for v, _ in ep['s']]
+    assert kept['id'] == 42
+    assert kept.meta == {'origin': 'unit'}
+    with pytest.raises(KeyError):
+        _ = kept['note']
 
 
 def test_concat_helper(sig_simple):

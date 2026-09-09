@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, final
 
 from positronic.dataset.transforms import signals
@@ -252,6 +252,21 @@ class Identity(EpisodeTransform):
                 continue
             container[k] = v
         return EpisodeContainer(container, episode.meta)
+
+
+class KeepStatic(EpisodeTransform):
+    """Keep every signal and only the named static values.
+
+    Example:
+        KeepStatic(['task', 'eval.outcome'])
+    """
+
+    def __init__(self, keys: Iterable[str]):
+        self._keys = frozenset(keys)
+
+    def __call__(self, episode: Episode) -> Episode:
+        static = {k: v for k, v in episode.static.items() if k in self._keys}
+        return EpisodeContainer({**episode.signals, **static}, episode.meta)
 
 
 class Concat:
