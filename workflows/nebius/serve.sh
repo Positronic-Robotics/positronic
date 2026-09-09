@@ -6,6 +6,12 @@
 # itself takes ~10-15 min more to finish uv sync and load the model into GPU
 # memory after the URL appears.
 #
+# Both wires are served: the websocket on port 8000 and gRPC on port 9000. The
+# gRPC port is declared as an ordinary HTTP port, because that front negotiates
+# HTTP/2 over ALPN and so carries gRPC end to end; a port declared `/tcp` gets a
+# tls:// URL whose front negotiates no ALPN at all, which gRPC refuses with
+# "Cannot check peer: missing selected ALPN property".
+#
 # That URL carries the id of a tunnel created with the endpoint, so it cannot be
 # chosen or known in advance, and a delete plus re-create earns a new one even
 # under the same name. Nothing may hold it across a redeploy. `nebius ai endpoint
@@ -90,6 +96,12 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
+GRPC_PORT=9000
+case " $* " in
+  *" --grpc_port="*|*" --grpc_port "*) ;;
+  *) set -- "$@" "--grpc_port=${GRPC_PORT}" ;;
+esac
+
 SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
 echo "Creating $VENDOR endpoint '$NAME'..."
@@ -101,6 +113,7 @@ nebius ai endpoint create \
   --container-command uv \
   --args "$SERVER_ARGS" \
   --container-port 8000 \
+  --container-port "${GRPC_PORT}" \
   --platform gpu-h100-sxm \
   --preset "$PRESET" \
   --working-dir /positronic \
@@ -127,10 +140,11 @@ echo "Waiting for the managed HTTPS URL (typically <1 min)..."
 
 URL=""
 for i in $(seq 1 30); do
-  # This field also carries bare `IP:port` entries, which serve no TLS and would put the bearer token
-  # on the wire in cleartext — take the https:// one, and fail rather than fall back.
+  # Each managed URL names the container port it fronts, so the two wires are told apart by that
+  # prefix. This field also carries bare `IP:port` entries, which serve no TLS and would put the
+  # bearer token on the wire in cleartext — take the https:// ones, and fail rather than fall back.
   URL=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
-    | jq -r '[.status.public_endpoints[]? | select(startswith("https://"))] | first // empty')
+    | jq -r '[.status.public_endpoints[]? | select(startswith("https://port8000-"))] | first // empty')
   if [ -n "$URL" ]; then break; fi
   sleep 10
 done
@@ -140,10 +154,16 @@ if [ -z "$URL" ]; then
   exit 1
 fi
 
+GRPC_HOST=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
+  | jq -r "[.status.public_endpoints[]? | select(startswith(\"https://port${GRPC_PORT}-\"))] | first // empty" \
+  | sed 's|^https://||')
+GRPC_URL="grpcs://${GRPC_HOST}:443"
+
 cat <<BANNER
 
 ==============================================================
   Endpoint URL:  $URL
+  gRPC URL:      $GRPC_URL
   Endpoint ID:   $ID
   Endpoint name: $NAME
   Vendor:        $VENDOR
@@ -158,6 +178,11 @@ Once the model is loaded, sanity-check with (see workflows/nebius/README.md
 for loading AUTH_TOKEN out of MysteryBox):
 
   curl -H "Authorization: Bearer \$AUTH_TOKEN" $URL/api/v1/models
+
+Point a rig at either wire; through this front an 846 KiB observation
+round-trips in about 6 ms over gRPC and about 60 ms over the websocket:
+
+  --policy=.authed_remote --policy.url='$GRPC_URL'
 
 To release the endpoint:
 

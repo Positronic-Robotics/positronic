@@ -15,6 +15,7 @@ the same order, so everything below holds on each.
 |---|---|---|
 | WebSocket | `ws://host:8000/api/v1/session[/<model_id>]` | the server's `port`, beside the HTTP routes |
 | gRPC | `grpc://host:9000/api/v1/session[/<model_id>]` | the server's `grpc_port`, sessions alone |
+| gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
 
 The WebSocket wire is the default, and a server serves gRPC only when `grpc_port` names a port. A
 gRPC session is one bidirectional stream of the same frames, so no `.proto` file describes them.
@@ -22,9 +23,24 @@ The session path and the query cross as the `positronic-session-path` and `posit
 metadata, and `Authorization` crosses as the `authorization` metadata.
 
 Python's WebSocket stack costs about 30 ms per 846 KiB observation in framing and reassembly, which
-gRPC does in about 1 ms. Take the gRPC wire on an endpoint a client reaches directly. A managed HTTPS
-front usually translates HTTP into its own protocol and drops the HTTP/2 frame detail gRPC needs, so
-an endpoint behind one keeps the WebSocket wire.
+gRPC does in about 1 ms, so take the gRPC wire wherever it reaches.
+
+It reaches through a managed HTTPS front, which is what serves an authenticated endpoint: the front
+terminates TLS and the HTTP/2 connection runs end to end, so the server binds a plaintext port and
+holds no certificate of its own. The front has to negotiate HTTP/2 over ALPN — check a new one with
+`openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint that means declaring
+the gRPC port as an ordinary HTTP port and dialling its `https://` host as `grpcs://<host>:443`; a
+port declared `/tcp` is fronted by a `tls://` URL that negotiates no ALPN, which gRPC refuses with
+`Cannot check peer: missing selected ALPN property`.
+
+Through such an endpoint an 846 KiB observation round-trips in about 6 ms over gRPC against about
+60 ms over the WebSocket, and gRPC holds that at 10 Hz, which is 8 MB/s of observation. The front
+shapes a session that outruns it: a back-to-back loop settles at about 83 ms a round trip after some
+11 MB, and gets its speed back after a minute of quiet. The WebSocket holds its 60 ms throughout,
+never being fast enough to be shaped.
+
+Both wires ping through a silent wait, so a front that drops a connection it has read nothing from —
+the managed one after about 90 s — does not cut an inference the model is still working on.
 
 `/api/v1/models` is an HTTP route, so it stays on the server's `port`. `InferenceClient.list_models`
 over a `grpc://` URL says so.
@@ -95,7 +111,7 @@ Any violation — including an unknown key — fails at connect: the server send
 
 One string is a complete endpoint description, because the whole session configuration fits in the URL:
 `--policy=.remote --policy.url='gpu-host:8000?codec.fps=10'` accepts `host`, `host:port`, and full
-`http(s)`/`ws(s)`/`grpc` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
+`http(s)`/`ws(s)`/`grpc(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
 Credentials are the exception and stay a separate `headers` argument, so the URL itself is safe to hand around.
 
 ### Session Flow
@@ -261,8 +277,9 @@ from positronic.offboard.client import InferenceClient
 client = InferenceClient('localhost:8000')
 # A named model, tuned for every session this client opens
 # client = InferenceClient('localhost:8000/api/v1/session/model_a?codec.fps=10')
-# The same session on the gRPC wire
+# The same session on the gRPC wire, on a LAN and behind a TLS edge
 # client = InferenceClient('grpc://localhost:9000/api/v1/session/model_a')
+# client = InferenceClient('grpcs://gpu-host:443/api/v1/session/model_a')
 
 session = client.new_session()
 meta = session.metadata
