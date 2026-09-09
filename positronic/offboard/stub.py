@@ -51,8 +51,7 @@ class DelayedSession(DelegatingSession):
 
 class Delay(Layer):
     """Holds every answer for ``delay_sec``, standing in for a model slow enough to outlast a front's
-    idle close. A layer rather than an argument of the policy: a session param may tune the pipeline
-    around the model source, never the source itself.
+    idle close. A session param may tune the pipeline around the model source, never the source itself.
     """
 
     def __init__(self, delay_sec: float = 0.0):
