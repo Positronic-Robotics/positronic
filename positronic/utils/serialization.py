@@ -26,7 +26,7 @@ _JPEG = b'__jpeg__'
 _DATA = b'data'
 _DTYPE = b'dtype'
 _SHAPE = b'shape'
-FRAMES = b'frames'  # the wire's own name for the per-frame JPEGs; a reader of a marker needs it
+FRAMES = b'frames'  # the wire's own name for the per-frame JPEGs
 _NDIM = b'ndim'
 
 # JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
