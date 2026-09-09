@@ -1,175 +1,100 @@
-# GR00T in Positronic
+# GR00T N1.7 DROID
 
-## What is GR00T?
+Positronic uses [`nvidia/GR00T-N1.7-DROID`](https://huggingface.co/nvidia/GR00T-N1.7-DROID)
+through our [GR00T fork](https://github.com/Positronic-Robotics/gr00t).
+The checkpoint defines the model architecture, image processor and relative-action conversion.
+The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/DROID).
 
-GR00T is [NVIDIA's](https://developer.nvidia.com/isaac/groot) generalist robot foundation model for versatile robot control.
+## Representation
 
-Positronic provides first-class support for GR00T including:
-- Training on single capable server GPU (~50GB)
-- Inference on smaller GPU (~7.5GB, can run closer to robot)
-- Relative modalities support (uses same codecs, different groot model internally to match OpenPI's relative actions by default)
-- Unified inference API compatible with all Positronic hardware
-- Integration with our fork: [Positronic-Robotics/gr00t](https://github.com/Positronic-Robotics/gr00t), kept up to date with upstream
+- `droid`: wrist + one exterior camera, matching the published checkpoint.
+- `droid_three_cameras`: wrist + two exterior cameras. Fine-tune with this layout, then serve that checkpoint.
+- RGB images first use the client's bilinear padded resize to **320×180**. The checkpoint processor
+  resizes the shortest edge to **256**, crops **95%**, resizes the shortest edge again, then runs
+  its vision processor. Positronic does not apply an additional square crop.
+- State is absolute tool position + row-based 6D rotation, gripper position and seven joint positions.
+  Poses move from Positronic's default tool frame to `DROID_EE_FRAME`, then receive upstream's
+  DROID rotation correction. Gripper convention is **1 = closed**.
+- Conversion writes recorded state trajectories as absolute action labels. The checkpoint processor
+  computes pose-relative EEF actions and joint offsets for training, then restores absolute actions
+  at inference. Positronic does not subtract poses or rotations itself.
+- Inference executes the first **15 of 40** predicted joint targets at **15 Hz**, with the DROID
+  impedance settings and a gripper threshold of **0.5**, matching upstream's default execution horizon.
 
-See [Model Selection Guide](../../docs/model-selection.md) for comparison with other options.
+The published two-camera checkpoint does not consume an extra exterior view. Select
+`droid_three_cameras` for both conversion and serving when fine-tuning with three views.
+N1.6 checkpoints require an N1.6 image; their custom action schemas are incompatible with this adapter.
 
-## Hardware Requirements
+## Docker
 
-| Phase | Requirement | Notes |
-|-------|-------------|-------|
-| **Training** | capable sever GPU (~50GB) | NVIDIA's training config optimized for a single capable GPU |
-| **Inference** | GPU (~7.5GB) | RTX 4070, A10, or better (can run on robot) |
-| **Training Time** | 0.5-2 days | Typical for GR00T |
-
-## Quick Start
+Build the fork's base image, then the Positronic image:
 
 ```bash
-# 1. Convert dataset (output_dir supports both local paths and s3://)
-cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.dataset.path=~/datasets/my_task_raw \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+# In the GR00T fork
+make -C docker build
+# In Positronic
+make -C docker build-groot GROOT_BASE_IMAGE=positro/gr00t-base:local
+cd docker
+export IMAGE_TAG=local
+```
+
+The GR00T environment is `/opt/gr00t-venv` (Python 3.12, upstream locked dependencies).
+Positronic has a separate environment at `/positronic/.venv`. Training and serving require a CUDA GPU.
+
+## Convert and fine-tune
+
+From Positronic's `docker` directory:
+
+```bash
+docker compose run --rm --pull never lerobot-0_3_3-convert convert \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
   --output_dir=~/datasets/groot/my_task
 
-# 2. Train
-cd docker && docker compose run --rm groot-train \
+docker compose run --rm groot-train \
   --input_path=~/datasets/groot/my_task \
   --output_path=~/checkpoints/groot \
-  --exp_name=my_task_v1 \
-  --modality_config=ee_rot6d_q
-
-# 3. Serve
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/my_task_v1/
-
-# 4. Run inference
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote \
-  --policy.url=localhost:8000
+  --exp_name=my_task \
+  --num_train_steps=10000
 ```
 
-See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
+Supply the conversion command's dataset configuration for your recordings as usual.
+For three views, replace the codec with `positronic.vendors.gr00t.codecs.droid_three_cameras`.
+The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
 
-## Available Codecs
+`--base_model` defaults to `nvidia/GR00T-N1.7-DROID`. Standard controls are `--batch_size`,
+`--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.
+Resume restores the latest saved training state in the experiment directory.
+The fork retains checkpoint architecture and preprocessing while applying upstream's standard
+fine-tuning settings. Dataset statistics are computed by GR00T.
 
-GR00T supports multiple codecs with different rotation representations and observation spaces.
+## Serve
 
-| Codec | Observation | Action | Modality Config | Use Case |
-|-------|-------------|--------|-----------------|----------|
-| `ee_quat` | EE pose (quat) + grip + images | Absolute EE position (quat) + grip | `ee` | Default EE control, quaternion rotation |
-| `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d` | 6D rotation representation |
-| `ee_quat_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q` | Combined EE + joint feedback |
-| `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q` | 6D rotation + joint feedback (recommended) |
-
-**Key features:**
-- **Rotation representations**: Quaternion (4D) vs rot6d (6D continuous)
-- **Joint feedback**: Optional joint position observations for richer state representation
-- Images automatically resized to 224x224
-- Sets `gr00t_modality` metadata for training compatibility
-
-**Codec must match modality config during training:**
-
-| Codec | Training Modality |
-|-------|-------------------|
-| `ee_quat` | `ee` |
-| `ee_rot6d` | `ee_rot6d` |
-| `ee_quat_joints` | `ee_q` |
-| `ee_rot6d_joints` | `ee_rot6d_q` |
-
-**Recommendation:** Use `ee_rot6d_joints` for best performance (6D rotation is continuous, joint feedback improves learning).
-
-See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
-
-## Configuration Reference
-
-### Training Configuration
-
-**Common parameters:**
-
-| Parameter | Description | Default | Example |
-|-----------|-------------|---------|---------|
-| `--modality_config` | Modality configuration (must match codec) | `ee` | `ee_rot6d_q` |
-| `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
-| `--num_train_steps` | Total training steps | Config default | `100000` |
-| `--learning_rate` | Override learning rate | Config default | `1e-4` |
-| `--save_steps` | Checkpoint save interval | Config default | `10000` |
-| `--num_workers` | Dataloader workers | Config default | `8` |
-| `--resume` | Resume from existing checkpoint | `False` | `True` |
-| `--output_path` | Checkpoint destination | Required | `~/checkpoints/groot` |
-
-**WandB logging:** Enabled by default if `WANDB_API_KEY` is set in `docker/.env.wandb`.
-
-### Inference Server Configuration
-
-Every named policy pipeline is a server subcommand, pairing the codec with the matching modality
-config:
+Published checkpoint, without fine-tuning:
 
 ```bash
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/my_task_v1/ \
-  --port=8000
+docker compose run --rm --service-ports groot-server droid
 ```
 
-**Available pipelines** (the subcommand selects one):
-- `ee` - End-effector pose (quaternion)
-- `ee_joints` - End-effector pose + joint positions (quaternion)
-- `ee_rot6d` - End-effector pose (rot6d)
-- `ee_rot6d_joints` - End-effector pose + joint positions (rot6d, recommended)
-- `ee_rot6d_rel` - End-effector pose (rot6d, relative actions)
-- `ee_rot6d_joints_rel` - End-effector pose + joint positions (rot6d, relative actions)
-
-`serve` is `ee`. The `phail` and `sim_stack` subcommands are the same pipelines with their
-`checkpoints_dir`/`recording_dir` bound.
-
-**Server parameters:**
-
-| Parameter | Description | Default | Example |
-|-----------|-------------|---------|---------|
-| subcommand | Named pipeline | `ee` | `ee_rot6d_joints` |
-| `--pipeline.source.checkpoints_dir` | Experiment directory (contains `checkpoint-N` folders) | Required | `~/checkpoints/groot/my_task_v1/` |
-| `--pipeline.source.checkpoint` | Specific checkpoint ID | Latest | `10000`, `50000` |
-| `--port` | Server port | `8000` | `8001` |
-| `--pipeline.source.modality_config` | Override the pipeline's paired modality config | Paired | `ee_rot6d_q` |
-
-**Session parameters:** a client can tune the served pipeline per connection via query params on the
-session URL — e.g. `--policy.url='vm-h100:8000?codec.fps=10'` on the eval CLI. Values
-must be JSON literals. The model source (`checkpoints_dir`, `--checkpoint`, modality config) is
-fixed at launch and cannot be changed per session.
-
-## Troubleshooting
-
-### GR00T Modality Mismatch
-
-**Problem:** Training or inference fails with modality-related errors
-
-**Cause:** Codec and modality config don't match
-
-**Solution:** Use the correct pairing (see table in [Available Codecs](#available-codecs)):
+Fine-tuned checkpoint:
 
 ```bash
-# Codec: ee_rot6d_joints → Modality: ee_rot6d_q
-
-# Training
-cd docker && docker compose run --rm groot-train \
-  --modality_config=ee_rot6d_q \
-  --input_path=~/datasets/groot/my_task  # (converted with ee_rot6d_joints codec)
-
-# Inference (use the matching pipeline)
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/my_task_v1/
+docker compose run --rm --service-ports groot-server droid \
+  --pipeline.source.checkpoints_dir=~/checkpoints/groot/my_task
 ```
 
-## See Also
+Select `droid_three_cameras` for a checkpoint trained on three views.
+Use `--pipeline.source.checkpoint=10000` to select a saved step. Omit it to serve the latest.
+A Hugging Face source uses `--pipeline.source.checkpoints_dir=hf://owner/model`.
 
-**Positronic Documentation:**
-- [Model Selection Guide](../../docs/model-selection.md) — When to use GR00T vs OpenPI vs LeRobot
-- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
-- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
-- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
+## Adapter parity tests
 
-**Other Models:**
-- [OpenPI (π₀.₅)](../openpi/README.md) — Recommended for most tasks, most capable foundation model
-- [LeRobot ACT](../lerobot/README.md) — Single-task transformer, fast training
+The GR00T source is included in the image at `/gr00t`. From the image's `/positronic` directory:
 
-**External:**
-- [NVIDIA GR00T](https://developer.nvidia.com/isaac/groot) — Official GR00T page
-- [Positronic GR00T Fork](https://github.com/Positronic-Robotics/gr00t) — Our integration repository
+```bash
+GR00T_REFERENCE_ROOT=/gr00t uv run --no-sync --python 3.12 pytest \
+  -o addopts= positronic/vendors/gr00t/tests
+```
+
+The cross-repository tests compare encoded tool poses and image pixels directly against the
+upstream DROID functions. Model forward and fine-tuning checks additionally require the checkpoint
+weights and a GPU.

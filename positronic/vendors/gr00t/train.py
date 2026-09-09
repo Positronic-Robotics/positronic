@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -6,7 +7,7 @@ import configuronic as cfn
 import pos3
 
 from positronic import utils
-from positronic.vendors.gr00t import MODALITY_CONFIGS
+from positronic.vendors import gr00t
 
 
 def cleanup_old_optimizers(output_dir: str, keep_last_n: int = 2):
@@ -19,44 +20,43 @@ def cleanup_old_optimizers(output_dir: str, keep_last_n: int = 2):
             print(f'Deleted {opt_file}')
 
 
-@cfn.config(num_train_steps=None, groot_venv_path='/.venv/', modality_config='ee')
+@cfn.config(num_train_steps=None, groot_venv_path=gr00t.VENV, base_model=gr00t.BASE_MODEL, batch_size=64)
 def main(
     input_path: str,
     output_path: str,
     exp_name: str,
-    modality_config: str,
+    base_model: str,
+    batch_size: int,
     num_train_steps,
     groot_venv_path: str,
-    learning_rate: float = None,
-    save_steps: int = None,
+    learning_rate: float | None = None,
+    save_steps: int | None = None,
     resume: bool = False,
-    num_workers: int = None,
+    num_workers: int | None = None,
     keep_optimizers_for_last_n: int = 2,
 ):
     exp_name = str(exp_name)
     groot_root = Path(__file__).parents[4] / 'gr00t'
     python_bin = str(Path(groot_venv_path).expanduser() / 'bin' / 'python')
-    known = MODALITY_CONFIGS.get(modality_config)
-    modality_config_path = known.path if known is not None else Path(modality_config)
 
     with pos3.mirror():
         dataset_local_path = pos3.download(input_path)
+        with (Path(dataset_local_path) / 'meta' / 'modality.json').open() as f:
+            video_keys = list(json.load(f)[gr00t.VIDEO])
         output_path = output_path.rstrip('/')
         # When resuming, don't delete existing checkpoint files
         output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
         prefix = 'resume_metadata' if resume else 'run_metadata'
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix=prefix)
 
-        # Calculate save_steps: 20 checkpoints per run, but at least every 2000 steps
-        if save_steps is None and num_train_steps is not None:
-            save_steps = max(num_train_steps // 20, 2000)
-
-        # N1.6 uses launch_finetune.py with new CLI format (auto-resumes if checkpoint exists)
         command = [python_bin, 'gr00t/experiment/launch_finetune.py']
-        command.extend(['--base_model_path', 'nvidia/GR00T-N1.6-3B'])
+        command.extend(['--base-model-path', base_model])
         command.extend(['--dataset_path', str(dataset_local_path)])
-        command.extend(['--modality_config_path', str(modality_config_path)])
-        command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
+        command.extend(['--video-keys', *video_keys])
+        command.extend(['--embodiment-tag', gr00t.EMBODIMENT])
+        command.extend(['--global-batch-size', str(batch_size)])
+        if resume:
+            command.append('--resume-from-checkpoint')
         command.extend(['--output_dir', str(output_dir)])
         command.extend(['--num_gpus', '1'])
         command.extend(['--save_total_limit', '9999'])  # Keep all checkpoints
@@ -71,7 +71,7 @@ def main(
         command.append('--use-wandb')
 
         env = os.environ.copy()
-        print(f'Running command: `{" ".join(command)}`\n with env: {env}')
+        print(f'Running command: {command}')
         subprocess.run(command, check=True, cwd=str(groot_root), env=env)
 
         # Clean up optimizer state from old checkpoints to save space

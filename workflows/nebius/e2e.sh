@@ -48,7 +48,7 @@ case "$VENDOR" in
   lerobot_0_3_3) CODEC=positronic.vendors.lerobot_0_3_3.codecs.ee ;;
   lerobot)       CODEC=positronic.vendors.lerobot.codecs.ee ;;
   openpi)        CODEC=positronic.vendors.openpi.codecs.ee ;;
-  gr00t)         CODEC=positronic.vendors.gr00t.codecs.ee_rot6d ;;
+  gr00t)         CODEC=positronic.vendors.gr00t.codecs.droid ;;
   *) echo "Unknown vendor '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2; exit 1 ;;
 esac
 
@@ -146,9 +146,8 @@ case "$VENDOR" in
       "--input_path=$DATASET_DIR" \
       "--output_path=$CKPT_DIR" \
       "--exp_name=$EXP_NAME" \
-      --num_train_steps=200 --save_steps=100 \
-      --modality_config=ee_rot6d 2>&1)
-    SERVE_SUBCMD=(ee_rot6d --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+      --num_train_steps=200 --save_steps=100 2>&1)
+    SERVE_SUBCMD=(droid --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
 esac
 echo "$TRAIN_OUT" >> "$LOG"

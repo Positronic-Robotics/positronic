@@ -69,7 +69,7 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 |-------|---------------|
 | **SmolVLA / LeRobot 0.4.x** | `ee`, `joints` (512x512 images) |
 | **LeRobot ACT (0.3.3)** | `ee`, `joints`, `ee_traj`, `joints_traj` |
-| **GR00T** | `ee_rot6d_joints`, `ee_quat`, `ee_quat_joints` |
+| **GR00T N1.7** | `droid`, `droid_three_cameras` |
 | **OpenPI** | `ee`, `ee_joints`, `droid` |
 
 ### S3 Support
@@ -127,11 +127,10 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
 cd docker && docker compose run --rm groot-train \
   --input_path=~/datasets/groot/stack_cubes \
   --output_path=~/checkpoints/groot \
-  --exp_name=experiment_v1 \
-  --modality_config=ee_rot6d_q
+  --exp_name=experiment_v1
 ```
 
-**Modality config must match codec** (see [GR00T README](../positronic/vendors/gr00t/README.md#1-prepare-data)).
+The checkpoint supplies the model and action configuration. Camera names come from the converted dataset (see [GR00T README](../positronic/vendors/gr00t/README.md)).
 
 ### OpenPI Training
 
@@ -197,7 +196,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 **GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+cd docker && docker compose run --rm --service-ports groot-server droid \
   --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 ```
 
@@ -287,7 +286,7 @@ cd docker && docker compose run --rm lerobot-convert convert \
 # ACT, GR00T, OpenPI — use lerobot-0_3_3-convert
 cd docker && for pair in \
   "lerobot_0_3_3.codecs.ee ~/datasets/lerobot_act/my_task" \
-  "gr00t.codecs.ee_rot6d_joints ~/datasets/groot/my_task" \
+  "gr00t.codecs.droid ~/datasets/groot/my_task" \
   "openpi.codecs.ee ~/datasets/openpi/my_task"; do
   set -- $pair
   docker compose run --rm lerobot-0_3_3-convert convert \

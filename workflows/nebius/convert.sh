@@ -45,7 +45,7 @@ Examples:
 
   bash workflows/nebius/convert.sh gr00t \
     --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-    --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+    --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
     --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 EOF
   exit 1
