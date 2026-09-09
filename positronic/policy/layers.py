@@ -78,10 +78,10 @@ class ChunkedSchedule(Layer):
 
         def __init__(self, inner: Session):
             super().__init__(inner)
-            self._trajectory_end: float | None = None
+            self._trajectory_end_ns: int | None = None
 
         def __call__(self, obs, time_ns):
-            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
+            if self._trajectory_end_ns is not None and obs[keys.OBS_TIME_NS] < self._trajectory_end_ns:
                 return None
             result = self._inner(obs, time_ns)
             if result is not None:
@@ -93,11 +93,11 @@ class ChunkedSchedule(Layer):
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
                 anchor = time_ns / 1e9
                 result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
-                self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
+                self._trajectory_end_ns = round(result[-1][keys.ACTION_TIMESTAMP] * 1e9) if result else None
             return result
 
         def cancel(self):
-            self._trajectory_end = None
+            self._trajectory_end_ns = None
             super().cancel()
 
     def make_session(self, inner: Session):

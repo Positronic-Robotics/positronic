@@ -710,12 +710,15 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
 
     rollout = Rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy(), None)
     inference = _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)
+    stop = threading.Timer(0.02, world.request_stop)
     try:
-        inference({})  # starts the function, which never answers
-        world.request_stop()
-        inference.wait(world.should_stop_reader())
+        stop.start()
+        assert inference({}, world.should_stop_reader()) is None
+        assert world.should_stop_reader().value
     finally:
+        stop.cancel()
         never_answers.set()
+        rollout.close()
 
 
 @pytest.mark.timeout(3.0)
@@ -2122,6 +2125,22 @@ def test_an_uncharged_call_pauses_the_world(world):
 
     assert played, 'no command was played'
     assert played[0][0] < 0.05, f'the world paid for the function: first command at {played[0][0]}s'
+
+
+@pytest.mark.timeout(20.0)
+@pytest.mark.parametrize('wall_sec', [0.0, 0.01])
+def test_uncharged_chunks_have_no_extra_control_tick(world, wall_sec):
+    chunk = [*slow_chunk(0.1, 4), {keys.ACTION_TIMESTAMP: 0.1}]
+    played = _run_episode(
+        world,
+        RemoteStubPolicy(wall_sec=wall_sec, chunk=chunk),
+        ChunkedSchedule(),
+        charge_inference_time=False,
+        run_sec=0.4,
+    )
+
+    assert len(played) >= 12
+    np.testing.assert_allclose(np.diff([t for t, _ in played])[3::4], 0.025, atol=1e-7)
 
 
 @pytest.mark.timeout(20.0)
