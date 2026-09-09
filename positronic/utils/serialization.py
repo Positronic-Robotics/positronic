@@ -26,7 +26,7 @@ _JPEG = b'__jpeg__'
 _DATA = b'data'
 _DTYPE = b'dtype'
 _SHAPE = b'shape'
-_FRAMES = b'frames'
+FRAMES = b'frames'  # the wire's own name for the per-frame JPEGs; a reader of a marker needs it
 _NDIM = b'ndim'
 
 # JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
@@ -46,12 +46,12 @@ def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
         buf = io.BytesIO()
         PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=_JPEG_QUALITY)
         bufs.append(buf.getvalue())
-    return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
+    return {_JPEG: True, FRAMES: bufs, _NDIM: int(image.ndim)}
 
 
 def _decode_jpeg(marker: dict) -> np.ndarray:
     """Inverse of ``encode_jpeg``: decode per-frame JPEGs and restore the original shape."""
-    frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[_FRAMES]])
+    frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[FRAMES]])
     return frames if marker[_NDIM] == 4 else frames[0]
 
 

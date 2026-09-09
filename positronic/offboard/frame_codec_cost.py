@@ -25,14 +25,30 @@ import av
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic.utils.serialization import encode_jpeg, unpack
+from positronic.utils.serialization import FRAMES, encode_jpeg, unpack
 
-JPEG = 'jpeg q90'
+
+@dataclasses.dataclass(frozen=True)
+class Jpeg:
+    """One JPEG per frame, at the quality the wire itself encodes at."""
+
+    name = 'jpeg'
+
+    def cost(self, window: np.ndarray) -> tuple[int, float, float]:
+        """Bytes, encode ms and decode ms for one window."""
+        start = time.perf_counter()
+        marker = encode_jpeg(window)
+        encode_ms = 1000 * (time.perf_counter() - start)
+
+        start = time.perf_counter()
+        unpack(marker)
+        decode_ms = 1000 * (time.perf_counter() - start)
+        return sum(len(buf) for buf in marker[FRAMES]), encode_ms, decode_ms
 
 
 @dataclasses.dataclass(frozen=True)
 class H264:
-    """One x264 setting, named the way the report names it."""
+    """One x264 setting, over the whole window as a single GOP."""
 
     preset: str
     crf: int
@@ -40,6 +56,31 @@ class H264:
     @property
     def name(self) -> str:
         return f'h264 {self.preset} crf{self.crf}'
+
+    def cost(self, window: np.ndarray) -> tuple[int, float, float]:
+        """Bytes, encode ms and decode ms for one window."""
+        height, width = window.shape[1:3]
+        buffer = io.BytesIO()
+        start = time.perf_counter()
+        with av.open(buffer, 'w', format='mp4') as container:
+            stream = container.add_stream('libx264', rate=15)
+            stream.width, stream.height, stream.pix_fmt = width, height, 'yuv420p'
+            # One self-contained GOP with no lookahead: a request carries its own window and waits on it.
+            stream.options = {'preset': self.preset, 'crf': str(self.crf), 'tune': 'zerolatency', 'g': str(len(window))}
+            for frame in window:
+                container.mux(stream.encode(av.VideoFrame.from_ndarray(frame, format='rgb24')))
+            container.mux(stream.encode(None))
+        encode_ms = 1000 * (time.perf_counter() - start)
+        payload = buffer.getvalue()
+
+        start = time.perf_counter()
+        with av.open(io.BytesIO(payload), 'r') as container:
+            for frame in container.decode(video=0):
+                frame.to_ndarray(format='rgb24')
+        return len(payload), encode_ms, 1000 * (time.perf_counter() - start)
+
+
+Codec = Jpeg | H264
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,51 +116,14 @@ def bounded_frames(mp4: pathlib.Path, width: int, height: int, rate_hz: float) -
     return frames
 
 
-def jpeg_cost(window: np.ndarray) -> tuple[int, float, float]:
-    """Bytes, encode ms and decode ms for one window as one JPEG per frame."""
-    start = time.perf_counter()
-    marker = encode_jpeg(window)
-    encode_ms = 1000 * (time.perf_counter() - start)
-
-    start = time.perf_counter()
-    unpack(marker)
-    decode_ms = 1000 * (time.perf_counter() - start)
-    return sum(len(buf) for buf in marker[b'frames']), encode_ms, decode_ms
-
-
-def h264_cost(window: np.ndarray, codec: H264) -> tuple[int, float, float]:
-    """Bytes, encode ms and decode ms for one window as a single h264 GOP."""
-    height, width = window.shape[1:3]
-    buffer = io.BytesIO()
-    start = time.perf_counter()
-    with av.open(buffer, 'w', format='mp4') as container:
-        stream = container.add_stream('libx264', rate=15)
-        stream.width, stream.height, stream.pix_fmt = width, height, 'yuv420p'
-        # One self-contained GOP with no lookahead: a request carries its own window and waits on it.
-        stream.options = {'preset': codec.preset, 'crf': str(codec.crf), 'tune': 'zerolatency', 'g': str(len(window))}
-        for frame in window:
-            container.mux(stream.encode(av.VideoFrame.from_ndarray(frame, format='rgb24')))
-        container.mux(stream.encode(None))
-    encode_ms = 1000 * (time.perf_counter() - start)
-    payload = buffer.getvalue()
-
-    start = time.perf_counter()
-    with av.open(io.BytesIO(payload), 'r') as container:
-        for frame in container.decode(video=0):
-            frame.to_ndarray(format='rgb24')
-    return len(payload), encode_ms, 1000 * (time.perf_counter() - start)
-
-
-def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[H264], limit: int) -> list[Cost]:
+def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[Codec], limit: int) -> list[Cost]:
     """One row per codec per window, over the windows the episode holds."""
     starts = list(range(0, len(frames) - depth + 1))[: limit or None]
     rows = []
     for window_index, start in enumerate(starts):
         window = np.stack(frames[start : start + depth])
-        size, encode_ms, decode_ms = jpeg_cost(window)
-        rows.append(Cost(JPEG, camera, window_index, size / 1024, encode_ms, decode_ms))
         for codec in codecs:
-            size, encode_ms, decode_ms = h264_cost(window, codec)
+            size, encode_ms, decode_ms = codec.cost(window)
             rows.append(Cost(codec.name, camera, window_index, size / 1024, encode_ms, decode_ms))
     return rows
 
@@ -157,7 +161,8 @@ def main() -> int:
     args = parser.parse_args()
 
     width, height = (int(side) for side in args.bound.lower().split('x'))
-    codecs = [H264(spec.split(':')[0], int(spec.split(':')[1])) for spec in args.x264.split(',')]
+    codecs: list[Codec] = [Jpeg()]
+    codecs += [H264(spec.split(':')[0], int(spec.split(':')[1])) for spec in args.x264.split(',')]
     rows: list[Cost] = []
     for camera in args.cameras.split(','):
         frames = bounded_frames(args.episode / f'{camera}.mp4', width, height, args.rate)
