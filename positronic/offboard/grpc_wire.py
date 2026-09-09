@@ -72,8 +72,7 @@ def _client_options() -> list[tuple[str, int]]:
         *_MESSAGE_SIZE_OPTIONS,
         ('grpc.keepalive_time_ms', _PING_EVERY_MS),
         ('grpc.keepalive_timeout_ms', _PING_ANSWER_TIMEOUT_MS),
-        # Both of gRPC's own client throttles stop the pings during exactly the silent wait they
-        # exist for: it sends two and stops, and it spaces them five minutes apart.
+        # Left to itself gRPC sends two pings without data, five minutes apart.
         ('grpc.http2.max_pings_without_data', 0),
         ('grpc.http2.min_time_between_pings_ms', _PING_EVERY_MS),
     ]
