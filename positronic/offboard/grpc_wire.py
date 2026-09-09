@@ -32,8 +32,7 @@ _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
-# A front closes a connection it has read nothing from — ~90s on the Nebius managed ingress — and one
-# inference sends nothing until it answers, so the client pings through that silence.
+# How often the client pings a connection nothing is crossing, so no front reads it as dead.
 _PING_EVERY_MS = 20_000
 _PING_ANSWER_TIMEOUT_MS = 10_000
 _PING_TOLERATED_EVERY_MS = 10_000
