@@ -304,13 +304,14 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
 
 
-def test_the_kind_of_a_written_file_separates_the_pages_the_build_and_the_assets(dataset, tmp_path):
+def test_the_kind_of_a_written_file_separates_the_pages_the_api_the_build_and_the_assets(dataset, tmp_path):
     written = an_export(dataset, tmp_path / 'out', build_id='bld', assets=True)
 
     by_kind = {kind: sorted(str(file.path) for file in written if file.kind is kind) for kind in FileKind}
 
     assert 'index.html' in by_kind[FileKind.PAGE]
-    assert not [path for path in by_kind[FileKind.PAGE] if path.startswith(('build/', 'static/'))]
+    assert not [path for path in by_kind[FileKind.PAGE] if path.startswith(('api/', 'build/', 'static/'))]
+    assert by_kind[FileKind.API] and all(path.startswith('api/') for path in by_kind[FileKind.API])
     assert by_kind[FileKind.BUILD] and all(path.startswith('build/bld/') for path in by_kind[FileKind.BUILD])
     assert by_kind[FileKind.ASSET] and all(path.startswith('static/') for path in by_kind[FileKind.ASSET])
 

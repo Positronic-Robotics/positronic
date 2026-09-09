@@ -114,10 +114,14 @@ def validated_build_id(value: str) -> str:
 class FileKind(StrEnum):
     """Which part of the output directory a file sits in."""
 
-    # A page or an API response, outside the build and the assets.
     PAGE = 'page'
+    API = 'api'
     BUILD = 'build'
     ASSET = 'asset'
+
+
+# The first part of a path names its kind; a path under no such directory is a page.
+_KIND_BY_DIRECTORY = {API_ROUTE: FileKind.API, BUILD_DIR: FileKind.BUILD, ASSET_ROUTE: FileKind.ASSET}
 
 
 @dataclass(frozen=True)
@@ -127,7 +131,10 @@ class ExportedFile:
     path: PurePosixPath
     content_type: str
     size: int
-    kind: FileKind
+
+    @property
+    def kind(self) -> FileKind:
+        return _KIND_BY_DIRECTORY.get(self.path.parts[0], FileKind.PAGE)
 
 
 # `mimetypes` answers for neither on every box.
@@ -216,16 +223,8 @@ class _Output:
             raise ValueError(f'{path} is not in the export plan')
         return self.directory.joinpath(*path.parts)
 
-    @staticmethod
-    def _kind(path: PurePosixPath) -> FileKind:
-        if path.parts[0] == BUILD_DIR:
-            return FileKind.BUILD
-        if path.parts[0] == ASSET_ROUTE:
-            return FileKind.ASSET
-        return FileKind.PAGE
-
     def _record(self, path: PurePosixPath, content_type: str, size: int) -> ExportedFile:
-        written = ExportedFile(path, content_type, size, self._kind(path))
+        written = ExportedFile(path, content_type, size)
         self.files.append(written)
         return written
 
