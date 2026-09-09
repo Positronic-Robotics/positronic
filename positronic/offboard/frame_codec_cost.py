@@ -123,24 +123,29 @@ def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[Codec]
     return rows
 
 
+def _row(label: str, group: list[Cost], windows: list[int]) -> str:
+    """One printed line: the median over windows of what the group cost in each window."""
+    per_window = [[row for row in group if row.window == window] for window in windows]
+    return (
+        f'{label:>16}  '
+        f'{statistics.median(sum(row.kib for row in w) for w in per_window):8.0f}  '
+        f'{statistics.median(sum(row.encode_ms for row in w) for w in per_window):10.1f}  '
+        f'{statistics.median(sum(row.decode_ms for row in w) for w in per_window):10.1f}'
+    )
+
+
 def report(rows: list[Cost], depth: int) -> None:
     """Median cost per codec, per camera and summed over the cameras one request carries."""
     names = list(dict.fromkeys(row.codec for row in rows))
     cameras = list(dict.fromkeys(row.camera for row in rows))
-    windows = {row.window for row in rows}
+    windows = sorted({row.window for row in rows})
     print(f'\n{depth} frames, {len(windows)} windows, {len(cameras)} cameras\n')
     print(f'{"codec":>22}  {"camera":>16}  {"KiB":>8}  {"encode ms":>10}  {"decode ms":>10}')
     for name in names:
         of_codec = [row for row in rows if row.codec == name]
-        for camera in cameras + ['every camera']:
-            group = of_codec if camera == 'every camera' else [row for row in of_codec if row.camera == camera]
-            per_window = [[row for row in group if row.window == window] for window in sorted(windows)]
-            print(
-                f'{name:>22}  {camera:>16}  '
-                f'{statistics.median(sum(r.kib for r in w) for w in per_window):8.0f}  '
-                f'{statistics.median(sum(r.encode_ms for r in w) for w in per_window):10.1f}  '
-                f'{statistics.median(sum(r.decode_ms for r in w) for w in per_window):10.1f}'
-            )
+        for camera in cameras:
+            print(f'{name:>22}  {_row(camera, [row for row in of_codec if row.camera == camera], windows)}')
+        print(f'{name:>22}  {_row("every camera", of_codec, windows)}')
 
 
 def main() -> int:
