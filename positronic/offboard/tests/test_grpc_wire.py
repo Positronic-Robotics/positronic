@@ -7,9 +7,11 @@ import grpc
 import pytest
 
 from positronic.offboard import grpc_wire, wire
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
 from positronic.offboard.tests.conftest import DictSource, StartServer
+from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, remote
 
@@ -105,7 +107,10 @@ def test_the_query_carries_the_session_params(start_server, make_mock_policy):
     _host, _port, server = start_server(pipe, grpc=True)
     session = InferenceClient(grpc_url(server, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
     try:
-        assert session.metadata['local_stack']['seq'][0]['args']['offsets_sec'] == [-0.5, 0.0]
+        stack = session.metadata[offboard_keys.LOCAL_STACK][SEQ]
+        # `args` and the layer's own constructor keyword are the spec grammar's, written wherever a
+        # layer renders itself; this reader spells them as the wire carries them.
+        assert stack[0]['args']['offsets_sec'] == [-0.5, 0.0]
     finally:
         session.close()
 
@@ -186,3 +191,21 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_pol
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
     finally:
         session.close()
+
+
+def test_a_refused_handshake_closes_the_connection(both_wires):
+    """A model the source does not know is refused in a protocol frame, past the transport handlers,
+    and the gRPC connection behind it holds a reader thread until something closes it."""
+    client = InferenceClient(grpc_url(both_wires[0], f'{wire.SESSION_PATH}/unknown-model'))
+    opened = []
+    connect = client._connect
+
+    def record():
+        opened.append(connect())
+        return opened[-1]
+
+    client._connect = record
+    with pytest.raises(RuntimeError):
+        client.new_session()
+    assert opened, 'the session never opened a connection'
+    assert opened[0]._closed, 'the refused session left its connection open'

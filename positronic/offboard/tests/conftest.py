@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import uvicorn
 
+from positronic.offboard import wire
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
@@ -36,7 +37,11 @@ def start_server() -> Generator[StartServer, None, None]:
         grpc_port = _find_free_port() if grpc else None
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, host=host, port=_find_free_port(), grpc_port=grpc_port, **server_kwargs)
-        uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
+        uv_server = uvicorn.Server(
+            uvicorn.Config(
+                server.app, host=server.host, port=server.port, log_level='warning', ws_max_size=wire.MAX_MESSAGE_BYTES
+            )
+        )
 
         async def _run():
             await server._startup()

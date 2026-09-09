@@ -245,16 +245,28 @@ class InferenceClient:
         )
         return wire.WebsocketClientConnection(websocket)
 
+    def _open_session(self) -> InferenceSession:
+        """One attempt at a session, closing the connection whenever the handshake does not finish.
+
+        A refusal the server sends as a protocol frame — an unknown model, a session param it rejects
+        — raises past every transport handler, and a gRPC connection holds a reader thread until it
+        is closed.
+        """
+        conn = self._connect()
+        try:
+            return InferenceSession(conn, infer_timeout=self.infer_timeout)
+        except BaseException:
+            conn.close()
+            raise
+
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
         retries = _ConnectRetries()
         while True:
-            conn = None
             try:
-                conn = self._connect()
-                return InferenceSession(conn, infer_timeout=self.infer_timeout)
+                return self._open_session()
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
@@ -270,8 +282,6 @@ class InferenceClient:
                 grpc.RpcError,
                 wire.PeerDisconnected,
             ) as e:
-                if conn is not None:
-                    conn.close()
                 if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:

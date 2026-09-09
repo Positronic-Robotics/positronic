@@ -424,7 +424,9 @@ class PolicyServer:
     def serve(self):
         async def _run():
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            config = uvicorn.Config(
+                self.app, host=self.host, port=self.port, log_level='info', ws_max_size=wire.MAX_MESSAGE_BYTES
+            )
             server = uvicorn.Server(config)
             self._last_activity = time.monotonic()
             watchdog = None

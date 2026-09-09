@@ -27,13 +27,9 @@ METHOD_PATH = f'/{SERVICE}/{METHOD}'
 SESSION_PATH_HEADER = 'positronic-session-path'
 SESSION_QUERY_HEADER = 'positronic-session-query'
 
-# An observation is a stack of camera frames, and the gRPC default of 4 MiB refuses one. 16 MiB is the
-# ceiling uvicorn already gives the websocket wire (``ws_max_size``), so both wires carry the same frame.
-_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
-
 _MESSAGE_SIZE_OPTIONS = [
-    ('grpc.max_receive_message_length', _MAX_MESSAGE_BYTES),
-    ('grpc.max_send_message_length', _MAX_MESSAGE_BYTES),
+    ('grpc.max_receive_message_length', wire.MAX_MESSAGE_BYTES),
+    ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
 # How long ``close`` waits for the server to end the stream, so its own session cleanup runs.

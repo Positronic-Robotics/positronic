@@ -15,6 +15,11 @@ from websockets.sync.connection import Connection
 # session metadata, so both wires address a model the same way.
 SESSION_PATH = '/api/v1/session'
 
+# The largest frame a session may carry, on either wire. An observation is a stack of camera frames,
+# so the gRPC default of 4 MiB refuses one; uvicorn's own default happens to be this, and passing it
+# explicitly is what keeps the two wires equal when that default moves.
+MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+
 
 class PeerDisconnected(Exception):
     """The peer ended the session."""
