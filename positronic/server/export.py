@@ -112,13 +112,13 @@ def validated_build_id(value: str) -> str:
 
 
 class FileKind(StrEnum):
-    """Where one file the export wrote sits."""
+    """What a rebuild and a host do with one file the export wrote."""
 
-    # A page or an API response; a rebuild rewrites it.
+    # A page or an API response. A rebuild rewrites it.
     PAGE = 'page'
-    # A recording or a download under `build/<build_id>/`; a rebuild never rewrites it.
+    # A recording or a download. A rebuild never rewrites it.
     BUILD = 'build'
-    # One of the app's own scripts, styles and viewer files under `static/`.
+    # A script, a style or a viewer file. Every export the host serves shares one copy.
     ASSET = 'asset'
 
 
@@ -373,10 +373,7 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
 
 
 def asset_files() -> list[tuple[PurePosixPath, Path]]:
-    """The app's own scripts, styles and viewer, each as its path under `static/` and the file to copy from.
-
-    The pages request them at the host root, so a host serves one copy for every export under it.
-    """
+    """The app's own scripts, styles and viewer, each as its path under `static/` and the file to copy from."""
     static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
     return [(PurePosixPath(ASSET_ROUTE) / file.relative_to(static_dir).as_posix(), file) for file in files]

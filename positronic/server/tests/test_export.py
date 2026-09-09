@@ -304,14 +304,15 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
 
 
-def test_every_file_carries_the_kind_its_path_says(dataset, tmp_path):
+def test_the_kind_of_a_written_file_separates_the_pages_the_build_and_the_assets(dataset, tmp_path):
     written = an_export(dataset, tmp_path / 'out', build_id='bld', assets=True)
 
-    by_kind = {kind: {str(file.path) for file in written if file.kind is kind} for kind in FileKind}
-    assert by_kind[FileKind.PAGE] == {str(f.path) for f in written if f.path.parts[0] not in ('build', 'static')}
-    assert by_kind[FileKind.BUILD] == {str(f.path) for f in written if f.path.parts[0] == 'build'}
-    assert by_kind[FileKind.ASSET] == {str(f.path) for f in written if f.path.parts[0] == 'static'}
-    assert all(by_kind.values())
+    by_kind = {kind: sorted(str(file.path) for file in written if file.kind is kind) for kind in FileKind}
+
+    assert 'index.html' in by_kind[FileKind.PAGE]
+    assert not [path for path in by_kind[FileKind.PAGE] if path.startswith(('build/', 'static/'))]
+    assert by_kind[FileKind.BUILD] and all(path.startswith('build/bld/') for path in by_kind[FileKind.BUILD])
+    assert by_kind[FileKind.ASSET] and all(path.startswith('static/') for path in by_kind[FileKind.ASSET])
 
 
 def test_the_asset_list_holds_the_viewer_of_the_release_the_pages_load():

@@ -255,11 +255,7 @@ class Identity(EpisodeTransform):
 
 
 class KeepStatic(EpisodeTransform):
-    """Keep every signal and only the named static values.
-
-    Example:
-        KeepStatic(['task', 'eval.outcome'])
-    """
+    """Keep every signal and only the named static values."""
 
     def __init__(self, keys: Iterable[str]):
         self._keys = frozenset(keys)
