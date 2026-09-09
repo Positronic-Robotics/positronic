@@ -14,12 +14,18 @@ from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
 from positronic import telemetry
-from positronic.simulator.env_server.telemetry import ENV_PROCESS
+from positronic.simulator.env_server.telemetry import ENV_PROCESS, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.telemetry_keys import HARNESS_PROCESS, SPAN_EVAL_PASS
 
 
 def _spans_by_name(path):
     return {rec.name: rec for rec in telemetry.read_spans(path)}
+
+
+def _resource_attrs(path):
+    """The resource block a sidecar stamps on every span, from its first line."""
+    line = json.loads(path.read_text().splitlines()[0])
+    return telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
 
 
 @contextmanager
@@ -180,8 +186,7 @@ def test_resource_carries_process_identity(tmp_path):
         with telemetry.span('probe'):
             pass
 
-    line = json.loads((telemetry.spans_path(tmp_path, ENV_PROCESS)).read_text().splitlines()[0])
-    attrs = telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
+    attrs = _resource_attrs(telemetry.spans_path(tmp_path, ENV_PROCESS))
     assert attrs[telemetry.ATTR_RUN_ID] == 'run-1'
     assert attrs[telemetry.ATTR_PROCESS_NAME] == ENV_PROCESS
     assert attrs[telemetry.ATTR_PROCESS_PID] == os.getpid()
@@ -440,3 +445,76 @@ def test_readers_tolerate_truncated_final_line(tmp_path):
     stats_path.write_text('{"t_ns": 1, "gpus": []}\n{"t_ns": 2, "cpu_sy')
     stats = list(telemetry.read_stats(stats_path))
     assert [sample[telemetry.STAT_T_NS] for sample in stats] == [1]
+
+
+def test_bind_from_env_is_inert_without_the_env_vars(tmp_path, monkeypatch):
+    monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    assert not (tmp_path / telemetry.TELEMETRY_SUBDIR).exists()
+
+
+def _run_id(path):
+    return _resource_attrs(path)[telemetry.ATTR_RUN_ID]
+
+
+def _env_sidecars(tmp_path):
+    """The sidecars `bind_from_env` wrote under a telemetry dir, which it names per run."""
+    return sorted((tmp_path / telemetry.TELEMETRY_SUBDIR).glob(f'*{telemetry.SPANS_SUFFIX}'))
+
+
+@pytest.mark.parametrize('run_id', ['../../escaped', 'a/b', '..', 'has spaces', ''])
+def test_bind_from_env_keeps_a_run_id_inside_the_telemetry_dir(tmp_path, monkeypatch, run_id):
+    """The run id reaches this from an operator's environment and now names a file, so a value naming a
+    path must not write outside the directory that turned recording on."""
+    telemetry_dir = tmp_path / telemetry.TELEMETRY_SUBDIR
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(telemetry_dir))
+    monkeypatch.setenv(ENV_RUN_ID, run_id)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    (path,) = _env_sidecars(tmp_path)
+    assert path.parent == telemetry_dir  # nothing escaped the directory that turned recording on
+    if run_id:
+        assert _run_id(path) == run_id  # the resource block still holds it verbatim
+
+
+def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
+    """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    (path,) = _env_sidecars(tmp_path)
+    assert _run_id(path)
+
+
+def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch):
+    """An attended rollout sets two env vars and gets the sidecar the eval CLI writes."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'rollout-1')
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+    (path,) = _env_sidecars(tmp_path)
+    assert _spans_by_name(path)['client'].process == HARNESS_PROCESS
+    assert _run_id(path) == 'rollout-1'
+
+
+def test_bind_from_env_defers_to_a_provider_already_bound(tmp_path, monkeypatch):
+    """The CLI owns the lifecycle under ``eval run --timing``, and keeps it."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'ignored' / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'from-env')
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'from-the-cli'):
+        with telemetry.bind_from_env(HARNESS_PROCESS):
+            with telemetry.span('client'):
+                pass
+        with telemetry.span('after'):
+            pass
+    path = telemetry.spans_path(tmp_path, HARNESS_PROCESS)
+    assert set(_spans_by_name(path)) == {'client', 'after'}
+    assert _run_id(path) == 'from-the-cli'
+    assert not (tmp_path / 'ignored').exists()
