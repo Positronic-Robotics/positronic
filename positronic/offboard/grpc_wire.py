@@ -156,8 +156,8 @@ class GrpcClientConnection:
             self._responses.cancel()
 
     def send(self, message: bytes) -> None:
-        # Past either of these gRPC has stopped reading the request iterator, so the write would sit in
-        # the outbox while ``recv`` waited out a whole inference timeout on an inbox nothing refills.
+        # A write past either of these sits in the outbox while ``recv`` waits out a whole inference
+        # timeout on an inbox nothing refills: gRPC has stopped reading the request iterator.
         if self._closed or self._ended:
             raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)

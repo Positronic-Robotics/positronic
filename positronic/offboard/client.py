@@ -132,7 +132,7 @@ def _refusal(e: Exception) -> _Refusal:
 
     Each gRPC code stands for the HTTP status its wire twin answers: ``PERMISSION_DENIED`` for 403,
     ``UNAVAILABLE`` for 503, ``RESOURCE_EXHAUSTED`` for 429. A TLS edge no client can use answers
-    ``UNAVAILABLE`` too, exactly as a cold backend does, so its details are what tell them apart.
+    ``UNAVAILABLE`` too, exactly as a cold backend does, so its details tell them apart.
     """
     if isinstance(e, InvalidStatus):
         status = e.response.status_code
