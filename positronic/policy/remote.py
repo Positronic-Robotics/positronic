@@ -96,6 +96,9 @@ class RemoteSession(Session):
             return None
         return [result] if isinstance(result, dict) else result
 
+    def reads_observation(self, obs: cabc.Mapping[str, Any], time_ns: int) -> bool:
+        return self._answer is None
+
     def cancel(self):
         # The cancel says the world the chunk applies to has gone. The session still reads the round trip
         # for its failure, and drops the chunk that comes with it.
