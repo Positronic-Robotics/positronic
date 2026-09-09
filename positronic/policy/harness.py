@@ -187,6 +187,10 @@ class _ScheduleFidelity:
     def count_scheduled(self, waypoints: int) -> None:
         self._scheduled += waypoints
 
+    def count_dropped(self, waypoints: int) -> None:
+        """Record waypoints discarded without going out, a fresh chunk having replaced them after their time."""
+        self._dropped += waypoints
+
     def count_played(self, popped: int, late_ns: int) -> None:
         """Record a round that emitted the newest of ``popped`` due waypoints, ``late_ns`` past its due time."""
         self._emitted += 1
@@ -458,6 +462,14 @@ class Harness(pimm.ControlSystem):
                 f'rig-side stack is not anchoring chunks to the harness clock'
             )
 
+    @staticmethod
+    def _due_count(schedule: deque[tuple[int, Any]], now_ns: int) -> int:
+        """How many of a schedule's waypoints have come due. A schedule ascends, so they are its leading run."""
+        for index, (due_ns, _) in enumerate(schedule):
+            if due_ns > now_ns:
+                return index
+        return len(schedule)
+
     def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
@@ -465,8 +477,11 @@ class Harness(pimm.ControlSystem):
         """
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
+        now_ns = clock.now_ns()
         # Layers time actions in float seconds; the schedules and every pimm channel are in ns.
         for name, schedule in self._schedules.items():
+            # A chunk landing on a late round replaces waypoints already due, which then go out on no round.
+            self._fidelity[name].count_dropped(self._due_count(schedule, now_ns))
             schedule.clear()
             schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
             self._fidelity[name].count_scheduled(len(schedule))
