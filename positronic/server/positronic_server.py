@@ -144,11 +144,6 @@ templates = Jinja2Templates(directory=_pkg_path('templates'))
 VIEWER_DIR = 'rerun'
 
 
-def viewer_version() -> str:
-    """The rerun release whose viewer the pages load."""
-    return rr.__version__
-
-
 def asset_link(name: str) -> str:
     """The path at the host root the asset file `name` is served at."""
     return app.url_path_for(ASSET_ROUTE, path=name)
@@ -511,7 +506,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
-            'viewer_path': asset_link(f'{VIEWER_DIR}/{viewer_version()}/index.html'),
+            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html'),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
