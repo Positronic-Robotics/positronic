@@ -6,7 +6,6 @@ generic handler with no serialiser hands each frame over as it arrived.
 
 import logging
 import queue
-import ssl
 import threading
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -46,20 +45,26 @@ _CLOSE_TIMEOUT_SEC = 5.0
 # turns out to be up after all.
 _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 
-# What gRPC's own status details call a certificate the client's roots do not cover.
-_UNVERIFIABLE_CERTIFICATE = 'CERTIFICATE_VERIFY_FAILED'
+# What gRPC's status details call an edge no client can use: a certificate its roots do not cover,
+# and a front that selects no HTTP/2 over ALPN.
+UNUSABLE_EDGE = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 
 
-def _why_not_ready(channel: grpc.Channel, timeout: float) -> str:
+def edge_is_unusable(details: str) -> bool:
+    """Whether a gRPC status blames the TLS edge's own configuration rather than a cold backend."""
+    return any(marker in details for marker in UNUSABLE_EDGE)
+
+
+def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
     """What gRPC says stopped the channel coming up. Its readiness future carries only that it did not."""
     probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
     try:
         next(probe(iter(()), timeout=timeout))
     except grpc.RpcError as e:
-        return e.details() or ''
+        return e
     except StopIteration:
-        return ''
-    return ''
+        return None
+    return None
 
 
 def _client_options() -> list[tuple[str, int]]:
@@ -119,12 +124,12 @@ class GrpcClientConnection:
         try:
             grpc.channel_ready_future(self._channel).result(timeout=open_timeout)
         except grpc.FutureTimeoutError:
-            details = _why_not_ready(self._channel, timeout=open_timeout)
+            refusal = _connect_refusal(self._channel, timeout=open_timeout)
             self._channel.close()
-            if _UNVERIFIABLE_CERTIFICATE in details:
-                # The same exception the websocket wire raises here, so one connect loop reads a
-                # misconfigured edge as permanent over either wire rather than retrying its deadline out.
-                raise ssl.SSLCertVerificationError(f'gRPC channel to {target}: {details}') from None
+            # An edge that refuses every client is permanent, so raise what gRPC blamed rather than a
+            # timeout: the connect loop reads the status and stops instead of retrying its deadline out.
+            if refusal is not None and edge_is_unusable(refusal.details() or ''):
+                raise refusal from None
             raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
         # gRPC metadata keys are lower case, and they are the same header names the websocket wire sends.
         metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (

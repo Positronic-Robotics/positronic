@@ -94,10 +94,12 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
-GRPC_PORT=9000
-case " $* " in
-  *" --grpc_port="*|*" --grpc_port "*) ;;
-  *) set -- "$@" "--grpc_port=${GRPC_PORT}" ;;
+# The endpoint exposes the port the server listens on, so a caller's own --grpc_port decides both.
+ARGS=" $* "
+case "$ARGS" in
+  *" --grpc_port="*) GRPC_PORT=${ARGS#*--grpc_port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *" --grpc_port "*) GRPC_PORT=${ARGS#*--grpc_port }; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *) GRPC_PORT=9000; set -- "$@" "--grpc_port=${GRPC_PORT}" ;;
 esac
 
 SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"

@@ -131,7 +131,8 @@ def _refusal(e: Exception) -> _Refusal:
     """How to read a refused connect, over either wire.
 
     Each gRPC code stands for the HTTP status its wire twin answers: ``PERMISSION_DENIED`` for 403,
-    ``UNAVAILABLE`` for 503, ``RESOURCE_EXHAUSTED`` for 429.
+    ``UNAVAILABLE`` for 503, ``RESOURCE_EXHAUSTED`` for 429. A TLS edge no client can use answers
+    ``UNAVAILABLE`` too, exactly as a cold backend does, so its details are what tell them apart.
     """
     if isinstance(e, InvalidStatus):
         status = e.response.status_code
@@ -142,6 +143,8 @@ def _refusal(e: Exception) -> _Refusal:
         return _Refusal.FINAL
     # A gRPC error carries its code as a `Call`; anything else says nothing about the server.
     if isinstance(e, grpc.Call):
+        if grpc_wire.edge_is_unusable(e.details() or ''):
+            return _Refusal.FINAL
         code = e.code()
         if code is grpc.StatusCode.PERMISSION_DENIED:
             return _Refusal.FORBIDDEN

@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import ipaddress
 import pathlib
 import queue
 import ssl
@@ -155,6 +156,11 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
 
 
+# The edge answers on one address, not on both families a name resolves to: gRPC reports the last
+# address it failed on, so a second leg refusing the connection would hide what the first blamed.
+EDGE_HOST = '127.0.0.1'
+
+
 def _self_signed(host: str) -> tuple[bytes, bytes]:
     """A certificate and key for ``host``, PEM encoded, valid from yesterday."""
     key = ec.generate_private_key(ec.SECP256R1())
@@ -170,7 +176,7 @@ def _self_signed(host: str) -> tuple[bytes, bytes]:
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - day)
         .not_valid_after(now + day)
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False)
         .sign(key, hashes.SHA256())
     )
     private = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
@@ -182,7 +188,9 @@ async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         while chunk := await reader.read(65536):
             writer.write(chunk)
             await writer.drain()
-    except OSError:
+    # Whichever end closes first leaves the other half of the pair writing into a dead socket, which
+    # is how a session ends. Anything else is the edge itself failing and belongs in the test's face.
+    except (ConnectionResetError, BrokenPipeError):
         pass
     finally:
         writer.close()
@@ -194,12 +202,13 @@ def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]
 
     It terminates TLS, selects HTTP/2 over ALPN and copies the bytes on, so the client and the server
     speak one h2 connection end to end and the server holds no certificate. Answers the front's own
-    port and the root to verify it against.
+    port and the root to verify it against. ``alpn=False`` selects no protocol at all, which is what
+    a front fronting a raw TCP port does.
     """
     stops: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
 
-    def start(backend_host: str, backend_port: int) -> tuple[int, bytes]:
-        certificate, private = _self_signed('localhost')
+    def start(backend_host: str, backend_port: int, alpn: bool = True) -> tuple[int, bytes]:
+        certificate, private = _self_signed(EDGE_HOST)
         started: queue.SimpleQueue = queue.SimpleQueue()
 
         async def _serve_edge() -> None:
@@ -209,13 +218,14 @@ def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]
                 key_file.write_bytes(private)
                 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 context.load_cert_chain(chain, key_file)
-                context.set_alpn_protocols(['h2'])
+                if alpn:
+                    context.set_alpn_protocols(['h2'])
 
                 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
                     backend_r, backend_w = await asyncio.open_connection(backend_host, backend_port)
                     await asyncio.gather(_copy(reader, backend_w), _copy(backend_r, writer))
 
-                edge = await asyncio.start_server(_handle, 'localhost', 0, ssl=context)
+                edge = await asyncio.start_server(_handle, EDGE_HOST, 0, ssl=context)
                 stop = asyncio.Event()
                 started.put((edge.sockets[0].getsockname()[1], asyncio.get_running_loop(), stop))
                 async with edge:
@@ -238,7 +248,7 @@ def edged(tls_edge, monkeypatch) -> Callable[[PolicyServer], str]:
     def url(server: PolicyServer) -> str:
         port, root = tls_edge(server.host, server.grpc_port)
         monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(root))
-        return f'grpcs://localhost:{port}'
+        return f'grpcs://{EDGE_HOST}:{port}'
 
     return url
 
@@ -391,10 +401,22 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
 def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A root that does not cover the edge is permanent, so it surfaces on the first attempt."""
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
-    unrelated, _key = _self_signed('localhost')
+    unrelated, _key = _self_signed(EDGE_HOST)
     monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(unrelated))
-    client = InferenceClient(f'grpcs://localhost:{port}', open_timeout=2.0, connect_deadline=20.0)
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[0])
+
+
+def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
+    """A front fronting a raw TCP port terminates TLS and names no protocol, which gRPC cannot use."""
+    port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
+    monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(root))
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[1])
+
+
+def _surfaces_at_once(url: str, blamed: str) -> None:
+    """Assert a connect to ``url`` fails naming ``blamed``, without spending its retry deadline."""
+    client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
     started = time.monotonic()
-    with pytest.raises(ssl.SSLCertVerificationError, match=grpc_wire._UNVERIFIABLE_CERTIFICATE):
+    with pytest.raises(grpc.RpcError, match=blamed):
         client.new_session()
     assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'
