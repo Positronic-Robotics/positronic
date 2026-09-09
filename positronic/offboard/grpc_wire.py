@@ -7,6 +7,7 @@ generic handler with no serialiser hands each frame over as it arrived.
 import logging
 import queue
 import threading
+import time
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 
@@ -43,6 +44,10 @@ _CLOSE_TIMEOUT_SEC = 5.0
 # A path no handler serves, so asking why a channel is down never opens a session on a server that
 # turns out to be up after all.
 _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
+
+# The slice of one connect attempt's budget the refusal probe may spend. A target that black-holes
+# connection attempts answers neither, so both waits must fit inside the caller's ``open_timeout``.
+_REFUSAL_PROBE_SEC = 1.0
 
 # What gRPC's status details call an edge no client can use: a certificate its roots do not cover,
 # and a front that selects no HTTP/2 over ALPN.
@@ -115,10 +120,12 @@ class GrpcClientConnection:
     ):
         self._target = target
         self._channel = _channel(target, secure)
+        deadline = time.monotonic() + open_timeout
+        ready_timeout = max(0.0, open_timeout - _REFUSAL_PROBE_SEC)
         try:
-            grpc.channel_ready_future(self._channel).result(timeout=open_timeout)
+            grpc.channel_ready_future(self._channel).result(timeout=ready_timeout)
         except grpc.FutureTimeoutError:
-            refusal = _connect_refusal(self._channel, timeout=open_timeout)
+            refusal = _connect_refusal(self._channel, timeout=max(0.0, deadline - time.monotonic()))
             self._channel.close()
             # An edge that refuses every client is permanent, so raise what gRPC blamed rather than a
             # timeout: the connect loop reads the status and stops instead of retrying its deadline out.
