@@ -153,17 +153,10 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextmanager
-def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
-    """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
-    resource block carrying this process's identity, and register the provider so ``span`` records. The batch
-    processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
-    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
-        yield provider
-
-
-@contextmanager
 def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
-    """``bind``, against the spans file itself rather than the run directory holding it."""
+    """Provider lifecycle for one process's telemetry: stream spans to ``path`` under a resource block
+    carrying this process's identity, and register the provider so ``span`` records. The batch processor is
+    flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
     global _provider
     try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
         from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
@@ -197,6 +190,13 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
         provider.force_flush()
         provider.shutdown()
         _provider = None
+
+
+@contextmanager
+def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
+    """``_bind_to`` for a run's output directory, which holds the spans at ``<process>.spans.jsonl``."""
+    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
+        yield provider
 
 
 def _filename_token(run_id: str) -> str:
