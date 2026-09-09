@@ -247,7 +247,7 @@ async def serve(
     ``authorized`` reads the session headers and refuses before the session opens, as the websocket
     wire refuses the upgrade.
 
-    The port is plaintext; a TLS edge in front of it is what serves an authenticated endpoint.
+    The port is plaintext; a TLS edge in front of it serves an authenticated endpoint.
     """
 
     async def _serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:

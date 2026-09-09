@@ -25,7 +25,7 @@ metadata, and `Authorization` crosses as the `authorization` metadata.
 Python's WebSocket stack costs about 30 ms per 846 KiB observation in framing and reassembly, which
 gRPC does in about 1 ms, so take the gRPC wire wherever it reaches.
 
-It reaches through a managed HTTPS front, which is what serves an authenticated endpoint: the front
+It reaches through a managed HTTPS front, which is how an authenticated endpoint is served: the front
 terminates TLS and the HTTP/2 connection runs end to end, so the server binds a plaintext port and
 holds no certificate of its own. The front has to negotiate HTTP/2 over ALPN — check a new one with
 `openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint that means declaring
