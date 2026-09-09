@@ -37,7 +37,7 @@ Through such an endpoint an 846 KiB observation round-trips in about 6 ms over g
 60 ms over the WebSocket, and gRPC holds that at 10 Hz, which is 8 MB/s of observation. The front
 shapes a session that outruns it: a back-to-back loop settles at about 83 ms a round trip after some
 11 MB, and gets its speed back after a minute of quiet. The WebSocket holds its 60 ms throughout,
-never being fast enough to be shaped.
+below the rate the front shapes at.
 
 Both wires ping through a silent wait, so a front that drops a connection it has read nothing from —
 the managed one after about 90 s — does not cut an inference the model is still working on.
