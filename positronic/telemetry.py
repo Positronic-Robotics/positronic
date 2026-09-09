@@ -32,11 +32,13 @@ import functools
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -52,6 +54,8 @@ from positronic.simulator.env_server.telemetry import (
     ATTR_PROCESS_NAME,
     ATTR_PROCESS_PID,
     ATTR_RUN_ID,
+    ENV_RUN_ID,
+    ENV_TELEMETRY_DIR,
     SPANS_SUFFIX,
 )
 
@@ -153,6 +157,13 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
     """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
     resource block carrying this process's identity, and register the provider so ``span`` records. The batch
     processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
+    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
+        yield provider
+
+
+@contextmanager
+def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
+    """``bind``, against the spans file itself rather than the run directory holding it."""
     global _provider
     try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
         from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
@@ -162,7 +173,6 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         from opentelemetry.sdk.trace.sampling import ALWAYS_ON  # noqa: PLC0415
     except ImportError as error:
         raise RuntimeError(_MISSING_EXTRA) from error
-    path = spans_path(out_dir, process)
     path.parent.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
         ATTR_RUN_ID: run_id,
@@ -187,6 +197,32 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         provider.force_flush()
         provider.shutdown()
         _provider = None
+
+
+def _filename_token(run_id: str) -> str:
+    """``run_id`` reduced to characters a filename may carry. The resource block holds it verbatim, so
+    this only labels the file — a run id naming a path (`../…`) would otherwise write outside the
+    telemetry directory."""
+    token = re.sub(r'[^A-Za-z0-9._-]', '_', run_id).lstrip('.')
+    return token or uuid.uuid4().hex
+
+
+def bind_from_env(process: str):
+    """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
+
+    The directory turns recording on, and the run names the file: two runs against one directory each
+    get their own sidecar. An unset run id is minted, so a directory left set across runs separates them
+    without the operator having to think about it; a run id deliberately shared groups them again.
+
+    Inert while the directory is unset, and while a provider is already bound.
+    """
+    directory = os.environ.get(ENV_TELEMETRY_DIR)
+    if directory is None or _provider is not None:
+        return nullcontext()
+    run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
+    # The reduce globs the suffix and reads the process from each file's resource block, so qualifying
+    # the name by run costs it nothing.
+    return _bind_to(Path(directory) / f'{process}.{_filename_token(run_id)}{SPANS_SUFFIX}', process, run_id)
 
 
 def force_flush() -> None:
