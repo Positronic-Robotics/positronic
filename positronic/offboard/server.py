@@ -462,8 +462,7 @@ def serve(
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
 
-    ``grpc_port`` adds the gRPC wire beside the websocket one. HTTP/2 needs the frames a websocket-only
-    front drops, so give it a port a client reaches directly.
+    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.

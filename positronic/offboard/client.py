@@ -259,12 +259,9 @@ class InferenceClient:
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
-            # A cold backend fails before the session is ready in several ways: the connect times out, the edge
-            # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
-            # 502/503 while the backend boots), it refuses the gRPC call (``RpcError``), or it accepts the
-            # connection and then drops or stalls the status handshake inside ``InferenceSession``
-            # (``ConnectionClosed``/``PeerDisconnected``/``TimeoutError``). All mean "not ready yet", so retry
-            # within the deadline instead of letting one kill the run.
+            # Each of these is a backend that is not ready yet — a timed-out connect, a reset TLS
+            # handshake, a refused upgrade or gRPC call, a dropped status handshake — so one must not
+            # kill the run. ``_ConnectRetries`` decides which of them is the endpoint saying no.
             except (
                 TimeoutError,
                 ssl.SSLError,
