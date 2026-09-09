@@ -411,12 +411,6 @@ class Harness(pimm.ControlSystem):
             return {eval_keys.TERMINATED: False}
         return None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # FOOTGUN: outside the handler that seals the episode span — leaving this scope shuts the provider
-        # down, and a span ended after that is dropped. Inert unless the env vars are set.
-        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
-            yield from self._guarded(should_stop, clock)
-
     def _guarded(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
             yield from self._run(should_stop, clock)
@@ -433,6 +427,12 @@ class Harness(pimm.ControlSystem):
                 self._call.set_exception(pimm.calls.HandlerStopped())
             for call in self.perform_task.incoming():
                 call.set_exception(pimm.calls.HandlerStopped())
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        # FOOTGUN: outside the handler that seals the episode span — leaving this scope shuts the provider
+        # down, and a span ended after that is dropped. Inert unless the env vars are set.
+        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
+            yield from self._guarded(should_stop, clock)
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
