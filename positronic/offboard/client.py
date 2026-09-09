@@ -90,7 +90,9 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
+        before = self._websocket.protocol.state.name
         self._websocket.close()
+        logger.info('InferenceSession.close: state %s -> %s', before, self._websocket.protocol.state.name)
 
 
 def _session_path(path: str, url: str) -> str:
