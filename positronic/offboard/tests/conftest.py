@@ -34,7 +34,8 @@ def start_server() -> Generator[StartServer, None, None]:
 
     def start(pipeline, *, grpc: bool = False, **server_kwargs) -> tuple[str, int, PolicyServer]:
         grpc_port = _find_free_port() if grpc else None
-        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), grpc_port=grpc_port, **server_kwargs)
+        host = server_kwargs.pop('host', 'localhost')
+        server = PolicyServer(pipeline, host=host, port=_find_free_port(), grpc_port=grpc_port, **server_kwargs)
         uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
 
         async def _run():

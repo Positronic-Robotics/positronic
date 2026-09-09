@@ -167,6 +167,11 @@ def _headers(context: grpc.aio.ServicerContext) -> dict[str, str]:
     return {key: value for key, value in (context.invocation_metadata() or ()) if isinstance(value, str)}
 
 
+def _bind_target(host: str, port: int) -> str:
+    """The address to bind, with an IPv6 literal in the brackets gRPC's target syntax requires."""
+    return f'[{host}]:{port}' if ':' in host else f'{host}:{port}'
+
+
 async def serve(
     serve_session: Callable[[GrpcServerConnection], Awaitable[None]],
     authorized: Callable[[Mapping[str, str]], bool],
@@ -194,7 +199,11 @@ async def serve(
     handler = grpc.stream_stream_rpc_method_handler(_serve_one, request_deserializer=None, response_serializer=None)
     server = grpc.aio.server(options=_MESSAGE_SIZE_OPTIONS)
     server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
-    bound = server.add_insecure_port(f'{host}:{port}')
+    bound = server.add_insecure_port(_bind_target(host, port))
+    if bound == 0:
+        # gRPC reports a refused bind by returning port 0, so a server left to start here would
+        # accept nothing and say nothing.
+        raise OSError(f'gRPC could not bind {_bind_target(host, port)}')
     await server.start()
     logger.info(f'gRPC sessions on {host}:{bound}')
     return server

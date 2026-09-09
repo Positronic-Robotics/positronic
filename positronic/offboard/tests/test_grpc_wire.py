@@ -172,3 +172,17 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
     client = InferenceClient('grpc://localhost:1', open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='grpc://localhost:1'):
         client.new_session()
+
+
+def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
+    """gRPC's target syntax brackets an IPv6 literal, so a bare '::1' would bind ':::<port>' and fail."""
+    assert grpc_wire._bind_target('::', 9000) == '[::]:9000'
+    assert grpc_wire._bind_target('0.0.0.0', 9000) == '0.0.0.0:9000'
+
+    policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
+    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
+    session = InferenceClient(f'grpc://[{server.host}]:{server.grpc_port}').new_session()
+    try:
+        assert session.infer({'image': 'test'}) == [{'action': [4]}]
+    finally:
+        session.close()
