@@ -86,15 +86,11 @@ def _server_options() -> list[tuple[str, int]]:
     ]
 
 
-def channel_credentials() -> grpc.ChannelCredentials:
-    """The roots a ``grpcs://`` channel verifies the edge against: the system's own."""
-    return grpc.ssl_channel_credentials()
-
-
 def _channel(target: str, secure: bool) -> grpc.Channel:
     options = _client_options()
     if secure:
-        return grpc.secure_channel(target, channel_credentials(), options=options)
+        # No roots named, so the channel verifies the edge against the system's own.
+        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
     return grpc.insecure_channel(target, options=options)
 
 
@@ -158,10 +154,21 @@ class GrpcClientConnection:
         finally:
             self._responses.cancel()
 
+    def _refuse_if_closed(self) -> None:
+        """Refuse a closed session, whose inbox may still hold a reply that arrived during ``close``.
+
+        A timed-out inference closes here, so reading that reply would pair one observation's actions
+        with the next observation's state.
+        """
+        if self._closed:
+            raise wire.PeerDisconnected(f'The session on {self._target} is closed')
+
     def send(self, message: bytes) -> None:
+        self._refuse_if_closed()
         self._outbox.put(message)
 
     def recv(self, timeout: float | None = None) -> bytes:
+        self._refuse_if_closed()
         try:
             answer = self._inbox.get(timeout=timeout)
         except queue.Empty:

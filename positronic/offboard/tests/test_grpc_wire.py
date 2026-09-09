@@ -241,13 +241,19 @@ def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]
         loop.call_soon_threadsafe(stop.set)
 
 
+def _trust_only(monkeypatch, root: bytes) -> None:
+    """Verify every channel this test opens against ``root``, in place of the system's own."""
+    system_roots = grpc.ssl_channel_credentials
+    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: system_roots(root))
+
+
 @pytest.fixture
 def edged(tls_edge, monkeypatch) -> Callable[[PolicyServer], str]:
     """The ``grpcs://`` URL of a server reached through a TLS edge, with the client trusting its root."""
 
     def url(server: PolicyServer) -> str:
         port, root = tls_edge(server.host, server.grpc_port)
-        monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(root))
+        _trust_only(monkeypatch, root)
         return f'grpcs://{EDGE_HOST}:{port}'
 
     return url
@@ -402,14 +408,14 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
     """A root that does not cover the edge is permanent, so it surfaces on the first attempt."""
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
     unrelated, _key = _self_signed(EDGE_HOST)
-    monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(unrelated))
+    _trust_only(monkeypatch, unrelated)
     _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[0])
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A front fronting a raw TCP port terminates TLS and names no protocol, which gRPC cannot use."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
-    monkeypatch.setattr(grpc_wire, 'channel_credentials', lambda: grpc.ssl_channel_credentials(root))
+    _trust_only(monkeypatch, root)
     _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[1])
 
 
@@ -420,3 +426,15 @@ def _surfaces_at_once(url: str, blamed: str) -> None:
     with pytest.raises(grpc.RpcError, match=blamed):
         client.new_session()
     assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'
+
+
+def test_a_timed_out_session_refuses_the_next_inference(both_wires):
+    """The timeout closes the connection, and the server may answer inside the close's own wait."""
+    server, policy = both_wires
+    policy._mock_session.side_effect = lambda *_: time.sleep(1.0) or [{'action': [1, 2, 3]}]
+    session = InferenceClient(grpc_url(server), infer_timeout=0.2).new_session()
+    with pytest.raises(TimeoutError):
+        session.infer({'image': 'test'})
+    # Without the guard this answers the first observation's actions, against the second's state.
+    with pytest.raises(wire.PeerDisconnected):
+        session.infer({'image': 'test'})
