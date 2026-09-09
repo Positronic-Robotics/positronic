@@ -1,12 +1,8 @@
 """Measure what one observation window costs per image codec: bytes, encode time, decode time.
 
 Replays a recorded episode's cameras through the rig-side bound, then encodes each temporal-stack
-window two ways — one JPEG per frame, which is what the wire carries today, and one h264 GOP over
-the whole window. h264 sends a fraction of the bytes; this reports what that costs in encode and
-decode time, both of which sit on the round trip.
-
-JPEG runs single-threaded through ``encode_jpeg``, the encoder the wire uses. h264 runs with
-x264's own frame threading, so the comparison is generous to h264.
+window as one JPEG per frame, which is what the wire carries, and as one h264 GOP. JPEG encodes
+single-threaded through ``encode_jpeg``; h264 encodes with x264's own frame threading.
 
 Usage
   python -m positronic.offboard.frame_codec_cost --episode <dir holding <camera>.mp4>
