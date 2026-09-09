@@ -1,4 +1,5 @@
 import collections.abc as cabc
+import logging
 import time
 from typing import Any
 
@@ -15,6 +16,8 @@ from positronic.utils.serialization import encode_jpeg
 from .base import Answer, Layer, Policy, Runtime, Session
 from .recording import Recorder
 from .spec import from_spec
+
+logger = logging.getLogger(__name__)
 
 # The name the wire round trip is served under. A policy whose sessions are ``RemoteSession``s declares it.
 INFER = 'infer'
@@ -109,10 +112,16 @@ class RemoteSession(Session):
         return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._session.metadata})
 
     def close(self):
+        # The assert below is the failure to name: a round trip in flight means the runtime was not
+        # closed first, and the socket then goes without a close frame — which the server reads as a
+        # session it still owns, so the next episode's handshake never completes.
+        in_flight = self._answer is not None and not self._answer.done()
+        logger.info('RemoteSession.close: answer_in_flight=%s', in_flight)
         assert self._answer is None or self._answer.done(), (
             'close the runtime serving this session first: the round trip in flight uses the websocket that this closes'
         )
         self._session.close()
+        logger.info('RemoteSession.close: session closed')
 
 
 class _Endpoint(Policy):

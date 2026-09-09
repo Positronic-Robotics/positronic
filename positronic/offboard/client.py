@@ -102,7 +102,11 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
+        before = self._websocket.protocol.state.name
         self._websocket.close()
+        # OPEN -> CLOSED is a close frame the server sees. Anything else means the socket had already
+        # gone, and the server keeps the session it thinks it still serves.
+        logger.info('InferenceSession.close: state %s -> %s', before, self._websocket.protocol.state.name)
 
 
 def _session_path(path: str, url: str) -> str:
