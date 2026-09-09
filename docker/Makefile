@@ -41,6 +41,8 @@ TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
 
+GROOT_BASE_IMAGE ?= positro/gr00t-base:240627d
+
 help:
 	@echo "Positronic Docker Build System - Makefile"
 	@echo ""
@@ -81,7 +83,7 @@ build-openpi:
 
 build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
-	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=positro/gr00t-base:latest -f Dockerfile.groot -t $(IMAGE_NAME_GROOT):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(GROOT_BASE_IMAGE) -f Dockerfile.groot -t $(IMAGE_NAME_GROOT):local ..
 
 build-dreamzero-base:
 	@echo "Building $(IMAGE_NAME_DREAMZERO_BASE)..."

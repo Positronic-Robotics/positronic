@@ -6,7 +6,7 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
 
-Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server ee_rot6d_joints` launches that one. The available names are listed in each vendor's README.
+Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server droid` launches that one. The available names are listed in each vendor's README.
 
 **Start inference server:**
 ```bash
@@ -20,7 +20,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # GR00T
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+cd docker && docker compose run --rm --service-ports groot-server droid \
   --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
 # OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)

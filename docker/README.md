@@ -40,7 +40,22 @@ Now you are ready to build our Docker.
 docker/build.sh
 ```
 
-## GR00T containers: uv mount caveat
+## GR00T N1.7 containers
 
-If you customize `docker-compose.yml` volumes, **do not bind-mount** your host `~/.local/share/uv` into `/root/.local/share/uv` for `positro/gr00t` images.
-GR00T's `/.venv/bin/python` can be a symlink into the image's own uv-managed CPython under `/root/.local/share/uv/python/...`, and the bind mount can hide that target and cause `/.venv/bin/python` to fail with `ENOENT`.
+`make build-groot` uses `GROOT_BASE_IMAGE` from the GR00T fork. The fork image contains
+CUDA 12.8 and the upstream Python 3.12 environment at `/opt/gr00t-venv`.
+Positronic installs its own locked environment at `/positronic/.venv`.
+Both training and serving launch GR00T in its separate environment.
+
+Build the base in the [fork](https://github.com/Positronic-Robotics/gr00t), then build the adapter:
+
+```bash
+# In the GR00T fork:
+make -C docker build
+# In Positronic:
+make -C docker build-groot GROOT_BASE_IMAGE=positro/gr00t-base:local
+IMAGE_TAG=local docker compose -f docker/docker-compose.yml run --rm --service-ports groot-server droid
+```
+
+Do not mount host uv interpreter directories over the image's interpreter directories.
+See [GR00T](../positronic/vendors/gr00t/README.md) for conversion, fine-tuning and inference.

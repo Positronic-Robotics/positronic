@@ -144,7 +144,7 @@ bash workflows/nebius/convert.sh openpi \
 
 bash workflows/nebius/convert.sh gr00t \
   --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 ```
 
@@ -250,7 +250,7 @@ bash workflows/nebius/serve.sh openpi my-openpi ee \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
   --pipeline.ee_frame=None
 
-bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
+bash workflows/nebius/serve.sh gr00t groot-server droid \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 

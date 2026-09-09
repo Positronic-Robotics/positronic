@@ -189,7 +189,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/exp_v1
 
 # GR00T server (swap hardware code stays the same)
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+cd docker && docker compose run --rm --service-ports groot-server droid \
   --pipeline.source.checkpoints_dir=~/checkpoints/groot/exp_v1
 
 # Client connects the same way

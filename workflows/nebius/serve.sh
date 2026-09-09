@@ -57,7 +57,7 @@ Examples:
     --pipeline.ee_frame=None
 
   # GR00T
-  bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
+  bash workflows/nebius/serve.sh gr00t groot-server droid \
     --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
