@@ -94,6 +94,10 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
+# The port the websocket wire listens on, named once: the create declares it and the poll below
+# selects the managed URL that fronts it.
+WS_PORT=8000
+
 # The endpoint exposes the port the server listens on, so a caller's own --grpc_port decides both.
 ARGS=" $* "
 case "$ARGS" in
@@ -112,7 +116,7 @@ nebius ai endpoint create \
   --image "$IMAGE" \
   --container-command uv \
   --args "$SERVER_ARGS" \
-  --container-port 8000 \
+  --container-port "${WS_PORT}" \
   --container-port "${GRPC_PORT}" \
   --platform gpu-h100-sxm \
   --preset "$PRESET" \
@@ -144,7 +148,7 @@ for i in $(seq 1 30); do
   # prefix. This field also carries bare `IP:port` entries, which serve no TLS and would put the
   # bearer token on the wire in cleartext — take the https:// ones, and fail rather than fall back.
   URL=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
-    | jq -r '[.status.public_endpoints[]? | select(startswith("https://port8000-"))] | first // empty')
+    | jq -r "[.status.public_endpoints[]? | select(startswith(\"https://port${WS_PORT}-\"))] | first // empty")
   if [ -n "$URL" ]; then break; fi
   sleep 10
 done
