@@ -51,9 +51,7 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 # too, that trip being asynchronous; it is the tick carrying a `policy.encode`.
 ATTR_POLICY_ANSWERED = 'policy.answered'
 
-# One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint a round
-# overtook, so ``EMITTED + DROPPED`` is what came due and ``SCHEDULED`` also covers what a fresh chunk
-# replaced first.
+# One episode's waypoint account, totalled over its command channels.
 ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
 ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
