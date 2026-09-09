@@ -481,6 +481,30 @@ def test_bind_from_env_keeps_a_run_id_inside_the_telemetry_dir(tmp_path, monkeyp
         assert _run_id(path) == run_id  # the resource block still holds it verbatim
 
 
+def _bind_once(tmp_path, monkeypatch, run_id):
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, run_id)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        with telemetry.span('client'):
+            pass
+
+
+def test_two_run_ids_that_reduce_alike_get_their_own_sidecar(tmp_path, monkeypatch):
+    """Reducing a run id to filename characters is many-to-one, so `a/b` and `a_b` name one file between
+    them. Two runs would append to it, and the reduce reads a directory whole."""
+    _bind_once(tmp_path, monkeypatch, 'a/b')
+    _bind_once(tmp_path, monkeypatch, 'a_b')
+    assert sorted(_run_id(path) for path in _env_sidecars(tmp_path)) == ['a/b', 'a_b']
+
+
+def test_a_run_id_a_filename_may_carry_names_its_sidecar_as_written(tmp_path, monkeypatch):
+    """Only a reduced id needs a digest to stay distinct, so an id that survives the reduction is the name
+    an operator reads on the file."""
+    _bind_once(tmp_path, monkeypatch, 'rik-0')
+    (path,) = _env_sidecars(tmp_path)
+    assert path.name == f'{HARNESS_PROCESS}.rik-0{telemetry.SPANS_SUFFIX}'
+
+
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
     """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
