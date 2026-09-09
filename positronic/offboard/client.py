@@ -175,8 +175,28 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-# The URL schemes that put a session on the gRPC wire: plaintext, and behind a TLS edge.
-_GRPC_SCHEMES = ('grpc', 'grpcs')
+class _Scheme(Enum):
+    """A URL scheme a session may open on, and what it settles: which wire, and whether it is TLS."""
+
+    EMPTY = ('', False, False)
+    HTTP = ('http', False, False)
+    WS = ('ws', False, False)
+    HTTPS = ('https', True, False)
+    WSS = ('wss', True, False)
+    GRPC = ('grpc', False, True)
+    GRPCS = ('grpcs', True, True)
+
+    def __init__(self, text: str, secure: bool, grpc_wired: bool):
+        self.text = text
+        self.secure = secure
+        self.grpc_wired = grpc_wired
+
+    @classmethod
+    def of(cls, text: str) -> '_Scheme':
+        for scheme in cls:
+            if scheme.text == text:
+                return scheme
+        raise ValueError(f'Unsupported scheme {text!r}')
 
 
 class InferenceClient:
@@ -210,15 +230,15 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', *_GRPC_SCHEMES):
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+        try:
+            scheme = _Scheme.of(split.scheme)
+        except ValueError:
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}') from None
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        grpc_wired = split.scheme in _GRPC_SCHEMES
-        secure = split.scheme in ('https', 'wss', 'grpcs')
-        session_scheme = split.scheme if grpc_wired else ('wss' if secure else 'ws')
-        http_scheme = 'https' if secure else 'http'
-        default_port = 443 if secure else 80
+        session_scheme = scheme.text if scheme.grpc_wired else ('wss' if scheme.secure else 'ws')
+        http_scheme = 'https' if scheme.secure else 'http'
+        default_port = 443 if scheme.secure else 80
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
         host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
         port = default_port if split.port is None else split.port
@@ -228,8 +248,8 @@ class InferenceClient:
         query = f'?{split.query}' if split.query else ''
         self._session_path = _session_path(split.path, url)
         self._query = split.query
-        self._grpc_target = f'{host}:{port}' if grpc_wired else None
-        self._grpc_secure = secure
+        self._grpc_target = f'{host}:{port}' if scheme.grpc_wired else None
+        self._grpc_secure = scheme.secure
         self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
         self.api_url = None if self._grpc_target else f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
