@@ -140,6 +140,10 @@ app.mount(f'/{ASSET_ROUTE}', StaticFiles(directory=_pkg_path(ASSET_ROUTE)), name
 templates = Jinja2Templates(directory=_pkg_path('templates'))
 
 
+# The rerun viewer sits under `static/rerun/<release>/`, one directory per release.
+VIEWER_DIR = 'rerun'
+
+
 def asset_link(name: str) -> str:
     """The path at the host root the asset file `name` is served at."""
     return app.url_path_for(ASSET_ROUTE, path=name)
@@ -148,7 +152,7 @@ def asset_link(name: str) -> str:
 @app.middleware('http')
 async def cache_rerun_assets(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith(asset_link('rerun/')):
+    if request.url.path.startswith(asset_link(f'{VIEWER_DIR}/')):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return response
 
@@ -502,7 +506,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
-            'viewer_path': asset_link(f'rerun/{rr.__version__}/index.html'),
+            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html'),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),

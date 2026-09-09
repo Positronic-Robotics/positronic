@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from multiprocessing.pool import ThreadPool
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -110,6 +111,19 @@ def validated_build_id(value: str) -> str:
     return value
 
 
+class FileKind(StrEnum):
+    """Which part of the output directory a file sits in."""
+
+    PAGE = 'page'
+    API = 'api'
+    BUILD = 'build'
+    ASSET = 'asset'
+
+
+# The first part of a path names its kind; a path under no such directory is a page.
+_KIND_BY_DIRECTORY = {API_ROUTE: FileKind.API, BUILD_DIR: FileKind.BUILD, ASSET_ROUTE: FileKind.ASSET}
+
+
 @dataclass(frozen=True)
 class ExportedFile:
     """One file the export wrote, at `path` under the output directory."""
@@ -117,6 +131,10 @@ class ExportedFile:
     path: PurePosixPath
     content_type: str
     size: int
+
+    @property
+    def kind(self) -> FileKind:
+        return _KIND_BY_DIRECTORY.get(self.path.parts[0], FileKind.PAGE)
 
 
 # `mimetypes` answers for neither on every box.
@@ -351,8 +369,8 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
     ]
 
 
-def _asset_files() -> list[tuple[PurePosixPath, Path]]:
-    """The app's own scripts, styles and viewer, each with its path under `static/`."""
+def asset_files() -> list[tuple[PurePosixPath, Path]]:
+    """The app's own scripts, styles and viewer, each as its path under `static/` and the file to copy from."""
     static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
     return [(PurePosixPath(ASSET_ROUTE) / file.relative_to(static_dir).as_posix(), file) for file in files]
@@ -525,11 +543,11 @@ def export_static(
             ),
             *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
         ]
-        asset_files = _asset_files() if assets else []
-        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in asset_files)))
+        assets_to_copy = asset_files() if assets else []
+        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in assets_to_copy)))
         _build_recordings(full, workers)
         _write_serving(out, plans)
-    for path, file in asset_files:
+    for path, file in assets_to_copy:
         out.copy(path, file)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
     return out.files

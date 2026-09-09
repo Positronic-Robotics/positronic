@@ -15,6 +15,7 @@ from urllib.request import urlopen
 
 import numpy as np
 import pytest
+import rerun as rr
 
 from positronic import keys
 from positronic.dataset import Dataset
@@ -28,9 +29,11 @@ from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
+    FileKind,
     _fetch,
     _Output,
     asset_content_type,
+    asset_files,
     export_static,
     filter_sets,
     large_file_links_under,
@@ -39,6 +42,7 @@ from positronic.server.export import (
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
     MAX_COMPONENT_BYTES,
+    VIEWER_DIR,
     ColumnConfig,
     GroupTableConfig,
     TableConfig,
@@ -307,6 +311,26 @@ def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
     assert not [path for path in without if path.startswith('static/')]
     assert 'static/app.js' in with_assets and 'static/styles.css' in with_assets
     assert any(path.startswith('static/rerun/') and path.endswith('.wasm') for path in with_assets)
+
+
+def test_the_kind_of_a_written_file_separates_the_pages_the_api_the_build_and_the_assets(dataset, tmp_path):
+    written = an_export(dataset, tmp_path / 'out', build_id='bld', assets=True)
+
+    by_kind = {kind: sorted(str(file.path) for file in written if file.kind is kind) for kind in FileKind}
+
+    assert 'index.html' in by_kind[FileKind.PAGE]
+    assert not [path for path in by_kind[FileKind.PAGE] if path.startswith(('api/', 'build/', 'static/'))]
+    assert by_kind[FileKind.API] and all(path.startswith('api/') for path in by_kind[FileKind.API])
+    assert by_kind[FileKind.BUILD] and all(path.startswith('build/bld/') for path in by_kind[FileKind.BUILD])
+    assert by_kind[FileKind.ASSET] and all(path.startswith('static/') for path in by_kind[FileKind.ASSET])
+
+
+def test_the_asset_list_holds_the_viewer_of_the_release_the_pages_load():
+    viewer = PurePosixPath('static', VIEWER_DIR, rr.__version__)
+    listed = [(path, file) for path, file in asset_files() if path.is_relative_to(viewer)]
+
+    assert listed
+    assert all(file.is_file() for _, file in listed)
 
 
 def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
