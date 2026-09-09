@@ -29,6 +29,7 @@ points ``--timing`` reaches.
 """
 
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -200,11 +201,15 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
 
 
 def _filename_token(run_id: str) -> str:
-    """``run_id`` reduced to characters a filename may carry. The resource block holds it verbatim, so
-    this only labels the file — a run id naming a path (`../…`) would otherwise write outside the
-    telemetry directory."""
+    """``run_id`` reduced to characters a filename may carry, and still distinct for a distinct id. The
+    resource block holds it verbatim, so this only labels the file — a run id naming a path (`../…`) would
+    otherwise write outside the telemetry directory."""
     token = re.sub(r'[^A-Za-z0-9._-]', '_', run_id).lstrip('.')
-    return token or uuid.uuid4().hex
+    if token and token == run_id:
+        return token
+    # The substitution is many-to-one, so a reduced id carries a digest of the id it reduced: `a/b` and
+    # `a_b` reduce alike, and two runs would otherwise append to one sidecar.
+    return f'{token}.{hashlib.sha256(run_id.encode()).hexdigest()[:8]}'.lstrip('.')
 
 
 def bind_from_env(process: str):
