@@ -140,29 +140,29 @@ class _EpisodeTelemetry:
     def step(self) -> None:
         self._steps += 1
 
-    def end(self, virtual_now: float) -> None:
-        """Close the rollout, stamped with its step count and its virtual duration up to ``virtual_now`` —
-        captured when the rollout ended, before the flush round advances the sim clock."""
+    def end(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
+        """Close the rollout, stamped with its step count, its waypoint account and its virtual duration up to
+        ``virtual_now`` — captured when the rollout ended, before the flush round advances the sim clock."""
         if self._span is None:
             return
-        self._close(virtual_now)
+        self._close(virtual_now, waypoint_attrs)
         telemetry.force_flush()
 
-    def seal(self, virtual_now: float) -> None:
+    def seal(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
         """Close a rollout abandoned mid-flight by a raising ``reset`` / ``new_session`` / session call, marked
         ``episode.partial`` so the reduce keeps it. Ending it is what exports it: the batch processor drops an
         unended span, orphaning the finished children and losing their phases."""
         if self._span is None:
             return
         telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_PARTIAL: True})
-        self.end(virtual_now)
+        self.end(virtual_now, waypoint_attrs)
 
-    def _close(self, virtual_now: float) -> None:
+    def _close(self, virtual_now: float, waypoint_attrs: dict[str, Any]) -> None:
         # A rollout that never started — a prepare that raised — has zero virtual duration.
         virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
         assert self._span is not None
         attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
-        telemetry.set_attrs(self._span, **attrs)
+        telemetry.set_attrs(self._span, **attrs, **waypoint_attrs)
         self._end_span()
 
     def _end_span(self) -> None:
@@ -170,6 +170,88 @@ class _EpisodeTelemetry:
         self._span.end()
         telemetry.pop_anchor(self._span)
         self._span = None
+
+
+# Lateness is binned to the whole millisecond up to this bound. Anything later shares the last bin, where
+# only the running maximum still separates it, so the bound must outlast the longest round worth resolving.
+_LATE_BINS_MS = 1000
+
+
+class _ScheduleFidelity:
+    """How well one episode's loop played the waypoints scheduled on one command channel.
+
+    A round emits only the newest waypoint that has come due, so a round longer than the control period
+    discards every earlier one it overtook. This counts those against what the schedule took, and bins how
+    far past its own due time each emitted waypoint went out.
+    """
+
+    def __init__(self) -> None:
+        self._scheduled = 0
+        self._emitted = 0
+        self._dropped = 0
+        self._late_sum_ns = 0
+        self._max_late_ns = 0
+        self._late_bins = [0] * (_LATE_BINS_MS + 1)
+
+    def count_scheduled(self, waypoints: int) -> None:
+        self._scheduled += waypoints
+
+    def count_dropped(self, waypoints: int) -> None:
+        """Record waypoints discarded without going out, a fresh chunk having replaced them after their time."""
+        self._dropped += waypoints
+
+    def count_played(self, popped: int, late_ns: int) -> None:
+        """Record a round that emitted the newest of ``popped`` due waypoints, ``late_ns`` past its due time."""
+        self._emitted += 1
+        self._dropped += popped - 1
+        self._late_sum_ns += late_ns
+        self._max_late_ns = max(self._max_late_ns, late_ns)
+        self._late_bins[min(late_ns // 1_000_000, _LATE_BINS_MS)] += 1
+
+    def merge(self, other: '_ScheduleFidelity') -> None:
+        """Fold another channel's account into this one, so an episode's totals read off a single account."""
+        self._scheduled += other._scheduled
+        self._emitted += other._emitted
+        self._dropped += other._dropped
+        self._late_sum_ns += other._late_sum_ns
+        self._max_late_ns = max(self._max_late_ns, other._max_late_ns)
+        self._late_bins = [own + theirs for own, theirs in zip(self._late_bins, other._late_bins, strict=True)]
+
+    def span_attrs(self) -> dict[str, Any]:
+        """The account as episode-span attributes. Lateness rides as a sum and a maximum, which the offline
+        reduce totals across episodes exactly, where a percentile would not survive being averaged."""
+        return {
+            telemetry_keys.ATTR_WAYPOINTS_SCHEDULED: self._scheduled,
+            telemetry_keys.ATTR_WAYPOINTS_EMITTED: self._emitted,
+            telemetry_keys.ATTR_WAYPOINTS_DROPPED: self._dropped,
+            telemetry_keys.ATTR_WAYPOINTS_LATE_SUM_MS: self._late_sum_ns / 1e6,
+            telemetry_keys.ATTR_WAYPOINTS_LATE_MAX_MS: self._max_late_ns / 1e6,
+        }
+
+    def meta(self, prefix: str) -> dict[str, Any]:
+        """The episode's account under ``prefix``, empty for a channel the trajectory never named."""
+        if self._scheduled == 0:
+            return {}
+        meta: dict[str, Any] = {
+            f'{prefix}.{eval_keys.SCHEDULED}': self._scheduled,
+            f'{prefix}.{eval_keys.EMITTED}': self._emitted,
+            f'{prefix}.{eval_keys.DROPPED}': self._dropped,
+        }
+        if self._emitted > 0:
+            meta[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._late_percentile_ms(50)
+            meta[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._late_percentile_ms(90)
+            meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._max_late_ns / 1e6
+        return meta
+
+    def _late_percentile_ms(self, percent: int) -> float:
+        """The whole millisecond at or under which ``percent`` of the emitted waypoints went out."""
+        rank = -(-self._emitted * percent // 100)  # nearest-rank, in integers, so no float rounds it off by one
+        seen = 0
+        for ms, count in enumerate(self._late_bins):
+            seen += count
+            if seen >= rank:
+                return float(ms)
+        raise AssertionError('every emitted waypoint is binned, so a rank within the count is always reached')
 
 
 class Harness(pimm.ControlSystem):
@@ -204,6 +286,8 @@ class Harness(pimm.ControlSystem):
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
+        # How the live episode has played those schedules, rebuilt per episode and stamped into its statics.
+        self._fidelity = {name: _ScheduleFidelity() for name in embodiment.commands}
 
         # One episode per call, answered with the terminal payload it ended on.
         self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
@@ -240,9 +324,18 @@ class Harness(pimm.ControlSystem):
         assert self._inference is not None, 'only a live episode has meta'
         for k, v in flatten_dict(self._inference.meta).items():
             meta[f'{policy_keys.POLICY_META}.{k}'] = v
+        for name, fidelity in self._fidelity.items():
+            meta.update(fidelity.meta(f'{eval_keys.SCHEDULE}.{name}'))
         meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
         return meta
+
+    def _episode_waypoints(self) -> _ScheduleFidelity:
+        """Every command channel's account for this episode, in one."""
+        total = _ScheduleFidelity()
+        for fidelity in self._fidelity.values():
+            total.merge(fidelity)
+        return total
 
     def _ready(
         self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, args: dict[str, Any]
@@ -287,7 +380,7 @@ class Harness(pimm.ControlSystem):
         # The episode span must still be open while the recorder writes the STOP, so that write is timed
         # inside the episode. The other control systems run in that round as well, and the episode is timed
         # with their work too. The error is not more than one control period.
-        self._telemetry.end(virtual_now)
+        self._telemetry.end(virtual_now, self._episode_waypoints().span_attrs())
 
     def _set_deadline(self, deadline_ns: int | None) -> None:
         """Arm the live episode's deadline and publish it, so the enforced one and the published one agree."""
@@ -303,6 +396,7 @@ class Harness(pimm.ControlSystem):
         # it, and still closes the session it was handed.
         self._call = call
         self._inference = _EpisodeInference(call.request, self._charges_wall_time, clock)
+        self._fidelity = {name: _ScheduleFidelity() for name in self._embodiment.commands}
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
@@ -377,6 +471,14 @@ class Harness(pimm.ControlSystem):
                 f'rig-side stack is not anchoring chunks to the harness clock'
             )
 
+    @staticmethod
+    def _due_count(schedule: deque[tuple[int, Any]], now_ns: int) -> int:
+        """How many of a schedule's waypoints have come due. A schedule ascends, so they are its leading run."""
+        for index, (due_ns, _) in enumerate(schedule):
+            if due_ns > now_ns:
+                return index
+        return len(schedule)
+
     def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
@@ -384,20 +486,27 @@ class Harness(pimm.ControlSystem):
         """
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
+        now_ns = clock.now_ns()
         # Layers time actions in float seconds; the schedules and every pimm channel are in ns.
         for name, schedule in self._schedules.items():
+            # A chunk landing on a late round replaces waypoints already due, which then go out on no round.
+            self._fidelity[name].count_dropped(self._due_count(schedule, now_ns))
             schedule.clear()
             schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
+            self._fidelity[name].count_scheduled(len(schedule))
 
     def _issue_due_commands(self, clock: pimm.Clock) -> None:
-        """Emit each channel's due command. Nothing on a channel with none. Last on a channel with multiple."""
+        """Emit each channel's due command. Nothing on a channel with none. Last on a channel with multiple,
+        counting the ones it overtakes as dropped and how late the one it sends is."""
         now_ns = clock.now_ns()
         for name, schedule in self._schedules.items():
-            value = None
+            due_ns, value, popped = now_ns, None, 0
             while schedule and schedule[0][0] <= now_ns:
-                value = schedule.popleft()[1]
+                due_ns, value = schedule.popleft()
+                popped += 1
             if value is not None:
                 self.commands[name].emit(value)
+                self._fidelity[name].count_played(popped, now_ns - due_ns)
 
     def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if the live trial has ended this round, else ``None``.
@@ -421,7 +530,7 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
-            self._telemetry.seal(clock.now())
+            self._telemetry.seal(clock.now(), self._episode_waypoints().span_attrs())
             if self._call is not None:
                 self._call.set_exception(exc)
                 self._call = None
