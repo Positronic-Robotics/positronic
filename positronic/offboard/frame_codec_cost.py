@@ -23,8 +23,8 @@ import time
 
 import av
 import numpy as np
-from PIL import Image as PilImage
 
+from positronic.policy.codec import RestrictImageSize
 from positronic.utils.serialization import FRAMES, encode_jpeg, unpack
 
 
@@ -95,8 +95,9 @@ class Cost:
     decode_ms: float
 
 
-def bounded_frames(mp4: pathlib.Path, width: int, height: int, rate_hz: float) -> list[np.ndarray]:
-    """Every frame the stack samples, scaled the way ``RestrictImageSize`` scales it."""
+def bounded_frames(mp4: pathlib.Path, bound: RestrictImageSize, rate_hz: float) -> list[np.ndarray]:
+    """Every frame the stack samples, through the rig's own bound."""
+    key = 'image'
     with av.open(str(mp4), 'r') as container:
         recorded_rate = container.streams.video[0].average_rate
         if recorded_rate is None:
@@ -106,13 +107,7 @@ def bounded_frames(mp4: pathlib.Path, width: int, height: int, rate_hz: float) -
         for index, frame in enumerate(container.decode(video=0)):
             if index % step:
                 continue
-            image = frame.to_ndarray(format='rgb24')
-            source_height, source_width = image.shape[:2]
-            scale = min(1.0, width / source_width, height / source_height)
-            if scale < 1.0:
-                size = (int(source_width * scale), int(source_height * scale))
-                image = np.array(PilImage.fromarray(image).resize(size, PilImage.Resampling.BILINEAR))
-            frames.append(image)
+            frames.append(bound.encode({key: frame.to_ndarray(format='rgb24')})[key])
     return frames
 
 
@@ -160,12 +155,12 @@ def main() -> int:
     parser.add_argument('--json', type=pathlib.Path, help='write every row here')
     args = parser.parse_args()
 
-    width, height = (int(side) for side in args.bound.lower().split('x'))
+    bound = RestrictImageSize(*(int(side) for side in args.bound.lower().split('x')))
     codecs: list[Codec] = [Jpeg()]
     codecs += [H264(spec.split(':')[0], int(spec.split(':')[1])) for spec in args.x264.split(',')]
     rows: list[Cost] = []
     for camera in args.cameras.split(','):
-        frames = bounded_frames(args.episode / f'{camera}.mp4', width, height, args.rate)
+        frames = bounded_frames(args.episode / f'{camera}.mp4', bound, args.rate)
         print(f'{camera}: {len(frames)} sampled frames at {frames[0].shape[1]}x{frames[0].shape[0]}')
         rows += costs(frames, camera, args.frames, codecs, args.windows)
 
