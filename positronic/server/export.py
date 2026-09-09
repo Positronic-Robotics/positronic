@@ -114,7 +114,7 @@ def validated_build_id(value: str) -> str:
 class FileKind(StrEnum):
     """Which part of the output directory a file sits in."""
 
-    # Neither the build nor the assets: a page or an API response.
+    # A page or an API response, outside the build and the assets.
     PAGE = 'page'
     BUILD = 'build'
     ASSET = 'asset'
