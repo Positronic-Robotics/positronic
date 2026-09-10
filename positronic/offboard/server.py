@@ -247,7 +247,7 @@ class PolicyServer:
         # A ring rides beside the Unix socket, so it needs a kernel that seals a memfd and a companion
         # path short enough to bind.
         channel = frames.channel_path(uds) if uds is not None and frame_ring and frames.SUPPORTED else None
-        if channel is not None and len(channel) > frames.MAX_SOCKET_PATH:
+        if channel is not None and len(os.fsencode(channel)) > frames.MAX_SOCKET_PATH:
             logger.warning('No frame ring: the companion socket path %r is too long to bind', channel)
             channel = None
         self._frames = frames.FrameChannel(channel) if channel is not None else None
