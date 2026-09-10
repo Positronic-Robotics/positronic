@@ -15,6 +15,8 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
+from . import frame_ring as frames
+from . import keys as offboard_keys
 from . import protocol
 from .protocol import deserialise, serialise, typed_commands
 
@@ -27,10 +29,24 @@ DEFAULT_INFER_TIMEOUT = 180.0
 
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+    """One session on one server, and the observations it sends.
+
+    ``uds`` is the Unix socket the session was dialled over, which says the server runs on this host.
+    A server that also declares a frame ring then gets every image through shared memory, and the
+    message carries a reference in place of each one.
+    """
+
+    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT, uds: str | None = None):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
+        self._frames = self._frame_writer(uds)
+
+    def _frame_writer(self, uds: str | None) -> frames.FrameWriter | None:
+        session_id = self._metadata.get(offboard_keys.FRAME_RING)
+        if uds is None or session_id is None or not frames.SUPPORTED:
+            return None
+        return frames.FrameWriter(frames.channel_path(uds), session_id)
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -72,7 +88,7 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
-        serialised = serialise(obs)
+        serialised = serialise(obs if self._frames is None else self._frames.pack(obs))
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
         self._websocket.send(serialised)
@@ -94,6 +110,8 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
+        if self._frames is not None:
+            self._frames.close()
         state_before_close = self._websocket.state.name
         self._websocket.close()
         # A close that times out still reaches CLOSED locally; only the close code says the server answered.
@@ -281,7 +299,7 @@ class InferenceClient:
                     else partial(unix_connect, self.uds, uri=self._ws_uri)
                 )
                 ws = dial(open_timeout=self.open_timeout, additional_headers=self.headers, ping_interval=20.0)
-                return InferenceSession(ws, infer_timeout=self.infer_timeout)
+                return InferenceSession(ws, infer_timeout=self.infer_timeout, uds=self.uds)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:

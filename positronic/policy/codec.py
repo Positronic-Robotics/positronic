@@ -27,6 +27,7 @@ from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, _ComposedLayer
 from positronic.utils import merge_dicts
+from positronic.utils.serialization import is_image
 
 _QUAT = geom.Rotation.Representation.QUAT
 
@@ -467,8 +468,7 @@ class RestrictImageSize(Codec):
         return {key: self._restrict(key, value) for key, value in data.items()}
 
     def _restrict(self, key: str, value: Any) -> Any:
-        # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+        if is_image(value):
             # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
             if value.ndim == 4:
                 return np.stack([_scaled(frame, self._width, self._height) for frame in value])

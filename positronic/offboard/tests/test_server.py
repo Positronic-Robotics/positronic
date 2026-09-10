@@ -12,11 +12,13 @@ from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
 import httpx
+import numpy as np
 import pytest
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic import keys
+from positronic.offboard import client, frame_ring
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
@@ -726,3 +728,83 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
         )
         status = sock.recv(64).split(b' ')[1]
     assert status == b'401'
+
+
+def _messages_the_client_sends(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Every observation message ``InferenceSession.infer`` puts on the wire."""
+    sent: list[bytes] = []
+    packer = client.serialise
+
+    def record(obj):
+        message = packer(obj)
+        sent.append(message)
+        return message
+
+    monkeypatch.setattr(client, 'serialise', record)
+    return sent
+
+
+def _frame() -> np.ndarray:
+    return np.random.default_rng(0).integers(0, 256, (240, 320, 3), dtype=np.uint8)
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_unix_session_carries_its_frames_through_shared_memory(unix_stub_server, monkeypatch):
+    socket_path, policy = unix_stub_server
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    session = InferenceClient(f'unix://{socket_path}').new_session()
+    try:
+        assert offboard_keys.FRAME_RING in session.metadata
+        assert session.infer({'image.left': image, 'grip': 0.5}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+    served = policy._mock_session.call_args.args[0]
+    np.testing.assert_array_equal(served['image.left'], image)
+    assert served['grip'] == 0.5
+    assert max(len(message) for message in sent) < image.nbytes // 100
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_ring_hands_the_server_a_view_it_cannot_write(unix_stub_server):
+    socket_path, policy = unix_stub_server
+
+    session = InferenceClient(f'unix://{socket_path}').new_session()
+    try:
+        session.infer({'image.left': _frame()})
+    finally:
+        session.close()
+
+    served = policy._mock_session.call_args.args[0]['image.left']
+    assert not served.flags.writeable
+
+
+def test_a_unix_session_with_the_ring_off_carries_its_frames_in_the_message(
+    start_unix_server, socket_path, make_mock_policy, monkeypatch
+):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), socket_path, frame_ring=False)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    session = InferenceClient(f'unix://{socket_path}').new_session()
+    try:
+        assert offboard_keys.FRAME_RING not in session.metadata
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(policy._mock_session.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) > image.nbytes
+
+
+def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
+    host, port, _server, _policy = stub_server
+
+    session = InferenceClient(f'{host}:{port}').new_session()
+    try:
+        assert offboard_keys.FRAME_RING not in session.metadata
+    finally:
+        session.close()

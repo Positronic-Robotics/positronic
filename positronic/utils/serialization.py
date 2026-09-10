@@ -35,6 +35,15 @@ _NDIM = b'ndim'
 _JPEG_QUALITY = 90
 
 
+def is_image(value: Any) -> bool:
+    """True for a value the wire treats as an image: an ``(H, W, 3)`` frame or a ``(T, H, W, 3)`` stack.
+
+    Codecs nest images inside dicts and lists (e.g. GR00T), so a caller that walks an observation
+    recurses to reach every one.
+    """
+    return isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
+
+
 def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
     """JPEG-encode a single ``(H, W, 3)`` image or a ``(T, H, W, 3)`` stack to a compact wire marker.
 
