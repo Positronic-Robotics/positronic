@@ -21,7 +21,7 @@ from positronic.utils import serialization
 
 logger = logging.getLogger(__name__)
 
-# The longest path ``sockaddr_un`` carries: ``sun_path`` is 108 bytes on Linux, and one holds the NUL.
+# The longest path ``sockaddr_un`` carries, in bytes: ``sun_path`` is 108 on Linux, and one holds the NUL.
 MAX_SOCKET_PATH = 107
 
 # The suffix of the descriptor socket, which each side derives from its own session socket path.
@@ -78,7 +78,10 @@ def _seals_a_memfd() -> bool:
     """True where a ring can be built: macOS has no ``memfd_create``, and Linux before 5.1 no seal."""
     if not hasattr(os, 'memfd_create'):
         return False
-    fd = os.memfd_create('positronic-frames-probe', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        fd = os.memfd_create('positronic-frames-probe', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    except OSError:
+        return False
     try:
         fcntl.fcntl(fd, _F_ADD_SEALS, _SEALS)
     except OSError:
@@ -138,10 +141,7 @@ class FrameRing:
 
 
 def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]]) -> Any:
-    """``value`` with an empty reference in place of every image, each paired with its array in ``found``.
-
-    The caller fills each reference in once the ring says where its image landed.
-    """
+    """``value`` with an empty reference in place of every image, each paired with its array in ``found``."""
     if serialization.is_image(value):
         reference: dict[bytes, Any] = {}
         found.append((reference, value))
@@ -246,7 +246,7 @@ class FrameChannel:
 
     def __init__(self, path: str):
         self.path = path
-        self._rings: dict[str, list[MappedRing]] = {}
+        self._rings: dict[str, MappedRing | None] = {}
         self._lock = threading.Lock()
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
@@ -261,7 +261,7 @@ class FrameChannel:
 
     def open_session(self, session_id: str) -> None:
         with self._lock:
-            self._rings[session_id] = []
+            self._rings[session_id] = None
 
     def close_session(self, session_id: str) -> None:
         with self._lock:
@@ -279,10 +279,10 @@ class FrameChannel:
 
     def _ring(self, session_id: str) -> MappedRing:
         with self._lock:
-            rings = self._rings.get(session_id, [])
-        if not rings:
+            ring = self._rings.get(session_id)
+        if ring is None:
             raise RuntimeError(f'Session {session_id} sent a frame reference before it handed over a ring')
-        return rings[-1]
+        return ring
 
     def _accept_forever(self) -> None:
         assert self._socket is not None
@@ -303,6 +303,7 @@ class FrameChannel:
                     logger.exception('A frame ring handover failed')
 
     def _take_ring(self, connection: socket.socket) -> None:
+        connection.settimeout(HANDOVER_TIMEOUT_SEC)
         message, fds, _flags, _address = socket.recv_fds(connection, _HANDOVER_BYTES, 1)
         if not fds:
             raise RuntimeError('A frame ring handover carried no descriptor')
@@ -313,10 +314,12 @@ class FrameChannel:
             os.close(fds[0])
         session_id = header[_SESSION]
         with self._lock:
-            rings = self._rings.get(session_id)
-            if rings is not None:
-                rings.append(ring)
-        if rings is None:
+            # A ring this replaces stays mapped while any view over it lives, so dropping it here frees
+            # only what nobody reads.
+            open_here = session_id in self._rings
+            if open_here:
+                self._rings[session_id] = ring
+        if not open_here:
             raise RuntimeError(f'A frame ring arrived for session {session_id}, which is not open here')
         connection.send(_ACK)
 
