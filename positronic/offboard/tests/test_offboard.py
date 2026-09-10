@@ -402,7 +402,7 @@ def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(fram
 @pytestmark_ring
 def test_closing_a_channel_that_waits_for_a_handover_ends_its_thread(socket_path):
     channel = frame_ring.FrameChannel(frame_ring.channel_path(socket_path))
-    channel.start()
+    channel.start(PolicyServer.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
     accepting = channel._thread
 
     channel.close()
