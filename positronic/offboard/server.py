@@ -231,10 +231,8 @@ class PolicyServer:
     README states the rules). An instantiated ``Pipeline`` refuses every session param. The default
     checkpoint is resolved at startup and pinned; a session that names a model id loads that one.
 
-    ``frame_ring`` accepts each observation's images through shared memory rather than in the message,
-    which a Unix socket makes possible. The server declares it per session, and a client that reads the
-    declaration hands over a sealed ring the server maps read-only (see ``positronic.offboard.frame_ring``).
-    A client that ignores the declaration keeps sending whole images, and so does every client over TCP.
+    ``frame_ring`` takes each observation's images through shared memory, which a Unix socket makes
+    possible; ``positronic.offboard.frame_ring`` states the contract.
     """
 
     def __init__(
@@ -574,8 +572,7 @@ def serve(
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``uds`` binds
     the websocket wire to that Unix socket path instead of ``host`` and ``port``; the gRPC wire still
     binds ``host``, so a socket-served websocket beside a gRPC port is still reachable over the network.
-    ``frame_ring=false`` keeps every image in the message there, which a socket-bound server otherwise
-    carries in shared memory.
+    ``frame_ring=false`` keeps every image in the message.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
