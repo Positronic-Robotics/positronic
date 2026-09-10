@@ -1,12 +1,9 @@
 """A shared-memory ring that carries an observation's frames to a server on the same host.
 
 The client creates the ring, seals it, and hands its descriptor to the server over an ``AF_UNIX``
-socket beside the session socket. Each inference writes the observation's images into one slot and
-sends a reference in place of every image. The server maps the ring read-only and builds a numpy view
-over those bytes, so the frames cross no message.
-
-The seals refuse every write, every resize and every hole punch on the server's side, so the
-read-only half is a property of the descriptor and not an agreement between the two processes.
+socket beside the session socket; each inference writes the images into one slot and sends a
+reference in place of every image. The server maps the ring read-only and builds a numpy view over
+those bytes, and the seals refuse every write, resize and hole punch it could make.
 """
 
 import fcntl
@@ -74,10 +71,8 @@ def _aligned(nbytes: int) -> int:
     return -(-nbytes // _ALIGN) * _ALIGN
 
 
-# The seal numbers from ``linux/fcntl.h``. A Python built against another platform's headers exports
-# none of them, so the kernel's own values stand here. ``F_SEAL_FUTURE_WRITE`` (Linux 5.1 and later)
-# leaves the writable mapping this process already holds and refuses every later one, which
-# ``F_SEAL_WRITE`` cannot do.
+# The seal numbers from ``linux/fcntl.h``: a Python built against other headers exports none of them.
+# ``F_SEAL_FUTURE_WRITE`` (Linux 5.1) spares the writer's own mapping, which ``F_SEAL_WRITE`` cannot.
 _F_ADD_SEALS = 1033
 _F_SEAL_SHRINK = 0x0002
 _F_SEAL_GROW = 0x0004
@@ -239,9 +234,8 @@ class MappedRing:
 class FrameChannel:
     """The socket that carries ring descriptors to this server, and the rings each session holds.
 
-    A thread accepts each handover, maps the ring read-only and answers. The handover names the
-    session id the server put in its ready handshake, so a ring lands on the session that asked for it.
-    The caller claims ``path`` and hands the socket to ``start``.
+    A thread accepts each handover, maps the ring read-only and answers, under the session id the
+    server put in its ready handshake. The caller claims ``path`` and hands the socket to ``start``.
     """
 
     def __init__(self, path: str):
