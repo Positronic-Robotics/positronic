@@ -1,4 +1,5 @@
 import os
+import pathlib
 import socket
 import time
 import urllib.parse
@@ -230,6 +231,73 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
     finally:
         session.close()
+
+
+@pytest.fixture
+def unix_stub_server(start_unix_server, socket_path, make_mock_policy) -> tuple[str, MagicMock]:
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), socket_path)
+    return socket_path, policy
+
+
+def test_a_pipeline_served_over_a_unix_socket(unix_stub_server):
+    socket_path, policy = unix_stub_server
+    client = InferenceClient(f'unix://{socket_path}')
+
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {'name': 'chunked_schedule'}
+        assert session.metadata[offboard_keys.HOST] == socket_path
+        assert offboard_keys.PORT not in session.metadata
+
+        obs = {'image': 'test'}
+        assert session.infer(obs) == [{'action': [1, 2, 3]}]
+        policy._mock_session.assert_called_with(obs, ANY)
+    finally:
+        session.close()
+
+
+def test_a_unix_url_carries_the_model_id_past_the_socket_path(unix_stub_server):
+    socket_path, _policy = unix_stub_server
+
+    session = InferenceClient(f'unix://{socket_path}/api/v1/session/10000').new_session()
+    try:
+        assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
+    finally:
+        session.close()
+
+
+def test_a_server_binds_over_the_socket_an_earlier_run_left(start_unix_server, socket_path, make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(socket_path)
+
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), socket_path)
+
+    assert InferenceClient(f'unix://{socket_path}').list_models() == ['stub']
+
+
+def test_a_path_that_is_not_a_socket_is_left_alone(socket_path):
+    """A wrong ``uds`` fails the bind rather than deleting a file nobody meant to lose."""
+    path = pathlib.Path(socket_path)
+    path.write_text('not a socket')
+
+    PolicyServer.clear_stale_socket(socket_path)
+
+    assert path.read_text() == 'not a socket'
+
+
+def test_a_socket_a_live_server_listens_on_is_left_alone(socket_path):
+    """Unlinking it would take the address off its owner and route new sessions to the wrong server."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
+        live.bind(socket_path)
+        live.listen()
+
+        PolicyServer.clear_stale_socket(socket_path)
+
+        assert pathlib.Path(socket_path).is_socket()
 
 
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):

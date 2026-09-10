@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import StrEnum
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlsplit
 
@@ -50,6 +50,11 @@ from positronic.server.dataset_utils import (
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
 
+# The app's own scripts, styles and viewer sit under this route at the host root.
+ASSET_ROUTE = 'static'
+# The directory of assets a page reads when nothing names another.
+DEFAULT_ASSET_DIR = PurePosixPath(ASSET_ROUTE)
+
 
 @dataclass(frozen=True)
 class PageConfig:
@@ -59,6 +64,7 @@ class PageConfig:
     title: str = ''  # empty = the dataset root
     show_paths: bool = True
     static_export: bool = False
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR
 
 
 # The app state's key for the `PageConfig` every page reads.
@@ -101,6 +107,16 @@ def require_dataset(func):
 MAX_COMPONENT_BYTES = 200
 
 
+def _is_one_path_segment(value: str) -> bool:
+    """Whether a URL path and a filename both carry `value` as one segment, as it is written."""
+    return (
+        bool(value)
+        and value not in ('.', '..')
+        and quote(value, safe='') == value
+        and len(value) <= MAX_COMPONENT_BYTES
+    )
+
+
 def _path_component(value: str) -> str:
     """``value`` as one filename component, injectively and within any filesystem's name limit."""
     encoded = quote(value, safe='')
@@ -132,21 +148,33 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# The app's own scripts, styles and viewer, served at the host root, so every export a host serves shares one copy.
-ASSET_ROUTE = 'static'
 # Every API route sits under this segment; a static export writes each response a page reads whole under it.
 API_ROUTE = 'api'
 app.mount(f'/{ASSET_ROUTE}', StaticFiles(directory=_pkg_path(ASSET_ROUTE)), name=ASSET_ROUTE)
 templates = Jinja2Templates(directory=_pkg_path('templates'))
 
 
-# The rerun viewer sits under `static/rerun/<release>/`, one directory per release.
+# The rerun viewer sits under `<asset directory>/rerun/<release>/`, one directory per release.
 VIEWER_DIR = 'rerun'
+
+
+def validated_asset_dir(value: PurePosixPath) -> PurePosixPath:
+    """`value` when it names a directory of assets under the asset route."""
+    route, *segments = value.parts
+    if route != ASSET_ROUTE:
+        raise ValueError(f'an asset directory sits under {ASSET_ROUTE!r}, got {str(value)!r}')
+    for segment in segments:
+        if not _is_one_path_segment(segment):
+            raise ValueError(
+                f'an asset directory is URL path segments of at most {MAX_COMPONENT_BYTES} letters, digits, "_", '
+                f'"-" and ".", got {str(value)!r}'
+            )
+    return value
 
 
 def asset_link(name: str) -> str:
     """The path at the host root the asset file `name` is served at."""
-    return app.url_path_for(ASSET_ROUTE, path=name)
+    return f'/{_page_config().asset_dir}/{name}'
 
 
 @app.middleware('http')
@@ -347,16 +375,26 @@ def normalized_base_href(value: str) -> str:
 
 
 def configure_pages(
-    *, base_href: str = '/', title: str = '', show_paths: bool = True, static_export: bool = False
+    *,
+    base_href: str = '/',
+    title: str = '',
+    show_paths: bool = True,
+    static_export: bool = False,
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR,
 ) -> None:
     """Set where the pages are served and what they show.
 
     `base_href` is the path at the server root every page link and API call resolves against. `title` is
     the header text, the dataset root when empty. `show_paths` says whether a page reports where the
-    dataset lives. `static_export` makes the pages read the files a static export writes.
+    dataset lives. `static_export` makes the pages read the files a static export writes. `asset_dir` is
+    the directory under the asset route the pages read the app's own scripts, styles and viewer from.
     """
     app_state[_PAGE_CONFIG_KEY] = PageConfig(
-        base_href=normalized_base_href(base_href), title=title, show_paths=show_paths, static_export=static_export
+        base_href=normalized_base_href(base_href),
+        title=title,
+        show_paths=show_paths,
+        static_export=static_export,
+        asset_dir=validated_asset_dir(asset_dir),
     )
 
 
@@ -987,7 +1025,7 @@ def configure_tables(
     """
     episode_columns = set(ep_table_cfg or {})
     for name, cfg in (group_tables or {}).items():
-        if not name or name in ('.', '..') or quote(name, safe='') != name or len(name) > MAX_COMPONENT_BYTES:
+        if not _is_one_path_segment(name):
             raise ValueError(
                 f'a group name is one URL path segment of at most {MAX_COMPONENT_BYTES} letters, digits, "_", "-" '
                 f'and ".", got {name!r}'
