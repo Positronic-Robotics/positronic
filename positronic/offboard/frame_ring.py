@@ -74,8 +74,8 @@ _F_SEAL_FUTURE_WRITE = 0x0010
 _SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
 
 
-def _seals_a_memfd() -> bool:
-    """True where a ring can be built: macOS has no ``memfd_create``, and Linux before 5.1 no seal."""
+def _ring_is_supported() -> bool:
+    """Whether this host builds a sealed ring: macOS has no ``memfd_create``, Linux before 5.1 no seal."""
     if not hasattr(os, 'memfd_create'):
         return False
     try:
@@ -94,7 +94,7 @@ def _seals_a_memfd() -> bool:
 
 
 # A server that cannot build a ring declares none, and every image stays in the message.
-SUPPORTED = _seals_a_memfd()
+SUPPORTED = _ring_is_supported()
 
 
 class FrameRing:
@@ -340,7 +340,8 @@ class FrameChannel:
             self._socket.close()
             self._socket = None
         if self._thread is not None:
-            self._thread.join(timeout=5.0)
+            # A handover under way holds the thread for its own deadline, so the join waits that long.
+            self._thread.join(timeout=HANDOVER_TIMEOUT_SEC)
             self._thread = None
         with self._lock:
             self._rings.clear()
