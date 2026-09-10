@@ -318,14 +318,14 @@ def _over_the_wire(obs):
 @pytestmark_ring
 def test_a_ring_carries_every_image_of_an_observation_byte_identical(frame_channel, frame_writer):
     image, stack = _image(), np.stack([_image(), _image()])
-    obs = {'image.left': image, 'grip': 0.5, 'nested': {'frames': [image, stack]}}
+    obs = {'image.left': image, keys.GRIP: 0.5, 'nested': {'frames': [image, stack]}}
 
     served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
 
     np.testing.assert_array_equal(served['image.left'], image)
     np.testing.assert_array_equal(served['nested']['frames'][0], image)
     np.testing.assert_array_equal(served['nested']['frames'][1], stack)
-    assert served['grip'] == 0.5
+    assert served[keys.GRIP] == 0.5
 
 
 @pytestmark_ring
@@ -339,7 +339,7 @@ def test_a_packed_observation_leaves_the_pixels_out_of_the_message(frame_writer)
 
 @pytestmark_ring
 def test_an_observation_with_no_image_creates_no_ring(frame_writer):
-    assert frame_writer.pack({'grip': 0.5}) == {'grip': 0.5}
+    assert frame_writer.pack({keys.GRIP: 0.5}) == {keys.GRIP: 0.5}
     assert frame_writer._ring is None
 
 

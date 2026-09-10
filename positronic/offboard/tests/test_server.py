@@ -757,13 +757,13 @@ def test_a_unix_session_carries_its_frames_through_shared_memory(unix_stub_serve
     session = InferenceClient(f'unix://{socket_path}').new_session()
     try:
         assert offboard_keys.FRAME_RING in session.metadata
-        assert session.infer({'image.left': image, 'grip': 0.5}) == [{'action': [1, 2, 3]}]
+        assert session.infer({'image.left': image, keys.GRIP: 0.5}) == [{'action': [1, 2, 3]}]
     finally:
         session.close()
 
     served = policy._mock_session.call_args.args[0]
     np.testing.assert_array_equal(served['image.left'], image)
-    assert served['grip'] == 0.5
+    assert served[keys.GRIP] == 0.5
     assert max(len(message) for message in sent) < image.nbytes // 100
 
 
