@@ -1,8 +1,8 @@
 """Measure what one inference costs when the frames ride a shared-memory ring, and when they do not.
 
 The server runs in this process on a Unix socket, and the served session reads every pixel it is
-given, as a codec does. So each arm pays for touching the frames, and the difference between them is
-what the boundary costs.
+given, as a codec does. So each arm pays for touching the frames, and the boundary costs the
+difference between them.
 
 Usage
   uv run --locked python -m positronic.offboard.tests.bench_frame_ring
