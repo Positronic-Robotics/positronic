@@ -74,7 +74,7 @@ class PolicyClient:
 
     def ping(self) -> bool:
         try:
-            self.call_endpoint('ping')
+            self.call_endpoint(gr00t.PING)
             return True
         except (zmq.error.ZMQError, RuntimeError):
             return False
@@ -101,11 +101,11 @@ class PolicyClient:
         return response
 
     def get_action(self, observation: dict[str, Any]) -> tuple[dict, dict]:
-        response = self.call_endpoint('get_action', {gr00t.OBSERVATION: observation, gr00t.OPTIONS: None})
+        response = self.call_endpoint(gr00t.GET_ACTION, {gr00t.OBSERVATION: observation, gr00t.OPTIONS: None})
         return tuple(response)
 
     def reset(self) -> dict[str, Any]:
-        return self.call_endpoint('reset', {gr00t.OPTIONS: None})
+        return self.call_endpoint(gr00t.RESET, {gr00t.OPTIONS: None})
 
     def close(self):
         self.socket.close(linger=0)
@@ -317,7 +317,7 @@ class Gr00tSource(ModelSource):
             groot.start(on_progress)
             policy = Gr00tPolicy(groot, str(checkpoint_dir))
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
-            modalities = groot.client.call_endpoint('get_modality_config')
+            modalities = groot.client.call_endpoint(gr00t.GET_MODALITY_CONFIG)
             warmup(policy, self._warm_observation(modalities), on_progress)
         except Exception:
             groot.stop()
