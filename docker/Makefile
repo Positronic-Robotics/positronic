@@ -1,5 +1,7 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
+.DEFAULT_GOAL := help
+
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -41,7 +43,15 @@ TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
 
-GROOT_BASE_IMAGE ?= positro/gr00t-base:240627d
+GROOT_REF := 506ccc87314fb69ad7ac8d8960b002ce3a378395
+ifndef GROOT_BASE_IMAGE
+GROOT_BASE_IMAGE := positro/gr00t-base:$(GROOT_REF)
+build-groot: build-groot-base
+endif
+
+.PHONY: build-groot-base
+build-groot-base:
+	docker build --platform linux/amd64 -f docker/Dockerfile -t $(GROOT_BASE_IMAGE) https://github.com/Positronic-Robotics/gr00t.git\#$(GROOT_REF)
 
 help:
 	@echo "Positronic Docker Build System - Makefile"

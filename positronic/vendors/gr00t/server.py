@@ -62,37 +62,34 @@ class PolicyClient:
         self.host = host
         self.port = port
         self.timeout_ms = timeout_ms
-        self._init_socket()
+        self.socket = self._make_socket()
 
-    def _init_socket(self):
-        if hasattr(self, 'socket'):
-            self.socket.close(linger=0)
-        self.socket = self.context.socket(zmq.REQ)
-        self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
-        self.socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
-        self.socket.connect(f'tcp://{self.host}:{self.port}')
+    def _make_socket(self):
+        socket = self.context.socket(zmq.REQ)
+        socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+        socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
+        socket.connect(f'tcp://{self.host}:{self.port}')
+        return socket
 
     def ping(self) -> bool:
         try:
-            self.call_endpoint('ping', requires_input=False)
+            self.call_endpoint('ping')
             return True
         except (zmq.error.ZMQError, RuntimeError):
-            self._init_socket()
             return False
 
-    def call_endpoint(self, endpoint: str, data: dict | None = None, requires_input: bool = True) -> Any:
+    def call_endpoint(self, endpoint: str, data: dict | None = None) -> Any:
         request: dict = {'endpoint': endpoint}
-        if requires_input:
+        if data is not None:
             request['data'] = data
 
         try:
             self.socket.send(MsgSerializer.to_bytes(request))
             message = self.socket.recv()
-        except zmq.error.Again as err:
-            self._init_socket()
-            raise RuntimeError(
-                f'Timeout after {self.timeout_ms}ms calling endpoint "{endpoint}" at {self.host}:{self.port}'
-            ) from err
+        except zmq.error.ZMQError as err:
+            self.socket.close(linger=0)
+            self.socket = self._make_socket()
+            raise RuntimeError(f'GR00T endpoint {endpoint} failed at {self.host}:{self.port}: {err}') from err
 
         if message == b'ERROR':
             raise RuntimeError('Server error. Make sure the correct policy server is running.')
@@ -114,15 +111,10 @@ class PolicyClient:
         self.context.term()
 
 
-###########################################################################################
-# Subprocess manager for gr00t ZMQ server
-###########################################################################################
-
-
 class Gr00tSubprocess:
     """Manages the gr00t ZMQ server subprocess."""
 
-    def __init__(self, checkpoint_dir: str, groot_venv_path: str, zmq_port: int = 5555, ready_timeout: float = 120.0):
+    def __init__(self, checkpoint_dir: str, groot_venv_path: Path, zmq_port: int = 5555, ready_timeout: float = 120.0):
         self.checkpoint_dir = checkpoint_dir
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
@@ -132,7 +124,7 @@ class Gr00tSubprocess:
 
     def start(self, on_progress: Callable[[str], None] | None = None):
         groot_root = Path(__file__).parents[4] / 'gr00t'
-        python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
+        python_bin = str(self.groot_venv_path / 'bin' / 'python')
 
         command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
         command.extend(['--model_path', str(self.checkpoint_dir)])
@@ -178,12 +170,8 @@ class Gr00tSubprocess:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+                self.process.wait()
             self.process = None
-
-
-###########################################################################################
-# Policy and model source
-###########################################################################################
 
 
 class _Gr00tSession(Session):
@@ -219,32 +207,6 @@ class Gr00tPolicy(Policy):
         self._groot.stop()
 
 
-def _step_id(raw: str) -> str:
-    """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
-    return str(int(raw)) if raw.isdigit() else raw
-
-
-def _warm_observation(modalities: dict) -> dict[str, Any]:
-    """Build a valid current-frame DROID observation from the loaded checkpoint's modalities."""
-    for name in (gr00t.VIDEO, gr00t.STATE):
-        if modalities[name]['delta_indices'] != [0]:
-            raise ValueError(f'DROID adapter requires current-frame {name}, got {modalities[name]}')
-    width, height = gr00t.IMAGE_SIZE
-    state = {
-        name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32)
-        for name in modalities[gr00t.STATE]['modality_keys']
-    }
-    state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
-    return {
-        gr00t.VIDEO: {
-            name: np.zeros((1, 1, height, width, 3), dtype=np.uint8)
-            for name in modalities[gr00t.VIDEO]['modality_keys']
-        },
-        gr00t.STATE: state,
-        gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
-    }
-
-
 class Gr00tSource(ModelSource):
     """A Hugging Face model (``hf://owner/model``) or a directory of fine-tuned checkpoints.
 
@@ -264,7 +226,7 @@ class Gr00tSource(ModelSource):
         if self._is_hub_model and checkpoint is not None:
             raise ValueError('checkpoint step selection applies only to fine-tuned checkpoint directories')
         self.checkpoint = checkpoint
-        self.groot_venv_path = groot_venv_path
+        self.groot_venv_path = Path(groot_venv_path).expanduser()
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
 
@@ -282,10 +244,15 @@ class Gr00tSource(ModelSource):
     def _is_hub_model(self) -> bool:
         return self.checkpoints_dir.startswith('hf://')
 
+    @staticmethod
+    def _step_id(raw: str) -> str:
+        """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
+        return str(int(raw)) if raw.isdigit() else raw
+
     def get_models(self) -> list[str]:
         if self._is_hub_model:
             return [self.checkpoints_dir.removeprefix('hf://')]
-        return [_step_id(r) for r in self._raw_ids()]
+        return [self._step_id(r) for r in self._raw_ids()]
 
     def resolve(self, model_id: str | None) -> str:
         """Explicit id > the configured ``checkpoint`` > latest, always as the id ``get_models`` advertises.
@@ -301,8 +268,29 @@ class Gr00tSource(ModelSource):
         if model_id is None and self.checkpoint is not None:
             model_id = str(self.checkpoint).strip('/')
         if model_id is None:
-            return _step_id(self._raw_ids()[-1])
-        return _step_id(self._raw_for(model_id))
+            return self._step_id(self._raw_ids()[-1])
+        return self._step_id(self._raw_for(model_id))
+
+    @staticmethod
+    def _warm_observation(modalities: dict) -> dict[str, Any]:
+        """Build a valid current-frame DROID observation from the loaded checkpoint's modalities."""
+        for name in (gr00t.VIDEO, gr00t.STATE):
+            if modalities[name]['delta_indices'] != [0]:
+                raise ValueError(f'DROID adapter requires current-frame {name}, got {modalities[name]}')
+        width, height = gr00t.IMAGE_SIZE
+        state = {
+            name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32)
+            for name in modalities[gr00t.STATE]['modality_keys']
+        }
+        state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
+        return {
+            gr00t.VIDEO: {
+                name: np.zeros((1, 1, height, width, 3), dtype=np.uint8)
+                for name in modalities[gr00t.VIDEO]['modality_keys']
+            },
+            gr00t.STATE: state,
+            gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
+        }
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         if self._is_hub_model:
@@ -325,8 +313,8 @@ class Gr00tSource(ModelSource):
             groot.start(on_progress)
             policy = Gr00tPolicy(groot, str(checkpoint_dir))
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
-            modalities = groot.client.call_endpoint('get_modality_config', requires_input=False)
-            warmup(policy, _warm_observation(modalities), on_progress)
+            modalities = groot.client.call_endpoint('get_modality_config')
+            warmup(policy, self._warm_observation(modalities), on_progress)
         except Exception:
             groot.stop()
             raise
@@ -338,11 +326,6 @@ class Gr00tSource(ModelSource):
             'embodiment': gr00t.EMBODIMENT,
             policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
         }
-
-
-###########################################################################################
-# Serving configs
-###########################################################################################
 
 
 gr00t_source = cfn.Config(Gr00tSource)

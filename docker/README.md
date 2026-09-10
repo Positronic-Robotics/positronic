@@ -42,20 +42,21 @@ docker/build.sh
 
 ## GR00T N1.7 containers
 
-`make build-groot` uses `GROOT_BASE_IMAGE` from the GR00T fork. The fork image contains
+`make build-groot` builds the GR00T fork revision pinned in `Makefile`. The fork image contains
 CUDA 12.8 and the upstream Python 3.12 environment at `/opt/gr00t-venv`.
 Positronic installs its own locked environment at `/positronic/.venv`.
 Both training and serving launch GR00T in its separate environment.
 
-Build the base in the [fork](https://github.com/Positronic-Robotics/gr00t), then build the adapter:
+Build both images from Positronic:
 
 ```bash
-# In the GR00T fork:
-make -C docker build
-# In Positronic:
-make -C docker build-groot GROOT_BASE_IMAGE=positro/gr00t-base:local
+make -C docker build-groot
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml run --rm --service-ports groot-server droid
 ```
+
+Pass `GROOT_BASE_IMAGE=<image:tag>` to use an existing base and skip its build.
+For local fork development, run `make -C docker build` in the fork,
+then `make -C docker build-groot GROOT_BASE_IMAGE=positro/gr00t-base:local` in Positronic.
 
 Do not mount host uv interpreter directories over the image's interpreter directories.
 See [GR00T](../positronic/vendors/gr00t/README.md) for conversion, fine-tuning and inference.

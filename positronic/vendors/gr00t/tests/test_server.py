@@ -1,7 +1,10 @@
+from unittest.mock import Mock
+
 import msgpack
 import msgpack_numpy
 import numpy as np
 import pytest
+import zmq
 
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
@@ -49,3 +52,22 @@ def test_published_checkpoint_is_served_without_a_local_checkpoint_scan(monkeypa
     source = gr00t_server.Gr00tSource()
     assert source.get_models() == [gr00t.BASE_MODEL]
     assert source.resolve(None) == gr00t.BASE_MODEL
+
+
+@pytest.mark.parametrize('failure', [zmq.Again(), zmq.ZMQError(zmq.EFSM)])
+def test_client_can_ping_after_a_transport_failure(monkeypatch, failure):
+    failed = Mock()
+    failed.send.side_effect = failure
+    recovered = Mock()
+    recovered.recv.return_value = gr00t_server.MsgSerializer.to_bytes('pong')
+    context = Mock()
+    context.socket.side_effect = [failed, recovered]
+    monkeypatch.setattr(gr00t_server.zmq, 'Context', lambda: context)
+    client = gr00t_server.PolicyClient()
+    try:
+        assert not client.ping()
+        assert client.ping()
+        request = gr00t_server.MsgSerializer.from_bytes(recovered.send.call_args.args[0])
+        assert request == {'endpoint': 'ping'}
+    finally:
+        client.close()

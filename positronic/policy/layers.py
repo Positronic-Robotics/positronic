@@ -14,11 +14,6 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.policy.base import DelegatingSession, Layer, Session
 
 
-def _obs_time(obs) -> float:
-    """Observation timestamp in seconds, from the harness's nanosecond stamp."""
-    return obs[keys.OBS_TIME_NS] / 1e9
-
-
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
 # domain types reach the border, this reads the status off the value.
 def _is_robot_status(name: str) -> bool:
@@ -179,7 +174,7 @@ class TemporalStack(Layer):
             self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
 
         def __call__(self, obs, time_ns):
-            now = _obs_time(obs)
+            now = obs[keys.OBS_TIME_NS] / 1e9
             self._buffer.append(now, {k: obs[k] for k in self._keys})
             return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
 

@@ -27,16 +27,16 @@ N1.6 checkpoints require an N1.6 image; their custom action schemas are incompat
 
 ## Docker
 
-Build the fork's base image, then the Positronic image:
+Build the pinned fork and the Positronic image:
 
 ```bash
-# In the GR00T fork
-make -C docker build
-# In Positronic
-make -C docker build-groot GROOT_BASE_IMAGE=positro/gr00t-base:local
+make -C docker build-groot
 cd docker
 export IMAGE_TAG=local
 ```
+
+`build-groot` builds its base from the fork revision pinned in `docker/Makefile`.
+To use an existing base image, pass `GROOT_BASE_IMAGE=<image:tag>`.
 
 The GR00T environment is `/opt/gr00t-venv` (Python 3.12, upstream locked dependencies).
 Positronic has a separate environment at `/positronic/.venv`. Training and serving require a CUDA GPU.
@@ -50,13 +50,14 @@ must have access to it, with its token available inside the container through `H
 From Positronic's `docker` directory:
 
 ```bash
-docker compose run --rm --pull never lerobot-0_3_3-convert convert \
+mkdir -p "$PWD/groot-data"
+docker compose run --rm --pull never -v "$PWD/groot-data:/data" lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
-  --output_dir=~/datasets/groot/my_task
+  --output_dir=/data/datasets/my_task
 
-docker compose run --rm groot-train \
-  --input_path=~/datasets/groot/my_task \
-  --output_path=~/checkpoints/groot \
+docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
+  --input_path=/data/datasets/my_task \
+  --output_path=/data/checkpoints \
   --exp_name=my_task \
   --num_train_steps=10000
 ```
@@ -82,8 +83,8 @@ docker compose run --rm --service-ports groot-server droid
 Fine-tuned checkpoint:
 
 ```bash
-docker compose run --rm --service-ports groot-server droid \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/my_task
+docker compose run --rm --service-ports --pull never -v "$PWD/groot-data:/data" groot-server droid \
+  --pipeline.source.checkpoints_dir=/data/checkpoints/my_task
 ```
 
 Select `droid_three_cameras` for a checkpoint trained on three views.
@@ -95,7 +96,8 @@ A Hugging Face source uses `--pipeline.source.checkpoints_dir=hf://owner/model`.
 The GR00T source is included in the image at `/gr00t`. From the image's `/positronic` directory:
 
 ```bash
-GR00T_REFERENCE_ROOT=/gr00t uv run --no-sync --python 3.12 pytest \
+uv sync --locked --python 3.12
+GR00T_REFERENCE_ROOT=/gr00t uv run --no-sync --python 3.12 python -m pytest \
   -o addopts= positronic/vendors/gr00t/tests
 ```
 

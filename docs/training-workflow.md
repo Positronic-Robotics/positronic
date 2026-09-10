@@ -124,9 +124,9 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
 ### GR00T Training
 
 ```bash
-cd docker && docker compose run --rm groot-train \
-  --input_path=~/datasets/groot/stack_cubes \
-  --output_path=~/checkpoints/groot \
+cd docker && docker compose run --rm -v "$PWD/groot-data:/data" groot-train \
+  --input_path=/data/datasets/stack_cubes \
+  --output_path=/data/checkpoints \
   --exp_name=experiment_v1
 ```
 
