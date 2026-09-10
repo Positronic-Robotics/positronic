@@ -5,6 +5,7 @@ session socket. Each inference writes the images into a slot and sends a referen
 the server reads through a mapping the seals let it neither write nor resize.
 """
 
+import contextlib
 import fcntl
 import logging
 import mmap
@@ -276,6 +277,8 @@ class FrameChannel:
                     logger.exception('The frame ring channel stopped accepting')
                 return
             with connection:
+                if self._closing:
+                    return
                 try:
                     self._take_ring(connection)
                 # One bad handover must not take the channel down.
@@ -303,6 +306,11 @@ class FrameChannel:
     def close(self) -> None:
         self._closing = True
         if self._socket is not None:
+            # Closing a socket another thread waits in ``accept`` on does not wake that thread, so
+            # knock first. A refused knock means it is not waiting, which is the state this wants.
+            with contextlib.suppress(OSError), socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as knock:
+                knock.settimeout(HANDOVER_TIMEOUT_SEC)
+                knock.connect(self.path)
             self._socket.close()
             self._socket = None
         if self._thread is not None:
