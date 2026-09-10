@@ -267,7 +267,7 @@ The CLI entry point every vendor server exposes. A vendor binds `pipeline` to ea
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. One URL addresses it, in the same forms
-`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for `https`/`wss` and 80 otherwise. The URL
+`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for a TLS scheme and 80 otherwise. The URL
 fixes the wire, the model and the session params, so serving another model means another client.
 
 ```python
