@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 import configuronic as cfn
 import numpy as np
@@ -440,19 +441,28 @@ def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum:
     )
 
 
-def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int]]:
-    """One wall window per run whose ``eval.pass`` span never closed, keyed by the pass span the episodes name
-    as their parent — from that run's first episode start to its last episode end.
+class _WindowKey(NamedTuple):
+    """The run, and the pass span within it, that one wall window covers.
 
-    Grouping by parent is what keeps two killed runs appended to one directory apart: each contributes its own
+    The parent alone does not identify a run: an attended rollout opens no ``eval.pass`` span, so every one of
+    its episodes is a root, and two such runs appended to one directory share the ``None`` parent.
+    """
+
+    run_id: str
+    parent_id: str | None
+
+
+def _episode_windows(episodes: list[SpanRec]) -> dict[_WindowKey, tuple[int, int]]:
+    """One wall window per run whose ``eval.pass`` span never closed, from that run's first episode start to
+    its last episode end.
+
+    Grouping by run and parent keeps two runs appended to one directory apart: each contributes its own
     window, so the dead wall between them falls outside both, exactly as the gap between two pass spans does.
     """
-    by_parent: dict[str | None, list[SpanRec]] = defaultdict(list)
+    by_window: dict[_WindowKey, list[SpanRec]] = defaultdict(list)
     for episode in episodes:
-        by_parent[episode.parent_id].append(episode)
-    return {
-        parent: (min(e.start_ns for e in group), max(e.end_ns for e in group)) for parent, group in by_parent.items()
-    }
+        by_window[_WindowKey(episode.run_id, episode.parent_id)].append(episode)
+    return {key: (min(e.start_ns for e in group), max(e.end_ns for e in group)) for key, group in by_window.items()}
 
 
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
@@ -469,7 +479,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     passes = [p for p in spans if p.name == SPAN_EVAL_PASS]
     if passes:
         window = WallWindow.W_PASS
-        windows = {p.span_id: (p.start_ns, p.end_ns) for p in passes}
+        windows = {_WindowKey(p.run_id, p.span_id): (p.start_ns, p.end_ns) for p in passes}
     else:
         window = WallWindow.W_EPISODES
         windows = _episode_windows(all_episodes)
@@ -501,12 +511,12 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         logger.warning(
             '%d episode(s) did not run to completion (a failed pass?); their finished phases are included', partial
         )
-    orphans = sum(e.parent_id not in windows for e in all_episodes)
+    orphans = sum(_WindowKey(e.run_id, e.parent_id) not in windows for e in all_episodes)
     if orphans:
         logger.warning('%d episode(s) belong to no completed pass (a killed run?); excluded from the report', orphans)
     # Only episodes belonging to a window reduce: where one pass completed, a killed earlier run's episodes are
     # in the same reused directory but under no window of their own, and would inflate every normalised figure.
-    episodes = [e for e in all_episodes if e.parent_id in windows]
+    episodes = [e for e in all_episodes if _WindowKey(e.run_id, e.parent_id) in windows]
     timings = [_episode_timing(e, children) for e in episodes]
 
     episode_wall_sum = float(sum(t.wall_s for t in timings))
