@@ -15,6 +15,7 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive
 from positronic.drivers.roboarm import command, models
 from positronic.policy.codec import (
+    GR00T_MODALITY,
     ActionHorizon,
     ActionTimestamp,
     BinarizeGripInference,
@@ -79,51 +80,58 @@ class DroidCodec(Codec):
     def _derive_grip(episode: Episode):
         return tf.Elementwise(episode[keys.GRIP], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
-    def _derive_actions(self, episode: Episode):
-        return tf.concat(self._derive_pose(episode), self._derive_grip(episode), episode[keys.JOINTS], dtype=np.float32)
-
     @staticmethod
     def _derive_image(source: str, episode: Episode):
         return image.resize_with_pad(*gr00t.IMAGE_SIZE, signal=episode[source])
 
     @property
     def training_encoder(self):
-        state_meta = {name: {'start': 0, 'end': dim, 'original_key': name} for name, dim in gr00t.STATE_DIMS.items()}
+        state_encoders = {
+            gr00t.EE_POSE: self._derive_pose,
+            gr00t.GRIP: self._derive_grip,
+            gr00t.JOINT_POSITION: lambda episode: tf.Elementwise(
+                episode[keys.JOINTS], partial(np.asarray, dtype=np.float32)
+            ),
+        }
+        state_meta = {
+            name: {'start': 0, 'end': gr00t.STATE_DIMS[name], gr00t.ORIGINAL_KEY: name} for name in state_encoders
+        }
         action_meta = {}
         start = 0
-        for name, dim in gr00t.STATE_DIMS.items():
+        for name in state_encoders:
+            dim = gr00t.STATE_DIMS[name]
             action_meta[name] = {'start': start, 'end': start + dim}
             start += dim
         meta = {
-            'gr00t_modality': {
+            GR00T_MODALITY: {
                 gr00t.STATE: state_meta,
-                'action': action_meta,
-                gr00t.VIDEO: {name: {'original_key': name} for name in self.image_mappings},
-                'annotation': {gr00t.TASK.removeprefix('annotation.'): {'original_key': 'task_index'}},
+                gr00t.ACTION: action_meta,
+                gr00t.VIDEO: {name: {gr00t.ORIGINAL_KEY: name} for name in self.image_mappings},
+                gr00t.ANNOTATION: {
+                    gr00t.TASK.removeprefix(gr00t.ANNOTATION + '.'): {gr00t.ORIGINAL_KEY: gr00t.TASK_INDEX}
+                },
             },
             'lerobot_features': {
-                **{name: lerobot_state(dim) for name, dim in gr00t.STATE_DIMS.items()},
+                **{name: lerobot_state(gr00t.STATE_DIMS[name]) for name in state_encoders},
                 **{name: lerobot_image(*gr00t.IMAGE_SIZE) for name in self.image_mappings},
-                'action': lerobot_action(start),
+                gr00t.ACTION: lerobot_action(start),
             },
         }
         return Derive(
             meta=meta,
             **{
-                gr00t.EE_POSE: self._derive_pose,
-                gr00t.GRIP: self._derive_grip,
-                gr00t.JOINT_POSITION: lambda episode: tf.Elementwise(
-                    episode[keys.JOINTS], partial(np.asarray, dtype=np.float32)
-                ),
+                **state_encoders,
                 'task': itemgetter(keys.TASK),
-                'action': self._derive_actions,
+                gr00t.ACTION: lambda episode: tf.concat(
+                    *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
+                ),
                 **{name: partial(self._derive_image, source) for name, source in self.image_mappings.items()},
             },
         )
 
     @property
     def meta(self):
-        return {'image_sizes': dict.fromkeys(self.image_mappings.values(), gr00t.IMAGE_SIZE)}
+        return {self.IMAGE_SIZES: dict.fromkeys(self.image_mappings.values(), gr00t.IMAGE_SIZE)}
 
 
 @cfn.config(

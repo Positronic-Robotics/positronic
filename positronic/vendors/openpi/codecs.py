@@ -103,7 +103,7 @@ class ObservationCodec(Codec):
 
     @property
     def meta(self):
-        return {'image_sizes': self._image_size}
+        return {self.IMAGE_SIZES: self._image_size}
 
     @property
     def training_encoder(self):
@@ -264,7 +264,7 @@ class LiberoObservationCodec(Codec):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return {'image_sizes': self._image_size}
+        return {self.IMAGE_SIZES: self._image_size}
 
 
 libero_obs = cfn.Config(LiberoObservationCodec)

@@ -10,7 +10,10 @@ from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import models
+from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.spec import split
 from positronic.vendors import gr00t
+from positronic.vendors.gr00t import server
 from positronic.vendors.gr00t.codecs import droid, droid_three_cameras
 
 
@@ -55,6 +58,34 @@ def test_three_camera_configuration_uses_a_distinct_second_external_image(observ
     del observation[keys.EXTERIOR_IMAGE_2]
     with pytest.raises(KeyError):
         droid_three_cameras().encode(observation)
+
+
+def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
+    monkeypatch.setattr(gr00t, 'STATE_DIMS', dict(reversed(list(gr00t.STATE_DIMS.items()))))
+    codec = droid()
+    episode = EpisodeContainer({
+        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+    })
+    encoder = codec.training_encoder
+    encoded = encoder(episode)
+    action = encoded[gr00t.ACTION][0][0]
+    for name, bounds in encoder.meta[GR00T_MODALITY][gr00t.ACTION].items():
+        np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
+
+
+@pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
+def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation):
+    pipeline = config()
+    local, _, codec = split(pipeline)
+    resize = next(layer for layer in local._layers() if isinstance(layer, RestrictImageSize))
+    wire_observation = resize.encode(observation)
+    for source in codec.meta[Codec.IMAGE_SIZES]:
+        assert wire_observation[source].shape[0] <= gr00t.IMAGE_SIZE[1]
+        assert wire_observation[source].shape[1] <= gr00t.IMAGE_SIZE[0]
+    direct = codec.encode(observation)
+    remote_encoded = codec.encode(wire_observation)
+    for name in direct[gr00t.VIDEO]:
+        np.testing.assert_array_equal(remote_encoded[gr00t.VIDEO][name], direct[gr00t.VIDEO][name])
 
 
 def test_droid_frame_and_pixels_match_upstream_robot_client(observation):

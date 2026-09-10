@@ -18,6 +18,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
+from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -43,8 +44,8 @@ class MsgSerializer:
         if isinstance(obj, dict):
             if obj.get(b'nd', obj.get('nd')) and obj.get(b'kind', obj.get('kind')) in (b'O', 'O'):
                 raise ValueError('Object arrays are not supported by the GR00T wire protocol')
-            if obj.get('__ModalityConfig__'):
-                return obj['as_json']
+            if obj.get(gr00t.MODALITY_CONFIG):
+                return obj[gr00t.AS_JSON]
         return mnp.decode(obj)
 
     @staticmethod
@@ -79,9 +80,9 @@ class PolicyClient:
             return False
 
     def call_endpoint(self, endpoint: str, data: dict | None = None) -> Any:
-        request: dict = {'endpoint': endpoint}
+        request: dict = {gr00t.ENDPOINT: endpoint}
         if data is not None:
-            request['data'] = data
+            request[gr00t.DATA] = data
 
         try:
             self.socket.send(MsgSerializer.to_bytes(request))
@@ -95,16 +96,16 @@ class PolicyClient:
             raise RuntimeError('Server error. Make sure the correct policy server is running.')
         response = MsgSerializer.from_bytes(message)
 
-        if isinstance(response, dict) and 'error' in response:
-            raise RuntimeError(f'Server error: {response["error"]}')
+        if isinstance(response, dict) and gr00t.ERROR in response:
+            raise RuntimeError(f'Server error: {response[gr00t.ERROR]}')
         return response
 
     def get_action(self, observation: dict[str, Any]) -> tuple[dict, dict]:
-        response = self.call_endpoint('get_action', {'observation': observation, 'options': None})
+        response = self.call_endpoint('get_action', {gr00t.OBSERVATION: observation, gr00t.OPTIONS: None})
         return tuple(response)
 
     def reset(self) -> dict[str, Any]:
-        return self.call_endpoint('reset', {'options': None})
+        return self.call_endpoint('reset', {gr00t.OPTIONS: None})
 
     def close(self):
         self.socket.close(linger=0)
@@ -216,12 +217,14 @@ class Gr00tSource(ModelSource):
 
     def __init__(
         self,
+        video_keys: tuple[str, ...],
         checkpoints_dir: str = 'hf://' + gr00t.BASE_MODEL,
         checkpoint: str | None = None,
         groot_venv_path: str = gr00t.VENV,
         zmq_port: int = 5555,
         ready_timeout: float = 600.0,
     ):
+        self.video_keys = tuple(video_keys)
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         if self._is_hub_model and checkpoint is not None:
             raise ValueError('checkpoint step selection applies only to fine-tuned checkpoint directories')
@@ -271,23 +274,24 @@ class Gr00tSource(ModelSource):
             return self._step_id(self._raw_ids()[-1])
         return self._step_id(self._raw_for(model_id))
 
-    @staticmethod
-    def _warm_observation(modalities: dict) -> dict[str, Any]:
-        """Build a valid current-frame DROID observation from the loaded checkpoint's modalities."""
+    def _warm_observation(self, modalities: dict) -> dict[str, Any]:
+        """Validate codec cameras and build a current-frame observation for the checkpoint."""
         for name in (gr00t.VIDEO, gr00t.STATE):
-            if modalities[name]['delta_indices'] != [0]:
+            if modalities[name][gr00t.DELTA_INDICES] != [0]:
                 raise ValueError(f'DROID adapter requires current-frame {name}, got {modalities[name]}')
+        expected = set(modalities[gr00t.VIDEO][gr00t.MODALITY_KEYS])
+        if set(self.video_keys) != expected:
+            raise ValueError(
+                f'Checkpoint video keys {sorted(expected)} do not match codec keys {sorted(self.video_keys)}'
+            )
         width, height = gr00t.IMAGE_SIZE
         state = {
             name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32)
-            for name in modalities[gr00t.STATE]['modality_keys']
+            for name in modalities[gr00t.STATE][gr00t.MODALITY_KEYS]
         }
         state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
         return {
-            gr00t.VIDEO: {
-                name: np.zeros((1, 1, height, width, 3), dtype=np.uint8)
-                for name in modalities[gr00t.VIDEO]['modality_keys']
-            },
+            gr00t.VIDEO: {name: np.zeros((1, 1, height, width, 3), dtype=np.uint8) for name in self.video_keys},
             gr00t.STATE: state,
             gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
         }
@@ -332,9 +336,10 @@ gr00t_source = cfn.Config(Gr00tSource)
 
 
 @cfn.config(codec=codecs.droid, source=gr00t_source)
-def pipeline(codec, source):
+def pipeline(codec: Codec, source: cfn.Config):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
-    return StopOnFault() | ChunkedSchedule() | remote | codec | source
+    model_source = source(video_keys=tuple(codec.training_encoder.meta[GR00T_MODALITY][gr00t.VIDEO]))
+    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | model_source
 
 
 droid = pipeline

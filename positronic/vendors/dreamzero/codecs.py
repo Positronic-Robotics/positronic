@@ -16,7 +16,7 @@ from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.action import IKJointsAction
-from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.policy.codec import GR00T_MODALITY, Codec, lerobot_action, lerobot_image, lerobot_state
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
@@ -66,7 +66,7 @@ class DreamZeroObservationCodec(Codec):
                 'video.exterior_image_1_left': lerobot_image(w, h),
                 'video.exterior_image_2_left': lerobot_image(w, h),
             },
-            'gr00t_modality': {
+            GR00T_MODALITY: {
                 'state': {
                     'joint_position': {'start': 0, 'end': 7, 'original_key': 'state.joint_position'},
                     'gripper_position': {'start': 0, 'end': 1, 'original_key': 'state.gripper_position'},
@@ -123,7 +123,7 @@ class DreamZeroObservationCodec(Codec):
 
     @property
     def meta(self):
-        return {'image_sizes': self._image_size}
+        return {self.IMAGE_SIZES: self._image_size}
 
     @property
     def training_encoder(self):
@@ -151,7 +151,7 @@ class DreamZeroActionCodec(Codec):
                 'action.joint_position': lerobot_state(num_joints),
                 'action.gripper_position': lerobot_state(1),
             },
-            'gr00t_modality': {
+            GR00T_MODALITY: {
                 'action': {
                     'joint_position': {'start': 0, 'end': num_joints, 'original_key': 'action.joint_position'},
                     'gripper_position': {'start': 0, 'end': 1, 'original_key': 'action.gripper_position'},
