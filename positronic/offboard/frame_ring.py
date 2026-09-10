@@ -1,9 +1,8 @@
 """A shared-memory ring that carries an observation's frames to a server on the same host.
 
-The client creates the ring, seals it, and hands its descriptor to the server over an ``AF_UNIX``
-socket beside the session socket; each inference writes the images into one slot and sends a
-reference in place of every image. The server maps the ring read-only and builds a numpy view over
-those bytes, and the seals refuse every write, resize and hole punch it could make.
+The client creates the ring, seals it, and hands its descriptor over an ``AF_UNIX`` socket beside the
+session socket. Each inference writes the images into a slot and sends a reference for each, which
+the server reads through a mapping the seals let it neither write nor resize.
 """
 
 import fcntl
@@ -25,14 +24,10 @@ logger = logging.getLogger(__name__)
 # ring, and every image stays in the message.
 SUPPORTED = hasattr(os, 'memfd_create')
 
-# The suffix of the descriptor socket, next to the session socket. Each side builds that path from the
-# socket path it already holds, so a bind mount that gives the two processes different names for one
-# directory still lands them on the same socket.
+# The suffix of the descriptor socket, which each side derives from its own session socket path.
 SOCKET_SUFFIX = '.frames'
 
-# One round trip is in flight at a time, so the writer returns to a slot four inferences later. A
-# server that still holds a view of an earlier observation — a temporal stack, a recorder — reads the
-# bytes that were written for it.
+# Slots per ring, so a slot the server may still read is never the one the writer takes next.
 SLOTS = 4
 
 # Each slot opens with two sequence numbers, one before the payload and one after it. The rest of the
