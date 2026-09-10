@@ -1,14 +1,16 @@
 import logging
+import re
 import ssl
 import time
 import urllib.parse
 from enum import Enum
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 
 import httpx
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
-from websockets.sync.client import connect
+from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
 from . import protocol
@@ -117,6 +119,20 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str]:
+    """The socket path a ``unix://`` URL names, and the URL path left over for the server.
+
+    The socket path is absolute and runs to the first ``/api/v1`` segment. A URL that names no such
+    segment is the bare socket path, which addresses the default session.
+    """
+    if split.netloc or not split.path.startswith('/'):
+        raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
+    marker = re.search(r'/api/v1(?=/|$)', split.path)
+    if marker is None:
+        return split.path, ''
+    return split.path[: marker.start()], split.path[marker.start() :]
+
+
 class _ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
@@ -156,6 +172,11 @@ class InferenceClient:
     session — the model id it names and the query it carries as session params — reaches the server exactly
     as written, so every session opened here serves that model with those params.
 
+    ``unix://<absolute socket path>[/api/v1/session[/<model_id>]][?query]`` reaches a server on the same
+    machine over a Unix domain socket, which needs no network. The socket path runs to the first
+    ``/api/v1`` segment, so ``unix:///run/policy.sock`` is the default session and
+    ``unix:///run/policy.sock/api/v1/session/10000?fps=10`` names a model and a param. TLS does not apply.
+
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
 
@@ -174,22 +195,35 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', 'unix'):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
         secure = split.scheme in ('https', 'wss')
+        if split.scheme == 'unix':
+            uds, path = _socket_and_path(split, url)
+            # A socket path is not a host. The server reads the path and the query alone, so the
+            # handshake asks for them under a host that stands in for the socket.
+            netloc = 'localhost'
+        else:
+            uds = None
+            if not split.hostname:
+                raise ValueError(f'No host in {url!r}')
+            path = split.path
+            default_port = 443 if secure else 80
+            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+            host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
+            port = default_port if split.port is None else split.port
+            netloc = host if port == default_port else f'{host}:{port}'
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
-        default_port = 443 if secure else 80
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
-        port = default_port if split.port is None else split.port
-        netloc = host if port == default_port else f'{host}:{port}'
         # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever wrote
         # the URL knows whether `true` means the bool or the string.
         query = f'?{split.query}' if split.query else ''
-        self.session_url = f'{ws_scheme}://{netloc}{_session_path(split.path, url)}{query}'
+        session_path = _session_path(path, url)
+        self.uds = uds
+        # The URL the websocket handshake asks for, and the TCP address to dial when there is no socket.
+        self._ws_uri = f'{ws_scheme}://{netloc}{session_path}{query}'
+        # What an error names. Over a socket the stand-in host would not say which socket failed.
+        self.session_url = self._ws_uri if uds is None else f'unix://{uds}{session_path}{query}'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
@@ -207,12 +241,12 @@ class InferenceClient:
                 # A proxy between here and the server closes a connection it has read nothing from, often
                 # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
                 # answers. The pings keep it open.
-                ws = connect(
-                    self.session_url,
-                    open_timeout=self.open_timeout,
-                    additional_headers=self.headers,
-                    ping_interval=20.0,
+                dial = (
+                    partial(connect, self._ws_uri)
+                    if self.uds is None
+                    else partial(unix_connect, self.uds, uri=self._ws_uri)
                 )
+                ws = dial(open_timeout=self.open_timeout, additional_headers=self.headers, ping_interval=20.0)
                 return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
@@ -238,6 +272,8 @@ class InferenceClient:
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
-        response = httpx.get(f'{self.api_url}/models', headers=self.headers)
+        transport = None if self.uds is None else httpx.HTTPTransport(uds=self.uds)
+        with httpx.Client(transport=transport) as client:
+            response = client.get(f'{self.api_url}/models', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']

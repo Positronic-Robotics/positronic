@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import stat
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -202,6 +203,9 @@ class PolicyServer:
     The default checkpoint is resolved once, at startup, and pinned for every request that names no
     explicit one — a running server never switches to a newer checkpoint that lands later. A request
     for /api/v1/session/{model_id} still loads that one on demand.
+
+    ``uds`` binds a Unix socket path instead of ``host:port``, which serves a client on the same machine
+    over no network. A client reaches it with a ``unix://`` URL.
     """
 
     def __init__(
@@ -212,6 +216,7 @@ class PolicyServer:
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        uds: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -226,7 +231,11 @@ class PolicyServer:
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
-        self.metadata: dict[str, Any] = {offboard_keys.HOST: host, offboard_keys.PORT: port}
+        self.uds = uds
+        # Where the server listens, as the handshake reports it. A Unix socket has no port.
+        self.metadata: dict[str, Any] = (
+            {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.HOST: uds}
+        )
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -407,10 +416,25 @@ class PolicyServer:
                 server.should_exit = True
                 return
 
+    @staticmethod
+    def clear_stale_socket(path: str) -> None:
+        """Remove the socket file left by an earlier run, so a restart can bind ``path`` again.
+
+        Anything else at the path stays: the bind then fails rather than deleting a file nobody meant to lose.
+        """
+        try:
+            mode = os.stat(path).st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISSOCK(mode):
+            os.unlink(path)
+
     def serve(self):
         async def _run():
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            if self.uds is not None:
+                self.clear_stale_socket(self.uds)
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, uds=self.uds, log_level='info')
             server = uvicorn.Server(config)
             self._last_activity = time.monotonic()
             watchdog = None
@@ -430,13 +454,23 @@ class PolicyServer:
             self._manager.close()
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None)
-def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None, idle_timeout_min: float | None):
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, uds=None)
+def serve(
+    pipeline: cfn.Config,
+    host: str,
+    port: int,
+    recording_dir: str | None,
+    idle_timeout_min: float | None,
+    uds: str | None,
+):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
     Only the socket and the recording taps are flags of their own; everything the served model is —
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+
+    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused, which serves a client
+    on the same machine over no network.
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
@@ -448,4 +482,5 @@ def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None,
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        uds=uds,
     ).serve()

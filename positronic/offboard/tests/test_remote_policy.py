@@ -117,7 +117,8 @@ class TestInferenceClientHeaders:
 
     def test_list_models_passes_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
+        with patch('positronic.offboard.client.httpx.Client') as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
             mock_get.return_value.json.return_value = {'models': ['m1']}
             client = InferenceClient('localhost:8000', headers=headers)
 
@@ -127,7 +128,8 @@ class TestInferenceClientHeaders:
             assert mock_get.call_args.kwargs['headers'] == headers
 
     def test_list_models_without_headers_passes_none(self):
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
+        with patch('positronic.offboard.client.httpx.Client') as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
             mock_get.return_value.json.return_value = {'models': []}
             client = InferenceClient('localhost:8000')
             client.list_models()
@@ -206,6 +208,43 @@ class TestInferenceClientUrl:
             assert mock_connect.call_count == 2
             for call in mock_connect.call_args_list:
                 assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
+
+    def test_a_socket_path_alone_is_the_default_session(self):
+        client = InferenceClient('unix:///run/policy.sock')
+        assert client.uds == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session'
+        assert client.api_url == 'http://localhost/api/v1'
+
+    def test_a_socket_path_ends_at_the_api_segment(self):
+        client = InferenceClient('unix:///run/policy.sock/api/v1/session/10000?fps=10')
+        assert client.uds == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session/10000?fps=10'
+
+    def test_a_query_on_a_bare_socket_path_rides_along(self):
+        client = InferenceClient('unix:///run/policy.sock?fps=10')
+        assert client.uds == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session?fps=10'
+
+    def test_the_api_marker_is_a_whole_segment(self):
+        """A socket under a directory whose name only starts with the marker is still the whole path."""
+        client = InferenceClient('unix:///run/api/v1x/policy.sock')
+        assert client.uds == '/run/api/v1x/policy.sock'
+        assert client.session_url == 'unix:///run/api/v1x/policy.sock/api/v1/session'
+
+    def test_a_relative_socket_path_rejected(self):
+        with pytest.raises(ValueError, match='absolute'):
+            InferenceClient('unix://policy.sock')
+
+    def test_a_unix_url_dials_the_socket_and_asks_for_the_url_path(self):
+        with (
+            patch('positronic.offboard.client.unix_connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            InferenceClient('unix:///run/policy.sock/api/v1/session/10000?fps=10').new_session()
+
+            mock_connect.assert_called_once()
+            assert mock_connect.call_args.args[0] == '/run/policy.sock'
+            assert mock_connect.call_args.kwargs['uri'] == 'ws://localhost/api/v1/session/10000?fps=10'
 
 
 def _refused(status: HTTPStatus) -> InvalidStatus:

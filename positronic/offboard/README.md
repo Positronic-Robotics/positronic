@@ -74,6 +74,10 @@ Because the whole session configuration fits in the URL, one string is a complet
 `http(s)`/`ws(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
 Credentials are the exception and stay a separate `headers` argument, so the URL itself is safe to hand around.
 
+A `unix://` URL reaches a server on the same machine over a Unix socket, which needs no network: the server
+binds the path with `--uds`, and `unix:///run/policy.sock[/api/v1/session[/<model_id>]][?query]` dials it. The
+socket path runs to the first `/api/v1` segment; everything after it is the URL path the server reads.
+
 ### WebSocket Flow
 
 #### 1. Handshake
