@@ -16,6 +16,7 @@ from positronic.dataset.transforms.episode import Derive
 from positronic.drivers.roboarm import command, models
 from positronic.policy.codec import (
     GR00T_MODALITY,
+    LEROBOT_FEATURES,
     ActionHorizon,
     ActionTimestamp,
     BinarizeGripInference,
@@ -94,13 +95,14 @@ class DroidCodec(Codec):
             ),
         }
         state_meta = {
-            name: {'start': 0, 'end': gr00t.STATE_DIMS[name], gr00t.ORIGINAL_KEY: name} for name in state_encoders
+            name: {gr00t.START: 0, gr00t.END: gr00t.STATE_DIMS[name], gr00t.ORIGINAL_KEY: name}
+            for name in state_encoders
         }
         action_meta = {}
         start = 0
         for name in state_encoders:
             dim = gr00t.STATE_DIMS[name]
-            action_meta[name] = {'start': start, 'end': start + dim}
+            action_meta[name] = {gr00t.START: start, gr00t.END: start + dim}
             start += dim
         meta = {
             GR00T_MODALITY: {
@@ -111,7 +113,7 @@ class DroidCodec(Codec):
                     gr00t.TASK.removeprefix(gr00t.ANNOTATION + '.'): {gr00t.ORIGINAL_KEY: gr00t.TASK_INDEX}
                 },
             },
-            'lerobot_features': {
+            LEROBOT_FEATURES: {
                 **{name: lerobot_state(gr00t.STATE_DIMS[name]) for name in state_encoders},
                 **{name: lerobot_image(*gr00t.IMAGE_SIZE) for name in self.image_mappings},
                 gr00t.ACTION: lerobot_action(start),
@@ -121,7 +123,7 @@ class DroidCodec(Codec):
             meta=meta,
             **{
                 **state_encoders,
-                'task': itemgetter(keys.TASK),
+                keys.TASK: itemgetter(keys.TASK),
                 gr00t.ACTION: lambda episode: tf.concat(
                     *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
                 ),

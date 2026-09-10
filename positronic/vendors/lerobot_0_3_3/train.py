@@ -32,6 +32,7 @@ from lerobot.scripts import train as lerobot_train
 from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
+from positronic.policy.codec import LEROBOT_FEATURES
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
 from positronic.vendors.lerobot_0_3_3.backbone import BACKBONES
 
@@ -57,10 +58,10 @@ def build_env_config_from_codec(codec: Codec) -> PositronicEnvConfig:
 
     fps = int(inference_meta.get('action_fps', 15))
 
-    assert 'lerobot_features' in training_meta, (
-        f"Codec training_encoder missing 'lerobot_features'. Keys: {list(training_meta.keys())}"
+    assert LEROBOT_FEATURES in training_meta, (
+        f'Codec training_encoder missing {LEROBOT_FEATURES!r}. Keys: {list(training_meta.keys())}'
     )
-    lerobot_features = training_meta['lerobot_features']
+    lerobot_features = training_meta[LEROBOT_FEATURES]
 
     features = {}
     features_map = {}
