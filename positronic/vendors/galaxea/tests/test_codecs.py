@@ -28,7 +28,7 @@ def test_observation_preserves_rgb_pixels_and_maps_state(observation):
     assert encoded[protocol.IMAGES][protocol.DUMMY_WRIST_RIGHT].shape == (3, 224, 224)
     assert not encoded[protocol.IMAGES][protocol.DUMMY_WRIST_RIGHT].any()
     assert encoded[protocol.TASK] == observation[keys.TASK]
-    assert encoded[protocol.EMBODIMENT_TYPE] == 'Droid_Franka'
+    assert encoded[protocol.EMBODIMENT_TYPE] == protocol.DROID_FRANKA
     assert encoded[protocol.FREQUENCY] == 15.0
 
 
