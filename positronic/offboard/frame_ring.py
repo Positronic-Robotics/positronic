@@ -27,7 +27,7 @@ SUPPORTED = hasattr(os, 'memfd_create')
 # The suffix of the descriptor socket, which each side derives from its own session socket path.
 SOCKET_SUFFIX = '.frames'
 
-# Slots per ring, so a slot the server may still read is never the one the writer takes next.
+# Slots per ring, so the writer never takes a slot the server may still read.
 SLOTS = 4
 
 # The slot header: two sequence numbers, then padding that puts every payload on a 64-byte boundary.
@@ -53,7 +53,7 @@ _HANDOVER_BYTES = 4096
 
 
 class TornFrame(RuntimeError):
-    """The slot a reference names holds another write, so the pixels under it are not the ones sent."""
+    """The slot a reference names holds another write, so the pixels under it belong elsewhere."""
 
 
 def channel_path(socket_path: str) -> str:
