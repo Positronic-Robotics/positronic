@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import StrEnum
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlsplit
 
@@ -52,6 +52,8 @@ _api_cache: dict[tuple, dict] = {}
 
 # The app's own scripts, styles and viewer sit under this route at the host root.
 ASSET_ROUTE = 'static'
+# The directory of assets a page reads when nothing names another.
+DEFAULT_ASSET_DIR = PurePosixPath(ASSET_ROUTE)
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,7 @@ class PageConfig:
     title: str = ''  # empty = the dataset root
     show_paths: bool = True
     static_export: bool = False
-    asset_dir: str = ASSET_ROUTE
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR
 
 
 # The app state's key for the `PageConfig` every page reads.
@@ -156,16 +158,16 @@ templates = Jinja2Templates(directory=_pkg_path('templates'))
 VIEWER_DIR = 'rerun'
 
 
-def validated_asset_dir(value: str) -> str:
+def validated_asset_dir(value: PurePosixPath) -> PurePosixPath:
     """`value` when it names a directory of assets under the asset route."""
-    route, *segments = value.split('/')
+    route, *segments = value.parts
     if route != ASSET_ROUTE:
-        raise ValueError(f'an asset directory sits under {ASSET_ROUTE!r}, got {value!r}')
+        raise ValueError(f'an asset directory sits under {ASSET_ROUTE!r}, got {str(value)!r}')
     for segment in segments:
         if not _is_one_path_segment(segment):
             raise ValueError(
                 f'an asset directory is URL path segments of at most {MAX_COMPONENT_BYTES} letters, digits, "_", '
-                f'"-" and ".", got {value!r}'
+                f'"-" and ".", got {str(value)!r}'
             )
     return value
 
@@ -378,7 +380,7 @@ def configure_pages(
     title: str = '',
     show_paths: bool = True,
     static_export: bool = False,
-    asset_dir: str = ASSET_ROUTE,
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR,
 ) -> None:
     """Set where the pages are served and what they show.
 

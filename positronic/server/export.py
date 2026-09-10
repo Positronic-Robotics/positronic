@@ -35,6 +35,7 @@ from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
     API_ROUTE,
     ASSET_ROUTE,
+    DEFAULT_ASSET_DIR,
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
@@ -370,9 +371,9 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
     ]
 
 
-def asset_files(asset_dir: str = ASSET_ROUTE) -> list[tuple[PurePosixPath, Path]]:
+def asset_files(asset_dir: PurePosixPath = DEFAULT_ASSET_DIR) -> list[tuple[PurePosixPath, Path]]:
     """The app's own scripts, styles and viewer, each as its path under `asset_dir` and the file to copy from."""
-    directory = PurePosixPath(validated_asset_dir(asset_dir))
+    directory = validated_asset_dir(asset_dir)
     static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
     return [(directory / file.relative_to(static_dir).as_posix(), file) for file in files]
@@ -491,7 +492,7 @@ def export_static(
     build_id: str = '',
     full_dataset: Dataset | None = None,
     assets: bool = True,
-    asset_dir: str = ASSET_ROUTE,
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR,
     scratch_dir: Path | None = None,
     workers: int = DEFAULT_WORKERS,
 ) -> list[ExportedFile]:
@@ -608,7 +609,7 @@ def main(
         show_paths=show_paths,
         build_id=build_id,
         assets=assets,
-        asset_dir=asset_dir,
+        asset_dir=PurePosixPath(asset_dir),
         workers=workers,
     )
     logging.info(f'{len(written)} files, {sum(file.size for file in written) / 1e6:.1f} MB, under {out_dir}')
