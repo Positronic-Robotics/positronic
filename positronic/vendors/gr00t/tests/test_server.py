@@ -6,13 +6,14 @@ import numpy as np
 import pytest
 import zmq
 
+from positronic.offboard.server import PolicyServer
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
 
 
 def _source(monkeypatch, checkpoints: list[str]) -> gr00t_server.Gr00tSource:
     monkeypatch.setattr(gr00t_server, 'list_checkpoints', lambda _dir, prefix='': checkpoints)
-    return gr00t_server.Gr00tSource('s3://bucket/exp')
+    return gr00t_server.droid.override_data(**{'source.checkpoints_dir': 's3://bucket/exp'})().source
 
 
 def test_zero_padded_checkpoints_are_served_under_the_id_they_advertise(monkeypatch):
@@ -49,9 +50,44 @@ def test_serializer_rejects_pickle_bearing_arrays():
 
 def test_published_checkpoint_is_served_without_a_local_checkpoint_scan(monkeypatch):
 
-    source = gr00t_server.Gr00tSource()
+    source = gr00t_server.droid().source
     assert source.get_models() == [gr00t.BASE_MODEL]
     assert source.resolve(None) == gr00t.BASE_MODEL
+
+
+@pytest.mark.parametrize('config', [gr00t_server.droid, gr00t_server.droid_three_cameras])
+@pytest.mark.parametrize('checkpoint_cameras', [2, 3])
+def test_camera_mismatch_stops_the_backend_before_warmup(monkeypatch, config, checkpoint_cameras):
+    source = config().source
+    cameras = [gr00t.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE]
+    if checkpoint_cameras == 3:
+        cameras.append(gr00t.EXTERIOR_IMAGE_2)
+    backend = Mock()
+    backend.client.call_endpoint.return_value = {
+        gr00t.VIDEO: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: cameras},
+        gr00t.STATE: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: list(gr00t.STATE_DIMS)},
+    }
+    monkeypatch.setattr(gr00t_server, 'Gr00tSubprocess', Mock(return_value=backend))
+    warmup = Mock()
+    monkeypatch.setattr(gr00t_server, 'warmup', warmup)
+    if len(source.video_keys) != checkpoint_cameras:
+        with pytest.raises(ValueError, match='Checkpoint video keys'):
+            source.load(gr00t.BASE_MODEL)
+        warmup.assert_not_called()
+        backend.stop.assert_called_once()
+    else:
+        policy = source.load(gr00t.BASE_MODEL)
+        try:
+            assert set(warmup.call_args.args[1][gr00t.VIDEO]) == set(cameras)
+            backend.stop.assert_not_called()
+        finally:
+            policy.close()
+
+
+def test_session_timing_overrides_preserve_source_equality():
+    server = PolicyServer(gr00t_server.droid)
+    variant = server._session_pipeline({'codec.fps': 10.0})
+    assert variant.source == gr00t_server.droid().source
 
 
 @pytest.mark.parametrize('failure', [zmq.Again(), zmq.ZMQError(zmq.EFSM)])

@@ -90,7 +90,7 @@ class ObservationCodec(Codec):
     def meta(self):
         sizes = {input_key: (w, h) for _out, (input_key, (w, h)) in self._image_configs.items()}
         unique = set(sizes.values())
-        return {'image_sizes': unique.pop() if len(unique) == 1 else sizes}
+        return {self.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes}
 
     @property
     def training_encoder(self):

@@ -7,6 +7,7 @@ import configuronic as cfn
 import pos3
 
 from positronic import utils
+from positronic.policy.codec import GR00T_MODALITY_PATH
 from positronic.vendors import gr00t
 
 
@@ -41,7 +42,7 @@ def main(
     python_bin = str(Path(groot_venv_path).expanduser() / 'bin' / 'python')
 
     dataset_local_path = pos3.download(input_path)
-    with (Path(dataset_local_path) / 'meta' / 'modality.json').open() as f:
+    with (Path(dataset_local_path) / GR00T_MODALITY_PATH).open() as f:
         video_keys = list(json.load(f)[gr00t.VIDEO])
     output_path = output_path.rstrip('/')
     output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
