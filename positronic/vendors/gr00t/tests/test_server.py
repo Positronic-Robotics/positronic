@@ -101,8 +101,8 @@ def test_client_can_ping_after_a_transport_failure(monkeypatch, failure):
     monkeypatch.setattr(gr00t_server.zmq, 'Context', lambda: context)
     client = gr00t_server.PolicyClient()
     try:
-        assert not client.ping()
-        assert client.ping()
+        assert client.ping() is gr00t_server.PingResult.FAILURE
+        assert client.ping() is gr00t_server.PingResult.SUCCESS
         request = gr00t_server.MsgSerializer.from_bytes(recovered.send.call_args.args[0])
         assert request == {'endpoint': 'ping'}
     finally:

@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Callable
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,10 @@ from positronic.vendors.gr00t import codecs
 
 logger = logging.getLogger(__name__)
 
+NUMPY_ARRAY = b'nd'
+NUMPY_KIND = b'kind'
+NUMPY_OBJECT_KIND = b'O'
+
 
 class MsgSerializer:
     """N1.7's msgpack-numpy wire format, excluding pickle-bearing object arrays."""
@@ -42,7 +47,9 @@ class MsgSerializer:
     @staticmethod
     def decode_custom_classes(obj):
         if isinstance(obj, dict):
-            if obj.get(b'nd', obj.get('nd')) and obj.get(b'kind', obj.get('kind')) in (b'O', 'O'):
+            if obj.get(NUMPY_ARRAY, obj.get(NUMPY_ARRAY.decode())) and obj.get(
+                NUMPY_KIND, obj.get(NUMPY_KIND.decode())
+            ) in (NUMPY_OBJECT_KIND, NUMPY_OBJECT_KIND.decode()):
                 raise ValueError('Object arrays are not supported by the GR00T wire protocol')
             if obj.get(gr00t.MODALITY_CONFIG):
                 return obj[gr00t.AS_JSON]
@@ -53,6 +60,11 @@ class MsgSerializer:
         if isinstance(obj, np.ndarray) and obj.dtype.hasobject:
             raise TypeError('Object arrays are not supported by the GR00T wire protocol')
         return mnp.encode(obj)
+
+
+class PingResult(Enum):
+    SUCCESS = auto()
+    FAILURE = auto()
 
 
 class PolicyClient:
@@ -72,12 +84,12 @@ class PolicyClient:
         socket.connect(f'tcp://{self.host}:{self.port}')
         return socket
 
-    def ping(self) -> bool:
+    def ping(self) -> PingResult:
         try:
             self.call_endpoint(gr00t.PING)
-            return True
+            return PingResult.SUCCESS
         except (zmq.error.ZMQError, RuntimeError):
-            return False
+            return PingResult.FAILURE
 
     def call_endpoint(self, endpoint: str, data: dict | None = None) -> Any:
         request: dict = {gr00t.ENDPOINT: endpoint}
@@ -142,7 +154,7 @@ class Gr00tSubprocess:
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
         try:
             wait_for_subprocess_ready(
-                client.ping,
+                lambda: client.ping() is PingResult.SUCCESS,
                 lambda: (self.process.poll() is not None, self.process.returncode),
                 'gr00t subprocess',
                 on_progress,
