@@ -54,8 +54,11 @@ class Rollout:
 
         Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
         """
+        logging.info('Rollout.close: closing the runtime')
         self.rt.close()
+        logging.info('Rollout.close: runtime closed, closing the session')
         self.session.close()
+        logging.info('Rollout.close: session closed')
 
 
 class _EpisodeInference:
