@@ -313,8 +313,8 @@ def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_unix_ser
 
 
 def test_a_dial_at_a_path_holding_something_that_is_not_a_socket_fails_at_once(socket_path):
-    """No waiting clears a wrong path. Which errno says so differs by platform, so the deadline it
-    must not spend is what this asserts."""
+    """No waiting clears a wrong path. Which errno says so differs by platform, so this asserts the
+    connect deadline goes unspent."""
     pathlib.Path(socket_path).write_text('not a socket')
     started = time.monotonic()
 

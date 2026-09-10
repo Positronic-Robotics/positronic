@@ -127,8 +127,8 @@ def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, st
     The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
     Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
     socket path cannot hold a directory whose own name carries a slash. Only the socket path is
-    decoded, because it names a file; the URL path reaches the server as written, which is what lets
-    a model id carry its own escapes.
+    decoded, because it names a file; the URL path reaches the server as written, so a model id
+    carries its own escapes.
     """
     if split.netloc or not split.path.startswith('/'):
         raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
@@ -252,9 +252,9 @@ class InferenceClient:
         """Whether a failed dial is a co-located server that has not bound its socket yet.
 
         Its ``serve`` binds only once the model has loaded, so the path is absent for that whole
-        interval, and a socket that refuses is one restarting. The path decides that, not the error:
-        a missing socket and a wrong path report different errno on Linux and on macOS. A refusal
-        this client has no permission to read past is settled wherever it comes from.
+        interval, and a socket that refuses is one restarting. The path answers it, because a missing
+        socket and a wrong path report different errno on Linux and on macOS. A refusal this client
+        has no permission to read past is settled wherever it comes from.
         """
         assert self.uds is not None
         if isinstance(e, PermissionError):
