@@ -240,13 +240,35 @@ def test_an_endpoint_says_whether_it_names_a_locator():
     assert Endpoint(name='baseline', url='wss://x/ws').names_a_locator is True
 
 
-def test_a_plan_names_each_task_and_each_endpoint_once():
-    with pytest.raises(ValidationError, match='more than once'):
-        a_plan(tasks=[SPOONS, SPOONS])
+def test_a_plan_names_each_endpoint_once():
     with pytest.raises(ValidationError, match='more than once'):
         a_plan(endpoints=[BASELINE, BASELINE])
     with pytest.raises(ValidationError, match='more than once'):
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': [{'name': 'e'}, {'name': 'e'}]})
+
+
+def test_a_plan_may_name_one_task_twice():
+    """Two nodes of one task, each with its own scene, is a plan the platform runs. The position
+    keeps them apart; the id cannot."""
+    plan = a_plan(tasks=[SPOONS, SPOONS])
+
+    assert [task.task_id for task in plan.tasks] == [SPOONS, SPOONS]
+    assert [task.position for task in plan.tasks] == [0, 1]
+
+
+def test_every_node_is_numbered_by_its_place_in_the_list():
+    plan = a_plan(tasks=[SPOONS, {'task_id': SPOONS, 'episodes_per_endpoint': 2}, SPOONS])
+
+    assert [task.position for task in plan.tasks] == [0, 1, 2]
+
+
+def test_a_position_a_caller_states_is_the_list_order_regardless():
+    """The index identifies the node, so a sent value cannot disagree with where it sits — and the
+    field never goes out on the wire for a caller to have sent one in the first place."""
+    plan = a_plan(tasks=[{'task_id': SPOONS, 'position': 7}, SPOONS])
+
+    assert [task.position for task in plan.tasks] == [0, 1]
+    assert 'position' not in plan.model_dump()['tasks'][0]
 
 
 def test_a_task_endpoint_naming_no_locator_names_one_the_plan_defines():

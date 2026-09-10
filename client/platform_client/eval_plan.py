@@ -164,6 +164,11 @@ class TaskNode(Cascade):
 
     task_id: TaskRef
     endpoints: list[Endpoint] | None = Field(default=None, min_length=1)
+    # Where this node sits in the plan's task list, stamped by `EvalPlan._number_the_nodes`. It
+    # identifies the node, so a plan naming one task twice keys its two nodes apart; `task_id` alone
+    # cannot. Excluded from the wire: a caller states the order by writing the list, and a value it
+    # sent would be overwritten by the index anyway.
+    position: int = Field(default=0, ge=0, exclude=True)
 
     @model_validator(mode='before')
     @classmethod
@@ -223,8 +228,15 @@ class EvalPlan(Cascade):
         return self
 
     @model_validator(mode='after')
-    def _each_task_appears_once(self) -> Self:
-        _require_unique_names([task.task_id for task in self.tasks], 'the plan')
+    def _number_the_nodes(self) -> Self:
+        """Stamp each node with its place in the list, which is what identifies it.
+
+        A plan may name one catalogue task twice, each node with its own scene, and the position is
+        what keeps the two apart everywhere they are filed. Nothing refuses the repeat: a caller
+        asking for two scenes of one task is asking for something the platform runs.
+        """
+        for position, task in enumerate(self.tasks):
+            task.position = position
         return self
 
     @model_validator(mode='after')
