@@ -165,7 +165,11 @@ class FrameWriter:
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
             return self._ring
         ring = FrameRing(slot_bytes)
-        self._hand_over(ring)
+        try:
+            self._hand_over(ring)
+        except Exception:
+            ring.close()
+            raise
         if self._ring is not None:
             # A mapping outlives the descriptor it was made from, so this frees the ring only here.
             self._ring.close()

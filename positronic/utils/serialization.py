@@ -36,11 +36,7 @@ _JPEG_QUALITY = 90
 
 
 def is_image(value: Any) -> bool:
-    """True for a value the wire treats as an image: an ``(H, W, 3)`` frame or a ``(T, H, W, 3)`` stack.
-
-    Codecs nest images inside dicts and lists (e.g. GR00T), so a caller that walks an observation
-    recurses to reach every one.
-    """
+    """True for a value the wire treats as an image: an ``(H, W, 3)`` frame or a ``(T, H, W, 3)`` stack."""
     return isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
 
 
