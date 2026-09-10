@@ -60,7 +60,7 @@ Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<
 
 **A Unix socket reaches a server on the same machine.** `--uds /run/policy.sock` binds that socket path in place of a host and a port. `--policy.url=unix:///run/policy.sock` dials it, over no network. A model id and session params follow the socket path as they follow a host: `unix:///run/policy.sock/api/v1/session/10000?codec.fps=10`. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
 
-Such a server also takes each observation's images through shared memory, which keeps 8 MB of frames out of the message: it declares a frame ring in the handshake, and a `unix://` client writes the images into a sealed `memfd` the server maps read-only. `--frame_ring=false` on the server turns that off. [`positronic/offboard/README.md`](../positronic/offboard/README.md) states the contract.
+Such a server also takes each observation's images through shared memory, which keeps 8 MB of frames out of the message; `--frame_ring=false` turns that off. [`positronic/offboard/README.md`](../positronic/offboard/README.md) states the contract.
 
 **Credentials stay out of the URL, and out of the command line.** The URL is meant to be safe to paste around, so a token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
