@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from positronic.offboard import client, websocket_wire, wire
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
@@ -78,7 +79,7 @@ def _measure(socket_path: str, frame_ring: bool, calls: int, cameras: int) -> tu
     client.serialise = lambda obj: _record(packer(obj), sent)
     try:
         session = InferenceClient.from_url(f'unix://{socket_path}').new_session()
-        declared = 'frame_ring' in session.metadata
+        declared = offboard_keys.FRAME_RING in session.metadata
         obs: dict[str, Any] = {
             f'image.{i}': np.random.default_rng(i).integers(0, 256, HD720, dtype=np.uint8) for i in range(cameras)
         }
