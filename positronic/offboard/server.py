@@ -5,6 +5,8 @@ import hmac
 import json
 import logging
 import os
+import secrets
+import socket
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -17,6 +19,7 @@ import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
+from positronic.offboard import frame_ring as frames
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder, Session
 from positronic.policy.base import Layer, timings_to
@@ -227,6 +230,11 @@ class PolicyServer:
     A ``cfn.Config`` pipeline takes session params as dotted overrides (``?codec.fps=10``; the offboard
     README states the rules). An instantiated ``Pipeline`` refuses every session param. The default
     checkpoint is resolved at startup and pinned; a session that names a model id loads that one.
+
+    ``frame_ring`` accepts each observation's images through shared memory rather than in the message,
+    which a Unix socket makes possible. The server declares it per session, and a client that reads the
+    declaration hands over a sealed ring the server maps read-only (see ``positronic.offboard.frame_ring``).
+    A client that ignores the declaration keeps sending whole images, and so does every client over TCP.
     """
 
     def __init__(
@@ -235,6 +243,7 @@ class PolicyServer:
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        frame_ring: bool = True,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -247,6 +256,10 @@ class PolicyServer:
         _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
+        # A ring needs a kernel that carries a sealed memfd, and a Unix socket to ride beside. The socket
+        # belongs to a wire, so ``serve`` opens the channel once the wires have bound.
+        self._takes_rings = frame_ring and frames.SUPPORTED
+        self._frames: frames.FrameChannel | None = None
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -313,7 +326,17 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
+    def _served_policy(self, answered: Policy, remote_half: Layer | None) -> Policy:
+        """``answered`` under the pipeline's remote half, with a recording tap on each side of it."""
+        if self._recording_dir is None:
+            return answered if remote_half is None else remote_half.wrap(answered)
+        # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
+        rec = Recorder(self._recording_dir)
+        if remote_half is None:
+            return rec.tap('inference').wrap(answered)
+        return (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(answered)
+
+    async def _answer_observations(self, conn: wire.ServerConnection, session: Session, session_id: str) -> None:
         """Answer every observation the client sends, until it disconnects."""
         while True:
             message = await conn.receive()
@@ -322,6 +345,8 @@ class PolicyServer:
                 with _ServedTiming.opened() as timing:
                     with timing.phase(protocol.TIMING_DECODE):
                         raw_obs = deserialise(message)
+                        if self._frames is not None:
+                            raw_obs = self._frames.resolve(session_id, raw_obs)
                     # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                     # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                     with timing.phase(protocol.TIMING_QUEUED):
@@ -352,6 +377,11 @@ class PolicyServer:
         self._last_activity = time.monotonic()
         policy: Policy | None = None
         session = None
+        # The id a frame ring is handed over under. It names this session and nothing else, so a ring
+        # reaches the session that declared it.
+        session_id = secrets.token_hex(8)
+        if self._frames is not None:
+            self._frames.open_session(session_id)
         try:
             pipeline = self._session_pipeline(_session_params(conn.query_params))
             local, border, remote_half = split(pipeline)
@@ -362,16 +392,7 @@ class PolicyServer:
             policy = await self._manager.get_policy(rid, conn)
             # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
             # above it sees one call per answer rather than one per call the answer took.
-            answered = blocking(policy)
-            if self._recording_dir is not None:
-                # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
-                rec = Recorder(self._recording_dir)
-                if remote_half is not None:
-                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(answered)
-                else:
-                    served = rec.tap('inference').wrap(answered)
-            else:
-                served = remote_half.wrap(answered) if remote_half is not None else answered
+            served = self._served_policy(blocking(policy), remote_half)
             # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
             # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
             await _acquire_with_keepalives(self._infer_lock, conn, 'Waiting for inference slot')
@@ -397,10 +418,12 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: border.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            if self._frames is not None:
+                meta[offboard_keys.FRAME_RING] = session_id
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
             try:
-                await self._answer_observations(conn, session)
+                await self._answer_observations(conn, session, session_id)
             except wire.PeerDisconnected:
                 logger.info('Client disconnected')
 
@@ -416,6 +439,8 @@ class PolicyServer:
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
+            if self._frames is not None:
+                self._frames.close_session(session_id)
             try:
                 if session is not None:
                     # Both ends of a session's life touch the backend — close does a reset round-trip — so
@@ -457,6 +482,18 @@ class PolicyServer:
             # A wire that ended on an error raises; a silent return reads as a shutdown.
             raise failed[0][1]
 
+    def _open_frame_channel(self, started: Sequence[wire.Wire]) -> None:
+        """Serve frame rings beside the Unix socket a wire bound, where this server takes them at all.
+
+        A wire names its socket once it has started, so this runs after ``start`` and before the first
+        session. A server whose wires all bind a port takes no ring.
+        """
+        uds = next((w.endpoint.uds for w in started if w.endpoint.uds is not None), None)
+        if not self._takes_rings or uds is None:
+            return
+        self._frames = frames.FrameChannel(frames.channel_path(uds))
+        self._frames.start(websocket_wire.claim_socket_path(self._frames.path, socket.SOCK_SEQPACKET))
+
     def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
@@ -477,6 +514,7 @@ class PolicyServer:
                 for w in wires:
                     await w.start(self._serve_session, self._authorized)
                     started.append(w)
+                self._open_frame_channel(started)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
                     on_ready()
@@ -502,6 +540,9 @@ class PolicyServer:
             logger.info('Server stopped by user')
         finally:
             self._loop, self._stop = None, None
+            if self._frames is not None:
+                self._frames.close()
+                self._frames = None
             self._manager.close()
 
     def shutdown(self):
@@ -511,7 +552,9 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None, uds=None)
+@cfn.config(
+    host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None, uds=None, frame_ring=True
+)
 def serve(
     pipeline: cfn.Config,
     host: str,
@@ -520,6 +563,7 @@ def serve(
     idle_timeout_min: float | None,
     grpc_port: int | None,
     uds: str | None,
+    frame_ring: bool,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
@@ -530,6 +574,8 @@ def serve(
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``uds`` binds
     the websocket wire to that Unix socket path instead of ``host`` and ``port``; the gRPC wire still
     binds ``host``, so a socket-served websocket beside a gRPC port is still reachable over the network.
+    ``frame_ring=false`` keeps every image in the message there, which a socket-bound server otherwise
+    carries in shared memory.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
@@ -539,6 +585,7 @@ def serve(
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        frame_ring=frame_ring,
     )
     wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api, uds=uds)]
     if grpc_port is not None:

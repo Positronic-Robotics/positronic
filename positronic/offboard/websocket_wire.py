@@ -209,8 +209,8 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
 LIVE_SOCKET_PROBE_SEC = 1.0
 
 
-def _is_stale_socket(path: Path) -> bool:
-    """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+def _is_stale_socket(path: Path, kind: int) -> bool:
+    """Whether ``path`` is a socket of type ``kind`` no server answers on, so replacing it takes nothing.
 
     A live socket, a probe that runs out of time against a full backlog, and a path that holds something
     other than a socket are none of them stale.
@@ -220,7 +220,7 @@ def _is_stale_socket(path: Path) -> bool:
             return False
     except FileNotFoundError:
         return False
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+    with socket.socket(socket.AF_UNIX, kind) as probe:
         probe.settimeout(LIVE_SOCKET_PROBE_SEC)
         try:
             probe.connect(str(path))
@@ -231,8 +231,8 @@ def _is_stale_socket(path: Path) -> bool:
     return False
 
 
-def claim_socket_path(path: Path) -> socket.socket:
-    """Bind and listen on ``path``, and return the socket, or refuse a path a live server holds.
+def claim_socket_path(path: Path, kind: int = socket.SOCK_STREAM) -> socket.socket:
+    """Bind and listen on ``path`` as a socket of type ``kind``, or refuse a path a live server holds.
 
     A live path is refused: the bind precedes any probe, so the loser fails on ``EADDRINUSE`` and the
     probe reads the holder as live. An absent or a stale path holds no such claim. A socket is bound
@@ -241,14 +241,14 @@ def claim_socket_path(path: Path) -> socket.socket:
     one starter. Serve the returned socket by its descriptor: a server handed the path instead binds
     again, and unlinks this claim.
     """
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock = socket.socket(socket.AF_UNIX, kind)
     try:
         try:
             sock.bind(str(path))
         except OSError as taken:
             if taken.errno != errno.EADDRINUSE:
                 raise
-            if not _is_stale_socket(path):
+            if not _is_stale_socket(path, kind):
                 raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
             os.unlink(path)
             sock.bind(str(path))
