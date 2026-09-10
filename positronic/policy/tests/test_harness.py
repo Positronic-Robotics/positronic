@@ -340,14 +340,8 @@ def _last_grip(p):
     return msg.data
 
 
-def _emitted_commands(recorder):
-    """Every robot command a recorder saw, in emission order."""
-    return [cmd for _ts, cmd in recorder.emitted]
-
-
-def _emitted_grips(recorder):
-    """Every grip target a recorder saw, in emission order."""
-    return [grip for _ts, grip in recorder.emitted]
+def _emitted_values(recorder):
+    return [value for _ts, value in recorder.emitted]
 
 
 @pytest.mark.timeout(3.0)
@@ -400,14 +394,14 @@ def test_harness_emits_cartesian_move(world):
         keys.DESCRIPTOR,
     }
 
-    cmds = _emitted_commands(cmd_recorder)
+    cmds = _emitted_values(cmd_recorder)
     assert cmds, 'no robot command emitted'
     cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
     np.testing.assert_allclose(cmd.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert grips and grips[-1] == pytest.approx(0.33)
 
 
@@ -539,7 +533,7 @@ def test_harness_waits_for_complete_inputs(world):
 
     def assert_no_inference():
         assert policy.last_obs is None
-        assert not _emitted_commands(cmd_recorder)
+        assert not _emitted_values(cmd_recorder)
 
     driver = ManualDriver([
         (partial(perform_task, Task(instruction_source='dummy-task', timeout_sec=None)), 0.01),
@@ -555,13 +549,13 @@ def test_harness_waits_for_complete_inputs(world):
 
     assert policy.last_obs is not None
 
-    cmds = _emitted_commands(cmd_recorder)
+    cmds = _emitted_values(cmd_recorder)
     assert cmds, 'no robot command emitted'
     cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert grips and grips[-1] == pytest.approx(0.33)
 
 
@@ -1371,8 +1365,8 @@ def test_timeout_during_inference_drops_the_chunk(world):
     assert len(stops) == 1
     assert stops[0].static_data[eval_keys.TERMINATED] is False
     # A trial that times out mid-call plays nothing: the chunk it was waiting on is dropped.
-    assert not _emitted_commands(cmd_recorder)
-    assert not _emitted_grips(grip_recorder)
+    assert not _emitted_values(cmd_recorder)
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(3.0)
@@ -1636,8 +1630,8 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=200)
 
-    assert not _emitted_commands(cmd_recorder)  # an empty trajectory schedules nothing
-    assert not _emitted_grips(grip_recorder)
+    assert not _emitted_values(cmd_recorder)  # an empty trajectory schedules nothing
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(3.0)
@@ -2535,7 +2529,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     ])
     drive_scheduler(world.start([harness, driver]), steps=1000)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert set(grips) == {0.5}, f'the second chunk kept the gripper playing: {grips}'
 
 
@@ -2555,8 +2549,8 @@ def test_manual_commands_are_emitted_as_plain_values(world):
     driver = ManualDriver([(partial(manual_em.emit, {keys.ROBOT_COMMAND: manual}), 0.01), (None, 0.02)])
     drive_scheduler(world.start([harness, driver]), steps=50)
 
-    assert _emitted_commands(cmd_recorder) == [manual]
-    assert not _emitted_grips(grip_recorder)
+    assert _emitted_values(cmd_recorder) == [manual]
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(20.0)
@@ -2586,7 +2580,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     ])
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
-    assert not _emitted_commands(cmd_recorder)
+    assert not _emitted_values(cmd_recorder)
 
 
 def test_a_layer_the_rig_runs_lands_in_the_sidecar_as_its_own_span(world, tmp_path):
@@ -2611,9 +2605,9 @@ def test_a_layer_the_rig_runs_lands_in_the_sidecar_as_its_own_span(world, tmp_pa
             Task(instruction_source='t', timeout_sec=None), (_Marker() | StopOnFault()).wrap(_Answering()), None
         )
         try:
-            _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)({
-                keys.ROBOT_STATUS: RobotStatus.AVAILABLE
-            })
+            _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)(
+                {keys.ROBOT_STATUS: RobotStatus.AVAILABLE}, world.should_stop_reader()
+            )
         finally:
             rollout.close()
 

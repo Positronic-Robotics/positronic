@@ -1,5 +1,4 @@
 import json
-from contextlib import nullcontext
 from unittest.mock import Mock
 
 import pytest
@@ -18,7 +17,6 @@ def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(tmp_path, monke
     output.mkdir()
     sync = Mock(return_value=output)
     run = Mock()
-    monkeypatch.setattr(train.pos3, 'mirror', nullcontext)
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
     monkeypatch.setattr(train.pos3, 'sync', sync)
     monkeypatch.setattr(train.utils, 'save_run_metadata', Mock())
