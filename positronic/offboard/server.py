@@ -35,8 +35,8 @@ AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 AUTH_HEADER = 'Authorization'
 
-# A server whose backlog is full holds a connect open, so the probe for a live socket bounds its wait
-# rather than stalling startup on it. A wait that runs out counts as live.
+# The probe for a live socket bounds its wait, and reads a wait that runs out as a live server: a
+# server whose backlog is full holds a connect open, and an unbounded one would stall startup.
 LIVE_SOCKET_PROBE_SEC = 1.0
 
 # The mode uvicorn gives a Unix socket it binds itself.
@@ -452,8 +452,8 @@ class PolicyServer:
         """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
 
         The bind is the claim, so two servers starting together cannot both take one path: the loser's
-        bind fails. Only then is a probe worth making, and only to tell a stale file from a live server.
-        The caller hands the descriptor to uvicorn, which binds nothing and so never unlinks the path.
+        bind fails. A probe follows it only to tell a stale file from a live server. The caller hands the
+        descriptor to uvicorn, which binds nothing and so never unlinks the path.
         """
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
