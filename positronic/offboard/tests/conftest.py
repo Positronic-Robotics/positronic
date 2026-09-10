@@ -16,6 +16,21 @@ from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import ModelSource, PolicySource, remote
 
 
+def _bind_free_socket(host: str) -> socket.socket:
+    """A socket holding a free port on ``host``, to hand to the server that will serve on it.
+
+    Drawing a port and closing the socket loses the port to whoever binds next, and these tests run in
+    parallel. Staying bound from the draw to the serve is what makes the port ours. The family comes from
+    ``host`` itself, so an IPv6 test binds an IPv6 socket.
+    """
+    family, _type, _proto, _canon, address = socket.getaddrinfo(
+        host, 0, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    )[0]
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.bind(address)
+    return sock
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
@@ -36,7 +51,10 @@ def start_server() -> Generator[StartServer, None, None]:
     def start(pipeline, *, grpc: bool = False, **server_kwargs) -> tuple[str, int, PolicyServer]:
         grpc_port = _find_free_port() if grpc else None
         host = server_kwargs.pop('host', 'localhost')
-        server = PolicyServer(pipeline, host=host, port=_find_free_port(), grpc_port=grpc_port, **server_kwargs)
+        ws_socket = _bind_free_socket(host)
+        server = PolicyServer(
+            pipeline, host=host, port=ws_socket.getsockname()[1], grpc_port=grpc_port, **server_kwargs
+        )
         uv_server = uvicorn.Server(
             uvicorn.Config(
                 server.app, host=server.host, port=server.port, log_level='warning', ws_max_size=wire.MAX_MESSAGE_BYTES
@@ -48,7 +66,7 @@ def start_server() -> Generator[StartServer, None, None]:
             # Started first, so the websocket port answering means both wires are up.
             grpc_server = await server._start_grpc() if grpc_port is not None else None
             try:
-                await uv_server.serve()
+                await uv_server.serve(sockets=[ws_socket])
             finally:
                 if grpc_server is not None:
                     await grpc_server.stop(grace=None)
