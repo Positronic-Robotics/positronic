@@ -1,8 +1,4 @@
-"""Synchronous client for the env server: the lockstep ``tasks``/``reset``/``step``/``close`` round-trips.
-
-Positronic-free (``websockets`` + the wire codec). ``RemoteEnvControlSystem`` wraps this as a pimm
-control system; tests use it directly to compare a socket rollout against an in-process one.
-"""
+"""Synchronous env-server client with no dependencies on Positronic."""
 
 import logging
 import time
@@ -11,24 +7,18 @@ from typing import Any
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
-from .protocol import decode, encode
+from . import protocol
 
 logger = logging.getLogger(__name__)
 
-# How long ``close`` waits to be acknowledged. Teardown often runs while the peer is on its way out, and a
-# simulator wedged in its own destructor holds the socket open without ever answering — an unbounded wait there
-# hangs the run in place of ending it.
+# Bound cleanup time when the server keeps the socket open without answering.
 _CLOSE_ACK_TIMEOUT = 5.0
 
 
 class EnvConnection:
-    """One websocket to an ``EnvServer``, opened with retry. Every command blocks on the round-trip.
+    """One synchronous websocket connection to an ``EnvServer``.
 
-    There is no handshake: the first ``reset`` constructs the env server-side and returns
-    ``{'obs', 'meta', 'control_dt'}``.
-
-    The connect deadline must cover a first boot on a fresh machine: a heavy simulator can spend many minutes
-    bringing its runtime up — compiling shaders, loading assets — before it binds the port.
+    The connect deadline must cover simulator startup, which can take many minutes on a fresh machine.
     """
 
     def __init__(
@@ -56,30 +46,28 @@ class EnvConnection:
                 backoff = min(backoff * 2, 5.0)
 
     def tasks(self, spec: Any) -> list[dict[str, Any]]:
-        return self._request({'cmd': 'tasks', 'spec': spec})['tasks']
+        return self._request({protocol.CMD: protocol.Command.TASKS.value, protocol.SPEC: spec})[protocol.TASKS]
 
     def reset(self, token: Any) -> dict[str, Any]:
-        return self._request({'cmd': 'reset', 'token': token})
+        return self._request({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token})
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        return self._request({'cmd': 'step', 'action': action})
+        return self._request({protocol.CMD: protocol.Command.STEP.value, protocol.ACTION: action})
 
     def _request(self, msg: dict[str, Any]) -> dict[str, Any]:
-        self._ws.send(encode(msg))
-        result = decode(self._ws.recv())
-        if 'error' in result:
-            raise RuntimeError(f'env server: {result["error"]}')
+        self._ws.send(protocol.encode(msg))
+        result = protocol.decode(self._ws.recv())
+        if protocol.ERROR in result:
+            raise RuntimeError(f'env server: {result[protocol.ERROR]}')
         return result
 
     def close(self) -> None:
         try:
-            self._ws.send(encode({'cmd': 'close'}))
+            self._ws.send(protocol.encode({protocol.CMD: protocol.Command.CLOSE.value}))
             self._ws.recv(timeout=_CLOSE_ACK_TIMEOUT)
         except ConnectionClosed:
-            pass  # a peer already gone has released whatever the acknowledgement would have reported
+            pass  # A closed peer cannot acknowledge the close request.
         except TimeoutError:
-            # Abandoning it is still better than hanging the run here, but a server that took the request and
-            # never answered is wedged rather than finished, and its resources are nobody's to reclaim now.
             logger.error('Env server did not acknowledge close within %.1fs; abandoning it', _CLOSE_ACK_TIMEOUT)
         finally:
             self._ws.close()

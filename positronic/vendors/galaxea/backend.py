@@ -20,6 +20,9 @@ from . import protocol
 
 logger = logging.getLogger(__name__)
 
+_ABSENT_KEYS = '_absent_keys'
+_COT_TEXT = '_cot_text'
+
 
 class ChunkBackend:
     """Serialize access to the shared model; every request recomputes a complete trajectory."""
@@ -33,8 +36,8 @@ class ChunkBackend:
     def infer(self, obs: dict) -> dict:
         with self._lock:
             prediction = self._inferencer.infer([build_obs_dict(obs, self._processor)])[0]
-        absent = prediction.pop('_absent_keys', set())
-        cot_text = prediction.pop('_cot_text', None)
+        absent = prediction.pop(_ABSENT_KEYS, set())
+        prediction.pop(_COT_TEXT, None)
         actions = {}
         for name, value in prediction.items():
             if name in absent:
@@ -42,7 +45,7 @@ class ChunkBackend:
             if not isinstance(value, torch.Tensor) or value.ndim != 3 or value.shape[0] != 1:
                 raise ValueError(f'Expected {name} as a (1, T, D) tensor')
             actions[name] = value[0].float().cpu().numpy()
-        return protocol.chunk_response(actions, cot_text)
+        return protocol.chunk_response(actions)
 
     def handle(self, connection):
         connection.send(

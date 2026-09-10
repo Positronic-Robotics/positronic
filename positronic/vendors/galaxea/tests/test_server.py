@@ -38,9 +38,10 @@ class Backend:
     release: threading.Event = field(default_factory=threading.Event)
     metadata: dict = field(default_factory=lambda: {protocol.PROTOCOL: protocol.FULL_CHUNK_V1})
     response: dict = field(
-        default_factory=lambda: protocol.chunk_response(
-            {protocol.RIGHT_ARM: np.arange(32 * 7).reshape(32, 7), protocol.RIGHT_GRIPPER: np.zeros((32, 1))}, None
-        )
+        default_factory=lambda: protocol.chunk_response({
+            protocol.RIGHT_ARM: np.arange(32 * 7).reshape(32, 7),
+            protocol.RIGHT_GRIPPER: np.zeros((32, 1)),
+        })
     )
 
     def stop(self):
@@ -211,7 +212,7 @@ def test_subprocess_preserves_venv_and_checkpoint_symlinks(tmp_path, monkeypatch
     assert command[0] == str(interpreter)
     assert command[command.index('--checkpoint') + 1] == str(checkpoint)
     assert popen.call_args.kwargs['cwd'] == tmp_path
-    assert popen.call_args.kwargs['env']['VIRTUAL_ENV'] == str(tmp_path / '.venv')
+    assert popen.call_args.kwargs['env'][server.VIRTUAL_ENV] == str(tmp_path / '.venv')
     backend.stop()
     popen.return_value.terminate.assert_called_once()
     popen.return_value.wait.assert_called_once_with(timeout=10)

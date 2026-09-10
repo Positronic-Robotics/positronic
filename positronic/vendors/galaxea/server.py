@@ -16,6 +16,7 @@ from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Runtime
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
@@ -77,6 +78,11 @@ class _GalaxeaSession(Session):
         self._connection.close()
 
 
+PYTHONPATH = 'PYTHONPATH'
+VIRTUAL_ENV = 'VIRTUAL_ENV'
+PATH = 'PATH'
+
+
 class _BackendProcess:
     """Own the full-chunk model process in Galaxea's isolated interpreter."""
 
@@ -112,9 +118,9 @@ class _BackendProcess:
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', self._port))
         env = os.environ.copy()
-        env['PYTHONPATH'] = os.pathsep.join((str(self._root / 'src'), str(self._root), str(Path(__file__).parents[1])))
-        env['VIRTUAL_ENV'] = str(self._root / '.venv')
-        env['PATH'] = str(self._root / '.venv/bin') + os.pathsep + env.get('PATH', '')
+        env[PYTHONPATH] = os.pathsep.join((str(self._root / 'src'), str(self._root), str(Path(__file__).parents[1])))
+        env[VIRTUAL_ENV] = str(self._root / '.venv')
+        env[PATH] = str(self._root / '.venv/bin') + os.pathsep + env.get(PATH, '')
         self._process = subprocess.Popen(
             [
                 str(self._python),
@@ -196,7 +202,7 @@ class GalaxeaSource(ModelSource):
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
             'model_id': model_id,
-            protocol.CHECKPOINT_PATH: str(self._checkpoint),
+            policy_keys.CHECKPOINT_PATH: str(self._checkpoint),
             'usage': 'internal non-commercial evaluation only',
         }
 

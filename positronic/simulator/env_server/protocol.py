@@ -1,18 +1,31 @@
-"""Wire codec for the remote env-server boundary: msgpack with a numpy envelope.
+"""Env-server wire names and msgpack encoding for numpy arrays and plain data.
 
-This module is **positronic-free** — it imports only ``msgpack`` and ``numpy`` — so it can be
-imported (or copied) into a benchmark's isolated interpreter alongside the dumb server without
-dragging in pimm or the rest of positronic. Only raw numpy arrays and plain-data dicts cross the
-wire; every canonical<->raw mapping lives client-side in the ``EnvAdapter``.
-
-Arrays travel as raw bytes plus their ``dtype.str`` and shape, so a numpy-2 server round-trips a
-numpy-1 client unchanged.
+This module must work in an isolated interpreter without Positronic installed.
+Arrays use raw bytes, ``dtype.str``, and shape for compatibility between numpy versions.
 """
 
 import functools
+from collections.abc import Callable
+from enum import Enum
+from typing import Any, cast
 
 import msgpack
 import numpy as np
+
+CMD = 'cmd'
+OK = 'ok'
+TASKS = 'tasks'
+SPEC = 'spec'
+TOKEN = 'token'
+ACTION = 'action'
+ERROR = 'error'
+
+
+class Command(Enum):
+    TASKS = 'tasks'
+    RESET = 'reset'
+    STEP = 'step'
+    CLOSE = 'close'
 
 
 def _pack(obj):
@@ -27,13 +40,13 @@ def _pack(obj):
 
 def _unpack(obj):
     if b'__ndarray__' in obj:
-        # ``bytearray`` (not the raw msgpack ``bytes``) backs a writable array, so the socket path
-        # matches the in-process path for envs/adapters that mutate a decoded buffer in place.
+        # A bytearray keeps the decoded array writable.
         return np.ndarray(buffer=bytearray(obj[b'data']), dtype=np.dtype(obj[b'dtype']), shape=obj[b'shape'])
     if b'__npgeneric__' in obj:
         return np.dtype(obj[b'dtype']).type(obj[b'data'])
     return obj
 
 
-encode = functools.partial(msgpack.packb, default=_pack)
+# msgpack's default autoreset=True makes packb return bytes.
+encode = cast(Callable[[Any], bytes], functools.partial(msgpack.packb, default=_pack))
 decode = functools.partial(msgpack.unpackb, object_hook=_unpack)
