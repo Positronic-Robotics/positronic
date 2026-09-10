@@ -38,19 +38,6 @@ SOCKET_SUFFIX = '.frames'
 # bytes that were written for it.
 SLOTS = 4
 
-# How long a handover waits for the server to map the ring.
-HANDOVER_TIMEOUT_SEC = 10.0
-
-# The seal numbers from ``linux/fcntl.h``. A Python built against another platform's headers exports
-# none of them, so the kernel's own values stand here. ``F_SEAL_FUTURE_WRITE`` (Linux 5.1 and later)
-# leaves the writable mapping this process already holds and refuses every later one, which
-# ``F_SEAL_WRITE`` cannot do.
-_F_ADD_SEALS = 1033
-_F_SEAL_SHRINK = 0x0002
-_F_SEAL_GROW = 0x0004
-_F_SEAL_FUTURE_WRITE = 0x0010
-_SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
-
 # Each slot opens with two sequence numbers, one before the payload and one after it. The rest of the
 # header pads every payload to a 64-byte boundary.
 _HEADER_BYTES = 64
@@ -87,20 +74,15 @@ def _aligned(nbytes: int) -> int:
     return -(-nbytes // _ALIGN) * _ALIGN
 
 
-def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]]) -> Any:
-    """``value`` with an empty reference in place of every image, each paired with its array in ``found``.
-
-    The caller fills each reference in once the ring says where its image landed.
-    """
-    if serialization.is_image(value):
-        reference: dict[bytes, Any] = {}
-        found.append((reference, value))
-        return reference
-    if isinstance(value, Mapping):
-        return {key: _detach_images(item, found) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return type(value)(_detach_images(item, found) for item in value)
-    return value
+# The seal numbers from ``linux/fcntl.h``. A Python built against another platform's headers exports
+# none of them, so the kernel's own values stand here. ``F_SEAL_FUTURE_WRITE`` (Linux 5.1 and later)
+# leaves the writable mapping this process already holds and refuses every later one, which
+# ``F_SEAL_WRITE`` cannot do.
+_F_ADD_SEALS = 1033
+_F_SEAL_SHRINK = 0x0002
+_F_SEAL_GROW = 0x0004
+_F_SEAL_FUTURE_WRITE = 0x0010
+_SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
 
 
 class FrameRing:
@@ -153,6 +135,26 @@ class FrameRing:
         os.close(self.fd)
 
 
+def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]]) -> Any:
+    """``value`` with an empty reference in place of every image, each paired with its array in ``found``.
+
+    The caller fills each reference in once the ring says where its image landed.
+    """
+    if serialization.is_image(value):
+        reference: dict[bytes, Any] = {}
+        found.append((reference, value))
+        return reference
+    if isinstance(value, Mapping):
+        return {key: _detach_images(item, found) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return type(value)(_detach_images(item, found) for item in value)
+    return value
+
+
+# How long a handover waits for the server to map the ring.
+HANDOVER_TIMEOUT_SEC = 10.0
+
+
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
@@ -160,10 +162,9 @@ class FrameWriter:
     server before any reference to it goes on the wire, so the server never meets a slot it cannot map.
     """
 
-    def __init__(self, channel: str, session_id: str, slots: int = SLOTS):
+    def __init__(self, channel: str, session_id: str):
         self._channel = channel
         self._session_id = session_id
-        self._slots = slots
         self._ring: FrameRing | None = None
 
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
@@ -180,11 +181,10 @@ class FrameWriter:
     def _ring_for(self, slot_bytes: int) -> FrameRing:
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
             return self._ring
-        ring = FrameRing(slot_bytes, self._slots)
+        ring = FrameRing(slot_bytes)
         self._hand_over(ring)
         if self._ring is not None:
-            # The server keeps its own mapping of every ring it was handed, so the views it already
-            # built stay valid after this process drops the descriptor.
+            # A mapping outlives the descriptor it was made from, so this frees the ring only here.
             self._ring.close()
         self._ring = ring
         return ring
@@ -296,8 +296,7 @@ class FrameChannel:
             with connection:
                 try:
                     self._take_ring(connection)
-                # One bad handover must not take the channel down. The client waits for an answer that
-                # this connection now never sends, and raises there.
+                # One bad handover must not take the channel down.
                 except Exception:
                     logger.exception('A frame ring handover failed')
 
