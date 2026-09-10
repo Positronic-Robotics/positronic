@@ -1164,3 +1164,13 @@ def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
         assert offboard_keys.FRAME_RING not in session.metadata
     finally:
         session.close()
+
+
+def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_unix_server, socket_path, make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    directory = pathlib.Path(socket_path).parent
+    longest = str(directory / ('p' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - 1)))
+
+    server = start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), longest)
+
+    assert server._frames is None

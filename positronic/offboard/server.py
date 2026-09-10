@@ -254,8 +254,8 @@ class PolicyServer:
         _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
-        # A ring needs a kernel that carries a sealed memfd, and a Unix socket to ride beside. The socket
-        # belongs to a wire, so ``serve`` opens the channel once the wires have bound.
+        # A ring needs a kernel that seals a memfd, and a Unix socket to ride beside. The socket belongs
+        # to a wire, so ``serve`` opens the channel once the wires have bound.
         self._takes_rings = frame_ring and frames.SUPPORTED
         self._frames: frames.FrameChannel | None = None
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
@@ -489,7 +489,11 @@ class PolicyServer:
         uds = next((w.endpoint.uds for w in started if w.endpoint.uds is not None), None)
         if not self._takes_rings or uds is None:
             return
-        self._frames = frames.FrameChannel(frames.channel_path(uds))
+        channel = frames.channel_path(uds)
+        if len(str(channel)) > frames.MAX_SOCKET_PATH:
+            logger.warning('No frame ring: the companion socket path %r is too long to bind', str(channel))
+            return
+        self._frames = frames.FrameChannel(channel)
         self._frames.start(websocket_wire.claim_socket_path(self._frames.path, socket.SOCK_SEQPACKET))
 
     def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):

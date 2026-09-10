@@ -22,9 +22,8 @@ from positronic.utils import serialization
 
 logger = logging.getLogger(__name__)
 
-# A ring needs ``memfd_create``, which Linux has and macOS does not. A server without it declares no
-# ring, and every image stays in the message.
-SUPPORTED = hasattr(os, 'memfd_create')
+# The longest path ``sockaddr_un`` carries: ``sun_path`` is 108 bytes on Linux, and one holds the NUL.
+MAX_SOCKET_PATH = 107
 
 # The suffix of the descriptor socket, which each side derives from its own session socket path.
 SOCKET_SUFFIX = '.frames'
@@ -74,6 +73,24 @@ _F_SEAL_SHRINK = 0x0002
 _F_SEAL_GROW = 0x0004
 _F_SEAL_FUTURE_WRITE = 0x0010
 _SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
+
+
+def _seals_a_memfd() -> bool:
+    """True where a ring can be built: macOS has no ``memfd_create``, and Linux before 5.1 no seal."""
+    if not hasattr(os, 'memfd_create'):
+        return False
+    fd = os.memfd_create('positronic-frames-probe', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        fcntl.fcntl(fd, _F_ADD_SEALS, _SEALS)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+# A server that cannot build a ring declares none, and every image stays in the message.
+SUPPORTED = _seals_a_memfd()
 
 
 class FrameRing:
@@ -311,7 +328,7 @@ class FrameChannel:
             # knock first. A refused knock means it is not waiting, which is the state this wants.
             with contextlib.suppress(OSError), socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as knock:
                 knock.settimeout(HANDOVER_TIMEOUT_SEC)
-                knock.connect(self.path)
+                knock.connect(str(self.path))
             self._socket.close()
             self._socket = None
         if self._thread is not None:
