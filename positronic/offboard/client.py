@@ -122,9 +122,11 @@ def _session_path(path: str, url: str) -> str:
 def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str]:
     """The socket path a ``unix://`` URL names, decoded, and the URL path left over for the server.
 
-    The split runs over the encoded path, so an escaped separator inside a directory name stays part
-    of that name. Only the socket path is decoded, and once: it names a file, where the URL path
-    reaches the server as written, which is what lets a model id carry its own escapes.
+    The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
+    Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
+    socket path cannot hold a directory whose own name carries a slash. Only the socket path is
+    decoded, because it names a file; the URL path reaches the server as written, which is what lets
+    a model id carry its own escapes.
     """
     if split.netloc or not split.path.startswith('/'):
         raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')

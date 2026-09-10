@@ -238,8 +238,8 @@ class TestInferenceClientUrl:
         assert client.uds == '/run/a b%c/policy.sock'
         assert client.session_url == 'unix:///run/a b%c/policy.sock/api/v1/session/s3%3A//ckpt'
 
-    def test_an_escaped_separator_stays_inside_a_directory_name(self):
-        """The split runs before the decode, so %2F never becomes a path separator."""
+    def test_an_escaped_separator_is_a_separator_once_decoded(self):
+        """The decode resolves every escape, so no socket path can hold a slash inside one name."""
         client = InferenceClient('unix:///run/odd%2Fname/policy.sock')
         assert client.uds == '/run/odd/name/policy.sock'
 

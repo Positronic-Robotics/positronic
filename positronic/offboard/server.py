@@ -39,9 +39,6 @@ AUTH_HEADER = 'Authorization'
 # server whose backlog is full holds a connect open, and an unbounded one would stall startup.
 LIVE_SOCKET_PROBE_SEC = 1.0
 
-# The mode uvicorn gives a Unix socket it binds itself.
-UDS_MODE = 0o666
-
 
 def bearer(token: str) -> str:
     """The ``AUTH_HEADER`` value carrying ``token``."""
@@ -466,8 +463,9 @@ class PolicyServer:
                     raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
                 os.unlink(path)
                 sock.bind(path)
+            # The mode is the deployment's, through its umask: widening it here would open the socket
+            # to every local account that can reach the directory.
             sock.listen()
-            os.chmod(path, UDS_MODE)
         except BaseException:
             sock.close()
             raise

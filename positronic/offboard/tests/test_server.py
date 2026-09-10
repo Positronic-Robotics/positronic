@@ -19,7 +19,7 @@ from positronic import keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, UDS_MODE, PolicyServer, bearer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
@@ -330,10 +330,16 @@ def test_a_second_claim_on_one_path_is_refused_and_the_first_goes_on_serving(soc
         held.close()
 
 
-def test_a_claimed_socket_carries_the_mode_uvicorn_gives_one(socket_path):
-    sock = PolicyServer.claim_socket_path(socket_path)
+def test_a_claimed_socket_keeps_the_mode_the_umask_gives(socket_path):
+    """A restrictive umask is the deployment's choice, and widening it would open the socket to every
+    local account that can reach the directory."""
+    previous = os.umask(0o077)
     try:
-        assert stat.S_IMODE(os.stat(socket_path).st_mode) == UDS_MODE
+        sock = PolicyServer.claim_socket_path(socket_path)
+    finally:
+        os.umask(previous)
+    try:
+        assert stat.S_IMODE(os.stat(socket_path).st_mode) & 0o077 == 0
     finally:
         sock.close()
 
