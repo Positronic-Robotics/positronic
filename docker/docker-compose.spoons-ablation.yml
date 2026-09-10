@@ -11,7 +11,7 @@ services:
       service: groot-server
     # These experiment checkpoints use the N1.6 action schema.
     image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
-    entrypoint: ["uv", "run", "--no-sync", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-100
     pull_policy: always
     command:
@@ -26,7 +26,7 @@ services:
       service: groot-server
     # These experiment checkpoints use the N1.6 action schema.
     image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
-    entrypoint: ["uv", "run", "--no-sync", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-50
     pull_policy: always
     command:
@@ -41,7 +41,7 @@ services:
       service: groot-server
     # These experiment checkpoints use the N1.6 action schema.
     image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
-    entrypoint: ["uv", "run", "--no-sync", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-25
     pull_policy: always
     command:
