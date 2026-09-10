@@ -248,7 +248,7 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server):
     session = client.new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
-        assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {'name': 'chunked_schedule'}
         assert session.metadata[offboard_keys.HOST] == socket_path
         assert offboard_keys.PORT not in session.metadata
 
@@ -264,7 +264,7 @@ def test_a_unix_url_carries_the_model_id_past_the_socket_path(unix_stub_server):
 
     session = InferenceClient(f'unix://{socket_path}/api/v1/session/10000').new_session()
     try:
-        assert session.metadata['checkpoint_id'] == '10000'
+        assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
     finally:
         session.close()
 
