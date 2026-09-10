@@ -469,8 +469,7 @@ def serve(
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
 
-    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused, which serves a client
-    on the same machine over no network.
+    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused.
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.

@@ -120,11 +120,7 @@ def _session_path(path: str, url: str) -> str:
 
 
 def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str]:
-    """The socket path a ``unix://`` URL names, and the URL path left over for the server.
-
-    The socket path is absolute and runs to the first ``/api/v1`` segment. A URL that names no such
-    segment is the bare socket path, which addresses the default session.
-    """
+    """The socket path a ``unix://`` URL names, and the URL path left over for the server."""
     if split.netloc or not split.path.startswith('/'):
         raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
     marker = re.search(r'/api/v1(?=/|$)', split.path)
