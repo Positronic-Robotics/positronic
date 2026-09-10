@@ -231,6 +231,18 @@ class TestInferenceClientUrl:
         assert client.uds == '/run/api/v1x/policy.sock'
         assert client.session_url == 'unix:///run/api/v1x/policy.sock/api/v1/session'
 
+    def test_the_socket_path_is_decoded_and_the_session_path_is_not(self):
+        """The socket path names a file, so its escapes are resolved; the model id reaches the server
+        as written, which is how an id carrying its own escapes survives."""
+        client = InferenceClient('unix:///run/a%20b%25c/policy.sock/api/v1/session/s3%3A//ckpt')
+        assert client.uds == '/run/a b%c/policy.sock'
+        assert client.session_url == 'unix:///run/a b%c/policy.sock/api/v1/session/s3%3A//ckpt'
+
+    def test_an_escaped_separator_stays_inside_a_directory_name(self):
+        """The split runs before the decode, so %2F never becomes a path separator."""
+        client = InferenceClient('unix:///run/odd%2Fname/policy.sock')
+        assert client.uds == '/run/odd/name/policy.sock'
+
     def test_a_relative_socket_path_rejected(self):
         with pytest.raises(ValueError, match='absolute'):
             InferenceClient('unix://policy.sock')

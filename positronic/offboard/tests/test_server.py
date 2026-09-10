@@ -271,6 +271,26 @@ def test_a_unix_url_carries_the_model_id_past_the_socket_path(unix_stub_server):
         session.close()
 
 
+def test_a_socket_path_carrying_url_escapes_is_dialled_as_a_filename(start_unix_server, socket_path, make_mock_policy):
+    """``urlsplit`` leaves the path encoded, so a directory holding a space or a percent would
+    otherwise be dialled as a file that does not exist."""
+    odd = pathlib.Path(socket_path).parent / 'a b%c'
+    odd.mkdir()
+    uds = str(odd / 's.sock')
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), uds)
+
+    client = InferenceClient(f'unix://{urllib.parse.quote(uds)}')
+
+    assert client.uds == uds
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
 def test_a_server_binds_over_the_socket_an_earlier_run_left(start_unix_server, socket_path, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
