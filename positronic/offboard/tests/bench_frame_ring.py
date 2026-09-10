@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import uvicorn
 
+from positronic import keys
 from positronic.offboard import client
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient
@@ -40,7 +41,7 @@ class _ReadEveryPixel(Session):
         for value in obs.values():
             if isinstance(value, np.ndarray):
                 int(value.sum())
-        return [{'timestamp': 0.0}]
+        return [{keys.ACTION_TIMESTAMP: 0.0}]
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -91,7 +92,7 @@ def _measure(socket_path: str, frame_ring: bool, calls: int, cameras: int) -> tu
         obs: dict[str, Any] = {
             f'image.{i}': np.random.default_rng(i).integers(0, 256, HD720, dtype=np.uint8) for i in range(cameras)
         }
-        obs['grip'] = 0.5
+        obs[keys.GRIP] = 0.5
         for _ in range(5):
             session.infer(obs)
         times = []
