@@ -490,7 +490,7 @@ class PolicyServer:
         if not self._takes_rings or uds is None:
             return
         channel = frames.channel_path(uds)
-        if len(str(channel)) > frames.MAX_SOCKET_PATH:
+        if len(os.fsencode(channel)) > frames.MAX_SOCKET_PATH:
             logger.warning('No frame ring: the companion socket path %r is too long to bind', str(channel))
             return
         self._frames = frames.FrameChannel(channel)
