@@ -16,7 +16,14 @@ from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.action import IKJointsAction
-from positronic.policy.codec import GR00T_MODALITY, Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.policy.codec import (
+    GR00T_MODALITY,
+    LEROBOT_FEATURES,
+    Codec,
+    lerobot_action,
+    lerobot_image,
+    lerobot_state,
+)
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
@@ -55,11 +62,11 @@ class DreamZeroObservationCodec(Codec):
             'video.wrist_image_left': partial(self._derive_image, wrist_camera),
             'video.exterior_image_1_left': partial(self._derive_image, exterior_camera_1),
             'video.exterior_image_2_left': partial(self._derive_image, self._exterior_camera_2),
-            'task': Get(keys.TASK, ''),
+            keys.TASK: Get(keys.TASK, ''),
         }
 
         self._training_meta = {
-            'lerobot_features': {
+            LEROBOT_FEATURES: {
                 'state.joint_position': lerobot_state(7),
                 'state.gripper_position': lerobot_state(1),
                 'video.wrist_image_left': lerobot_image(w, h),
@@ -146,7 +153,7 @@ class DreamZeroActionCodec(Codec):
         self._num_joints = num_joints
 
         self._training_meta = {
-            'lerobot_features': {
+            LEROBOT_FEATURES: {
                 'action': lerobot_action(num_joints + 1),
                 'action.joint_position': lerobot_state(num_joints),
                 'action.gripper_position': lerobot_state(1),

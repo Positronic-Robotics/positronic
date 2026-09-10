@@ -25,6 +25,13 @@ The published two-camera checkpoint does not consume an extra exterior view. Sel
 `droid_three_cameras` for both conversion and serving when fine-tuning with three views.
 N1.6 checkpoints require an N1.6 image; their custom action schemas are incompatible with this adapter.
 
+The default pose transform matches Franka rigs and the RoboLab adapter. The bundled MuJoCo
+Panda reports poses at a different tool frame; using the default transform on its recordings
+(including `sim_stack_cubes`) introduces a 45 mm offset. That frame alignment is tracked in
+[#550](https://github.com/Positronic-Robotics/positronic/issues/550). Such datasets and their
+serving codec require a matching simulator-specific `ee_frame`; the default is not a validated
+native-checkpoint configuration for that simulator.
+
 ## Docker
 
 Build the pinned fork and the Positronic image:
