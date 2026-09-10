@@ -7,6 +7,7 @@ from functools import partial
 import numpy as np
 import pos3
 import pytest
+from websockets.exceptions import ConnectionClosedError
 from websockets.frames import OP_PING
 from websockets.sync.client import connect as websocket_connect
 from websockets.sync.server import serve as websocket_serve
@@ -157,13 +158,14 @@ def test_close_gives_up_on_a_peer_that_never_answers():
         assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
 
 
-@pytest.mark.timeout(10.0)
-def test_scene_reset_survives_delayed_heartbeat_replies(monkeypatch):
+@pytest.fixture
+def server_without_heartbeat(monkeypatch):
     monkeypatch.setattr(
         'positronic.simulator.env_server.client.connect',
         partial(websocket_connect, ping_interval=0.01, ping_timeout=0.02),
     )
     ignored_pings = []
+    release = threading.Event()
 
     def handler(connection):
         receive_frame = connection.protocol.recv_frame
@@ -179,7 +181,8 @@ def test_scene_reset_survives_delayed_heartbeat_replies(monkeypatch):
             if decode(raw)['cmd'] == 'close':
                 connection.send(encode({'ok': True}))
                 return
-            time.sleep(0.2)
+            if release.wait(timeout=0.2):
+                return
             connection.send(encode({'obs': {'ready': True}}))
 
     host, port = 'localhost', free_port()
@@ -187,15 +190,37 @@ def test_scene_reset_survives_delayed_heartbeat_replies(monkeypatch):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            conn = EnvConnection(host, port)
-            try:
-                assert conn.reset({}) == {'obs': {'ready': True}}
-                assert ignored_pings
-            finally:
-                conn.close()
+            yield host, port, ignored_pings
         finally:
+            release.set()
             server.shutdown()
             thread.join(timeout=2.0)
+
+
+@pytest.mark.timeout(10.0)
+def test_scene_reset_survives_delayed_heartbeat_replies(server_without_heartbeat):
+    host, port, ignored_pings = server_without_heartbeat
+    conn = EnvConnection(host, port)
+    try:
+        assert conn.reset({}) == {'obs': {'ready': True}}
+        assert ignored_pings
+    finally:
+        conn.close()
+
+
+@pytest.mark.timeout(10.0)
+@pytest.mark.parametrize('command', [EnvConnection.tasks, EnvConnection.reset, EnvConnection.step])
+def test_unanswered_heartbeat_closes_pending_requests(server_without_heartbeat, command):
+    host, port, ignored_pings = server_without_heartbeat
+    conn = EnvConnection(host, port, ping_timeout=0.02)
+    try:
+        with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):
+            command(conn, {})
+        assert ignored_pings
+        with pytest.raises(ConnectionClosedError):
+            conn.step({})
+    finally:
+        conn.close()
 
 
 _HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}

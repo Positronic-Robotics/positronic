@@ -31,7 +31,15 @@ class EnvConnection:
     bringing its runtime up — compiling shaders, loading assets — before it binds the port.
     """
 
-    def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 1800.0):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        open_timeout: float = 10.0,
+        connect_deadline: float = 1800.0,
+        ping_timeout: float = 600.0,
+    ):
         uri = f'ws://{host}:{port}/'
         deadline = time.monotonic() + connect_deadline
         backoff = 0.5
@@ -39,8 +47,7 @@ class EnvConnection:
             try:
                 # Camera + full-state observations routinely exceed websockets' 1 MiB default frame size.
                 # Native scene loading can block the server's heartbeat replies for minutes.
-                # Keep sending pings without treating delayed replies as a dead simulator.
-                self._ws = connect(uri, open_timeout=open_timeout, max_size=None, ping_timeout=None)
+                self._ws = connect(uri, open_timeout=open_timeout, max_size=None, ping_timeout=ping_timeout)
                 break
             except (TimeoutError, OSError) as e:
                 if time.monotonic() >= deadline:
