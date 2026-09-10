@@ -31,12 +31,6 @@ def _bind_free_socket(host: str) -> socket.socket:
     return sock
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
-
-
 StartServer = Callable[..., tuple[str, int, PolicyServer]]
 
 
@@ -44,16 +38,16 @@ StartServer = Callable[..., tuple[str, int, PolicyServer]]
 def start_server() -> Generator[StartServer, None, None]:
     """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown.
 
-    ``grpc=True`` also serves the gRPC wire, on a port of its own that ``PolicyServer.grpc_port`` names.
+    ``grpc=True`` also serves the gRPC wire, on a free port of its own that ``PolicyServer.grpc_port``
+    names once the server has bound it.
     """
     running: list[tuple[uvicorn.Server, threading.Thread]] = []
 
     def start(pipeline, *, grpc: bool = False, **server_kwargs) -> tuple[str, int, PolicyServer]:
-        grpc_port = _find_free_port() if grpc else None
         host = server_kwargs.pop('host', 'localhost')
         ws_socket = _bind_free_socket(host)
         server = PolicyServer(
-            pipeline, host=host, port=ws_socket.getsockname()[1], grpc_port=grpc_port, **server_kwargs
+            pipeline, host=host, port=ws_socket.getsockname()[1], grpc_port=0 if grpc else None, **server_kwargs
         )
         uv_server = uvicorn.Server(
             uvicorn.Config(
@@ -64,7 +58,7 @@ def start_server() -> Generator[StartServer, None, None]:
         async def _run():
             await server._startup()
             # Started first, so the websocket port answering means both wires are up.
-            grpc_server = await server._start_grpc() if grpc_port is not None else None
+            grpc_server = await server._start_grpc() if server.grpc_port is not None else None
             try:
                 await uv_server.serve(sockets=[ws_socket])
             finally:

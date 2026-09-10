@@ -355,6 +355,17 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
         client.new_session()
 
 
+def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
+    """The refusal probe takes a share of the budget, so a healthy server answers a short one."""
+    server, _policy = both_wires
+    budget = grpc_wire._REFUSAL_PROBE_SEC / 2
+    session = InferenceClient(grpc_url(server), open_timeout=budget, connect_deadline=0.0).new_session()
+    try:
+        assert session.infer({'image': 'test'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
 def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
     """gRPC's target syntax brackets an IPv6 literal, so a bare '::1' would bind ':::<port>' and fail."""
     assert grpc_wire._bind_target('::', 9000) == '[::]:9000'

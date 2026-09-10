@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder
+from positronic.policy import Policy, Recorder, Session
 from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -307,6 +307,29 @@ class PolicyServer:
         """Serves one gRPC session, on the model the session path names."""
         await self._serve_session(conn, grpc_wire.model_id_of(conn.session_path))
 
+    async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
+        """Answer every observation the client sends, until it disconnects."""
+        while True:
+            message = await conn.receive()
+            self._last_activity = time.monotonic()
+            try:
+                raw_obs = deserialise(message)
+                # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
+                # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                async with self._infer_lock:
+                    try:
+                        # The server's clock is not the rig's.
+                        actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                    except asyncio.CancelledError:
+                        # Cancelling this await does not stop the worker, so the session close runs beside
+                        # a live inference. Logged to give a later wrong answer a cause.
+                        logger.error('Cancelled mid-inference: the worker is still in the backend')
+                        raise
+                await conn.send(serialise({protocol.RESULT: actions}))
+            except Exception as e:
+                logger.error(f'Error processing message: {e}', exc_info=True)
+                await conn.send(serialise({protocol.ERROR: str(e)}))
+
     async def _serve_session(self, conn: wire.ServerConnection, model_id: str | None):
         logger.info(f'Connected to {conn.peer} requesting {model_id or "default"}')
 
@@ -355,20 +378,7 @@ class PolicyServer:
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
             try:
-                while True:
-                    message = await conn.receive()
-                    self._last_activity = time.monotonic()
-                    try:
-                        raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        async with self._infer_lock:
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        await conn.send(serialise({protocol.RESULT: actions}))
-                    except Exception as e:
-                        logger.error(f'Error processing message: {e}', exc_info=True)
-                        await conn.send(serialise({protocol.ERROR: str(e)}))
+                await self._answer_observations(conn, session)
             except wire.PeerDisconnected:
                 logger.info('Client disconnected')
 
@@ -413,13 +423,17 @@ class PolicyServer:
                 return
 
     async def _start_grpc(self) -> grpc.aio.Server:
-        """Start the gRPC wire on ``grpc_port``, sharing this server's model slot and inference lock."""
+        """Start the gRPC wire on ``grpc_port``, sharing this server's model slot and inference lock.
+
+        ``grpc_port`` becomes the port actually bound, so a server asked for any free one names it.
+        """
         assert self.grpc_port is not None
 
         def authorized(headers: Mapping[str, str]) -> bool:
             return self._authorized(headers.get(AUTH_HEADER.lower()))
 
-        return await grpc_wire.serve(self.grpc_session, authorized, self.host, self.grpc_port)
+        server, self.grpc_port = await grpc_wire.serve(self.grpc_session, authorized, self.host, self.grpc_port)
+        return server
 
     def serve(self):
         async def _run():

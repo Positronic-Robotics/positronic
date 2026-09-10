@@ -95,22 +95,6 @@ class InferenceSession:
         logger.info('InferenceSession.close: %s', self._conn.close())
 
 
-def _session_path(path: str, url: str) -> str:
-    """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
-
-    A URL naming no model — a bare host, or the endpoint with or without a trailing slash — addresses the
-    endpoint itself, which serves whatever the server pinned.
-    """
-    if path.rstrip('/') in ('', wire.SESSION_PATH):
-        return wire.SESSION_PATH
-    if not path.startswith(f'{wire.SESSION_PATH}/'):
-        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    # Kept as written, percent-encoding included, so the server decodes exactly the id whoever handed out
-    # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
-    # repo, say), whose own slashes stay separators.
-    return path
-
-
 class _ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
@@ -197,6 +181,22 @@ class _Scheme(Enum):
             if scheme.text == text:
                 return scheme
         raise ValueError(f'Unsupported scheme {text!r}')
+
+
+def _session_path(path: str, url: str) -> str:
+    """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
+
+    A URL naming no model — a bare host, or the endpoint with or without a trailing slash — addresses the
+    endpoint itself, which serves whatever the server pinned.
+    """
+    if path.rstrip('/') in ('', wire.SESSION_PATH):
+        return wire.SESSION_PATH
+    if not path.startswith(f'{wire.SESSION_PATH}/'):
+        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
+    # Kept as written, percent-encoding included, so the server decodes exactly the id whoever handed out
+    # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
+    # repo, say), whose own slashes stay separators.
+    return path
 
 
 class InferenceClient:

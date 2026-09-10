@@ -45,7 +45,7 @@ _CLOSE_TIMEOUT_SEC = 5.0
 # turns out to be up after all.
 _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 
-# The slice of one connect attempt's budget the refusal probe may spend. A target that black-holes
+# The largest slice of one connect attempt's budget the refusal probe may spend. A target that black-holes
 # connection attempts answers neither, so both waits must fit inside the caller's ``open_timeout``.
 _REFUSAL_PROBE_SEC = 1.0
 
@@ -57,18 +57,6 @@ UNUSABLE_EDGE = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 def edge_is_unusable(details: str) -> bool:
     """Whether a gRPC status blames the TLS edge's own configuration rather than a cold backend."""
     return any(marker in details for marker in UNUSABLE_EDGE)
-
-
-def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
-    """What gRPC says stopped the channel coming up. Its readiness future carries only that it did not."""
-    probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
-    try:
-        next(probe(iter(()), timeout=timeout))
-    except grpc.RpcError as e:
-        return e
-    except StopIteration:
-        return None
-    return None
 
 
 def _client_options() -> list[tuple[str, int]]:
@@ -88,6 +76,27 @@ def _channel(target: str, secure: bool) -> grpc.Channel:
         # No roots named, so the channel verifies the edge against the system's own.
         return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
     return grpc.insecure_channel(target, options=options)
+
+
+def _probe_share(open_timeout: float) -> float:
+    """What one connect attempt gives the refusal probe, leaving the readiness wait the rest.
+
+    Half at most, so an ``open_timeout`` under ``_REFUSAL_PROBE_SEC`` still waits for a healthy server
+    instead of going straight to asking why it is down.
+    """
+    return min(_REFUSAL_PROBE_SEC, open_timeout / 2)
+
+
+def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
+    """What gRPC says stopped the channel coming up. Its readiness future carries only that it did not."""
+    probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
+    try:
+        next(probe(iter(()), timeout=timeout))
+    except grpc.RpcError as e:
+        return e
+    except StopIteration:
+        return None
+    return None
 
 
 class GrpcClientConnection:
@@ -112,17 +121,19 @@ class GrpcClientConnection:
         self._target = target
         self._channel = _channel(target, secure)
         deadline = time.monotonic() + open_timeout
-        ready_timeout = max(0.0, open_timeout - _REFUSAL_PROBE_SEC)
         try:
-            grpc.channel_ready_future(self._channel).result(timeout=ready_timeout)
+            grpc.channel_ready_future(self._channel).result(timeout=open_timeout - _probe_share(open_timeout))
         except grpc.FutureTimeoutError:
             refusal = _connect_refusal(self._channel, timeout=max(0.0, deadline - time.monotonic()))
-            self._channel.close()
-            # An edge that refuses every client is permanent, so raise what gRPC blamed rather than a
-            # timeout: the connect loop reads the status and stops instead of retrying its deadline out.
-            if refusal is not None and edge_is_unusable(refusal.details() or ''):
-                raise refusal from None
-            raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
+            # The probe path is served by no handler, so an UNIMPLEMENTED means the edge carried the call:
+            # the channel is up, and the readiness wait was short rather than the server absent.
+            if refusal is None or refusal.code() is not grpc.StatusCode.UNIMPLEMENTED:
+                self._channel.close()
+                # An edge that refuses every client is permanent, so raise what gRPC blamed rather than a
+                # timeout: the connect loop reads the status and stops instead of retrying its deadline out.
+                if refusal is not None and edge_is_unusable(refusal.details() or ''):
+                    raise refusal from None
+                raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
         # gRPC metadata keys are lower case, and they are the same header names the websocket wire sends.
         metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
             (SESSION_PATH_HEADER, session_path),
@@ -261,8 +272,10 @@ async def serve(
     authorized: Callable[[Mapping[str, str]], bool],
     host: str,
     port: int,
-) -> grpc.aio.Server:
-    """Start a gRPC server that gives every accepted session to ``serve_session``.
+) -> tuple[grpc.aio.Server, int]:
+    """Start a gRPC server that gives every accepted session to ``serve_session``, and say what it bound.
+
+    A ``port`` of 0 binds any free one, which is the port that comes back.
 
     ``authorized`` reads the session headers and refuses before the session opens, as the websocket
     wire refuses the upgrade.
@@ -292,4 +305,4 @@ async def serve(
         raise OSError(f'gRPC could not bind {_bind_target(host, port)}')
     await server.start()
     logger.info(f'gRPC sessions on {host}:{bound}')
-    return server
+    return server, bound

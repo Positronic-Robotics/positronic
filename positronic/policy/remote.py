@@ -146,10 +146,6 @@ class _Endpoint(Policy):
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return {INFER: round_trip}
 
-    def close(self):
-        # Sessions own the connections; the client itself holds only where to open one.
-        pass
-
 
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
