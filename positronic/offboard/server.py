@@ -1,6 +1,7 @@
 """The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
+import errno
 import hmac
 import json
 import logging
@@ -418,11 +419,12 @@ class PolicyServer:
                 return
 
     @staticmethod
-    def clear_stale_socket(path: str) -> None:
-        """Remove the socket file left by an earlier run, so a restart can bind ``path`` again.
+    def claim_socket_path(path: str) -> None:
+        """Take ``path`` for this server: remove the socket an earlier run left, or refuse a live one.
 
-        A socket that still accepts a connection belongs to a live server and stays, as does anything at
-        the path that is not a socket. The bind then fails instead of taking an address off its owner.
+        The refusal has to happen here, before uvicorn: ``asyncio.create_unix_server`` unlinks an
+        existing socket file and binds a new one, so a second server would silently take a live
+        server's future connections. A refused connection means nobody listens and the file is stale.
         """
         try:
             mode = os.stat(path).st_mode
@@ -435,12 +437,14 @@ class PolicyServer:
                 probe.connect(path)
             except ConnectionRefusedError:
                 os.unlink(path)
+                return
+        raise OSError(errno.EADDRINUSE, f'A server already listens on {path!r}')
 
     def serve(self):
         async def _run():
             await self._startup()
             if self.uds is not None:
-                self.clear_stale_socket(self.uds)
+                self.claim_socket_path(self.uds)
             config = uvicorn.Config(self.app, host=self.host, port=self.port, uds=self.uds, log_level='info')
             server = uvicorn.Server(config)
             self._last_activity = time.monotonic()

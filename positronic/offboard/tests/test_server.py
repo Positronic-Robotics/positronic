@@ -1,3 +1,4 @@
+import errno
 import os
 import pathlib
 import socket
@@ -284,20 +285,30 @@ def test_a_path_that_is_not_a_socket_is_left_alone(socket_path):
     path = pathlib.Path(socket_path)
     path.write_text('not a socket')
 
-    PolicyServer.clear_stale_socket(socket_path)
+    PolicyServer.claim_socket_path(socket_path)
 
     assert path.read_text() == 'not a socket'
 
 
-def test_a_socket_a_live_server_listens_on_is_left_alone(socket_path):
-    """Unlinking it would take the address off its owner and route new sessions to the wrong server."""
+@pytest.mark.timeout(30.0)
+def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mock_policy):
+    """``asyncio.create_unix_server`` unlinks the file it finds, so only a refusal here keeps the
+    address with the server that owns it."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(policy), uds=socket_path)
+
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
         live.bind(socket_path)
         live.listen()
 
-        PolicyServer.clear_stale_socket(socket_path)
+        with pytest.raises(OSError) as refusal:
+            server.serve()
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
 
-        assert pathlib.Path(socket_path).is_socket()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert live.accept()[0].close() is None
 
 
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):

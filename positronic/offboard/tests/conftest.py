@@ -96,7 +96,7 @@ def start_unix_server(running_servers: RunningServers) -> StartUnixServer:
 
     def start(pipeline, uds: str, **server_kwargs) -> PolicyServer:
         server = PolicyServer(pipeline, uds=uds, **server_kwargs)
-        PolicyServer.clear_stale_socket(uds)
+        PolicyServer.claim_socket_path(uds)
         config = uvicorn.Config(server.app, uds=uds, log_level='warning')
         _serve_in_background(server, config, running_servers)
         _wait_until_it_accepts(lambda: _dial_unix(uds))
