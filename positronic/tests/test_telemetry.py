@@ -505,6 +505,24 @@ def test_a_run_id_a_filename_may_carry_names_its_sidecar_as_written(tmp_path, mo
     assert path.name == f'{HARNESS_PROCESS}.rik-0{telemetry.SPANS_SUFFIX}'
 
 
+def test_a_run_id_too_long_for_a_filename_still_names_a_sidecar(tmp_path, monkeypatch):
+    """The run id reaches this from an operator's environment, and one longer than the filesystem's component
+    limit would fail the export with `ENAMETOOLONG` before the harness recorded a span."""
+    run_id = 'r' * 500
+    _bind_once(tmp_path, monkeypatch, run_id)
+    (path,) = _env_sidecars(tmp_path)
+    assert len(path.name.encode()) <= os.pathconf(str(path.parent), 'PC_NAME_MAX')
+    assert _run_id(path) == run_id  # the resource block still holds it verbatim
+
+
+def test_two_long_run_ids_that_share_a_prefix_get_their_own_sidecar(tmp_path, monkeypatch):
+    """Bounding the token is many-to-one just as reducing its characters is, so two ids that differ only past
+    the bound must not append to one sidecar."""
+    _bind_once(tmp_path, monkeypatch, 'r' * 500 + '-a')
+    _bind_once(tmp_path, monkeypatch, 'r' * 500 + '-b')
+    assert len(_env_sidecars(tmp_path)) == 2
+
+
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
     """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
