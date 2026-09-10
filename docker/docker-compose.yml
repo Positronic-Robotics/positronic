@@ -257,6 +257,25 @@ services:
     ipc: host
     entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.train"]
 
+  # Galaxea model use is restricted to internal, non-commercial evaluation; see vendors/galaxea/NOTICE.
+  galaxea-server:
+    image: positro/galaxea:${IMAGE_TAG:-latest}
+    init: true
+    shm_size: 8g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility]
+    volumes:
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.cache/galaxea/checkpoints:/galaxea/checkpoints
+    ports:
+      - "8000:8000"
+
   robolab-eval:
     image: positro/robolab:${IMAGE_TAG:-latest}
 

@@ -7,6 +7,8 @@ from functools import partial
 import numpy as np
 import pos3
 import pytest
+from websockets.frames import OP_PING
+from websockets.sync.client import connect as websocket_connect
 from websockets.sync.server import serve as websocket_serve
 
 import pimm
@@ -28,6 +30,7 @@ from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port
+from positronic.simulator.env_server.protocol import decode, encode
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -152,6 +155,47 @@ def test_close_gives_up_on_a_peer_that_never_answers():
         started = time.monotonic()
         conn.close()
         assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
+
+
+@pytest.mark.timeout(10.0)
+def test_scene_reset_survives_delayed_heartbeat_replies(monkeypatch):
+    monkeypatch.setattr(
+        'positronic.simulator.env_server.client.connect',
+        partial(websocket_connect, ping_interval=0.01, ping_timeout=0.02),
+    )
+    ignored_pings = []
+
+    def handler(connection):
+        receive_frame = connection.protocol.recv_frame
+
+        def ignore_ping(frame):
+            if frame.opcode == OP_PING:
+                ignored_pings.append(frame)
+            else:
+                receive_frame(frame)
+
+        monkeypatch.setattr(connection.protocol, 'recv_frame', ignore_ping)
+        for raw in connection:
+            if decode(raw)['cmd'] == 'close':
+                connection.send(encode({'ok': True}))
+                return
+            time.sleep(0.2)
+            connection.send(encode({'obs': {'ready': True}}))
+
+    host, port = 'localhost', free_port()
+    with websocket_serve(handler, host, port) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = EnvConnection(host, port)
+            try:
+                assert conn.reset({}) == {'obs': {'ready': True}}
+                assert ignored_pings
+            finally:
+                conn.close()
+        finally:
+            server.shutdown()
+            thread.join(timeout=2.0)
 
 
 _HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}

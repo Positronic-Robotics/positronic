@@ -38,7 +38,9 @@ class EnvConnection:
         while True:
             try:
                 # Camera + full-state observations routinely exceed websockets' 1 MiB default frame size.
-                self._ws = connect(uri, open_timeout=open_timeout, max_size=None)
+                # Native scene loading can block the server's heartbeat replies for minutes.
+                # Keep sending pings without treating delayed replies as a dead simulator.
+                self._ws = connect(uri, open_timeout=open_timeout, max_size=None, ping_timeout=None)
                 break
             except (TimeoutError, OSError) as e:
                 if time.monotonic() >= deadline:

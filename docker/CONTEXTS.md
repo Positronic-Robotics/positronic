@@ -15,8 +15,12 @@
 | `positro/openpi` | OpenPI training and inference |
 | `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
+| `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 Build and push all: `make push`
+
+Galaxea is opt-in: `make build-galaxea`. Its evaluation-only image is excluded from
+aggregate builds and pushes; see [the vendor README](../positronic/vendors/galaxea/README.md).
 
 ## References
 

@@ -1,0 +1,45 @@
+# Internal, non-commercial evaluation only. See positronic/vendors/galaxea/NOTICE and LICENSE-G0.5.
+FROM ubuntu:22.04
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates ffmpeg \
+    libgl1 libglib2.0-0 libsm6 libxext6 libturbojpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep interpreter symlinks outside the host-mounted cache directories.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+ARG GALAXEA_SHA=89f2322b4ad016e192437adc1a2c253b05bab246
+RUN git clone https://github.com/OpenGalaxea/GalaxeaVLA.git /galaxea \
+    && git -C /galaxea checkout ${GALAXEA_SHA}
+
+WORKDIR /galaxea
+COPY positronic/vendors/galaxea/requirements-inference.txt /galaxea/requirements-inference.txt
+# Export versions without installing Galaxea's training and simulation dependencies.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt \
+        --output-file /galaxea/constraints.txt \
+    && uv venv --python 3.10 /galaxea/.venv \
+    && uv pip install --python /galaxea/.venv/bin/python \
+        --index https://pypi.org/simple --default-index https://download.pytorch.org/whl/cu128 \
+        --index-strategy unsafe-best-match \
+        --constraint /galaxea/constraints.txt --requirement /galaxea/requirements-inference.txt
+
+WORKDIR /positronic
+COPY . /positronic
+ENV UV_PROJECT_ENVIRONMENT=/opt/positronic-venv \
+    PYTHONPATH=/positronic
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --python 3.13
+
+LABEL org.opencontainers.image.description="G0.5-DROID for internal, non-commercial evaluation only" \
+    org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-G0.5-Community-1.0"
+
+EXPOSE 8000
+ENTRYPOINT ["/opt/positronic-venv/bin/python", "-m", "positronic.vendors.galaxea.server"]

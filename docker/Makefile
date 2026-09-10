@@ -1,4 +1,5 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: build-galaxea tag-galaxea push-galaxea
 
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
@@ -8,6 +9,7 @@ IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
+IMAGE_NAME_GALAXEA := positro/galaxea
 
 # Extract version from pyproject.toml (first literal version entry)
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
@@ -52,6 +54,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
+	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -98,6 +101,17 @@ build-dreamzero:
 build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
+
+build-galaxea:
+	docker build --platform linux/amd64 -f Dockerfile.galaxea -t $(IMAGE_NAME_GALAXEA):local ..
+
+tag-galaxea: build-galaxea
+	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+
+push-galaxea: tag-galaxea
+	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
