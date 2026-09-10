@@ -10,6 +10,5 @@ CHECKPOINT_ID = 'checkpoint_id'
 LOCAL_STACK = 'local_stack'
 COMPRESS_IMAGES = 'compress_images'
 POSITRONIC_VERSION = 'positronic_version'
-# The id of this session, present when the server accepts frames through a shared-memory ring. A client on
-# the same host names it when it hands the ring over. See ``positronic.offboard.frame_ring``.
+# The id of this session, present when the server takes frames through a shared-memory ring.
 FRAME_RING = 'frame_ring'

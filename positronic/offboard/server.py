@@ -211,10 +211,8 @@ class PolicyServer:
     ``uds`` binds a Unix socket path instead of ``host:port``, which serves a client on the same machine
     over no network. A client reaches it with a ``unix://`` URL.
 
-    ``frame_ring`` accepts each observation's images through shared memory rather than in the message,
-    which a Unix socket makes possible. The server declares it per session, and a client that reads the
-    declaration hands over a sealed ring the server maps read-only (see ``positronic.offboard.frame_ring``).
-    A client that ignores the declaration keeps sending whole images, and so does every client over TCP.
+    ``frame_ring`` takes each observation's images through shared memory, which a Unix socket makes
+    possible; ``positronic.offboard.frame_ring`` states the contract.
     """
 
     def __init__(
@@ -549,7 +547,7 @@ def serve(
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
 
     ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused. ``--frame_ring=false``
-    keeps every image in the message there, which a Unix socket server otherwise carries in shared memory.
+    keeps every image in the message.
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
