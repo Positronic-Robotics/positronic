@@ -3,6 +3,7 @@
 import asyncio
 import datetime
 import ipaddress
+import logging
 import pathlib
 import queue
 import ssl
@@ -68,6 +69,23 @@ def test_both_wires_answer_one_observation_alike(both_wires):
     finally:
         over_ws.close()
         over_grpc.close()
+
+
+def test_both_wires_report_what_their_close_saw(both_wires, caplog):
+    """A close the server answered has to read differently from one it never saw, whichever wire carried
+    the session. The second leaves the server holding the slot, and the next session's handshake waits on
+    it, so each wire reports the distinction in the terms its own protocol offers."""
+    server, _policy = both_wires
+    over_ws = InferenceClient(f'{server.host}:{server.port}').new_session()
+    over_grpc = InferenceClient(grpc_url(server)).new_session()
+
+    with caplog.at_level(logging.INFO, logger='positronic.offboard.client'):
+        over_ws.close()
+        over_grpc.close()
+
+    ws_report, grpc_report = (r.getMessage() for r in caplog.records if 'InferenceSession.close' in r.getMessage())
+    assert 'close code 1000' in ws_report  # the server answered the close frame
+    assert 'server ended it within 5.0s True' in grpc_report
 
 
 def test_closing_a_session_ends_it_on_the_server(both_wires):
@@ -404,6 +422,15 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
         _silent_then_infer(server)
 
 
+def _surfaces_at_once(url: str, blamed: str) -> None:
+    """Assert a connect to ``url`` fails naming ``blamed``, without spending its retry deadline."""
+    client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
+    started = time.monotonic()
+    with pytest.raises(grpc.RpcError, match=blamed):
+        client.new_session()
+    assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'
+
+
 def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A root that does not cover the edge is permanent, so it surfaces on the first attempt."""
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
@@ -417,15 +444,6 @@ def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monke
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
     _trust_only(monkeypatch, root)
     _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[1])
-
-
-def _surfaces_at_once(url: str, blamed: str) -> None:
-    """Assert a connect to ``url`` fails naming ``blamed``, without spending its retry deadline."""
-    client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
-    started = time.monotonic()
-    with pytest.raises(grpc.RpcError, match=blamed):
-        client.new_session()
-    assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'
 
 
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
@@ -451,5 +469,7 @@ def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires
             conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):
             conn.send(b'an observation the stream can no longer carry')
+        # The peer ended the stream, so this close reads differently from one the server answered.
+        assert 'peer had ended the stream True' in conn.close()
     finally:
         conn.close()

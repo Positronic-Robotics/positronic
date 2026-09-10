@@ -82,15 +82,6 @@ def _client_options() -> list[tuple[str, int]]:
     ]
 
 
-def _server_options() -> list[tuple[str, int]]:
-    return [
-        *_MESSAGE_SIZE_OPTIONS,
-        # gRPC's own defaults, a five-minute floor and two strikes, answer a 20s ping with GOAWAY.
-        ('grpc.http2.min_ping_interval_without_data_ms', _PING_TOLERATED_EVERY_MS),
-        ('grpc.http2.max_ping_strikes', 0),
-    ]
-
-
 def _channel(target: str, secure: bool) -> grpc.Channel:
     options = _client_options()
     if secure:
@@ -196,7 +187,10 @@ class GrpcClientConnection:
         self._channel.close()
         # The websocket wire reads the same two facts off a close code. A stream the server never ended
         # means it still holds this session, so the next one's handshake waits on a slot nobody released.
-        return f'peer had ended the stream {self._ended}, server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
+        return (
+            f'peer had ended the stream {self._ended}, '
+            f'server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
+        )
 
 
 def model_id_of(session_path: str) -> str | None:
@@ -251,6 +245,15 @@ def _headers(context: grpc.aio.ServicerContext) -> dict[str, str]:
 def _bind_target(host: str, port: int) -> str:
     """The address to bind, with an IPv6 literal in the brackets gRPC's target syntax requires."""
     return f'[{host}]:{port}' if ':' in host else f'{host}:{port}'
+
+
+def _server_options() -> list[tuple[str, int]]:
+    return [
+        *_MESSAGE_SIZE_OPTIONS,
+        # gRPC's own defaults, a five-minute floor and two strikes, answer a 20s ping with GOAWAY.
+        ('grpc.http2.min_ping_interval_without_data_ms', _PING_TOLERATED_EVERY_MS),
+        ('grpc.http2.max_ping_strikes', 0),
+    ]
 
 
 async def serve(
