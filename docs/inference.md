@@ -56,7 +56,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
 ```
 
-Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
+Accepted forms: `host`, `host:port`, and `scheme://host[:port][/api/v1/session[/<model_id>]]`, each with an optional query. The scheme settles the wire and the TLS: `http`/`https` and `ws`/`wss` take the websocket wire, `grpc`/`grpcs` the gRPC one, and the `s` forms are the TLS ones. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's websocket default). Naming no model id serves the checkpoint the server pinned at startup.
 
 **Credentials stay out of the URL, and out of the command line.** The URL is meant to be safe to paste around, so a token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
