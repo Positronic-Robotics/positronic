@@ -203,6 +203,9 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
 # A filename must fit the filesystem's component limit — 255 bytes on ext4 and on APFS — and the token
 # shares that budget with the process name and the suffix, so it stays well clear of it.
 _MAX_TOKEN_CHARS = 64
+# Two ids that reduce alike are separated by the digest alone, so it carries 64 bits: a capped prefix
+# leaves nothing else to tell them apart, and 32 bits collide across ids that share one.
+_DIGEST_CHARS = 16
 
 
 def _filename_token(run_id: str) -> str:
@@ -213,9 +216,9 @@ def _filename_token(run_id: str) -> str:
     token = re.sub(r'[^A-Za-z0-9._-]', '_', run_id)[:_MAX_TOKEN_CHARS].lstrip('.')
     if token and token == run_id:
         return token
-    # The reduction is many-to-one, so a reduced id carries a digest of the id it reduced: `a/b` and `a_b`
-    # reduce alike, as do two ids sharing a long prefix, and two runs would otherwise append to one sidecar.
-    return f'{token}.{hashlib.sha256(run_id.encode()).hexdigest()[:8]}'.lstrip('.')
+    # The reduction is many-to-one — `a/b` and `a_b` reduce alike, as do two ids sharing a capped prefix —
+    # so a reduced id carries a digest of the id it reduced and two runs never share one sidecar.
+    return f'{token}.{hashlib.sha256(run_id.encode()).hexdigest()[:_DIGEST_CHARS]}'.lstrip('.')
 
 
 def bind_from_env(process: str):
@@ -231,8 +234,8 @@ def bind_from_env(process: str):
     if directory is None or _provider is not None:
         return nullcontext()
     run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
-    # The reduce globs the suffix and reads the process from each file's resource block, so qualifying
-    # the name by run costs it nothing.
+    # The reduce discovers sidecars by the suffix and reads the process from each file's resource block,
+    # so nothing parses this name.
     return _bind_to(Path(directory) / f'{process}.{_filename_token(run_id)}{SPANS_SUFFIX}', process, run_id)
 
 
