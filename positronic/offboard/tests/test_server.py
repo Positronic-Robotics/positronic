@@ -3,6 +3,7 @@ import os
 import pathlib
 import socket
 import stat
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
@@ -289,6 +290,34 @@ def test_a_socket_path_carrying_url_escapes_is_dialled_as_a_filename(start_unix_
         assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
     finally:
         session.close()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_unix_server, socket_path, make_mock_policy):
+    """``serve`` binds only once the model has loaded, so a co-located client starting beside its
+    server finds no socket at all for that interval."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_unix_server(pipeline, socket_path))
+    late.start()
+
+    try:
+        session = InferenceClient(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def test_a_dial_at_a_path_holding_something_that_is_not_a_socket_fails_at_once(socket_path):
+    """A wrong path refuses like a restarting server does, and no waiting clears it."""
+    pathlib.Path(socket_path).write_text('not a socket')
+
+    with pytest.raises(ConnectionRefusedError):
+        InferenceClient(f'unix://{socket_path}', connect_deadline=30.0).new_session()
 
 
 def test_a_server_binds_over_the_socket_an_earlier_run_left(start_unix_server, socket_path, make_mock_policy):

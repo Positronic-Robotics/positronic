@@ -1,6 +1,8 @@
 import logging
+import os
 import re
 import ssl
+import stat
 import time
 import urllib.parse
 from enum import Enum
@@ -150,8 +152,21 @@ class _ConnectRetries:
 
     MAX_FORBIDDEN_ATTEMPTS = 3
 
-    def __init__(self) -> None:
+    def __init__(self, connect_deadline: float, url: str) -> None:
         self._forbidden_attempts = 0
+        self._deadline = time.monotonic() + connect_deadline
+        self._backoff = 1.0
+        self._url = url
+
+    def wait_or_surface(self, e: Exception) -> None:
+        """Spend one refused connect against the budget, or let it surface. Call it from the handler."""
+        if self.take(e) is _ConnectOutcome.SURFACE:
+            raise
+        if time.monotonic() >= self._deadline:
+            raise TimeoutError(f'{e} (connecting to {self._url})') from e
+        logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, self._backoff)
+        time.sleep(self._backoff)
+        self._backoff = min(self._backoff * 2, 30.0)
 
     def take(self, e: Exception) -> _ConnectOutcome:
         """Spend a refused connect against the budget."""
@@ -233,11 +248,26 @@ class InferenceClient:
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
 
+    def _socket_may_still_appear(self, e: OSError) -> bool:
+        """Whether a failed dial is a co-located server that has not bound its socket yet.
+
+        Its ``serve`` binds only once the model has loaded, so the path is absent for that whole
+        interval, and a socket that refuses is one restarting. A refusal from anything else at the
+        path is a wrong path, and no waiting clears it.
+        """
+        assert self.uds is not None
+        if isinstance(e, FileNotFoundError):
+            return True
+        if not isinstance(e, ConnectionRefusedError):
+            return False
+        try:
+            return stat.S_ISSOCK(os.stat(self.uds).st_mode)
+        except FileNotFoundError:
+            return True
+
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
-        deadline = time.monotonic() + self.connect_deadline
-        backoff = 1.0
-        retries = _ConnectRetries()
+        retries = _ConnectRetries(self.connect_deadline, self.session_url)
         while True:
             ws = None
             try:
@@ -263,15 +293,13 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                if retries.take(e) is _ConnectOutcome.SURFACE:
-                    raise
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
-                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                retries.wait_or_surface(e)
             except OSError as e:
-                raise type(e)(f'{e} (connecting to {self.session_url})') from e
+                if ws is not None:
+                    ws.close()
+                if self.uds is None or not self._socket_may_still_appear(e):
+                    raise type(e)(f'{e} (connecting to {self.session_url})') from e
+                retries.wait_or_surface(e)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
