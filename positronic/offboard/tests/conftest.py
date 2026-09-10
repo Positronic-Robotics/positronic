@@ -38,7 +38,7 @@ def running_servers() -> Generator[RunningServers, None, None]:
     for uv_server, thread, server in running:
         uv_server.should_exit = True
         thread.join(timeout=5.0)
-        # ``serve`` closes the frame channel; a test drives uvicorn itself, so it closes it here.
+        # A server started here never runs through ``serve``, so nothing else closes its frame channel.
         if server._frames is not None:
             server._frames.close()
 
