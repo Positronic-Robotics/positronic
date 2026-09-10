@@ -30,8 +30,7 @@ SOCKET_SUFFIX = '.frames'
 # Slots per ring, so a slot the server may still read is never the one the writer takes next.
 SLOTS = 4
 
-# Each slot opens with two sequence numbers, one before the payload and one after it. The rest of the
-# header pads every payload to a 64-byte boundary.
+# The slot header: two sequence numbers, then padding that puts every payload on a 64-byte boundary.
 _HEADER_BYTES = 64
 _ALIGN = 64
 
@@ -78,8 +77,7 @@ _SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
 class FrameRing:
     """One sealed ring of ``slots`` slots, each holding ``slot_bytes`` of image data.
 
-    The constructor maps the ring writable and then seals it, so this process writes and every process
-    it hands the descriptor to only reads.
+    The constructor maps it writable before it seals it, which is the only order the seals allow.
     """
 
     def __init__(self, slot_bytes: int, slots: int = SLOTS):
@@ -93,11 +91,7 @@ class FrameRing:
         self._seq = 0
 
     def write(self, arrays: Sequence[np.ndarray]) -> list[dict[bytes, Any]]:
-        """Copy ``arrays`` into the next slot and return one reference each.
-
-        The sequence number goes down before the pixels and again after them. The message that names
-        the slot leaves this process later, so the server only ever reads a finished slot.
-        """
+        """Copy ``arrays`` into the next slot and return one reference each."""
         self._seq += 1
         slot = self._seq % self.slots
         counters = np.ndarray(2, dtype=np.uint64, buffer=self._map, offset=slot * self._stride)
@@ -148,8 +142,7 @@ HANDOVER_TIMEOUT_SEC = 10.0
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
-    ``pack`` returns the observation with a reference in place of every image. A ring reaches the
-    server before any reference to it goes on the wire, so the server never meets a slot it cannot map.
+    ``pack`` returns the observation with a reference in place of every image.
     """
 
     def __init__(self, channel: str, session_id: str):
@@ -209,11 +202,7 @@ class MappedRing:
         self._map = mmap.mmap(fd, self._stride * slots, mmap.MAP_SHARED, mmap.PROT_READ)
 
     def array(self, reference: Mapping[bytes, Any]) -> np.ndarray:
-        """A read-only view of the image ``reference`` names.
-
-        The view shares the ring's pages, so nothing copies. A write through it raises, which is the
-        wall the seals put in front of this process.
-        """
+        """A read-only view of the image ``reference`` names, over the ring's own pages."""
         slot, seq, offset = reference[_SLOT], reference[_SEQ], reference[_OFFSET]
         dtype = np.dtype(reference[_DTYPE])
         shape = tuple(reference[_SHAPE])
