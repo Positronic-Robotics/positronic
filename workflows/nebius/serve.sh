@@ -6,9 +6,9 @@
 # itself takes ~10-15 min more to finish uv sync and load the model into GPU
 # memory after the URL appears.
 #
-# Both wires are served: the websocket on port 8000 and gRPC on port 9000. The
-# gRPC port is declared as an ordinary HTTP port and never `/tcp` — the offboard
-# README says what each front does to a gRPC session.
+# Both wires are served: the websocket on 8000, and gRPC on whatever `--grpc_port`
+# names. The gRPC port is declared as an ordinary HTTP port and never `/tcp` — the
+# offboard README says what each front does to a gRPC session.
 #
 # That URL carries the id of a tunnel created with the endpoint, so it cannot be
 # chosen or known in advance, and a delete plus re-create earns a new one even
@@ -22,7 +22,7 @@
 # ingress mode strips the WebSocket upgrade headers and so cannot pass inference
 # sessions at all.
 #
-# Hardcoded: GPU platform, container port. Vendor selects image + uv extra. One
+# Hardcoded: GPU platform, websocket port. Vendor selects image + uv extra. One
 # setting of its own, via env: NEBIUS_PRESET. Everything shared with the other
 # scripts here lives in common.sh.
 
