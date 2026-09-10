@@ -244,10 +244,13 @@ class PolicyServer:
         self.metadata: dict[str, Any] = (
             {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.UDS: uds}
         )
-        self._frames: frames.FrameChannel | None = None
-        if uds is not None and frame_ring and frames.SUPPORTED:
-            # A ring rides beside the Unix socket, and it needs a kernel that carries a sealed memfd.
-            self._frames = frames.FrameChannel(frames.channel_path(uds))
+        # A ring rides beside the Unix socket, so it needs a kernel that seals a memfd and a companion
+        # path short enough to bind.
+        channel = frames.channel_path(uds) if uds is not None and frame_ring and frames.SUPPORTED else None
+        if channel is not None and len(channel) > frames.MAX_SOCKET_PATH:
+            logger.warning('No frame ring: the companion socket path %r is too long to bind', channel)
+            channel = None
+        self._frames = frames.FrameChannel(channel) if channel is not None else None
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 

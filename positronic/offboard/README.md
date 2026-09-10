@@ -103,8 +103,9 @@ A client that ignores the declaration keeps sending whole images, and so does ev
 - **The views are read-only.** Code that writes an observation's image in place raises; a codec that resizes or
   copies is unaffected.
 
-`--frame_ring=false` on the server keeps every image in the message, and a server that cannot create a
-`memfd` — a macOS server — declares no ring.
+`--frame_ring=false` on the server keeps every image in the message. A server declares no ring where the
+kernel seals no `memfd` — a macOS server, or Linux before 5.1 — or where the session socket's path plus
+`.frames` is longer than a Unix socket address may be.
 
 ### WebSocket Flow
 
