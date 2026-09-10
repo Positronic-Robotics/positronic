@@ -11,6 +11,7 @@ import time
 import traceback
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -42,6 +43,7 @@ from .utils import identity
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
+U = TypeVar('U')
 Req = TypeVar('Req')
 Res = TypeVar('Res')
 
@@ -73,6 +75,28 @@ class QueueEmitter(SignalEmitter[T]):
                 self._queue.put_nowait(Message(data, ts))
             except (Empty, Full):
                 pass
+
+
+# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
+# that connection then holds half a message: the next call over it returns what another one asked for, so
+# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
+_interrupted = False
+
+
+@contextmanager
+def _noting_interrupt() -> Iterator[None]:
+    """Record an interrupt taken inside the block, and let it go on.
+
+    A connection is torn by an interrupt that lands in the middle of a call over it, so every process that
+    reaches a transport records its own -- there is nowhere else the tearing can happen, and no process has
+    to have had a handler installed for it.
+    """
+    global _interrupted
+    try:
+        yield
+    except KeyboardInterrupt:
+        _interrupted = True
+        raise
 
 
 class MultiprocessEmitter(SignalEmitter[T]):
@@ -118,7 +142,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
     @property
     def transport_mode(self) -> TransportMode:
         if self._mode is TransportMode.UNDECIDED:
-            self._mode = TransportMode(self._mode_value.value)
+            with _noting_interrupt():  # reading the manager is where a connection is torn
+                self._mode = TransportMode(self._mode_value.value)
         return self._mode
 
     @property
@@ -188,9 +213,12 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         return True
 
+    @_noting_interrupt()
     def emit(self, data: T, ts: int = -1):
+        if _interrupted:
+            return
         ts = ts if ts >= 0 else self._clock.now_ns()
-        mode = self._ensure_mode(data)
+        mode = self._ensure_mode(data)  # itself a call to the manager, so it sits inside the guard
 
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
@@ -262,7 +290,8 @@ class MultiprocessReceiver(SignalReceiver[T]):
     @property
     def transport_mode(self) -> TransportMode:
         if self._mode is TransportMode.UNDECIDED:
-            self._mode = TransportMode(self._mode_value.value)
+            with _noting_interrupt():  # reading the manager is where a connection is torn
+                self._mode = TransportMode(self._mode_value.value)
         return self._mode
 
     @property
@@ -275,6 +304,10 @@ class MultiprocessReceiver(SignalReceiver[T]):
         except Empty:
             message = None
         else:
+            if not isinstance(message, Message):
+                # An interrupt that lands inside a manager call leaves that connection holding half a
+                # message, and every read after it comes back as whatever another call asked for.
+                raise ConnectionError(f'the queue was read after an interrupt tore its connection: {message!r}')
             self._last_queue_message = Message(message.data, message.ts, True)
             if self._mode is TransportMode.UNDECIDED:
                 self._mode = TransportMode.QUEUE
@@ -332,8 +365,11 @@ class MultiprocessReceiver(SignalReceiver[T]):
             self._up_value.value = False
             return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
 
+    @_noting_interrupt()
     def read(self) -> Message[T] | None:
-        mode = self.transport_mode
+        if _interrupted:
+            return None
+        mode = self.transport_mode  # itself a call to the manager, so it sits inside the guard
 
         if mode is TransportMode.SHARED_MEMORY:
             return self._read_shared_memory()
@@ -642,13 +678,35 @@ class World:
             self._advance_to(target_ns)
             yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
+    @overload
+    def connect(self, source: ControlSystemCaller[Req, Res], target: ControlSystemHandler[Req, Res]) -> None: ...
+
+    @overload
+    def connect(
+        self,
+        source: ControlSystemEmitter[T],
+        target: ControlSystemReceiver[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = ...,
+    ) -> None: ...
+
+    @overload
+    def connect(
+        self,
+        source: ControlSystemEmitter[T],
+        target: ControlSystemReceiver[U],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = ...,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[U]],
+    ) -> None: ...
+
     def connect(
         self,
         source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
-        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
+        target: ControlSystemReceiver[U] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[U]] = identity,
     ) -> None:
         """Declare a logical connection: an Emitter feeding a Receiver, or a Caller invoking a Handler.
 
@@ -663,7 +721,8 @@ class World:
             emitter_wrapper: Optional function to wrap the underlying SignalEmitter
                            before binding. Defaults to identity function.
             receiver_wrapper: Optional function to wrap the underlying SignalReceiver
-                            before binding. Defaults to identity function.
+                            before binding. Defaults to identity function. It is the only way the
+                            receiver may carry a type other than the emitter's.
 
         The wrapper functions allow for transformation or decoration of the
         underlying signal transport mechanisms, such as adding logging,
