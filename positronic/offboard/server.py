@@ -35,6 +35,13 @@ AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 AUTH_HEADER = 'Authorization'
 
+# A server whose backlog is full holds a connect open, so the probe for a live socket bounds its wait
+# rather than stalling startup on it. A wait that runs out counts as live.
+LIVE_SOCKET_PROBE_SEC = 1.0
+
+# The mode uvicorn gives a Unix socket it binds itself.
+UDS_MODE = 0o666
+
 
 def bearer(token: str) -> str:
     """The ``AUTH_HEADER`` value carrying ``token``."""
@@ -419,43 +426,74 @@ class PolicyServer:
                 return
 
     @staticmethod
-    def claim_socket_path(path: str) -> None:
-        """Take ``path`` for this server: remove the socket an earlier run left, or refuse a live one.
+    def _is_stale_socket(path: str) -> bool:
+        """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
 
-        The refusal has to happen here, before uvicorn: ``asyncio.create_unix_server`` unlinks an
-        existing socket file and binds a new one, so a second server would silently take a live
-        server's future connections. A refused connection means nobody listens and the file is stale.
+        A live socket, a probe that runs out of time against a full backlog, and a path that holds
+        something other than a socket are none of them stale.
         """
         try:
-            mode = os.stat(path).st_mode
+            if not stat.S_ISSOCK(os.stat(path).st_mode):
+                return False
         except FileNotFoundError:
-            return
-        if not stat.S_ISSOCK(mode):
-            return
+            return False
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(LIVE_SOCKET_PROBE_SEC)
             try:
                 probe.connect(path)
             except ConnectionRefusedError:
+                return True
+            except OSError:
+                return False
+        return False
+
+    @staticmethod
+    def claim_socket_path(path: str) -> socket.socket:
+        """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
+
+        The bind is the claim, so two servers starting together cannot both take one path: the loser's
+        bind fails. Only then is a probe worth making, and only to tell a stale file from a live server.
+        The caller hands the descriptor to uvicorn, which binds nothing and so never unlinks the path.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            try:
+                sock.bind(path)
+            except OSError as taken:
+                if taken.errno != errno.EADDRINUSE:
+                    raise
+                if not PolicyServer._is_stale_socket(path):
+                    raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
                 os.unlink(path)
-                return
-        raise OSError(errno.EADDRINUSE, f'A server already listens on {path!r}')
+                sock.bind(path)
+            sock.listen()
+            os.chmod(path, UDS_MODE)
+        except BaseException:
+            sock.close()
+            raise
+        return sock
 
     def serve(self):
         async def _run():
             await self._startup()
-            if self.uds is not None:
-                self.claim_socket_path(self.uds)
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, uds=self.uds, log_level='info')
-            server = uvicorn.Server(config)
-            self._last_activity = time.monotonic()
-            watchdog = None
-            if self.idle_timeout_min and self.idle_timeout_min > 0:
-                watchdog = asyncio.create_task(self._idle_watchdog(server))
+            sock, watchdog = None, None
             try:
+                if self.uds is not None:
+                    sock = self.claim_socket_path(self.uds)
+                fd = None if sock is None else sock.fileno()
+                config = uvicorn.Config(self.app, host=self.host, port=self.port, fd=fd, log_level='info')
+                server = uvicorn.Server(config)
+                self._last_activity = time.monotonic()
+                if self.idle_timeout_min and self.idle_timeout_min > 0:
+                    watchdog = asyncio.create_task(self._idle_watchdog(server))
                 await server.serve()
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
+                if sock is not None:
+                    # The file stays: a successor reads it as stale, where an unlink here could take a
+                    # path that successor has already claimed.
+                    sock.close()
 
         try:
             asyncio.run(_run())

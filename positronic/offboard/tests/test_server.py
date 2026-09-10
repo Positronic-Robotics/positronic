@@ -2,6 +2,7 @@ import errno
 import os
 import pathlib
 import socket
+import stat
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
@@ -18,7 +19,7 @@ from positronic import keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, UDS_MODE, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
@@ -280,14 +281,41 @@ def test_a_server_binds_over_the_socket_an_earlier_run_left(start_unix_server, s
     assert InferenceClient(f'unix://{socket_path}').list_models() == ['stub']
 
 
-def test_a_path_that_is_not_a_socket_is_left_alone(socket_path):
-    """A wrong ``uds`` fails the bind rather than deleting a file nobody meant to lose."""
+def test_a_path_that_is_not_a_socket_is_refused_and_left_alone(socket_path):
+    """A wrong ``uds`` is refused rather than emptied of a file nobody meant to lose."""
     path = pathlib.Path(socket_path)
     path.write_text('not a socket')
 
-    PolicyServer.claim_socket_path(socket_path)
+    with pytest.raises(OSError) as refusal:
+        PolicyServer.claim_socket_path(socket_path)
 
+    assert refusal.value.errno == errno.EADDRINUSE
     assert path.read_text() == 'not a socket'
+
+
+@pytest.mark.timeout(30.0)
+def test_a_second_claim_on_one_path_is_refused_and_the_first_goes_on_serving(socket_path):
+    """The bind is the claim, so two servers starting on one absent path cannot both pass it."""
+    held = PolicyServer.claim_socket_path(socket_path)
+    try:
+        with pytest.raises(OSError) as refusal:
+            PolicyServer.claim_socket_path(socket_path)
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert held.accept()[0].close() is None
+    finally:
+        held.close()
+
+
+def test_a_claimed_socket_carries_the_mode_uvicorn_gives_one(socket_path):
+    sock = PolicyServer.claim_socket_path(socket_path)
+    try:
+        assert stat.S_IMODE(os.stat(socket_path).st_mode) == UDS_MODE
+    finally:
+        sock.close()
 
 
 @pytest.mark.timeout(30.0)

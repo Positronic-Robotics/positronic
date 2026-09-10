@@ -91,18 +91,22 @@ def _dial_unix(path: str) -> None:
 
 
 @pytest.fixture
-def start_unix_server(running_servers: RunningServers) -> StartUnixServer:
-    """Factory serving pipelines on a Unix socket, as ``PolicyServer.serve`` binds one."""
+def start_unix_server(running_servers: RunningServers) -> Generator[StartUnixServer, None, None]:
+    """Factory serving pipelines on a Unix socket, as ``PolicyServer.serve`` claims one."""
+    claimed: list[socket.socket] = []
 
     def start(pipeline, uds: str, **server_kwargs) -> PolicyServer:
         server = PolicyServer(pipeline, uds=uds, **server_kwargs)
-        PolicyServer.claim_socket_path(uds)
-        config = uvicorn.Config(server.app, uds=uds, log_level='warning')
+        sock = PolicyServer.claim_socket_path(uds)
+        claimed.append(sock)
+        config = uvicorn.Config(server.app, fd=sock.fileno(), log_level='warning')
         _serve_in_background(server, config, running_servers)
         _wait_until_it_accepts(lambda: _dial_unix(uds))
         return server
 
-    return start
+    yield start
+    for sock in claimed:
+        sock.close()
 
 
 @pytest.fixture
