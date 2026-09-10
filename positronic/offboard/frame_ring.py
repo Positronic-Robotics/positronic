@@ -80,11 +80,13 @@ def _seals_a_memfd() -> bool:
         return False
     try:
         fd = os.memfd_create('positronic-frames-probe', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-    except OSError:
+    except OSError as refused:
+        logger.warning('No frame ring: this host refuses memfd_create (%s)', refused)
         return False
     try:
         fcntl.fcntl(fd, _F_ADD_SEALS, _SEALS)
-    except OSError:
+    except OSError as refused:
+        logger.warning('No frame ring: this host refuses the memfd seals (%s)', refused)
         return False
     finally:
         os.close(fd)
@@ -106,9 +108,13 @@ class FrameRing:
         self.slot_bytes = slot_bytes
         self._stride = _HEADER_BYTES + _aligned(slot_bytes)
         self.fd = os.memfd_create('positronic-frames', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-        os.ftruncate(self.fd, self._stride * slots)
-        self._map = mmap.mmap(self.fd, self._stride * slots, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
-        fcntl.fcntl(self.fd, _F_ADD_SEALS, _SEALS)
+        try:
+            os.ftruncate(self.fd, self._stride * slots)
+            self._map = mmap.mmap(self.fd, self._stride * slots, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+            fcntl.fcntl(self.fd, _F_ADD_SEALS, _SEALS)
+        except BaseException:
+            os.close(self.fd)
+            raise
         self._seq = 0
 
     def write(self, arrays: Sequence[np.ndarray]) -> list[dict[bytes, Any]]:
