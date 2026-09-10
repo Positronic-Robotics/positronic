@@ -289,6 +289,17 @@ def test_a_path_that_is_not_a_socket_is_left_alone(socket_path):
     assert path.read_text() == 'not a socket'
 
 
+def test_a_socket_a_live_server_listens_on_is_left_alone(socket_path):
+    """Unlinking it would take the address off its owner and route new sessions to the wrong server."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
+        live.bind(socket_path)
+        live.listen()
+
+        PolicyServer.clear_stale_socket(socket_path)
+
+        assert pathlib.Path(socket_path).is_socket()
+
+
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
     """Nothing left of the marker leaves the rig nothing to run, so the server refuses to serve it."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})

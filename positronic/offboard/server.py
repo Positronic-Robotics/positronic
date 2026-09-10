@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import socket
 import stat
 import time
 from collections import Counter
@@ -420,14 +421,20 @@ class PolicyServer:
     def clear_stale_socket(path: str) -> None:
         """Remove the socket file left by an earlier run, so a restart can bind ``path`` again.
 
-        Anything else at the path stays: the bind then fails rather than deleting a file nobody meant to lose.
+        A socket that still accepts a connection belongs to a live server and stays, as does anything at
+        the path that is not a socket. The bind then fails instead of taking an address off its owner.
         """
         try:
             mode = os.stat(path).st_mode
         except FileNotFoundError:
             return
-        if stat.S_ISSOCK(mode):
-            os.unlink(path)
+        if not stat.S_ISSOCK(mode):
+            return
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            try:
+                probe.connect(path)
+            except ConnectionRefusedError:
+                os.unlink(path)
 
     def serve(self):
         async def _run():
