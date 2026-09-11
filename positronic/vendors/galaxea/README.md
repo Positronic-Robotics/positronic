@@ -61,12 +61,11 @@ make -C docker build-galaxea
 Galaxea's image targets are opt-in; aggregate image publishing does not include
 this evaluation-only vendor.
 
-### Checkpoint access for all users
+### Checkpoint access
 
-Positronic users outside the company download directly from
-[OpenGalaxea/G05](https://huggingface.co/OpenGalaxea/G05) using their own Hugging Face
-account. No Positronic S3 credentials are needed. Hugging Face grants gated model
-access [to individual users](https://huggingface.co/docs/hub/models-gated), so each
+Download directly from [OpenGalaxea/G05](https://huggingface.co/OpenGalaxea/G05)
+using your own Hugging Face account. Hugging Face grants gated model access
+[to individual users](https://huggingface.co/docs/hub/models-gated), so each
 user must accept Galaxea's conditions and obtain access for their account.
 That access remains subject to the model license, including the hardware and
 image conditions above.
@@ -93,24 +92,6 @@ uvx hf download OpenGalaxea/G05 \
   --include 'action_tokenizer.pt' \
   --include 'qwen3_5_2b_base_processor/*' \
   --include 'licenses/*'
-```
-
-### Private company cache
-
-The same checkpoint bundle is stored at
-`s3://checkpoints/droid/galaxea/g05-droid/` for internal evaluation. Its
-`provenance.json` records the Hugging Face revision and SHA-256 checksum of each
-upstream file; `NOTICE` and `licenses/` carry the usage terms. This cache is not
-an external download service. Under the Internal Evaluation PoC terms, company
-access is restricted to the corporate group; outside users obtain their own
-copies from Galaxea through the flow above.
-
-With company S3 credentials, populate the same Docker cache:
-
-```bash
-aws s3 sync s3://checkpoints/droid/galaxea/g05-droid/ \
-  "$HOME/.cache/galaxea/checkpoints/" \
-  --endpoint-url https://storage.eu-north1.nebius.cloud
 ```
 
 ### Start the server
