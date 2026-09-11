@@ -103,6 +103,7 @@ class RemoteSession(Session):
 
     @property
     def meta(self) -> dict[str, Any]:
+        # The server block is the handshake as the server sent it, recorded whole and read nowhere here.
         return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._session.metadata})
 
     def close(self):

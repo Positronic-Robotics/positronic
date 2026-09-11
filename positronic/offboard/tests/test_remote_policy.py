@@ -313,6 +313,20 @@ def test_remote_session_normalizes_single_dict(open_session):
     assert round_trip(session, rt, {}) == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
 
 
+def test_a_prompt_the_server_declares_is_recorded_as_sent_and_the_task_still_goes_out(open_session):
+    """A ``prompt`` in the handshake is the deployment's declaration. It is recorded whole under the server
+    block, it is not the episode's task, and the task the episode sends reaches the wire unchanged."""
+    declared = 'Pick up the green cube and place it on the red cube.'
+    endpoint, mock_ws = _mock_endpoint(metadata={'model_name': 'm', 'prompt': declared})
+    session, rt = open_session(endpoint)
+
+    assert session.meta['server.prompt'] == declared
+    round_trip(session, rt, {keys.TASK: 'put the banana on the plate'})
+    sent = mock_ws.infer.call_args.args[0]
+    assert sent[keys.TASK] == 'put the banana on the plate'
+    assert 'prompt' not in sent
+
+
 def test_remote_session_passes_through_none(open_session):
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.return_value = None

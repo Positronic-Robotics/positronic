@@ -78,6 +78,8 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 
 **What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares, and only that — connecting to a server that declares no stack fails with an error naming the version it runs. What the declared stack must achieve is checked where it matters: the harness refuses to emit an action scheduled further than `MAX_ACTION_SKEW_SEC` from now, which is what a stack that never anchored its chunk to the rig's clock produces.
 
+**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the deployment's own declaration. It is fixed for the deployment and does not follow the episode. The instruction an episode sent is `task`.
+
 > **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 
 ## Local Inference
