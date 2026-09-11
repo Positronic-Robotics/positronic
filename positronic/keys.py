@@ -46,6 +46,16 @@ IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
+# What a camera's own control chose, read back from the sensor and recorded beside its frames: the exposure,
+# the gain and the white-balance temperature an automatic mode settled on. The config says "auto"; this says
+# what auto chose, and the frames cannot reproduce it once the episode ends.
+CAMERA_STATE_PREFIX = 'camera_state.'
+
+
+def camera_state(image_key: str) -> str:
+    """The signal a camera's read-back state records under: ``image.wrist`` records as ``camera_state.wrist``."""
+    return f'{CAMERA_STATE_PREFIX}{image_key.removeprefix(IMAGE_PREFIX)}'
+
 
 # The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
 # clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.
