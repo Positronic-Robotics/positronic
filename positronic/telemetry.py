@@ -29,14 +29,17 @@ points ``--timing`` reaches.
 """
 
 import functools
+import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -52,6 +55,8 @@ from positronic.simulator.env_server.telemetry import (
     ATTR_PROCESS_NAME,
     ATTR_PROCESS_PID,
     ATTR_RUN_ID,
+    ENV_RUN_ID,
+    ENV_TELEMETRY_DIR,
     SPANS_SUFFIX,
 )
 
@@ -149,10 +154,10 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextmanager
-def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
-    """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
-    resource block carrying this process's identity, and register the provider so ``span`` records. The batch
-    processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
+def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
+    """Provider lifecycle for one process's telemetry: stream spans to ``path`` under a resource block
+    carrying this process's identity, and register the provider so ``span`` records. The batch processor is
+    flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
     global _provider
     try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
         from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
@@ -162,7 +167,6 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         from opentelemetry.sdk.trace.sampling import ALWAYS_ON  # noqa: PLC0415
     except ImportError as error:
         raise RuntimeError(_MISSING_EXTRA) from error
-    path = spans_path(out_dir, process)
     path.parent.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
         ATTR_RUN_ID: run_id,
@@ -187,6 +191,52 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         provider.force_flush()
         provider.shutdown()
         _provider = None
+
+
+@contextmanager
+def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
+    """``_bind_to`` for a run's output directory, which holds the spans at ``<process>.spans.jsonl``."""
+    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
+        yield provider
+
+
+# A filename must fit the filesystem's component limit — 255 bytes on ext4 and on APFS — and the token
+# shares that budget with the process name and the suffix, so it stays well clear of it.
+_MAX_TOKEN_CHARS = 64
+# Two ids that reduce alike are separated by the digest alone, so it carries 64 bits: a capped prefix
+# leaves nothing else to tell them apart, and 32 bits collide across ids that share one.
+_DIGEST_CHARS = 16
+
+
+def _filename_token(run_id: str) -> str:
+    """``run_id`` reduced to the characters and the length a filename carries, and still distinct for a
+    distinct id. The resource block holds it verbatim, so this only labels the file — a run id naming a path
+    (`../…`) would otherwise write outside the telemetry directory, and a long one would fail the export with
+    ``ENAMETOOLONG``."""
+    token = re.sub(r'[^A-Za-z0-9._-]', '_', run_id)[:_MAX_TOKEN_CHARS].lstrip('.')
+    if token and token == run_id:
+        return token
+    # The reduction is many-to-one — `a/b` and `a_b` reduce alike, as do two ids sharing a capped prefix —
+    # so a reduced id carries a digest of the id it reduced and two runs never share one sidecar.
+    return f'{token}.{hashlib.sha256(run_id.encode()).hexdigest()[:_DIGEST_CHARS]}'.lstrip('.')
+
+
+def bind_from_env(process: str):
+    """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
+
+    The directory turns recording on, and the run names the file: two runs against one directory each
+    get their own sidecar. An unset run id is minted, so a directory left set across runs separates them
+    without the operator having to think about it; a run id deliberately shared groups them again.
+
+    Inert while the directory is unset, and while a provider is already bound.
+    """
+    directory = os.environ.get(ENV_TELEMETRY_DIR)
+    if directory is None or _provider is not None:
+        return nullcontext()
+    run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
+    # The reduce discovers sidecars by the suffix and reads the process from each file's resource block,
+    # so nothing parses this name.
+    return _bind_to(Path(directory) / f'{process}.{_filename_token(run_id)}{SPANS_SUFFIX}', process, run_id)
 
 
 def force_flush() -> None:
@@ -287,8 +337,12 @@ def _seal_truncated_line(path: Path) -> None:
 
 class SpanRec(NamedTuple):
     """One parsed span: hex ``span_id``/``parent_id`` (``parent_id`` is ``None`` for a root), wall-clock
-    epoch-ns bounds, the flat attribute map, and the recording process's name (the ``process.name`` resource
-    attribute every sidecar writer stamps — ``''`` when a file carries none)."""
+    epoch-ns bounds, the flat attribute map, and the recording process's name and run id (the ``process.name``
+    and ``run.id`` resource attributes every sidecar writer stamps — ``''`` when a file carries none).
+
+    A reduce reads a telemetry directory whole, so it needs the run id to tell two runs in it apart: a run
+    that opens no ``eval.pass`` span leaves every episode a root, and no other field separates them.
+    """
 
     name: str
     start_ns: int
@@ -297,6 +351,7 @@ class SpanRec(NamedTuple):
     span_id: str
     parent_id: str | None
     process: str = ''
+    run_id: str = ''
 
 
 def _decode_value(value: dict[str, Any]) -> Any:
@@ -332,6 +387,7 @@ def read_spans(path: Path | str) -> Iterator[SpanRec]:
             for resource_spans in doc.get('resourceSpans', []):
                 resource_attrs = _decode_attrs(resource_spans.get('resource', {}).get('attributes', []))
                 process = str(resource_attrs.get(ATTR_PROCESS_NAME, ''))
+                run_id = str(resource_attrs.get(ATTR_RUN_ID, ''))
                 for scope_spans in resource_spans.get('scopeSpans', []):
                     for span_data in scope_spans.get('spans', []):
                         yield SpanRec(
@@ -342,6 +398,7 @@ def read_spans(path: Path | str) -> Iterator[SpanRec]:
                             span_id=span_data['spanId'],
                             parent_id=span_data.get('parentSpanId') or None,
                             process=process,
+                            run_id=run_id,
                         )
 
 
