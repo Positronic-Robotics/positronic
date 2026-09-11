@@ -8,7 +8,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Generator
 from typing import Any
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
 import httpx
@@ -252,7 +252,8 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata[offboard_keys.LOCAL_STACK] == {'name': 'chunked_schedule'}
-        assert session.metadata[offboard_keys.HOST] == socket_path
+        assert session.metadata[offboard_keys.UDS] == socket_path
+        assert offboard_keys.HOST not in session.metadata
         assert offboard_keys.PORT not in session.metadata
 
         obs = {'image': 'test'}
@@ -310,6 +311,44 @@ def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_unix_ser
         assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
     finally:
         session.close()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_server_restarting_over_the_socket_it_left(
+    start_unix_server, socket_path, make_mock_policy
+):
+    """A bound path whose server has gone refuses the dial, and the successor binds over it. The wait
+    covers that restart as it covers a first start."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gone:
+        gone.bind(socket_path)
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_unix_server(pipeline, socket_path))
+    late.start()
+
+    try:
+        session = InferenceClient(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def test_a_dial_this_process_broke_fails_at_once_over_a_live_socket(unix_stub_server):
+    """A descriptor limit is this process's own, so no server appearing clears it. The socket is live
+    and the path says so, which is exactly when reading the path alone would wait out the deadline."""
+    socket_path, _policy = unix_stub_server
+    started = time.monotonic()
+
+    with patch('positronic.offboard.client.unix_connect') as dial:
+        dial.side_effect = OSError(errno.EMFILE, 'Too many open files')
+        with pytest.raises(OSError) as refusal:
+            InferenceClient(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+
+    assert 'Too many open files' in str(refusal.value)
+    assert time.monotonic() - started < 5.0
 
 
 def test_a_dial_at_a_path_holding_something_that_is_not_a_socket_fails_at_once(socket_path):

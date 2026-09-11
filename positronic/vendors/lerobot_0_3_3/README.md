@@ -106,6 +106,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 | `--pipeline.source.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--uds` | Unix socket path to bind in place of `--host`/`--port` | `None` | `/run/policy.sock` |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 

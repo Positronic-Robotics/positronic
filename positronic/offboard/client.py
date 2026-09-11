@@ -252,12 +252,14 @@ class InferenceClient:
         """Whether a failed dial is a co-located server that has not bound its socket yet.
 
         Its ``serve`` binds only once the model has loaded, so the path is absent for that whole
-        interval, and a socket that refuses is one restarting. The path answers it, because a missing
-        socket and a wrong path report different errno on Linux and on macOS. A refusal this client
-        has no permission to read past is settled wherever it comes from.
+        interval, and a socket that refuses is one restarting. Only an absent path and a refusal say
+        that; every other dial — a permission the path denies, a descriptor or a memory limit this
+        process has hit — is settled, and waiting for it spends the whole deadline on an answer that
+        will not change. A refusal then reads the path, which tells a restarting server from a path
+        naming something that is not a socket.
         """
         assert self.uds is not None
-        if isinstance(e, PermissionError):
+        if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
             return False
         try:
             return stat.S_ISSOCK(os.stat(self.uds).st_mode)

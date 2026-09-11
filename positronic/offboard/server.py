@@ -238,9 +238,9 @@ class PolicyServer:
         self.host = host
         self.port = port
         self.uds = uds
-        # Where the server listens, as the handshake reports it. A Unix socket has no port.
+        # Where the server listens, as the handshake reports it. A socket path is not a host, so it has its own key.
         self.metadata: dict[str, Any] = (
-            {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.HOST: uds}
+            {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.UDS: uds}
         )
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
