@@ -86,6 +86,7 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
 
 @pytest.mark.timeout(60.0)
 def test_transport_is_transparent(env_server):
+    """The same seed and actions must yield identical raw observations in-process and over the socket."""
     host, port = env_server
     seed = 7
 
@@ -111,6 +112,7 @@ def test_transport_is_transparent(env_server):
 
 @pytest.mark.timeout(60.0)
 def test_the_env_answers_its_own_task_list(env_server):
+    """Unknown task specifications must reach the environment and return its errors."""
     host, port = env_server
     conn = EnvConnection(host, port)
     assert conn.tasks({}) == [{'name': SCENE_NAME}]
@@ -122,7 +124,7 @@ def test_the_env_answers_its_own_task_list(env_server):
 
 @contextmanager
 def _mute_server():
-    """A peer that accepts requests without sending responses."""
+    """Hold the socket open without answering requests, simulating a peer stuck in teardown."""
     host, port = 'localhost', free_port()
     release = threading.Event()
 
@@ -219,6 +221,7 @@ _HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
 
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
+    """Apply the action once, hold for ``steps`` ticks, and return the settled end-effector position."""
     env.step(action)
     out = {'obs': None}
     for _ in range(steps):
@@ -227,6 +230,7 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
 
 
 def test_a_pinned_control_mode_rides_the_wire():
+    """Control modes must pass through for the environment to interpret."""
     mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
     wired = _wire_command(roboarm_command.JointPosition(np.zeros(7), mode=mode))
     assert wired['mode'] == roboarm_command.to_wire(mode)
@@ -234,6 +238,8 @@ def test_a_pinned_control_mode_rides_the_wire():
 
 
 class TestEnvControlFrame:
+    """Commands must target the frame the environment measures, even when it differs from the default."""
+
     frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
     rotmat = geom.Rotation.Representation.ROTATION_MATRIX
 
@@ -257,6 +263,7 @@ class TestEnvControlFrame:
         assert delta.mode == mode
 
     def test_a_delta_outside_the_env_frame_is_refused(self):
+        """A delta needs the measured pose in its own frame, which the wire does not supply."""
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='control frame'):
             _wire_command(_in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame))
@@ -278,6 +285,10 @@ class TestEnvControlFrame:
 
 @pytest.mark.timeout(60.0)
 def test_cartesian_delta_matches_absolute_target():
+    """A one-shot delta must settle at the composed absolute target without accumulating on idle ticks.
+
+    Comparing both paths cancels their shared actuator steady-state offset.
+    """
     rotmat = geom.Rotation.Representation.ROTATION_MATRIX
     seed, settle = 11, 300
     lift = np.array([0.0, 0.0, 0.04])
@@ -306,7 +317,7 @@ _COUNTDOWN = 'countdown'
 
 
 class _CountdownEnv(EnvProtocol):
-    """An environment with step-count observations and an optional terminal step."""
+    """Observe step counts starting at zero on reset; ``done_after=None`` never terminates."""
 
     def __init__(self, done_after: int | None = None, control_dt: float = 0.1):
         self._done_after = done_after
@@ -361,6 +372,7 @@ class _CountdownAdapter(EnvAdapter):
 
 @pytest.mark.timeout(60.0)
 def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
+    """Task listing must start the server and leave the connection usable for reset."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
@@ -374,6 +386,7 @@ def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
 
 @pytest.mark.timeout(60.0)
 def test_a_selection_naming_no_task_is_refused():
+    """Reject empty task selections so zero-trial runs cannot appear successful."""
     with serve_env(_CountdownEnv()) as (host, port):
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         with pytest.raises(ValueError, match='no task'):
@@ -382,6 +395,7 @@ def test_a_selection_naming_no_task_is_refused():
 
 @pytest.mark.timeout(60.0)
 def test_a_refused_listing_stops_the_server_it_started():
+    """Listing can fail before the scheduler starts, so cleanup cannot depend on its teardown."""
     with serve_env(_CountdownEnv()) as address:
         stopped = False
 
@@ -401,6 +415,7 @@ def test_a_refused_listing_stops_the_server_it_started():
 
 @pytest.mark.timeout(60.0)
 def test_proxy_publishes_the_reset_frame_then_free_runs():
+    """Reset must publish step zero and clear termination; active ticks advance physics without commands."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
@@ -419,6 +434,7 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
 
 @pytest.mark.timeout(60.0)
 def test_proxy_caches_reset_meta_as_live_instruction_source():
+    """Live instruction callbacks must retain reset metadata across steps that omit it."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
@@ -432,6 +448,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
+    """A timed-out trial must record canonical signals without reporting termination or success."""
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
@@ -462,12 +479,13 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     'eval_cfg', [libero_cfg.spatial, robolab_cfg.benchmark, native_cfg.stack_cubes], ids=['libero', 'robolab', 'mujoco']
 )
 def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
+    """Shared camera names let the same policy codec serve different simulators."""
     observations = eval_cfg.instantiate().embodiment.observations
     assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
 
 
 class _JointposChunks(Policy):
-    """Action chunks with grip values that identify each chunk and step."""
+    """Encode ``chunk * 100 + step`` in grip values to identify executed actions in recordings."""
 
     def __init__(self, command: roboarm_command.CommandType, chunk_len: int):
         self.command = command
@@ -492,6 +510,10 @@ class _JointposChunkSession(Session):
 
 @pytest.mark.timeout(60.0)
 def test_full_chunk_executes_between_replans(env_server, tmp_path):
+    """Every chunk action must execute, with a full control period for the final action.
+
+    ``ActionTimestamp``'s validity sentinel must keep replans ``chunk_len`` control periods apart.
+    """
     host, port = env_server
     probe = make_mujoco_env([])
     control_dt = probe.reset(0)['control_dt']
@@ -529,6 +551,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     ],
 )
 def test_server_failure_crosses_as_error_frame(env_server, message):
+    """Rejected commands must reach the client as errors while leaving the connection usable."""
     host, port = env_server
     conn = EnvConnection(host, port)
     conn.reset(7)

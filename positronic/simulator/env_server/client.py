@@ -16,8 +16,9 @@ _CLOSE_ACK_TIMEOUT = 5.0
 
 
 class EnvConnection:
-    """One synchronous websocket connection to an ``EnvServer``.
+    """Connect to an ``EnvServer`` with retry; each command blocks for its response.
 
+    Requests need no application handshake; ``reset`` returns the initial scene frame.
     The connect deadline must cover simulator startup, which can take many minutes on a fresh machine.
     """
 

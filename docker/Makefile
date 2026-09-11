@@ -22,7 +22,7 @@ IMAGE_TAG ?= $(BRANCH)
 
 REGISTRY_URL ?= docker.io
 
-# Nebius Container Registry supports an in-region pull from serverless jobs.
+# Nebius publishing is opt-in for in-region pulls; default push targets use Docker Hub.
 # Override NEBIUS_REGISTRY for a different project/registry; set NEBIUS_PROFILE to use a
 # non-default `nebius` CLI profile (e.g. a service-account profile for headless
 # CI). Auth goes through the nebius credential helper — no registry secret here.
