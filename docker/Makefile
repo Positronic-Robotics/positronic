@@ -43,7 +43,7 @@ TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
 
-GROOT_REF := ee9dd54d3f38150253c6c160fb21b18ae9673562
+GROOT_REF := be79d6244dda302ace1ff7a2cd55239aad2ad109
 ifndef GROOT_BASE_IMAGE
 GROOT_BASE_IMAGE := positro/gr00t-base:$(GROOT_REF)
 build-groot: build-groot-base
