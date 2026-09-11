@@ -7,15 +7,13 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import configuronic as cfn
-import grpc.aio
 import pos3
-import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketException, status
+from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
@@ -193,9 +191,10 @@ class PolicyServer:
     The session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    A session runs over one of two wires (see ``positronic.offboard.wire``): the websocket, on ``port``,
-    and gRPC, on ``grpc_port``. Both carry the same frames, so the flow above is the same on each. The
-    HTTP routes stay on ``port``; a ``grpc_port`` of ``None`` serves the websocket alone.
+    ``serve`` takes the wires sessions arrive on (see ``positronic.offboard.wire``). Each one reads its
+    own route for the model a session names and checks its own session headers, so the flow above is the
+    same over every wire and this server names none of them. ``api`` holds the server's own HTTP routes,
+    which a wire that speaks HTTP serves beside its sessions.
 
     On startup (before accepting connections): resolve(None) → load.
 
@@ -207,12 +206,9 @@ class PolicyServer:
     def __init__(
         self,
         pipeline: cfn.Config | Pipeline,
-        host: str = '0.0.0.0',
-        port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
-        grpc_port: int | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -225,10 +221,6 @@ class PolicyServer:
         _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
-        self.host = host
-        self.port = port
-        self.grpc_port = grpc_port
-        self.metadata: dict[str, Any] = {offboard_keys.HOST: host, offboard_keys.PORT: port}
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -240,6 +232,9 @@ class PolicyServer:
         self._infer_lock = asyncio.Lock()
 
         self._default_id: str | None = None
+        # Set while ``serve`` runs, so ``shutdown`` can reach its loop from another thread.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
 
         # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
         # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
@@ -248,15 +243,15 @@ class PolicyServer:
             raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
 
-        self.app = FastAPI()
-        http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
-        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
-        self.app.websocket(wire.SESSION_PATH, dependencies=ws_auth)(self.default_session)
-        # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
-        # ``/api/v1/models`` advertises.
-        self.app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=ws_auth)(self.model_session)
+        self._api = APIRouter()
+        self._api.get('/api/v1/models', dependencies=[Depends(self._require_http_auth)])(self.get_models)
 
-    def _authorized(self, authorization: str | None) -> bool:
+    @property
+    def api(self) -> APIRouter:
+        """The server's own HTTP routes: the model catalogue a client reads before it opens a session."""
+        return self._api
+
+    def _token_matches(self, authorization: str | None) -> bool:
         if self._auth_token is None:
             return True
         if authorization is None:
@@ -265,14 +260,13 @@ class PolicyServer:
         # a non-ASCII ``str``, which would answer a malformed header with a 500 instead of a refusal.
         return hmac.compare_digest(authorization.encode(), bearer(self._auth_token).encode())
 
-    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
-        if not self._authorized(authorization):
-            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+    def _authorized(self, headers: Mapping[str, str]) -> bool:
+        """Whether session headers carry the bearer token this server gates on. Every wire asks this."""
+        return self._token_matches(headers.get(AUTH_HEADER.lower()))
 
-    async def _require_ws_auth(self, websocket: WebSocket) -> None:
-        """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
-        if not self._authorized(websocket.headers.get(AUTH_HEADER)):
-            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
+        if not self._token_matches(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
@@ -292,20 +286,6 @@ class PolicyServer:
         if pipeline.source != self._source:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
-
-    async def default_session(self, websocket: WebSocket):
-        """Serves the model pinned at startup. Naming a model is the path's job, so every query param here
-        is a pipeline override."""
-        await websocket.accept()
-        await self._serve_session(wire.WebsocketServerConnection(websocket), None)
-
-    async def model_session(self, websocket: WebSocket, model_id: str):
-        await websocket.accept()
-        await self._serve_session(wire.WebsocketServerConnection(websocket), model_id)
-
-    async def grpc_session(self, conn: grpc_wire.GrpcServerConnection):
-        """Serves one gRPC session, on the model the session path names."""
-        await self._serve_session(conn, grpc_wire.model_id_of(conn.session_path))
 
     async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
         """Answer every observation the client sends, until it disconnects."""
@@ -366,8 +346,10 @@ class PolicyServer:
                 self._infer_lock.release()
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
+            endpoint = conn.endpoint
             meta = {
-                **self.metadata,
+                offboard_keys.HOST: endpoint.host,
+                offboard_keys.PORT: endpoint.port,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,
@@ -408,59 +390,70 @@ class PolicyServer:
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
         await self._manager.get_policy(self._default_id)
 
-    async def _idle_watchdog(self, server: uvicorn.Server):
+    async def _idle_watchdog(self):
+        """Return once no session has touched the server for ``idle_timeout_min``."""
         assert self.idle_timeout_min is not None
         timeout_s = self.idle_timeout_min * 60
         poll = min(timeout_s, 30)
-        while not server.should_exit:
+        while True:
             await asyncio.sleep(poll)
             if self._active_sessions > 0:
                 continue
             idle = time.monotonic() - self._last_activity
             if idle >= timeout_s:
                 logger.warning(f'No activity for {idle:.0f}s (idle timeout {timeout_s:.0f}s); shutting down server')
-                server.should_exit = True
                 return
 
-    async def _start_grpc(self) -> grpc.aio.Server:
-        """Start the gRPC wire on ``grpc_port``, sharing this server's model slot and inference lock.
+    def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
+        """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
-        ``grpc_port`` becomes the port actually bound, so a server asked for any free one names it.
+        Every wire shares this server's model slot and inference lock, so a session is served the same
+        whichever one carried it.
+
+        ``on_ready`` runs on the server's own loop once every wire has bound, which is where a caller
+        that asked for port 0 reads back the port each wire took.
         """
-        assert self.grpc_port is not None
 
-        def authorized(headers: Mapping[str, str]) -> bool:
-            return self._authorized(headers.get(AUTH_HEADER.lower()))
-
-        server, self.grpc_port = await grpc_wire.serve(self.grpc_session, authorized, self.host, self.grpc_port)
-        return server
-
-    def serve(self):
         async def _run():
+            self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
-            config = uvicorn.Config(
-                self.app, host=self.host, port=self.port, log_level='info', ws_max_size=wire.MAX_MESSAGE_BYTES
-            )
-            server = uvicorn.Server(config)
+            for w in wires:
+                await w.start(self._serve_session, self._authorized)
             self._last_activity = time.monotonic()
-            watchdog = None
-            grpc_server = await self._start_grpc() if self.grpc_port is not None else None
+            if on_ready is not None:
+                on_ready()
+            serving = [asyncio.create_task(w.serve()) for w in wires]
+            # What ends the server, beside a wire ending on its own: a caller's ``shutdown``, and the
+            # idle timeout.
+            ending: list[asyncio.Task] = [asyncio.create_task(self._stop.wait())]
             if self.idle_timeout_min and self.idle_timeout_min > 0:
-                watchdog = asyncio.create_task(self._idle_watchdog(server))
+                ending.append(asyncio.create_task(self._idle_watchdog()))
             try:
-                await server.serve()
+                done, _still_running = await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
+                # A wire that ended on an error raises here, rather than reading as the shutdown this waits for.
+                for task in done:
+                    task.result()
             finally:
-                if watchdog is not None:
-                    watchdog.cancel()
-                if grpc_server is not None:
-                    await grpc_server.stop(grace=None)
+                for task in ending:
+                    task.cancel()
+                for w in wires:
+                    await w.stop()
+                # Each wire ends the sessions it carries before this returns and the model slot closes.
+                await asyncio.gather(*serving, return_exceptions=True)
 
         try:
             asyncio.run(_run())
         except KeyboardInterrupt:
             logger.info('Server stopped by user')
         finally:
+            self._loop, self._stop = None, None
             self._manager.close()
+
+    def shutdown(self):
+        """Ask a running ``serve`` to end, from any thread. A server that is not serving ignores it."""
+        loop, stop = self._loop, self._stop
+        if loop is not None and stop is not None:
+            loop.call_soon_threadsafe(stop.set)
 
 
 @cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None)
@@ -482,13 +475,17 @@ def serve(
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
+
+    This is where the flags name the wires, and the only place either wire is named: ``PolicyServer``
+    takes whatever list it is handed.
     """
-    PolicyServer(
+    server = PolicyServer(
         pipeline,
-        host=host,
-        port=port,
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
-        grpc_port=grpc_port,
-    ).serve()
+    )
+    wires: list[wire.Wire] = [wire.WebsocketWire(host, port, server.api)]
+    if grpc_port is not None:
+        wires.append(grpc_wire.GrpcWire(host, grpc_port))
+    server.serve(wires)

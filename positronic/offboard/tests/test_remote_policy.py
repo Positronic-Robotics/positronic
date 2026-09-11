@@ -527,7 +527,7 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
     wire_action = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'timestamp': 0.0}]
     served = make_mock_policy(wire_action, {'model_name': 'm'})
-    host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
     session, rt = open_session(RemotePolicy(f'{host}:{port}'))
     actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})

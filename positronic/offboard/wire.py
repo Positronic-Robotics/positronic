@@ -1,13 +1,16 @@
-"""The transports one session runs over, and the two ends of an open one.
+"""The transports a session runs over, the two ends of an open one, and the server's end of a wire.
 
 A wire carries the ``protocol`` frames as opaque bytes and reads none of them, so the handshake and
 the inference loop read the same over every wire. ``grpc_wire`` holds the gRPC one.
 """
 
 import abc
-from typing import Protocol
+import socket
+from collections.abc import Awaitable, Callable, Mapping
+from typing import NamedTuple, Protocol
 
-from fastapi import WebSocket, WebSocketDisconnect
+import uvicorn
+from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 from websockets.sync.connection import Connection
 
@@ -20,9 +23,20 @@ SESSION_PATH = '/api/v1/session'
 # explicitly is what keeps the two wires equal when that default moves.
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
+# How long ``WebsocketWire.stop`` lets an open session finish before it cuts the connection. Left to
+# itself uvicorn waits for ever, so a session mid-inference would hold the whole server open.
+STOP_GRACE_SEC = 2
+
 
 class PeerDisconnected(Exception):
     """The peer ended the session."""
+
+
+class Endpoint(NamedTuple):
+    """Where a wire serves."""
+
+    host: str
+    port: int
 
 
 class ClientConnection(Protocol):
@@ -75,6 +89,11 @@ class ServerConnection(abc.ABC):
 
     @property
     @abc.abstractmethod
+    def endpoint(self) -> Endpoint:
+        """Where the wire that accepted this session serves."""
+
+    @property
+    @abc.abstractmethod
     def query_params(self) -> QueryParams:
         """The session params the client asked for."""
 
@@ -93,12 +112,17 @@ class ServerConnection(abc.ABC):
 class WebsocketServerConnection(ServerConnection):
     """A server's end of one websocket session, over an accepted ``WebSocket``."""
 
-    def __init__(self, websocket: WebSocket):
+    def __init__(self, websocket: WebSocket, endpoint: Endpoint):
         self._websocket = websocket
+        self._endpoint = endpoint
 
     @property
     def peer(self) -> str:
         return str(self._websocket.client)
+
+    @property
+    def endpoint(self) -> Endpoint:
+        return self._endpoint
 
     @property
     def query_params(self) -> QueryParams:
@@ -115,3 +139,121 @@ class WebsocketServerConnection(ServerConnection):
 
     async def refuse(self, reason: str) -> None:
         await self._websocket.close(code=1008, reason=reason[:100])
+
+
+# What a wire hands the server for each session it accepts: the connection, and the model the route
+# names, which is ``None`` where the route names the model the server pinned.
+SessionHandler = Callable[[ServerConnection, str | None], Awaitable[None]]
+
+# Whether the session headers carry a credential the server accepts. Header names are lower case.
+Authorized = Callable[[Mapping[str, str]], bool]
+
+
+class Wire(abc.ABC):
+    """One transport that sessions arrive on.
+
+    A wire reads its own route for the model a session names, and refuses an unauthorized peer before
+    the session opens. So a server hands every wire one ``SessionHandler`` and serves them all alike.
+    """
+
+    @property
+    @abc.abstractmethod
+    def endpoint(self) -> Endpoint:
+        """Where this wire serves. The port is bound, and so known, once ``start`` returns."""
+
+    @abc.abstractmethod
+    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
+        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
+
+    @abc.abstractmethod
+    async def serve(self) -> None:
+        """Carry sessions until ``stop``, or until the wire ends for its own reason."""
+
+    @abc.abstractmethod
+    async def stop(self) -> None:
+        """End the wire, and every session on it."""
+
+
+def _listening_socket(host: str, port: int) -> socket.socket:
+    """A socket bound on ``host``, where a ``port`` of 0 takes any free one.
+
+    The family comes from ``host`` itself, so an IPv6 host binds an IPv6 socket. Binding here rather
+    than inside uvicorn is what names the port before the wire serves, and holds it from then on.
+    """
+    family, kind, proto, _canonical, address = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    )[0]
+    sock = socket.socket(family, kind, proto)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(address)
+    # Listening here rather than at the first accept is what makes the port answer from the moment
+    # ``start`` returns: the kernel queues a connect that beats the serving loop to it.
+    sock.listen()
+    return sock
+
+
+class WebsocketWire(Wire):
+    """The websocket wire: a session upgrades on ``SESSION_PATH``, and ``api`` answers on the same port.
+
+    One uvicorn serves both, so the routes a client reads a model catalogue from sit on the endpoint it
+    opens sessions on.
+    """
+
+    def __init__(self, host: str, port: int, api: APIRouter):
+        self._host = host
+        self._port = port
+        self._api = api
+        self._socket: socket.socket | None = None
+        self._server: uvicorn.Server | None = None
+        self._endpoint: Endpoint | None = None
+
+    @property
+    def endpoint(self) -> Endpoint:
+        assert self._endpoint is not None, 'The websocket wire has not started'
+        return self._endpoint
+
+    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
+        self._socket = _listening_socket(self._host, self._port)
+        self._endpoint = Endpoint(self._host, self._socket.getsockname()[1])
+        app = FastAPI()
+        app.include_router(self._api)
+        self._route_sessions(app, session, authorized)
+        config = uvicorn.Config(
+            app,
+            host=self._host,
+            port=self._endpoint.port,
+            log_level='info',
+            ws_max_size=MAX_MESSAGE_BYTES,
+            timeout_graceful_shutdown=STOP_GRACE_SEC,
+        )
+        self._server = uvicorn.Server(config)
+
+    def _route_sessions(self, app: FastAPI, session: SessionHandler, authorized: Authorized) -> None:
+        async def require_auth(websocket: WebSocket) -> None:
+            """Refuses before ``accept()``, so an unauthorized peer never reaches the session handshake."""
+            if not authorized(websocket.headers):
+                raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+
+        async def serve_pinned_model(websocket: WebSocket) -> None:
+            """Serves the model the server pinned. Naming a model is the path's job, so every query param
+            here is a pipeline override."""
+            await websocket.accept()
+            await session(WebsocketServerConnection(websocket, self.endpoint), None)
+
+        async def serve_named_model(websocket: WebSocket, model_id: str) -> None:
+            await websocket.accept()
+            await session(WebsocketServerConnection(websocket, self.endpoint), model_id)
+
+        auth = [Depends(require_auth)]
+        app.websocket(SESSION_PATH, dependencies=auth)(serve_pinned_model)
+        # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name the
+        # model catalogue advertises.
+        app.websocket(f'{SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_named_model)
+
+    async def serve(self) -> None:
+        assert self._server is not None and self._socket is not None, 'The websocket wire has not started'
+        await self._server.serve(sockets=[self._socket])
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.should_exit = True

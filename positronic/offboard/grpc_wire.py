@@ -9,7 +9,7 @@ import queue
 import threading
 import time
 import urllib.parse
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 
 import grpc
 import grpc.aio
@@ -217,14 +217,25 @@ def model_id_of(session_path: str) -> str | None:
 class GrpcServerConnection(wire.ServerConnection):
     """A server's end of one gRPC session."""
 
-    def __init__(self, requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext, headers: Mapping[str, str]):
+    def __init__(
+        self,
+        requests: AsyncIterator[bytes],
+        context: grpc.aio.ServicerContext,
+        headers: Mapping[str, str],
+        endpoint: wire.Endpoint,
+    ):
         self._requests = requests
         self._context = context
         self._headers = headers
+        self._endpoint = endpoint
 
     @property
     def peer(self) -> str:
         return self._context.peer()
+
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        return self._endpoint
 
     @property
     def session_path(self) -> str:
@@ -267,42 +278,55 @@ def _server_options() -> list[tuple[str, int]]:
     ]
 
 
-async def serve(
-    serve_session: Callable[[GrpcServerConnection], Awaitable[None]],
-    authorized: Callable[[Mapping[str, str]], bool],
-    host: str,
-    port: int,
-) -> tuple[grpc.aio.Server, int]:
-    """Start a gRPC server that gives every accepted session to ``serve_session``, and say what it bound.
+class GrpcWire(wire.Wire):
+    """The gRPC wire: sessions on a port of their own, one bidirectional stream each.
 
-    A ``port`` of 0 binds any free one, which is the port that comes back.
-
-    ``authorized`` reads the session headers and refuses before the session opens, as the websocket
-    wire refuses the upgrade.
-
-    The port is plaintext; a TLS edge in front of it serves an authenticated endpoint.
+    A ``port`` of 0 binds any free one. The port is plaintext; a TLS edge in front of it serves an
+    authenticated endpoint.
     """
 
-    async def _serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
-        headers = _headers(context)
-        if not authorized(headers):
-            await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
-        try:
-            await serve_session(GrpcServerConnection(requests, context, headers))
-        except Exception as e:
-            # The session itself reports what it can over the stream; anything reaching here happened
-            # before or beyond that, so the client learns of it from the status alone.
-            logger.error(f'Failed gRPC session: {e}', exc_info=True)
-            await context.abort(grpc.StatusCode.INTERNAL, str(e))
+    def __init__(self, host: str, port: int):
+        self._host = host
+        self._port = port
+        self._server: grpc.aio.Server | None = None
+        self._endpoint: wire.Endpoint | None = None
 
-    handler = grpc.stream_stream_rpc_method_handler(_serve_one, request_deserializer=None, response_serializer=None)
-    server = grpc.aio.server(options=_server_options())
-    server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
-    bound = server.add_insecure_port(_bind_target(host, port))
-    if bound == 0:
-        # gRPC reports a refused bind by returning port 0, so a server left to start here would
-        # accept nothing and say nothing.
-        raise OSError(f'gRPC could not bind {_bind_target(host, port)}')
-    await server.start()
-    logger.info(f'gRPC sessions on {host}:{bound}')
-    return server, bound
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        assert self._endpoint is not None, 'The gRPC wire has not started'
+        return self._endpoint
+
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
+            headers = _headers(context)
+            if not authorized(headers):
+                await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
+            conn = GrpcServerConnection(requests, context, headers, self.endpoint)
+            try:
+                await session(conn, model_id_of(conn.session_path))
+            except Exception as e:
+                # The session itself reports what it can over the stream; anything reaching here happened
+                # before or beyond that, so the client learns of it from the status alone.
+                logger.error(f'Failed gRPC session: {e}', exc_info=True)
+                await context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+        handler = grpc.stream_stream_rpc_method_handler(serve_one, request_deserializer=None, response_serializer=None)
+        server = grpc.aio.server(options=_server_options())
+        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
+        bound = server.add_insecure_port(_bind_target(self._host, self._port))
+        if bound == 0:
+            # gRPC reports a refused bind by returning port 0, so a server left to start here would
+            # accept nothing and say nothing.
+            raise OSError(f'gRPC could not bind {_bind_target(self._host, self._port)}')
+        self._server = server
+        self._endpoint = wire.Endpoint(self._host, bound)
+        await server.start()
+        logger.info(f'gRPC sessions on {self._host}:{bound}')
+
+    async def serve(self) -> None:
+        assert self._server is not None, 'The gRPC wire has not started'
+        await self._server.wait_for_termination()
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            await self._server.stop(grace=None)

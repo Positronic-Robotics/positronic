@@ -25,8 +25,8 @@ from cryptography.x509.oid import NameOID
 from positronic.offboard import grpc_wire, wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
-from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
-from positronic.offboard.tests.conftest import DictSource, StartServer
+from positronic.offboard.server import AUTH_HEADER, bearer
+from positronic.offboard.tests.conftest import DictSource, Served, StartServer
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, remote
@@ -34,21 +34,21 @@ from positronic.policy.spec import ModelSource, PolicySource, remote
 _TOKEN = 'test-secret-token'
 
 
-def grpc_url(server: PolicyServer, path: str = '') -> str:
-    return f'grpc://{server.host}:{server.grpc_port}{path}'
+def grpc_url(served: Served, path: str = '') -> str:
+    return f'grpc://{served.host}:{served.grpc_port}{path}'
 
 
 @pytest.fixture
-def both_wires(start_server: StartServer, make_mock_policy) -> tuple[PolicyServer, MagicMock]:
+def both_wires(start_server: StartServer, make_mock_policy) -> tuple[Served, MagicMock]:
     """A server offering both wires over one policy."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
-    return server, policy
+    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
+    return served, policy
 
 
 def test_a_grpc_session_handshakes_and_infers(both_wires):
-    server, policy = both_wires
-    session = InferenceClient(grpc_url(server)).new_session()
+    served, policy = both_wires
+    session = InferenceClient(grpc_url(served)).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
@@ -58,14 +58,31 @@ def test_a_grpc_session_handshakes_and_infers(both_wires):
         session.close()
 
 
+def _apart_from_the_endpoint(meta: dict) -> dict:
+    return {key: value for key, value in meta.items() if key not in (offboard_keys.HOST, offboard_keys.PORT)}
+
+
 def test_both_wires_answer_one_observation_alike(both_wires):
-    server, _policy = both_wires
+    served, _policy = both_wires
     obs = {'image': 'test'}
-    over_ws = InferenceClient(f'{server.host}:{server.port}').new_session()
-    over_grpc = InferenceClient(grpc_url(server)).new_session()
+    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient(grpc_url(served)).new_session()
     try:
-        assert over_grpc.metadata == over_ws.metadata
+        assert _apart_from_the_endpoint(over_grpc.metadata) == _apart_from_the_endpoint(over_ws.metadata)
         assert over_grpc.infer(obs) == over_ws.infer(obs)
+    finally:
+        over_ws.close()
+        over_grpc.close()
+
+
+def test_each_wire_names_its_own_port_in_the_meta(both_wires):
+    """The two wires bind two ports, and a session reads back the one that carried it."""
+    served, _policy = both_wires
+    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient(grpc_url(served)).new_session()
+    try:
+        assert over_ws.metadata[offboard_keys.PORT] == served.port
+        assert over_grpc.metadata[offboard_keys.PORT] == served.grpc_port
     finally:
         over_ws.close()
         over_grpc.close()
@@ -75,9 +92,9 @@ def test_both_wires_report_what_their_close_saw(both_wires, caplog):
     """A close the server answered has to read differently from one it never saw, whichever wire carried
     the session. The second leaves the server holding the slot, and the next session's handshake waits on
     it, so each wire reports the distinction in the terms its own protocol offers."""
-    server, _policy = both_wires
-    over_ws = InferenceClient(f'{server.host}:{server.port}').new_session()
-    over_grpc = InferenceClient(grpc_url(server)).new_session()
+    served, _policy = both_wires
+    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient(grpc_url(served)).new_session()
 
     with caplog.at_level(logging.INFO, logger='positronic.offboard.client'):
         over_ws.close()
@@ -90,16 +107,16 @@ def test_both_wires_report_what_their_close_saw(both_wires, caplog):
 
 def test_closing_a_session_ends_it_on_the_server(both_wires):
     """``close`` half-closes the stream and waits, so the server releases the session before it returns."""
-    server, _policy = both_wires
-    session = InferenceClient(grpc_url(server)).new_session()
-    assert server._active_sessions == 1
+    served, _policy = both_wires
+    session = InferenceClient(grpc_url(served)).new_session()
+    assert served.server._active_sessions == 1
     session.close()
-    assert server._active_sessions == 0
+    assert served.server._active_sessions == 0
 
 
 def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
-    server, policy = both_wires
-    session = InferenceClient(grpc_url(server)).new_session()
+    served, policy = both_wires
+    session = InferenceClient(grpc_url(served)).new_session()
     try:
         policy._mock_session.side_effect = RuntimeError('no such joint')
         with pytest.raises(RuntimeError, match='no such joint'):
@@ -111,9 +128,9 @@ def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
 def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_server, make_mock_policy):
     """A model the source refuses fails in the handshake, before the session serves anything."""
     policies = {'alpha': make_mock_policy([{'action': [1]}], {'model_name': 'alpha'})}
-    _host, _port, server = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
+    served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
     with pytest.raises(RuntimeError, match='Unknown model'):
-        InferenceClient(grpc_url(server, f'{wire.SESSION_PATH}/beta')).new_session()
+        InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
 
 
 def test_the_session_path_names_the_model(start_server, make_mock_policy):
@@ -121,8 +138,8 @@ def test_the_session_path_names_the_model(start_server, make_mock_policy):
         'alpha': make_mock_policy([{'action': ['alpha']}], {'model_name': 'alpha'}),
         'beta': make_mock_policy([{'action': ['beta']}], {'model_name': 'beta'}),
     }
-    _host, _port, server = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
-    session = InferenceClient(grpc_url(server, f'{wire.SESSION_PATH}/beta')).new_session()
+    served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
+    session = InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
     try:
         assert session.metadata['model_name'] == 'beta'
         assert session.infer({'obs': 'beta'}) == [{'action': ['beta']}]
@@ -137,8 +154,8 @@ def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0))
 def test_the_query_carries_the_session_params(start_server, make_mock_policy):
     policies = {'alpha': make_mock_policy([{'action': ['alpha']}], {'model_name': 'alpha'})}
     pipe = cfn.Config(_tunable_pipe, source=cfn.Config(DictSource, policies=policies))
-    _host, _port, server = start_server(pipe, grpc=True)
-    session = InferenceClient(grpc_url(server, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
+    served = start_server(pipe, grpc=True)
+    session = InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
     try:
         stack = session.metadata[offboard_keys.LOCAL_STACK][SEQ]
         # `args` and the layer's own constructor keyword are the spec grammar's, written wherever a
@@ -149,10 +166,10 @@ def test_the_query_carries_the_session_params(start_server, make_mock_policy):
 
 
 @pytest.fixture
-def authed_server(start_server: StartServer, make_mock_policy) -> PolicyServer:
+def authed_server(start_server: StartServer, make_mock_policy) -> Served:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, auth_token=_TOKEN)
-    return server
+    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, auth_token=_TOKEN)
+    return served
 
 
 def test_the_grpc_wire_gates_on_the_bearer_token(authed_server):
@@ -266,11 +283,11 @@ def _trust_only(monkeypatch, root: bytes) -> None:
 
 
 @pytest.fixture
-def edged(tls_edge, monkeypatch) -> Callable[[PolicyServer], str]:
+def edged(tls_edge, monkeypatch) -> Callable[[Served], str]:
     """The ``grpcs://`` URL of a server reached through a TLS edge, with the client trusting its root."""
 
-    def url(server: PolicyServer) -> str:
-        port, root = tls_edge(server.host, server.grpc_port)
+    def url(served: Served) -> str:
+        port, root = tls_edge(served.host, served.grpc_port)
         _trust_only(monkeypatch, root)
         return f'grpcs://{EDGE_HOST}:{port}'
 
@@ -278,8 +295,8 @@ def edged(tls_edge, monkeypatch) -> Callable[[PolicyServer], str]:
 
 
 def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
-    server, policy = both_wires
-    session = InferenceClient(edged(server)).new_session()
+    served, policy = both_wires
+    session = InferenceClient(edged(served)).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
@@ -357,9 +374,9 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
 
 def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
     """The refusal probe takes a share of the budget, so a healthy server answers a short one."""
-    server, _policy = both_wires
+    served, _policy = both_wires
     budget = grpc_wire._REFUSAL_PROBE_SEC / 2
-    session = InferenceClient(grpc_url(server), open_timeout=budget, connect_deadline=0.0).new_session()
+    session = InferenceClient(grpc_url(served), open_timeout=budget, connect_deadline=0.0).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [1, 2, 3]}]
     finally:
@@ -372,8 +389,8 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_pol
     assert grpc_wire._bind_target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
     policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
-    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
-    session = InferenceClient(f'grpc://[{server.host}]:{server.grpc_port}').new_session()
+    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
+    session = InferenceClient(f'grpc://[{served.host}]:{served.grpc_port}').new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
     finally:
@@ -408,8 +425,8 @@ def chatty_client(monkeypatch) -> None:
     monkeypatch.setattr(grpc_wire, '_PING_EVERY_MS', 500)
 
 
-def _silent_then_infer(server: PolicyServer) -> list[dict]:
-    session = InferenceClient(grpc_url(server)).new_session()
+def _silent_then_infer(served: Served) -> list[dict]:
+    session = InferenceClient(grpc_url(served)).new_session()
     try:
         time.sleep(_SILENCE_SEC)
         return session.infer({'image': 'test'})
@@ -428,9 +445,9 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
     """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``."""
     monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(grpc_wire._MESSAGE_SIZE_OPTIONS))
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    _host, _port, server = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
+    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
     with pytest.raises(grpc.RpcError, match='Too many pings'):
-        _silent_then_infer(server)
+        _silent_then_infer(served)
 
 
 def _surfaces_at_once(url: str, blamed: str) -> None:
@@ -459,9 +476,9 @@ def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monke
 
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     """The timeout closes the connection, and the server may answer inside the close's own wait."""
-    server, policy = both_wires
+    served, policy = both_wires
     policy._mock_session.side_effect = lambda *_: time.sleep(1.0) or [{'action': [1, 2, 3]}]
-    session = InferenceClient(grpc_url(server), infer_timeout=0.2).new_session()
+    session = InferenceClient(grpc_url(served), infer_timeout=0.2).new_session()
     with pytest.raises(TimeoutError):
         session.infer({'image': 'test'})
     # Without the guard this answers the first observation's actions, against the second's state.
@@ -471,8 +488,8 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
 
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """gRPC stops reading the request iterator then, so a write would wait out a whole timeout."""
-    server, _policy = both_wires
-    conn = grpc_wire.GrpcClientConnection(f'{server.host}:{server.grpc_port}', f'{wire.SESSION_PATH}/unknown-model', '')
+    served, _policy = both_wires
+    conn = grpc_wire.GrpcClientConnection(f'{served.host}:{served.grpc_port}', f'{wire.SESSION_PATH}/unknown-model', '')
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.

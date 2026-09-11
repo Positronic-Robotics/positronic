@@ -1,5 +1,6 @@
 import os
 import socket
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
@@ -14,6 +15,7 @@ from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard import wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
@@ -25,6 +27,9 @@ from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
+
+# Short enough to keep the idle test quick, long enough that a loaded box still reaches the first poll.
+_A_MOMENT_IDLE = 0.5
 
 
 class _StubSource(ModelSource):
@@ -47,10 +52,21 @@ class _StubSource(ModelSource):
         return {'type': 'stub'}
 
 
+def test_an_idle_server_stops_itself(make_mock_policy):
+    """The idle watchdog ends every wire it is serving on, so ``serve`` returns with nobody asking it to."""
+    server = PolicyServer(
+        ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
+    )
+    serving = threading.Thread(target=server.serve, args=([wire.WebsocketWire('localhost', 0, server.api)],))
+    serving.start()
+    serving.join(timeout=_A_MOMENT_IDLE * 20)
+    assert not serving.is_alive(), 'the idle watchdog left the server running'
+
+
 @pytest.fixture
 def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+    host, port, server, _ = start_server(ChunkedSchedule() | remote | _StubSource(policy))
     return host, port, server, policy
 
 
@@ -127,7 +143,7 @@ class _LatestSource(ModelSource):
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy):
     source = _LatestSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
-    host, port, _server = start_server(ChunkedSchedule() | remote | source)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
     client = InferenceClient(f'{host}:{port}')
@@ -156,7 +172,7 @@ class _ProgressSource(_StubSource):
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
     ws = connect(f'ws://{host}:{port}/api/v1/session/other')
@@ -185,7 +201,7 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
     return host, port, policy
 
 
@@ -224,7 +240,7 @@ def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_sessi
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
-    host, port, _server = start_server(pipeline)
+    host, port, *_ = start_server(pipeline)
     client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
@@ -276,7 +292,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
-    host, port, _server = start_server(pipeline())
+    host, port, *_ = start_server(pipeline())
     remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'))
 
     local_session, local_rt = open_session(inline(pipeline()))
@@ -312,7 +328,7 @@ def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> Infere
 def param_server(start_server, make_mock_policy) -> Generator[tuple[str, int], None, None]:
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipe_cfg = cfn.Config(_tunable_pipe, source=cfn.Config(_StubSource, policy=stub))
-    host, port, _server = start_server(pipe_cfg)
+    host, port, *_ = start_server(pipe_cfg)
     yield host, port
 
 
@@ -342,7 +358,7 @@ def _fps_pipe(source: ModelSource, fps: float = 10.0):
 
 def test_session_param_retunes_the_served_remote_half(start_server):
     pipe_cfg = cfn.Config(_fps_pipe, source=cfn.Config(PolicySource, policy=_ScriptedPolicy()))
-    host, port, _server = start_server(pipe_cfg)
+    host, port, *_ = start_server(pipe_cfg)
 
     # The wire carries the server-side half's output: relative timestamps spaced 1/fps.
     default_session = _param_session(host, port, [])
@@ -407,7 +423,7 @@ def test_source_touching_session_param_rejected(param_server):
 
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(_tunable_pipe(_StubSource(stub)))
+    host, port, *_ = start_server(_tunable_pipe(_StubSource(stub)))
     with pytest.raises(RuntimeError, match='config-launched'):
         _param_session(host, port, [('pad_start', 'false')])
 
@@ -433,7 +449,7 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
     if _LIVE_ENDPOINT:
         return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
     return f'{host}:{port}', _TOKEN
 
 
@@ -517,7 +533,7 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'

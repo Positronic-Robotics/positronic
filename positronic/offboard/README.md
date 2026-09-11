@@ -253,14 +253,22 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 
 ```python
 from positronic.offboard import PolicyServer
+from positronic.offboard.wire import WebsocketWire
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
-PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
+server = PolicyServer(pipeline)
+server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, `grpc_port` adds the gRPC wire, and `idle_timeout_min` shuts the server down after that many minutes without activity.
+`serve` takes the wires sessions arrive on, and the server names none of them: each wire binds its own
+port, reads its own route for the model a session asks for, and checks its own session headers. Add
+`grpc_wire.GrpcWire(host, port)` to the list to serve gRPC beside the websocket. A wire that speaks HTTP
+takes `server.api`, the model catalogue, and answers it on the same port it carries sessions on. A wire
+asked for port 0 binds any free one and names it in `wire.endpoint`.
+
+`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
 The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
