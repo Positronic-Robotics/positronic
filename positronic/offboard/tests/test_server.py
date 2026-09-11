@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import os
 import socket
 import threading
@@ -28,9 +30,6 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
-# Short enough to keep the idle test quick, long enough that a loaded box still reaches the first poll.
-_A_MOMENT_IDLE = 0.5
-
 
 class _StubSource(ModelSource):
     """Serves one ready policy under any requested id, so route-supplied checkpoints resolve as-is."""
@@ -50,6 +49,40 @@ class _StubSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'type': 'stub'}
+
+
+# Short enough to keep this test quick, long enough that a loaded box still reaches the first poll.
+_A_MOMENT_IDLE = 0.5
+
+
+class _FailingWire(wire.Wire):
+    """Serves for ``after`` seconds, then falls over."""
+
+    def __init__(self, after: float):
+        self._after = after
+
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        return wire.Endpoint('localhost', 0)
+
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        pass
+
+    async def serve(self) -> None:
+        await asyncio.sleep(self._after)
+        raise RuntimeError(f'the {self._after}s wire fell over')
+
+    async def stop(self) -> None:
+        pass
+
+
+def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
+    """No wire ends in silence: one failure raises out of ``serve``, and every other one is logged."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
+        with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):
+            server.serve([_FailingWire(0.05), _FailingWire(0.1)])
+    assert any('the 0.1s wire fell over' in record.getMessage() for record in caplog.records)
 
 
 def test_an_idle_server_stops_itself(make_mock_policy):

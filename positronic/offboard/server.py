@@ -429,17 +429,22 @@ class PolicyServer:
             if self.idle_timeout_min and self.idle_timeout_min > 0:
                 ending.append(asyncio.create_task(self._idle_watchdog()))
             try:
-                done, _still_running = await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
-                # A wire that ended on an error raises here, rather than reading as the shutdown this waits for.
-                for task in done:
-                    task.result()
+                await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 for task in ending:
                     task.cancel()
                 for w in wires:
                     await w.stop()
                 # Each wire ends the sessions it carries before this returns and the model slot closes.
-                await asyncio.gather(*serving, return_exceptions=True)
+                outcomes = await asyncio.gather(*serving, return_exceptions=True)
+
+            failed = [(w, e) for w, e in zip(wires, outcomes, strict=True) if isinstance(e, Exception)]
+            # Only one failure can reach the caller, so the rest are reported here or nowhere.
+            for w, error in failed[1:]:
+                logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
+            if failed:
+                # A wire that ended on an error raises, rather than reading as the shutdown this waits for.
+                raise failed[0][1]
 
         try:
             asyncio.run(_run())

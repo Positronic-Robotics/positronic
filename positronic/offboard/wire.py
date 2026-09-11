@@ -23,10 +23,6 @@ SESSION_PATH = '/api/v1/session'
 # explicitly is what keeps the two wires equal when that default moves.
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
-# How long ``WebsocketWire.stop`` lets an open session finish before it cuts the connection. Left to
-# itself uvicorn waits for ever, so a session mid-inference would hold the whole server open.
-STOP_GRACE_SEC = 2
-
 
 class PeerDisconnected(Exception):
     """The peer ended the session."""
@@ -199,6 +195,10 @@ class WebsocketWire(Wire):
     opens sessions on.
     """
 
+    # How long ``stop`` lets an open session finish before it cuts the connection. Left to itself
+    # uvicorn waits for ever, so a session mid-inference would hold the whole server open.
+    STOP_GRACE_SEC = 2
+
     def __init__(self, host: str, port: int, api: APIRouter):
         self._host = host
         self._port = port
@@ -224,7 +224,7 @@ class WebsocketWire(Wire):
             port=self._endpoint.port,
             log_level='info',
             ws_max_size=MAX_MESSAGE_BYTES,
-            timeout_graceful_shutdown=STOP_GRACE_SEC,
+            timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
 
