@@ -191,10 +191,9 @@ class PolicyServer:
     The session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    ``serve`` takes the wires sessions arrive on (see ``positronic.offboard.wire``). Each one reads its
-    own route for the model a session names and checks its own session headers, so the flow above is the
-    same over every wire and this server names none of them. ``api`` holds the server's own HTTP routes,
-    which a wire that speaks HTTP serves beside its sessions.
+    ``serve`` takes the wires sessions arrive on, and names none of them (see
+    ``positronic.offboard.wire``, which states what a wire owes a server). ``api`` holds this server's
+    own HTTP routes, which a wire that speaks HTTP serves beside its sessions.
 
     On startup (before accepting connections): resolve(None) → load.
 
