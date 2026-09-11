@@ -57,7 +57,7 @@ It is declared in two places, for the two things it does:
 - **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
 - **Serving** — the OpenPI pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. The other vendor servers take no `ee_frame`: every checkpoint they serve was trained in the rig's `default`, so none has a transform to declare.
+Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T's DROID codec uses `DROID_EE_FRAME` for both dataset conversion and serving. Its pipeline exposes this through `codec.ee_frame`.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
@@ -70,7 +70,9 @@ Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply 
 | Wrapper | Expands to | Used by |
 |---------|-----------|---------|
 | `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` ([the DROID gains](../positronic/cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
-| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` | the `phail_v1` pipelines of LeRobot, GR00T, OpenPI and DreamZero |
+| `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` | the `phail_v1` pipelines of LeRobot, OpenPI and DreamZero |
+
+GR00T's DROID codec sets `DROID_IMPEDANCE` directly on its joint-position commands.
 
 ## Writing custom codecs
 
@@ -118,31 +120,15 @@ cd docker && docker compose run --rm lerobot-convert convert \
 
 See [`positronic/vendors/gr00t/codecs.py`](../positronic/vendors/gr00t/codecs.py).
 
-| Codec | Observation | Action | Modality Configs |
-|-------|-------------|--------|------------------|
-| `ee_quat` | EE pose (quat) + grip + images (224x224) | Absolute EE position (quat) + grip | `ee`, `ee_rel` |
-| `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d`, `ee_rot6d_rel` |
-| `ee_quat_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q`, `ee_q_rel` |
-| `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q`, `ee_rot6d_q_rel` |
-| `ee_quat_traj` | EE pose (quat) + grip + images | Absolute EE trajectory (quat) + grip (binarized) | `ee`, `ee_rel` |
-| `ee_rot6d_traj` | EE pose (rot6d) + grip + images | Absolute EE trajectory (rot6d) + grip (binarized) | `ee_rot6d`, `ee_rot6d_rel` |
-| `ee_quat_joints_traj` | EE pose + joints + grip + images | Absolute EE trajectory + grip (binarized) | `ee_q`, `ee_q_rel` |
-| `ee_rot6d_joints_traj` | EE pose (rot6d) + joints + grip + images | Absolute EE trajectory (rot6d) + grip (binarized) | `ee_rot6d_q`, `ee_rot6d_q_rel` |
-| `joints_traj` | Joints + grip + images (no EE pose) | Absolute joint trajectory + grip (binarized) | — |
+| Codec | Cameras | State and training actions | Inference actions |
+|-------|---------|----------------------------|-------------------|
+| `droid` | Exterior + wrist | Absolute EEF pose (XYZ + row-based rot6d), gripper, 7 joints | Absolute joint targets + binary gripper |
+| `droid_three_cameras` | Two exteriors + wrist | Same as `droid` | Same as `droid` |
 
-The codec must match the modality config during training.
-
-```bash
-# Convert with codec
-cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=~/datasets/groot/my_task
-
-# Train with matching modality
-cd docker && docker compose run --rm groot-train \
-  --modality_config=ee_rot6d_q \
-  --input_path=~/datasets/groot/my_task
-```
+Images use the upstream DROID client's 320×180 padded resize, then the checkpoint's native
+preprocessing. GR00T owns pose-relative and joint-relative conversion. Training labels are
+recorded state trajectories. Use the same camera layout for conversion and inference;
+the published DROID checkpoint uses two cameras. See the [Docker workflow](../positronic/vendors/gr00t/README.md).
 
 ### OpenPI
 

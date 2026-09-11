@@ -1,14 +1,17 @@
 # GR00T spoons data ablation servers (~4.6GB each, 2 fit on desktop, 1 on notebook)
 #
 # Desktop (2 servers):
-#   IMAGE_TAG=latest CACHE_ROOT=/home/<user> docker --context desktop compose -f docker-compose.spoons-ablation.yml up spoons-100 spoons-50
+#   GR00T_N16_IMAGE=positro/gr00t:<N1.6-tag> CACHE_ROOT=/home/<user> docker --context desktop compose -f docker-compose.spoons-ablation.yml up spoons-100 spoons-50
 # Notebook (1 server):
-#   IMAGE_TAG=latest docker --context notebook compose -f docker-compose.spoons-ablation.yml up spoons-25
+#   GR00T_N16_IMAGE=positro/gr00t:<N1.6-tag> docker --context notebook compose -f docker-compose.spoons-ablation.yml up spoons-25
 services:
   spoons-100:
     extends:
       file: docker-compose.yml
       service: groot-server
+    # These experiment checkpoints use the N1.6 action schema.
+    image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-100
     pull_policy: always
     command:
@@ -21,6 +24,9 @@ services:
     extends:
       file: docker-compose.yml
       service: groot-server
+    # These experiment checkpoints use the N1.6 action schema.
+    image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-50
     pull_policy: always
     command:
@@ -33,6 +39,9 @@ services:
     extends:
       file: docker-compose.yml
       service: groot-server
+    # These experiment checkpoints use the N1.6 action schema.
+    image: ${GR00T_N16_IMAGE:?Set GR00T_N16_IMAGE to a pinned GR00T N1.6 image}
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     container_name: spoons-25
     pull_policy: always
     command:

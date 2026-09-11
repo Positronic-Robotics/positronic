@@ -181,10 +181,7 @@ services:
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
-      # NOTE: Do NOT mount `/root/.local/share/uv` for gr00t images.
-      # gr00t's `/.venv/bin/python` is a symlink into the image's own uv-managed CPython under
-      # `/root/.local/share/uv/python/...`. Bind-mounting the host uv dir can hide that target and
-      # make `/.venv/bin/python` fail with ENOENT.
+      # Keep image-owned uv interpreters visible; do not mount /root/.local/share/uv here.
 
     # Set HOME inside container to match the mount expectations
     environment:
@@ -201,12 +198,12 @@ services:
     container_name: groot-train
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
-    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.train"]
+    entrypoint: ["uv", "run", "--no-sync", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--no-sync", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"
 

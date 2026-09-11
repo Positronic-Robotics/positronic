@@ -28,9 +28,10 @@ import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from pimm.logging import init_logging
-from positronic import utils
+from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
+from positronic.policy.codec import GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -110,9 +111,9 @@ def append_data_to_dataset(
 
             ep_task = task
             if task is None:
-                ep_task = frame.get('task', '')
+                ep_task = frame.get(keys.TASK, '')
 
-            frame.pop('task', None)
+            frame.pop(keys.TASK, None)
             lr_dataset.add_frame(frame, task=ep_task or '')
 
         lr_dataset.save_episode()
@@ -128,24 +129,24 @@ def convert_to_lerobot_dataset(
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
-    assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
+    assert dataset.meta[LEROBOT_FEATURES] is not None, f'dataset.meta[{LEROBOT_FEATURES!r}] is required'
 
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
         fps=fps,
         root=output_dir,
         use_videos=video,
-        features=dataset.meta['lerobot_features'],
+        features=dataset.meta[LEROBOT_FEATURES],
         image_writer_threads=32,
     )
     # Adding this file after the LR dataset is created,
     # otherwise the former will complain about the directory not being empty.
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
-    if 'gr00t_modality' in dataset.meta:
-        modality = dataset.meta.get('gr00t_modality')
+    if GR00T_MODALITY in dataset.meta:
+        modality = dataset.meta.get(GR00T_MODALITY)
         if modality is not None:
-            modality_path = output_dir / 'meta' / 'modality.json'
+            modality_path = output_dir / GR00T_MODALITY_PATH
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
@@ -164,8 +165,8 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
     # Save metadata for append operation
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
-    lr_modality_path = output_dir / 'meta' / 'modality.json'
-    ds_modality = dataset.meta.get('gr00t_modality', None)
+    lr_modality_path = output_dir / GR00T_MODALITY_PATH
+    ds_modality = dataset.meta.get(GR00T_MODALITY, None)
     if lr_modality_path.exists():
         with lr_modality_path.open(encoding='utf-8') as f:
             lr_modality = json.load(f)

@@ -37,6 +37,7 @@ from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
+from positronic.policy.codec import LEROBOT_FEATURES
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 
 # Workaround: HubMixin.save_pretrained unconditionally deletes config.json before
@@ -77,10 +78,10 @@ def build_env_config_from_codec(codec: Codec) -> PositronicEnvConfig:
 
     fps = int(inference_meta.get('action_fps', 15))
 
-    assert 'lerobot_features' in training_meta, (
-        f"Codec training_encoder missing 'lerobot_features'. Keys: {list(training_meta.keys())}"
+    assert LEROBOT_FEATURES in training_meta, (
+        f'Codec training_encoder missing {LEROBOT_FEATURES!r}. Keys: {list(training_meta.keys())}'
     )
-    lerobot_features = training_meta['lerobot_features']
+    lerobot_features = training_meta[LEROBOT_FEATURES]
 
     features = {}
     features_map = {}

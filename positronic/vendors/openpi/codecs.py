@@ -29,7 +29,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 from positronic.vendors import openpi
 
@@ -53,13 +53,13 @@ class ObservationCodec(Codec):
             'observation.state': self._derive_state,
             'observation.images.left': partial(self._derive_image, wrist_camera),
             'observation.images.side': partial(self._derive_image, exterior_camera),
-            'task': Get(keys.TASK, ''),
+            keys.TASK: Get(keys.TASK, ''),
         }
 
         state_dim = sum(state_features.values())
         w, h = image_size
         self._training_meta: dict[str, Any] = {
-            'lerobot_features': {
+            LEROBOT_FEATURES: {
                 'observation.state': lerobot_state(state_dim, list(state_features.keys())),
                 'observation.images.left': lerobot_image(w, h),
                 'observation.images.side': lerobot_image(w, h),
@@ -103,7 +103,7 @@ class ObservationCodec(Codec):
 
     @property
     def meta(self):
-        return {'image_sizes': self._image_size}
+        return {self.IMAGE_SIZES: self._image_size}
 
     @property
     def training_encoder(self):
@@ -264,7 +264,7 @@ class LiberoObservationCodec(Codec):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return {'image_sizes': self._image_size}
+        return {self.IMAGE_SIZES: self._image_size}
 
 
 libero_obs = cfn.Config(LiberoObservationCodec)

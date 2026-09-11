@@ -14,11 +14,6 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.policy.base import DelegatingSession, Layer, Session
 
 
-def _obs_time(obs) -> float:
-    """Observation timestamp in seconds, from the harness's nanosecond stamp."""
-    return obs[keys.OBS_TIME_NS] / 1e9
-
-
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
 # domain types reach the border, this reads the status off the value.
 def _is_robot_status(name: str) -> bool:
@@ -78,10 +73,10 @@ class ChunkedSchedule(Layer):
 
         def __init__(self, inner: Session):
             super().__init__(inner)
-            self._trajectory_end: float | None = None
+            self._trajectory_end_ns: int | None = None
 
         def __call__(self, obs, time_ns):
-            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
+            if self._trajectory_end_ns is not None and obs[keys.OBS_TIME_NS] < self._trajectory_end_ns:
                 return None
             result = self._inner(obs, time_ns)
             if result is not None:
@@ -93,11 +88,11 @@ class ChunkedSchedule(Layer):
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
                 anchor = time_ns / 1e9
                 result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
-                self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
+                self._trajectory_end_ns = round(result[-1][keys.ACTION_TIMESTAMP] * 1e9) if result else None
             return result
 
         def cancel(self):
-            self._trajectory_end = None
+            self._trajectory_end_ns = None
             super().cancel()
 
     def make_session(self, inner: Session):
@@ -179,7 +174,7 @@ class TemporalStack(Layer):
             self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
 
         def __call__(self, obs, time_ns):
-            now = _obs_time(obs)
+            now = obs[keys.OBS_TIME_NS] / 1e9
             self._buffer.append(now, {k: obs[k] for k in self._keys})
             return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
 

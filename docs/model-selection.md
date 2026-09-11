@@ -11,9 +11,9 @@ Positronic supports three foundation models with different capabilities and reso
 | Aspect | OpenPI (π₀.₅) | GR00T | SmolVLA | LeRobot ACT |
 |--------|---------------|-------|---------|-------------|
 | **Capability** | Most capable, generalist | Generalist | Vision-language-action | Single-task specialist |
-| **Training Hardware** | capable cloud GPU (~78GB, LoRA) | capable cloud GPU (~50GB) | Consumer GPU (RTX 3090, 4090) | Consumer GPU (RTX 3090, 4090) |
+| **Training Hardware** | capable cloud GPU (~78GB, LoRA) | CUDA GPU (measure for batch/layout) | Consumer GPU (RTX 3090, 4090) | Consumer GPU (RTX 3090, 4090) |
 | **Training Time** | Multiple days | 0.5-2 days | Several hours | Several hours |
-| **Inference Hardware** | GPU (~62GB, likely cloud) | GPU (~7.5GB, can run on robot) | Consumer GPU (4GB+) | Consumer GPU (4GB+) |
+| **Inference Hardware** | GPU (~62GB, likely cloud) | CUDA GPU (measure for camera layout) | Consumer GPU (4GB+) | Consumer GPU (4GB+) |
 | **Inference Speed** | Moderate | Moderate | Moderate | Fast |
 | **Best For** | Complex multi-task manipulation, generalization | General robotics tasks | Language-conditioned manipulation | Specific manipulation tasks, fast iteration |
 | **When to Use** | Need generalization, multi-task scenarios, leveraging foundation models | Prefer NVIDIA stack | Language instructions, VLM backbone | Single task, resource constraints, rapid experimentation |
@@ -36,20 +36,14 @@ Positronic supports three foundation models with different capabilities and reso
 
 → [OpenPI Documentation](../positronic/vendors/openpi/README.md)
 
-### GR00T — NVIDIA's Generalist Robot Policy
+### GR00T N1.7 DROID
 
-**What it is:** NVIDIA's foundation model for generalist robot control.
+NVIDIA's robot policy, using the published DROID checkpoint. Supports wrist plus one exterior
+camera by default, and wrist plus two exteriors through fine-tuning. It predicts joint-position
+actions and preserves the checkpoint's image and relative-action processing.
 
-**Strengths:**
-- Generalist capabilities
-- Can run on smaller GPU (~7.5GB inference, can run closer to robot)
-- Requires ~50GB for training (less than OpenPI)
-- Training takes 1-2 days (faster than OpenPI)
-
-**Limitations:**
-- Requires capable GPU for training
-- Slower than single-task models
-
+Training and inference require a CUDA GPU. Measure memory requirements with the intended batch
+size and camera layout.
 
 → [GR00T Documentation](../positronic/vendors/gr00t/README.md)
 

@@ -188,6 +188,13 @@ class TestChunkedSchedule:
         result = session(_obs(1.01), int(1.01e9))
         assert result is not None
 
+    def test_chunk_expiry_rounds_to_the_clock_nanosecond(self):
+        session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 0.1}]))
+        session(_obs(0.2), 200_000_000)
+
+        assert session({keys.OBS_TIME_NS: 299_999_999}, 299_999_999) is None
+        assert session({keys.OBS_TIME_NS: 300_000_000}, 300_000_000) is not None
+
     def test_expiry_is_judged_at_the_observation_instant(self):
         """Whether the trajectory has run out is a question about the observation, not about the call's time."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])

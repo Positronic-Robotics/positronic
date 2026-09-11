@@ -12,6 +12,7 @@ Two composition operators:
 import collections.abc as cabc
 from dataclasses import replace
 from functools import partial
+from pathlib import Path
 from typing import Any, final, overload
 
 import numpy as np
@@ -29,6 +30,9 @@ from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, 
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
+GR00T_MODALITY_PATH = Path('meta/modality.json')
+GR00T_MODALITY = 'gr00t_modality'
+LEROBOT_FEATURES = 'lerobot_features'
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
@@ -62,6 +66,8 @@ class Codec(Layer):
         The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
         size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
     """
+
+    IMAGE_SIZES = 'image_sizes'
 
     def encode(self, data: dict) -> dict:
         return {}

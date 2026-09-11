@@ -3521,6 +3521,20 @@ wheels = [
 ]
 
 [[package]]
+name = "msgpack-numpy"
+version = "0.4.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "msgpack" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra != 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/08/94/61e8aee142733ebfdc400a05bdac6e1763c4514bba3b42743d223f388450/msgpack-numpy-0.4.8.tar.gz", hash = "sha256:c667d3180513422f9c7545be5eec5d296dcbb357e06f72ed39cc683797556e69", size = 10923, upload-time = "2022-06-09T03:43:08.739Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/5d/f25ac7d4fb77cbd53ddc6d05d833c6bf52b12770a44fa9a447eed470ca9a/msgpack_numpy-0.4.8-py2.py3-none-any.whl", hash = "sha256:773c19d4dfbae1b3c7b791083e2caf66983bb19b40901646f61d8731554ae3da", size = 6919, upload-time = "2022-06-09T03:43:06.82Z" },
+]
+
+[[package]]
 name = "msgspec"
 version = "0.21.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4901,6 +4915,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "msgpack" },
+    { name = "msgpack-numpy" },
     { name = "mujoco" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra != 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
@@ -5017,6 +5032,7 @@ requires-dist = [
     { name = "lerobot", extras = ["smolvla"], marker = "extra == 'lerobot'", specifier = "==0.4.3" },
     { name = "linuxpy", marker = "extra == 'hardware'" },
     { name = "msgpack" },
+    { name = "msgpack-numpy", specifier = "==0.4.8" },
     { name = "mujoco" },
     { name = "numpy" },
     { name = "nvidia-ml-py", marker = "extra == 'telemetry'" },

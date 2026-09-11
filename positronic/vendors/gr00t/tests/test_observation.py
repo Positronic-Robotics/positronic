@@ -1,228 +1,114 @@
-"""Tests for GrootObservationCodec."""
-
+import importlib.util
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
-from positronic.vendors.gr00t import GRIP, JOINT_POSITION, LANGUAGE, MODALITY_CONFIGS, VIDEO, ModalityConfig, codecs
-from positronic.vendors.gr00t.codecs import GrootObservationCodec
-from positronic.vendors.gr00t.server import _warm_observation
-
-RotRep = geom.Rotation.Representation
+from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.tests.utils import DummySignal
+from positronic.drivers.roboarm import models
+from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.spec import split
+from positronic.vendors import gr00t
+from positronic.vendors.gr00t import server
+from positronic.vendors.gr00t.codecs import droid, droid_three_cameras
 
 
 @pytest.fixture
-def sample_inputs():
-    """Sample raw inputs for inference encoding."""
+def observation():
+    pose = geom.Transform3D([0.3, -0.2, 0.5], geom.Rotation.from_euler([0.4, -0.3, 0.7]))
     return {
-        keys.EE_POSE: np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),  # xyz + quat (w,x,y,z)
-        keys.GRIP: np.array([0.5]),
-        keys.JOINTS: np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
-        keys.WRIST_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-        keys.EXTERIOR_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-        keys.TASK: 'pick up the cube',
+        keys.EE_POSE: pose.as_vector(geom.Rotation.Representation.QUAT),
+        keys.GRIP: 0.25,
+        keys.JOINTS: np.arange(7, dtype=np.float64) / 10,
+        keys.WRIST_IMAGE: np.random.default_rng(1).integers(0, 256, (377, 611, 3), dtype=np.uint8),
+        keys.EXTERIOR_IMAGE: np.random.default_rng(2).integers(0, 256, (240, 320, 3), dtype=np.uint8),
+        keys.EXTERIOR_IMAGE_2: np.full((180, 320, 3), 73, dtype=np.uint8),
+        keys.TASK: 'Put the cup on the plate',
     }
 
 
-class TestGrootObservationCodec:
-    """Tests for GrootObservationCodec training and inference modes."""
-
-    # --- Inference encoding tests ---
-
-    def test_encode_basic(self, sample_inputs):
-        """Test basic inference encoding without rotation conversion."""
-        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
-        result = codec.encode(sample_inputs)
-
-        assert 'video' in result
-        assert 'state' in result
-        assert 'language' in result
-
-        assert 'wrist_image' in result['video']
-        assert 'exterior_image_1' in result['video']
-        assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)
-        assert result['video']['exterior_image_1'].shape == (1, 1, 224, 224, 3)
-
-        assert 'ee_pose' in result['state']
-        assert 'grip' in result['state']
-        assert 'joint_position' not in result['state']
-        assert result['state']['ee_pose'].shape == (1, 1, 7)
-        assert result['state']['grip'].shape == (1, 1, 1)
-
-        assert result['language']['annotation.language.language_instruction'] == [['pick up the cube']]
-
-    def test_encode_with_rot6d(self, sample_inputs):
-        """Test inference encoding with rot6d conversion."""
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=False)
-        result = codec.encode(sample_inputs)
-
-        assert result['state']['ee_pose'].shape == (1, 1, 9)
-
-        ee_pose = result['state']['ee_pose'][0, 0]
-        assert np.allclose(ee_pose[:3], sample_inputs[keys.EE_POSE][:3])
-
-        expected_rot6d = geom.Rotation.from_quat(sample_inputs[keys.EE_POSE][3:7]).as_rot6d
-        assert np.allclose(ee_pose[3:], expected_rot6d, atol=1e-6)
-
-    def test_encode_with_joints(self, sample_inputs):
-        """Test inference encoding with joint positions."""
-        codec = GrootObservationCodec(rotation_rep=None, include_joints=True)
-        result = codec.encode(sample_inputs)
-
-        assert 'joint_position' in result['state']
-        assert result['state']['joint_position'].shape == (1, 1, 7)
-        assert np.allclose(result['state']['joint_position'][0, 0], sample_inputs[keys.JOINTS])
-
-    def test_encode_with_rot6d_and_joints(self, sample_inputs):
-        """Test inference encoding with both rot6d and joints."""
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
-        result = codec.encode(sample_inputs)
-
-        assert result['state']['ee_pose'].shape == (1, 1, 9)
-        assert result['state']['grip'].shape == (1, 1, 1)
-        assert result['state']['joint_position'].shape == (1, 1, 7)
-
-    def test_encode_missing_task(self, sample_inputs):
-        """Test inference encoding handles missing task gracefully."""
-        del sample_inputs[keys.TASK]
-        codec = GrootObservationCodec()
-        result = codec.encode(sample_inputs)
-
-        assert result['language']['annotation.language.language_instruction'] == [['']]
-
-    # --- Rot6d conversion correctness tests ---
-
-    def test_rot6d_identity_quaternion(self, sample_inputs):
-        """Test rot6d conversion with identity quaternion."""
-        sample_inputs[keys.EE_POSE] = np.array([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
-
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
-        result = codec.encode(sample_inputs)
-
-        ee_pose = result['state']['ee_pose'][0, 0]
-        expected_rot6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
-        assert np.allclose(ee_pose[3:], expected_rot6d, atol=1e-6)
-
-    def test_rot6d_90deg_rotation(self, sample_inputs):
-        """Test rot6d conversion with 90 degree rotation around Z."""
-        quat = np.array([0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)])
-        sample_inputs[keys.EE_POSE] = np.array([1.0, 2.0, 3.0, *quat])
-
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
-        result = codec.encode(sample_inputs)
-
-        ee_pose = result['state']['ee_pose'][0, 0]
-        expected_rot6d = geom.Rotation.from_quat(quat).as_rot6d
-        assert np.allclose(ee_pose[3:], expected_rot6d, atol=1e-6)
-
-    # --- Output key tests ---
-
-    def test_output_keys_basic(self):
-        """Test that codec outputs correct keys for training."""
-        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
-
-        expected = {'ee_pose', 'grip', 'wrist_image', 'exterior_image_1', 'task'}
-        assert set(codec._derive_transforms.keys()) == expected
-
-    def test_output_keys_with_joints(self):
-        """Test that codec includes joint_position when enabled."""
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
-
-        assert 'joint_position' in codec._derive_transforms
-
-    # --- Metadata tests ---
-
-    def test_training_meta(self):
-        """Test that training metadata is computed from constructor params."""
-        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
-        meta = codec._training_meta
-
-        assert 'gr00t_modality' in meta
-        assert 'lerobot_features' in meta
-        assert 'joint_position' in meta['lerobot_features']
-        assert meta['lerobot_features']['ee_pose']['shape'] == (9,)
-
-    def test_training_meta_no_joints(self):
-        """Test that training metadata excludes joints when not enabled."""
-        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
-        meta = codec._training_meta
-
-        assert 'joint_position' not in meta['lerobot_features']
-        assert meta['lerobot_features']['ee_pose']['shape'] == (7,)
-
-    # --- Edge cases ---
-
-    def test_non_square_input_image(self, sample_inputs):
-        """Test that non-square images are properly resized with padding."""
-        sample_inputs[keys.WRIST_IMAGE] = np.random.randint(0, 255, (100, 200, 3), dtype=np.uint8)
-
-        codec = GrootObservationCodec()
-        result = codec.encode(sample_inputs)
-
-        assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)
-
-    def test_custom_image_size(self, sample_inputs):
-        """Test custom image size."""
-        codec = GrootObservationCodec(image_size=(128, 128))
-        result = codec.encode(sample_inputs)
-
-        assert result['video']['wrist_image'].shape == (1, 1, 128, 128, 3)
-        assert result['video']['exterior_image_1'].shape == (1, 1, 128, 128, 3)
-
-    def test_custom_camera_keys(self, sample_inputs):
-        """Test custom camera key mapping."""
-        sample_inputs['cam1'] = sample_inputs.pop(keys.WRIST_IMAGE)
-        sample_inputs['cam2'] = sample_inputs.pop(keys.EXTERIOR_IMAGE)
-
-        codec = GrootObservationCodec(wrist_camera='cam1', exterior_camera='cam2')
-        result = codec.encode(sample_inputs)
-
-        assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)
-        assert result['video']['exterior_image_1'].shape == (1, 1, 224, 224, 3)
+@pytest.mark.parametrize('config', [droid, droid_three_cameras])
+def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation):
+    codec = config()
+    episode = EpisodeContainer({
+        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+    })
+    training = codec.training_encoder(episode)
+    encoded = codec.encode(observation)
+    for name, value in encoded[gr00t.STATE].items():
+        assert np.asarray(training[name][0][0]).dtype == np.float32
+        np.testing.assert_allclose(training[name][0][0], value[0, 0], atol=1e-6)
+    for name, frames in encoded[gr00t.VIDEO].items():
+        assert frames.shape == (1, 1, 180, 320, 3)
+        np.testing.assert_array_equal(training[name][0][0], frames[0, 0])
+    expected_action = np.concatenate([encoded[gr00t.STATE][name][0, 0] for name in gr00t.STATE_DIMS])
+    np.testing.assert_allclose(training['action'][0][0], expected_action)
 
 
-def _shapes(observation: dict) -> dict:
-    """The nested observation reduced to the shape of every leaf, which is what a backend accepts or rejects."""
-    return {name: {key: np.asarray(v).shape for key, v in block.items()} for name, block in observation.items()}
-
-
-# Each pair is one deployment's codec and the GR00T modality config it was trained under. They must describe the
-# same observation, and until the fork's own config module can be read from here, this is what says so.
-# rules-allow: hardcoded-keys — the pairing is the assertion; reading it from the code under test would pass
-# whatever that code held.
-@pytest.mark.parametrize(
-    'codec_name, modality_config',
-    [
-        ('ee_quat', 'ee'),
-        ('ee_quat_joints', 'ee_q'),
-        ('ee_rot6d', 'ee_rot6d'),
-        ('ee_rot6d_joints', 'ee_rot6d_q'),
-        ('ee_rot6d', 'ee_rot6d_rel'),
-        ('ee_rot6d_joints', 'ee_rot6d_q_rel'),
-        ('joints_traj', 'joints'),
-    ],
-)
-def test_warmup_observation_matches_what_the_paired_codec_encodes(codec_name, modality_config, sample_inputs):
-    encoded = getattr(codecs, codec_name).instantiate().encode(sample_inputs)
-
-    warm = _warm_observation(MODALITY_CONFIGS[modality_config])
-
-    assert _shapes(warm) == _shapes(encoded)
-
-
-def test_a_custom_config_warms_at_the_cameras_and_language_field_it_declares():
-    # Names GR00T's other embodiments use, which none of the configs shipped here declare.
-    camera, task_key = 'ego_view', 'annotation.human.coarse_action'
-    custom = ModalityConfig(
-        path=Path('gr00t/configs/data/my_own.py'),
-        state={GRIP: 1, JOINT_POSITION: 7},
-        cameras=(camera,),
-        task_key=task_key,
+def test_three_camera_configuration_uses_a_distinct_second_external_image(observation):
+    encoded = droid_three_cameras().encode(observation)
+    assert len(encoded[gr00t.VIDEO]) == 3
+    np.testing.assert_array_equal(
+        encoded[gr00t.VIDEO][gr00t.EXTERIOR_IMAGE_2][0, 0], observation[keys.EXTERIOR_IMAGE_2]
     )
+    del observation[keys.EXTERIOR_IMAGE_2]
+    with pytest.raises(KeyError):
+        droid_three_cameras().encode(observation)
 
-    warm = _warm_observation(custom)
 
-    assert set(warm[VIDEO]) == {camera}
-    assert set(warm[LANGUAGE]) == {task_key}
+def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
+    monkeypatch.setattr(gr00t, 'STATE_DIMS', dict(reversed(list(gr00t.STATE_DIMS.items()))))
+    codec = droid()
+    episode = EpisodeContainer({
+        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+    })
+    encoder = codec.training_encoder
+    encoded = encoder(episode)
+    action = encoded[gr00t.ACTION][0][0]
+    for name, bounds in encoder.meta[GR00T_MODALITY][gr00t.ACTION].items():
+        np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
+
+
+@pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
+def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation):
+    pipeline = config()
+    local, _, codec = split(pipeline)
+    resize = next(layer for layer in local._layers() if isinstance(layer, RestrictImageSize))
+    wire_observation = resize.encode(observation)
+    for source in codec.meta[Codec.IMAGE_SIZES]:
+        assert wire_observation[source].shape[0] <= gr00t.IMAGE_SIZE[1]
+        assert wire_observation[source].shape[1] <= gr00t.IMAGE_SIZE[0]
+    direct = codec.encode(observation)
+    remote_encoded = codec.encode(wire_observation)
+    for name in direct[gr00t.VIDEO]:
+        np.testing.assert_array_equal(remote_encoded[gr00t.VIDEO][name], direct[gr00t.VIDEO][name])
+
+
+def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
+    reference = os.environ.get('GR00T_REFERENCE_ROOT')
+    if reference is None:
+        pytest.skip('Set GR00T_REFERENCE_ROOT to the GR00T checkout for cross-repository parity')
+    loaded = {}
+    for name, path in {'frame': 'gr00t/data/state_action/droid_frame.py', 'image': 'examples/DROID/utils.py'}.items():
+        spec = importlib.util.spec_from_file_location(name, Path(reference) / path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        loaded[name] = module
+    raw_pose = geom.Transform3D.from_vector(observation[keys.EE_POSE], geom.Rotation.Representation.QUAT)
+    tool_pose = raw_pose * models.DROID_EE_FRAME
+    upstream_pose = np.concatenate([
+        tool_pose.translation,
+        Rotation.from_matrix(tool_pose.rotation.as_rotation_matrix).as_euler('XYZ'),
+    ])
+    encoded = droid().encode(observation)
+    np.testing.assert_allclose(
+        encoded[gr00t.STATE][gr00t.EE_POSE][0, 0], loaded['frame'].compute_eef_9d(upstream_pose), atol=1e-6
+    )
+    for name, source in {gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE}.items():
+        expected = loaded['image'].resize_with_pad(observation[source], 180, 320)
+        np.testing.assert_array_equal(encoded[gr00t.VIDEO][name][0, 0], expected)

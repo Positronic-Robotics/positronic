@@ -57,7 +57,7 @@ Examples:
     --pipeline.ee_frame=None
 
   # GR00T
-  bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
+  bash workflows/nebius/serve.sh gr00t groot-server droid \
     --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
@@ -67,12 +67,15 @@ VENDOR="$1"
 NAME="$2"
 shift 2
 
+UV_ARGS="run --python 3.13"
+HF_FLAGS=()
 case "$VENDOR" in
   lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 " ;;
   lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
-  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA=""
+                 UV_ARGS="$GR00T_UV_ARGS"; HF_FLAGS=("${HF_ENV_FLAGS[@]}") ;;
   # dreamzero.server imports `huggingface_hub` at module top → needs --extra dreamzero
   dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="--extra dreamzero " ;;
   molmoact2)     IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra molmoact2 " ;;
@@ -90,7 +93,8 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
-SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
+
+SERVER_ARGS="${UV_ARGS} ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
@@ -109,6 +113,7 @@ nebius ai endpoint create \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
   --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
+  ${HF_FLAGS[@]+"${HF_FLAGS[@]}"} \
   "${S3_ENV_FLAGS[@]}"
 # Left on stdout, not discarded: `create` reports `Endpoint ID:` as soon as the resource exists and can
 # still fail afterwards — a container that will not start does exactly that — so a caller logging this

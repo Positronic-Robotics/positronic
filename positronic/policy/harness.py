@@ -84,12 +84,22 @@ class _EpisodeInference:
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: dict[str, Any], should_stop: pimm.SignalReceiver[bool]) -> list[dict[str, Any]] | None:
         now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._rollout.rt.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._rollout.session(frozen_view(self._owned(obs)), now_ns)
+        owned = frozen_view(self._owned(obs))
+        while True:
+            trajectory = self._rollout.session(owned, now_ns)
+            self.wait(should_stop)
+            if (
+                trajectory is not None
+                or self._charges_wall_time
+                or not self._rollout.rt.owes_an_answer
+                or should_stop.value
+            ):
+                return trajectory
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
@@ -357,9 +367,8 @@ class Harness(pimm.ControlSystem):
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
-        if (trajectory := inference(obs)) is not None:
+        if (trajectory := inference(obs, should_stop)) is not None:
             self._reschedule(trajectory, clock)
-        inference.wait(should_stop)
 
     @staticmethod
     def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:

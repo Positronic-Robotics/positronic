@@ -1,230 +1,164 @@
-"""GR00T codecs: implementation classes and configuronic configs in one file."""
+"""DROID observations and joint-position actions for GR00T."""
 
 from functools import partial
-from typing import Any
+from operator import itemgetter
 
 import configuronic as cfn
 import numpy as np
-from PIL import Image as PilImage
+from PIL import Image
 
 from positronic import geom, keys
-from positronic.cfg import codecs
-from positronic.dataset import transforms
+from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Get, Identity
-from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.dataset.transforms.episode import Derive
+from positronic.drivers.roboarm import command, models
+from positronic.policy.codec import (
+    GR00T_MODALITY,
+    LEROBOT_FEATURES,
+    ActionHorizon,
+    ActionTimestamp,
+    BinarizeGripInference,
+    ChangeEEFrame,
+    Codec,
+    lerobot_action,
+    lerobot_image,
+    lerobot_state,
+)
 from positronic.vendors import gr00t
 
-RotRep = geom.Rotation.Representation
 
+class DroidCodec(Codec):
+    """Encode poses in the DROID tool frame and decode upstream's absolute joint targets.
 
-class GrootObservationCodec(Codec):
-    """GR00T N1.6 observation encoder.
-
-    For training (training_encoder): derives flat keys for each state component.
-    For inference: encode() produces nested GR00T format (video/state/language).
+    Training uses recorded pose/joint/gripper trajectories as absolute action labels. GR00T's
+    checkpoint processor converts those labels to relative actions and back during inference.
     """
 
-    def __init__(
-        self,
-        rotation_rep: RotRep | None = None,
-        include_joints: bool = False,
-        include_ee_pose: bool = True,
-        image_size: tuple[int, int] = gr00t.IMAGE_SIZE,
-        exterior_camera: str = keys.EXTERIOR_IMAGE,
-        wrist_camera: str = keys.WRIST_IMAGE,
-        num_joints: int = 7,
-    ):
-        self._rotation_rep = rotation_rep
-        self._include_joints = include_joints
-        self._include_ee_pose = include_ee_pose
-        self._image_size = image_size
-        self._exterior_camera = exterior_camera
-        self._wrist_camera = wrist_camera
-        self._num_joints = num_joints
+    # Matches GR00T's gr00t/data/state_action/droid_frame.py; row-based rot6d follows this correction.
+    _ROTATION_CORRECTION = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=np.float64)
 
-        self._derive_transforms: dict[str, Any] = {
-            gr00t.GRIP: self._derive_grip,
-            gr00t.WRIST_IMAGE: partial(self._derive_image, wrist_camera),
-            gr00t.EXTERIOR_IMAGE: partial(self._derive_image, exterior_camera),
-            'task': Get(keys.TASK, ''),
+    def __init__(self, image_mappings: dict[str, str]):
+        self.image_mappings = dict(image_mappings)
+
+    @classmethod
+    def _encode_pose(cls, value):
+        pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)
+        rotation = pose.rotation.as_rotation_matrix @ cls._ROTATION_CORRECTION
+        return np.concatenate([pose.translation, rotation[:2].reshape(6)]).astype(np.float32)
+
+    @staticmethod
+    def _encode_image(frame):
+        return image.resize_with_pad_per_frame(*gr00t.IMAGE_SIZE, Image.Resampling.BILINEAR, np.asarray(frame))
+
+    def encode(self, inputs: dict) -> dict:
+        state = {
+            gr00t.EE_POSE: self._encode_pose(inputs[keys.EE_POSE]),
+            gr00t.GRIP: np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(1),
+            gr00t.JOINT_POSITION: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(7),
         }
-
-        state_meta: dict[str, Any] = {gr00t.GRIP: {'start': 0, 'end': 1, 'original_key': gr00t.GRIP}}
-        lerobot_features: dict[str, Any] = {
-            gr00t.GRIP: lerobot_state(1),
-            gr00t.WRIST_IMAGE: lerobot_image(*image_size),
-            gr00t.EXTERIOR_IMAGE: lerobot_image(*image_size),
-        }
-
-        if include_ee_pose:
-            obs_ee_dim = rotation_rep.size + 3 if rotation_rep else 7
-            state_meta[gr00t.EE_POSE] = {'start': 0, 'end': obs_ee_dim, 'original_key': gr00t.EE_POSE}
-            lerobot_features[gr00t.EE_POSE] = lerobot_state(obs_ee_dim)
-            self._derive_transforms[gr00t.EE_POSE] = self._derive_ee_pose
-        if include_joints:
-            state_meta[gr00t.JOINT_POSITION] = {'start': 0, 'end': num_joints, 'original_key': gr00t.JOINT_POSITION}
-            lerobot_features[gr00t.JOINT_POSITION] = lerobot_state(num_joints)
-            self._derive_transforms[gr00t.JOINT_POSITION] = self._derive_joints
-
-        self._training_meta = {
-            'gr00t_modality': {
-                gr00t.STATE: state_meta,
-                gr00t.VIDEO: {
-                    gr00t.EXTERIOR_IMAGE: {'original_key': gr00t.EXTERIOR_IMAGE},
-                    gr00t.WRIST_IMAGE: {'original_key': gr00t.WRIST_IMAGE},
-                },
-                'annotation': {'language.language_instruction': {'original_key': 'task_index'}},
-            },
-            'lerobot_features': lerobot_features,
-        }
-
-    def _derive_ee_pose(self, episode: Episode) -> Signal[Any]:
-        pose = episode[keys.EE_POSE]
-        if self._rotation_rep is not None:
-            pose = tf.recode_transform(RotRep.QUAT, self._rotation_rep, pose)
-        return tf.astype(pose, np.float32)
-
-    def _derive_grip(self, episode: Episode) -> Signal[Any]:
-        def _reshape_to_1d(values):
-            arr = np.asarray(values, dtype=np.float32)
-            return arr.reshape(-1, 1)
-
-        return transforms.Elementwise(episode[keys.GRIP], _reshape_to_1d)
-
-    def _derive_joints(self, episode: Episode) -> Signal[Any]:
-        return tf.astype(episode[keys.JOINTS], np.float32)
-
-    def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
-        w, h = self._image_size
-        return image.resize_with_pad(w, h, signal=episode[input_key])
-
-    def _encode_ee_pose(self, inputs: dict[str, Any]) -> np.ndarray:
-        pose = np.asarray(inputs[keys.EE_POSE], dtype=np.float32).reshape(-1)
-        if self._rotation_rep is not None:
-            pose = geom.Transform3D.from_vector(pose, RotRep.QUAT).as_vector(self._rotation_rep).astype(np.float32)
-        return pose
-
-    def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
-        frame = inputs[input_key]
-        if not isinstance(frame, np.ndarray):
-            frame = np.asarray(frame)
-        w, h = self._image_size
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
-
-    def _decode_single(self, data: dict) -> dict:
-        return {}
-
-    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
-        state_dict: dict[str, Any] = {gr00t.GRIP: grip[np.newaxis, np.newaxis, ...]}
-
-        if self._include_ee_pose:
-            ee_pose = self._encode_ee_pose(inputs)
-            state_dict[gr00t.EE_POSE] = ee_pose[np.newaxis, np.newaxis, ...]
-        if self._include_joints:
-            joints = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
-            state_dict[gr00t.JOINT_POSITION] = joints[np.newaxis, np.newaxis, ...]
-
         return {
             gr00t.VIDEO: {
-                gr00t.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs)[np.newaxis, np.newaxis, ...],
-                gr00t.EXTERIOR_IMAGE: self._encode_image(self._exterior_camera, inputs)[np.newaxis, np.newaxis, ...],
+                name: self._encode_image(inputs[source])[None, None] for name, source in self.image_mappings.items()
             },
-            gr00t.STATE: state_dict,
-            gr00t.LANGUAGE: {gr00t.TASK: [[inputs.get(keys.TASK, '')]]},
+            gr00t.STATE: {name: value[None, None] for name, value in state.items()},
+            gr00t.LANGUAGE: {gr00t.TASK: [[inputs[keys.TASK]]]},
         }
+
+    def _decode_single(self, data: dict) -> dict:
+        return {
+            keys.ROBOT_COMMAND: command.JointPosition(
+                positions=np.asarray(data[gr00t.JOINT_POSITION]).reshape(7), mode=DROID_IMPEDANCE
+            ),
+            keys.TARGET_GRIP: np.asarray(data[gr00t.GRIP]).item(),
+        }
+
+    def _derive_pose(self, episode: Episode):
+        return tf.Elementwise(episode[keys.EE_POSE], tf.lazy_sequence(self._encode_pose))
+
+    @staticmethod
+    def _derive_grip(episode: Episode):
+        return tf.Elementwise(episode[keys.GRIP], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
+
+    @staticmethod
+    def _derive_image(source: str, episode: Episode):
+        return image.resize_with_pad(*gr00t.IMAGE_SIZE, signal=episode[source])
+
+    @property
+    def training_encoder(self):
+        state_encoders = {
+            gr00t.EE_POSE: self._derive_pose,
+            gr00t.GRIP: self._derive_grip,
+            gr00t.JOINT_POSITION: lambda episode: tf.Elementwise(
+                episode[keys.JOINTS], partial(np.asarray, dtype=np.float32)
+            ),
+        }
+        state_meta = {
+            name: {gr00t.START: 0, gr00t.END: gr00t.STATE_DIMS[name], gr00t.ORIGINAL_KEY: name}
+            for name in state_encoders
+        }
+        action_meta = {}
+        start = 0
+        for name in state_encoders:
+            dim = gr00t.STATE_DIMS[name]
+            action_meta[name] = {gr00t.START: start, gr00t.END: start + dim}
+            start += dim
+        meta = {
+            GR00T_MODALITY: {
+                gr00t.STATE: state_meta,
+                gr00t.ACTION: action_meta,
+                gr00t.VIDEO: {name: {gr00t.ORIGINAL_KEY: name} for name in self.image_mappings},
+                gr00t.ANNOTATION: {
+                    gr00t.TASK.removeprefix(gr00t.ANNOTATION + '.'): {gr00t.ORIGINAL_KEY: gr00t.TASK_INDEX}
+                },
+            },
+            LEROBOT_FEATURES: {
+                **{name: lerobot_state(gr00t.STATE_DIMS[name]) for name in state_encoders},
+                **{name: lerobot_image(*gr00t.IMAGE_SIZE) for name in self.image_mappings},
+                gr00t.ACTION: lerobot_action(start),
+            },
+        }
+        return Derive(
+            meta=meta,
+            **{
+                **state_encoders,
+                keys.TASK: itemgetter(keys.TASK),
+                gr00t.ACTION: lambda episode: tf.concat(
+                    *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
+                ),
+                **{name: partial(self._derive_image, source) for name, source in self.image_mappings.items()},
+            },
+        )
 
     @property
     def meta(self):
-        return {'image_sizes': self._image_size}
-
-    @property
-    def training_encoder(self):
-        return Derive(meta=self._training_meta, **self._derive_transforms)
+        return {self.IMAGE_SIZES: dict.fromkeys(self.image_mappings.values(), gr00t.IMAGE_SIZE)}
 
 
-class _GrootActionModality(Codec):
-    """Bridges GR00T modality-keyed actions and flat action vectors.
-
-    Training: adds ``gr00t_modality.action`` metadata.
-    Inference decode: converts GR00T's ``{action_key: ..., 'grip': ...}`` output
-    into ``{'action': flat_vector}`` so the downstream action decoder can read it.
-    """
-
-    def __init__(self, modality: dict[str, Any], action_key: str):
-        self._training_meta = {'gr00t_modality': {'action': modality}}
-        self._action_key = action_key
-
-    def encode(self, data):
-        return data
-
-    def _decode_single(self, data: dict) -> dict:
-        action_part = np.asarray(data[self._action_key], dtype=np.float32).reshape(-1)
-        grip_part = np.asarray(data[gr00t.GRIP], dtype=np.float32).reshape(-1)
-        return {'action': np.concatenate([action_part, grip_part])}
-
-    @property
-    def training_encoder(self):
-        return Identity(meta=self._training_meta)
-
-
-@cfn.config(rotation_rep=None, include_joints=False, include_ee_pose=True, num_joints=7)
-def groot_obs(rotation_rep: str | None, include_joints: bool, include_ee_pose: bool, num_joints: int):
-    """GR00T N1.6 observation encoder."""
-    rot_rep = RotRep(rotation_rep) if rotation_rep else None
-    return GrootObservationCodec(
-        rotation_rep=rot_rep, include_joints=include_joints, include_ee_pose=include_ee_pose, num_joints=num_joints
+@cfn.config(
+    image_mappings={gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE},
+    fps=15.0,
+    execution_horizon=15,
+    ee_frame=models.DROID_EE_FRAME,
+)
+def droid(image_mappings: dict[str, str], fps: float, execution_horizon: int, ee_frame: geom.Transform3D):
+    """DROID's image, frame, gripper and 15 Hz joint-control conventions."""
+    if fps <= 0 or not 1 <= execution_horizon <= 40:
+        raise ValueError('fps must be positive and execution_horizon must be between 1 and 40')
+    return (
+        ActionHorizon(execution_horizon / fps)
+        | ActionTimestamp(fps=fps)
+        | BinarizeGripInference()
+        | ChangeEEFrame(ee_frame)
+        | DroidCodec(image_mappings)
     )
 
 
-@cfn.config(action_key=gr00t.EE_POSE, action_dim=7)
-def groot_action(base, action_key: str, action_dim: int):
-    """Wrap an action codec with GR00T modality metadata and decode adapter.
-
-    Composition is ``base | _GrootActionModality`` so that on decode (right-to-left)
-    the modality adapter runs first, converting GR00T's modality-keyed output
-    into a flat ``action`` vector that ``base`` can decode.
-    """
-    return base | _GrootActionModality(
-        {action_key: {'start': 0, 'end': action_dim}, gr00t.GRIP: {'start': action_dim, 'end': action_dim + 1}},
-        action_key=action_key,
-    )
-
-
-_ee_action = groot_action.override(base=codecs.absolute_pos_action)
-_rot6d_obs = groot_obs.override(rotation_rep='rot6d')
-_rot6d_action = _ee_action.override(**{'base.rotation_rep': 'rot6d', 'action_dim': 9})
-
-ee_quat = codecs.compose.override(obs=groot_obs, action=_ee_action)
-ee_quat_joints = ee_quat.override(**{'obs.include_joints': True})
-ee_rot6d = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_action)
-phail_v1 = ee_rot6d.override(action=codecs.phail_v1_execution.override(action=_rot6d_action))
-ee_rot6d_joints = ee_rot6d.override(**{'obs.include_joints': True})
-
-_traj_action = _ee_action.override(base=codecs.traj_ee_action)
-_rot6d_traj_action = _rot6d_action.override(base=codecs.traj_ee_action.override(rotation_rep='rot6d'))
-
-ee_quat_traj = codecs.compose.override(obs=groot_obs, action=_traj_action, binarize_grip=(keys.GRIP,))
-ee_rot6d_traj = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_traj_action, binarize_grip=(keys.GRIP,))
-ee_quat_joints_traj = ee_quat_traj.override(**{'obs.include_joints': True})
-ee_rot6d_joints_traj = ee_rot6d_traj.override(**{'obs.include_joints': True})
-
-joints_traj = codecs.compose.override(
-    obs=groot_obs.override(include_joints=True, include_ee_pose=False),
-    action=groot_action.override(
-        base=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
-        action_key=gr00t.JOINT_POSITION,
-    ),
-    binarize_grip=(keys.GRIP,),
+droid_three_cameras = droid.override(
+    image_mappings={
+        gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE,
+        gr00t.EXTERIOR_IMAGE_2: keys.EXTERIOR_IMAGE_2,
+        gr00t.WRIST_IMAGE: keys.WRIST_IMAGE,
+    }
 )
-
-# IK variants: GR00T obs (with joints) + IK joint-space action via groot_action wrapper
-ee_joints_ik = codecs.compose.override(
-    obs=groot_obs.override(include_joints=True),
-    action=groot_action.override(base=codecs.ik_joints_action, action_key=gr00t.JOINT_POSITION),
-)
-ee_joints_ik_sim = ee_joints_ik.override(**{'action.base.solver': 'lm'})

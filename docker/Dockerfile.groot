@@ -1,14 +1,18 @@
-ARG BASE_IMAGE=positro/gr00t-base:latest
+ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-# Set working directory
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 WORKDIR /positronic
 
-# Copy the positronic repository
+RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
+
 COPY . /positronic
 
-# Set Python path to include source root and gr00t
 ENV PYTHONPATH=/positronic:/gr00t
 
-# Default command
+# Keep Positronic's dependencies separate from the checkpoint runtime.
+ENV UV_PROJECT_ENVIRONMENT=/positronic/.venv VIRTUAL_ENV=/positronic/.venv
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --python 3.12 --no-dev
+
 CMD ["bash"]

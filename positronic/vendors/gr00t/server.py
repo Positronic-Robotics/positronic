@@ -1,13 +1,14 @@
-import io
 import logging
 import os
 import subprocess
 from collections.abc import Callable
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
 import msgpack
+import msgpack_numpy as mnp
 import numpy as np
 import pos3
 import zmq
@@ -18,7 +19,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -27,15 +28,13 @@ from positronic.vendors.gr00t import codecs
 
 logger = logging.getLogger(__name__)
 
-
-###########################################################################################
-# ZMQ client code for communicating with gr00t N1.6 server
-# Adapted from gr00t/policy/server_client.py
-###########################################################################################
+NUMPY_ARRAY = b'nd'
+NUMPY_KIND = b'kind'
+NUMPY_OBJECT_KIND = b'O'
 
 
 class MsgSerializer:
-    """Message serializer for ZMQ communication (N1.6 format)."""
+    """N1.7's msgpack-numpy wire format, excluding pickle-bearing object arrays."""
 
     @staticmethod
     def to_bytes(data: Any) -> bytes:
@@ -43,100 +42,93 @@ class MsgSerializer:
 
     @staticmethod
     def from_bytes(data: bytes) -> Any:
-        return msgpack.unpackb(data, object_hook=MsgSerializer.decode_custom_classes)
+        return msgpack.unpackb(data, object_hook=MsgSerializer.decode_custom_classes, raw=False)
 
     @staticmethod
     def decode_custom_classes(obj):
-        if not isinstance(obj, dict):
-            return obj
-        if '__ndarray_class__' in obj:
-            return np.load(io.BytesIO(obj['as_npy']), allow_pickle=False)
-        return obj
+        if isinstance(obj, dict):
+            if obj.get(NUMPY_ARRAY, obj.get(NUMPY_ARRAY.decode())) and obj.get(
+                NUMPY_KIND, obj.get(NUMPY_KIND.decode())
+            ) in (NUMPY_OBJECT_KIND, NUMPY_OBJECT_KIND.decode()):
+                raise ValueError('Object arrays are not supported by the GR00T wire protocol')
+            if obj.get(gr00t.MODALITY_CONFIG):
+                return obj[gr00t.AS_JSON]
+        return mnp.decode(obj)
 
     @staticmethod
     def encode_custom_classes(obj):
-        if isinstance(obj, np.ndarray):
-            output = io.BytesIO()
-            np.save(output, obj, allow_pickle=False)
-            return {'__ndarray_class__': True, 'as_npy': output.getvalue()}
-        return obj
+        if isinstance(obj, np.ndarray) and obj.dtype.hasobject:
+            raise TypeError('Object arrays are not supported by the GR00T wire protocol')
+        return mnp.encode(obj)
+
+
+class PingResult(Enum):
+    SUCCESS = auto()
+    FAILURE = auto()
 
 
 class PolicyClient:
-    """Client for communicating with GR00T N1.6 PolicyServer via ZMQ."""
+    """Client for communicating with GR00T N1.7 PolicyServer via ZMQ."""
 
     def __init__(self, host: str = 'localhost', port: int = 5555, timeout_ms: int = 15000):
         self.context = zmq.Context()
         self.host = host
         self.port = port
         self.timeout_ms = timeout_ms
-        self._init_socket()
+        self.socket = self._make_socket()
 
-    def _init_socket(self):
-        self.socket = self.context.socket(zmq.REQ)
-        self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
-        self.socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
-        self.socket.connect(f'tcp://{self.host}:{self.port}')
+    def _make_socket(self):
+        socket = self.context.socket(zmq.REQ)
+        socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+        socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
+        socket.connect(f'tcp://{self.host}:{self.port}')
+        return socket
 
-    def ping(self) -> bool:
+    def ping(self) -> PingResult:
         try:
-            self.call_endpoint('ping', requires_input=False)
-            return True
+            self.call_endpoint(gr00t.PING)
+            return PingResult.SUCCESS
         except (zmq.error.ZMQError, RuntimeError):
-            self._init_socket()
-            return False
+            return PingResult.FAILURE
 
-    def call_endpoint(self, endpoint: str, data: dict | None = None, requires_input: bool = True) -> Any:
-        request: dict = {'endpoint': endpoint}
-        if requires_input:
-            request['data'] = data
+    def call_endpoint(self, endpoint: str, data: dict | None = None) -> Any:
+        request: dict = {gr00t.ENDPOINT: endpoint}
+        if data is not None:
+            request[gr00t.DATA] = data
 
         try:
             self.socket.send(MsgSerializer.to_bytes(request))
             message = self.socket.recv()
-        except zmq.error.Again as err:
-            raise RuntimeError(
-                f'Timeout after {self.timeout_ms}ms calling endpoint "{endpoint}" at {self.host}:{self.port}'
-            ) from err
+        except zmq.error.ZMQError as err:
+            self.socket.close(linger=0)
+            self.socket = self._make_socket()
+            raise RuntimeError(f'GR00T endpoint {endpoint} failed at {self.host}:{self.port}: {err}') from err
 
         if message == b'ERROR':
             raise RuntimeError('Server error. Make sure the correct policy server is running.')
         response = MsgSerializer.from_bytes(message)
 
-        if isinstance(response, dict) and 'error' in response:
-            raise RuntimeError(f'Server error: {response["error"]}')
+        if isinstance(response, dict) and gr00t.ERROR in response:
+            raise RuntimeError(f'Server error: {response[gr00t.ERROR]}')
         return response
 
     def get_action(self, observation: dict[str, Any]) -> tuple[dict, dict]:
-        response = self.call_endpoint('get_action', {'observation': observation, 'options': None})
+        response = self.call_endpoint(gr00t.GET_ACTION, {gr00t.OBSERVATION: observation, gr00t.OPTIONS: None})
         return tuple(response)
 
     def reset(self) -> dict[str, Any]:
-        return self.call_endpoint('reset', {'options': None})
+        return self.call_endpoint(gr00t.RESET, {gr00t.OPTIONS: None})
 
     def close(self):
-        self.socket.close()
+        self.socket.close(linger=0)
         self.context.term()
-
-
-###########################################################################################
-# Subprocess manager for gr00t ZMQ server
-###########################################################################################
 
 
 class Gr00tSubprocess:
     """Manages the gr00t ZMQ server subprocess."""
 
-    def __init__(
-        self,
-        checkpoint_dir: str,
-        modality_config_path: Path,
-        groot_venv_path: str,
-        zmq_port: int = 5555,
-        ready_timeout: float = 120.0,
-    ):
+    def __init__(self, checkpoint_dir: str, groot_venv_path: Path, zmq_port: int = 5555, ready_timeout: float = 120.0):
         self.checkpoint_dir = checkpoint_dir
-        self.modality_config_path = modality_config_path
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
@@ -145,12 +137,11 @@ class Gr00tSubprocess:
 
     def start(self, on_progress: Callable[[str], None] | None = None):
         groot_root = Path(__file__).parents[4] / 'gr00t'
-        python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
+        python_bin = str(self.groot_venv_path / 'bin' / 'python')
 
         command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
         command.extend(['--model_path', str(self.checkpoint_dir)])
-        command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
-        command.extend(['--modality_config_path', str(self.modality_config_path)])
+        command.extend(['--embodiment-tag', gr00t.EMBODIMENT])
         command.extend(['--host', '127.0.0.1'])
         command.extend(['--port', str(self.zmq_port)])
 
@@ -163,7 +154,7 @@ class Gr00tSubprocess:
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
         try:
             wait_for_subprocess_ready(
-                client.ping,
+                lambda: client.ping() is PingResult.SUCCESS,
                 lambda: (self.process.poll() is not None, self.process.returncode),
                 'gr00t subprocess',
                 on_progress,
@@ -192,12 +183,8 @@ class Gr00tSubprocess:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+                self.process.wait()
             self.process = None
-
-
-###########################################################################################
-# Policy and model source
-###########################################################################################
 
 
 class _Gr00tSession(Session):
@@ -233,27 +220,8 @@ class Gr00tPolicy(Policy):
         self._groot.stop()
 
 
-def _step_id(raw: str) -> str:
-    """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
-    return str(int(raw)) if raw.isdigit() else raw
-
-
-def _warm_observation(modality: gr00t.ModalityConfig) -> dict[str, Any]:
-    """Zero-filled inputs in GR00T's nested format, carrying the state block ``modality`` declares.
-
-    Leading axes are ``(batch, time)``, the way a session hands one step over.
-    """
-    width, height = gr00t.IMAGE_SIZE
-    frame = np.zeros((1, 1, height, width, 3), dtype=np.uint8)
-    return {
-        gr00t.VIDEO: dict.fromkeys(modality.cameras, frame),
-        gr00t.STATE: {key: np.zeros((1, 1, dim), dtype=np.float32) for key, dim in modality.state.items()},
-        gr00t.LANGUAGE: {modality.task_key: [['']]},
-    }
-
-
 class Gr00tSource(ModelSource):
-    """GR00T checkpoints under ``checkpoints_dir``, each served through a dedicated ZMQ subprocess.
+    """A Hugging Face model (``hf://owner/model``) or a directory of fine-tuned checkpoints.
 
     Model ids are checkpoint step numbers (``'5000'`` for ``checkpoint-5000``). ``load`` downloads the
     checkpoint and boots the gr00t subprocess; the returned policy owns the subprocess.
@@ -261,27 +229,19 @@ class Gr00tSource(ModelSource):
 
     def __init__(
         self,
-        checkpoints_dir: str,
+        video_keys: tuple[str, ...],
+        checkpoints_dir: str = 'hf://' + gr00t.BASE_MODEL,
         checkpoint: str | None = None,
-        modality_config: str | gr00t.ModalityConfig = 'ee',
-        groot_venv_path: str = '/.venv/',
+        groot_venv_path: str = gr00t.VENV,
         zmq_port: int = 5555,
-        ready_timeout: float = 120.0,
+        ready_timeout: float = 600.0,
     ):
-        if isinstance(modality_config, str):
-            if modality_config not in gr00t.MODALITY_CONFIGS:
-                raise ValueError(
-                    f'Unknown modality config: {modality_config}. Available: {sorted(gr00t.MODALITY_CONFIGS)}. '
-                    'A config of your own is passed as a ModalityConfig, which states the state block to warm it with'
-                )
-            self._modality = gr00t.MODALITY_CONFIGS[modality_config]
-        else:
-            self._modality = modality_config
+        self.video_keys = tuple(video_keys)
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
+        if self._is_hub_model and checkpoint is not None:
+            raise ValueError('checkpoint step selection applies only to fine-tuned checkpoint directories')
         self.checkpoint = checkpoint
-        # What to call the config being served: the alias where there is one, else the module it points at.
-        self.modality_config = modality_config if isinstance(modality_config, str) else str(self._modality.path)
-        self.groot_venv_path = groot_venv_path
+        self.groot_venv_path = Path(groot_venv_path).expanduser()
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
 
@@ -295,8 +255,19 @@ class Gr00tSource(ModelSource):
                 return r
         raise ValueError(f'Checkpoint not found: {model_id}. Available: {self.get_models()}')
 
+    @property
+    def _is_hub_model(self) -> bool:
+        return self.checkpoints_dir.startswith('hf://')
+
+    @staticmethod
+    def _step_id(raw: str) -> str:
+        """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
+        return str(int(raw)) if raw.isdigit() else raw
+
     def get_models(self) -> list[str]:
-        return [_step_id(r) for r in self._raw_ids()]
+        if self._is_hub_model:
+            return [self.checkpoints_dir.removeprefix('hf://')]
+        return [self._step_id(r) for r in self._raw_ids()]
 
     def resolve(self, model_id: str | None) -> str:
         """Explicit id > the configured ``checkpoint`` > latest, always as the id ``get_models`` advertises.
@@ -304,23 +275,52 @@ class Gr00tSource(ModelSource):
         The zero-padding a directory may carry stays out of the public id; ``load`` puts it back to reach
         the directory.
         """
+        if self._is_hub_model:
+            only_model = self.get_models()[0]
+            if model_id is not None and model_id != only_model:
+                raise ValueError(f'This source serves only {only_model}')
+            return only_model
         if model_id is None and self.checkpoint is not None:
             model_id = str(self.checkpoint).strip('/')
         if model_id is None:
-            return _step_id(self._raw_ids()[-1])
-        return _step_id(self._raw_for(model_id))
+            return self._step_id(self._raw_ids()[-1])
+        return self._step_id(self._raw_for(model_id))
+
+    def _warm_observation(self, modalities: dict) -> dict[str, Any]:
+        """Validate codec cameras and build a current-frame observation for the checkpoint."""
+        for name in (gr00t.VIDEO, gr00t.STATE):
+            if modalities[name][gr00t.DELTA_INDICES] != [0]:
+                raise ValueError(f'DROID adapter requires current-frame {name}, got {modalities[name]}')
+        expected = set(modalities[gr00t.VIDEO][gr00t.MODALITY_KEYS])
+        if set(self.video_keys) != expected:
+            raise ValueError(
+                f'Checkpoint video keys {sorted(expected)} do not match codec keys {sorted(self.video_keys)}'
+            )
+        width, height = gr00t.IMAGE_SIZE
+        state = {
+            name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32)
+            for name in modalities[gr00t.STATE][gr00t.MODALITY_KEYS]
+        }
+        state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
+        return {
+            gr00t.VIDEO: {name: np.zeros((1, 1, height, width, 3), dtype=np.uint8) for name in self.video_keys},
+            gr00t.STATE: state,
+            gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
+        }
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
-        checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{self._raw_for(model_id)}'
-        logger.info(f'Downloading checkpoint {checkpoint_path}')
-        checkpoint_dir = run_with_progress(
-            lambda: pos3.download(checkpoint_path, exclude=['optimizer.pt']),
-            f'Downloading checkpoint checkpoint-{model_id}',
-            on_progress,
-        )
+        if self._is_hub_model:
+            self.resolve(model_id)
+            checkpoint_dir = self.checkpoints_dir
+        else:
+            checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{self._raw_for(model_id)}'
+            checkpoint_dir = run_with_progress(
+                lambda: pos3.download(checkpoint_path, exclude=['optimizer.pt']),
+                f'Downloading checkpoint checkpoint-{model_id}',
+                on_progress,
+            )
         groot = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
-            modality_config_path=self._modality.path,
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
@@ -329,7 +329,8 @@ class Gr00tSource(ModelSource):
             groot.start(on_progress)
             policy = Gr00tPolicy(groot, str(checkpoint_dir))
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
-            warmup(policy, _warm_observation(self._modality), on_progress)
+            modalities = groot.client.call_endpoint(gr00t.GET_MODALITY_CONFIG)
+            warmup(policy, self._warm_observation(modalities), on_progress)
         except Exception:
             groot.stop()
             raise
@@ -338,61 +339,27 @@ class Gr00tSource(ModelSource):
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
             policy_keys.TYPE: 'groot',
-            'modality_config': self.modality_config,
+            'embodiment': gr00t.EMBODIMENT,
             policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
         }
-
-
-###########################################################################################
-# Serving configs
-###########################################################################################
 
 
 gr00t_source = cfn.Config(Gr00tSource)
 
 
-# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
-# so none has a transform to declare.
-@cfn.config(codec=codecs.ee_quat, source=gr00t_source)
-def pipeline(codec, source):
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | source
+@cfn.config(codec=codecs.droid, source=gr00t_source)
+def pipeline(codec: Codec, source: cfn.Config):
+    """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
+    model_source = source(video_keys=tuple(codec.training_encoder.meta[GR00T_MODALITY][gr00t.VIDEO]))
+    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | model_source
 
 
-# Each entry pairs the codec with the matching GR00T modality config; they must agree with training.
-ee = pipeline
-ee_joints = pipeline.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'})
-ee_rot6d = pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'})
-ee_rot6d_joints = pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'})
-ee_rot6d_rel = pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'})
-ee_rot6d_joints_rel = pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'})
-# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
-sim_stack_pipe = pipeline.override(
-    codec=codecs.ee_rot6d.override(flip_grip=True), **{'source.modality_config': 'ee_rot6d'}
-)
-
-
-# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+droid = pipeline
+droid_three_cameras = pipeline.override(codec=codecs.droid_three_cameras)
 COMMANDS = {
-    'serve': serve.override(pipeline=ee),
-    'ee': serve.override(pipeline=ee),
-    'ee_joints': serve.override(pipeline=ee_joints),
-    'ee_rot6d': serve.override(pipeline=ee_rot6d),
-    'ee_rot6d_joints': serve.override(pipeline=ee_rot6d_joints),
-    'ee_rot6d_rel': serve.override(pipeline=ee_rot6d_rel),
-    'ee_rot6d_joints_rel': serve.override(pipeline=ee_rot6d_joints_rel),
-    'phail': serve.override(
-        pipeline=ee_rot6d_rel.override(
-            codec=codecs.phail_v1,
-            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/'},
-        ),
-        recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
-    ),
-    'sim_stack': serve.override(
-        pipeline=sim_stack_pipe.override(**{
-            'source.checkpoints_dir': 's3://checkpoints/sim_stack/groot/ee_rot6d/230226/'
-        }),
-        recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
-    ),
+    'serve': serve.override(pipeline=droid),
+    'droid': serve.override(pipeline=droid),
+    'droid_three_cameras': serve.override(pipeline=droid_three_cameras),
 }
 
 
