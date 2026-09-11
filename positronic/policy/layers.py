@@ -80,6 +80,12 @@ class ChunkedSchedule(Layer):
             super().__init__(inner)
             self._trajectory_end: float | None = None
 
+        def reads_observation(self, obs, time_ns):
+            # The same guard ``__call__`` makes, against the same instant, so the two cannot disagree.
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
+                return False
+            return self._inner.reads_observation(obs, time_ns)
+
         def __call__(self, obs, time_ns):
             if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
@@ -180,10 +186,15 @@ class TemporalStack(Layer):
 
         def __call__(self, obs, time_ns):
             now = _obs_time(obs)
-            # Every tick pays the whole of this, the ones the scheduling layer below answers included.
+            # The append is unconditional, including on the ticks that skip sampling: a gap here is
+            # a hole in the window every later sample is taken from. The span covers the stack's own
+            # work and never the call below it.
             with telemetry.span(telemetry_keys.SPAN_POLICY_STACK):
                 self._buffer.append(now, {k: obs[k] for k in self._keys})
-                stacked = self._buffer.sample(now)
+                reads = self._inner.reads_observation(obs, time_ns)
+                stacked = self._buffer.sample(now) if reads else None
+            if stacked is None:
+                return self._inner(obs, time_ns)
             return self._inner({**obs, **stacked}, time_ns)
 
         def cancel(self):
