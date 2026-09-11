@@ -416,28 +416,34 @@ class PolicyServer:
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
-            for w in wires:
-                await w.start(self._serve_session, self._authorized)
-            self._last_activity = time.monotonic()
-            if on_ready is not None:
-                on_ready()
-            serving = [asyncio.create_task(w.serve()) for w in wires]
-            # What ends the server, beside a wire ending on its own: a caller's ``shutdown``, and the
-            # idle timeout.
-            ending: list[asyncio.Task] = [asyncio.create_task(self._stop.wait())]
-            if self.idle_timeout_min and self.idle_timeout_min > 0:
-                ending.append(asyncio.create_task(self._idle_watchdog()))
+            # A wire binds when it starts, so one that started is stopped even where a later one cannot
+            # bind and nothing ever serves.
+            started: list[wire.Wire] = []
+            serving: list[asyncio.Task] = []
+            ending: list[asyncio.Task] = []
             try:
+                for w in wires:
+                    await w.start(self._serve_session, self._authorized)
+                    started.append(w)
+                self._last_activity = time.monotonic()
+                if on_ready is not None:
+                    on_ready()
+                serving = [asyncio.create_task(w.serve()) for w in started]
+                # What ends the server, beside a wire ending on its own: a caller's ``shutdown``, and
+                # the idle timeout.
+                ending = [asyncio.create_task(self._stop.wait())]
+                if self.idle_timeout_min and self.idle_timeout_min > 0:
+                    ending.append(asyncio.create_task(self._idle_watchdog()))
                 await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 for task in ending:
                     task.cancel()
-                for w in wires:
+                for w in started:
                     await w.stop()
                 # Each wire ends the sessions it carries before this returns and the model slot closes.
                 outcomes = await asyncio.gather(*serving, return_exceptions=True)
 
-            failed = [(w, e) for w, e in zip(wires, outcomes, strict=True) if isinstance(e, Exception)]
+            failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
             # Only one failure can reach the caller, so the rest are reported here or nowhere.
             for w, error in failed[1:]:
                 logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)

@@ -60,6 +60,7 @@ class _FailingWire(wire.Wire):
 
     def __init__(self, after: float):
         self._after = after
+        self.stopped = False
 
     @property
     def endpoint(self) -> wire.Endpoint:
@@ -73,7 +74,34 @@ class _FailingWire(wire.Wire):
         raise RuntimeError(f'the {self._after}s wire fell over')
 
     async def stop(self) -> None:
+        self.stopped = True
+
+
+class _UnbindableWire(wire.Wire):
+    """A wire whose port is taken."""
+
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        raise AssertionError('it never bound')
+
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        raise OSError('that port is taken')
+
+    async def serve(self) -> None:
+        raise AssertionError('it never served')
+
+    async def stop(self) -> None:
         pass
+
+
+def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
+    """A wire binds when it starts, so a startup that gives up does not leave an earlier one holding a
+    port against a server nothing is serving."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = _FailingWire(_A_MOMENT_IDLE)
+    with pytest.raises(OSError, match='that port is taken'):
+        server.serve([bound, _UnbindableWire()])
+    assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):

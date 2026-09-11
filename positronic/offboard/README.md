@@ -161,7 +161,7 @@ This metadata tells the client:
 
 #### 2. Status Updates (Long Model Loading)
 
-Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The server sends periodic status updates during loading to prevent WebSocket keepalive timeouts:
+Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The client gives the handshake 30s per message, so the server sends periodic status updates during loading. This holds on either wire:
 
 ```json
 {
