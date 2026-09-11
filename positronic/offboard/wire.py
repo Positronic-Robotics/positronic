@@ -206,6 +206,7 @@ class WebsocketWire(Wire):
         self._socket: socket.socket | None = None
         self._server: uvicorn.Server | None = None
         self._endpoint: Endpoint | None = None
+        self._served = False
 
     @property
     def endpoint(self) -> Endpoint:
@@ -252,8 +253,13 @@ class WebsocketWire(Wire):
 
     async def serve(self) -> None:
         assert self._server is not None and self._socket is not None, 'The websocket wire has not started'
+        self._served = True
         await self._server.serve(sockets=[self._socket])
 
     async def stop(self) -> None:
         if self._server is not None:
             self._server.should_exit = True
+        # uvicorn releases the socket as it shuts down. A startup that rolls back stops a wire that
+        # bound but never served, so uvicorn never runs; close the socket here to free the port.
+        if self._socket is not None and not self._served:
+            self._socket.close()

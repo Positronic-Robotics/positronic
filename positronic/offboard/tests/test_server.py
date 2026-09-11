@@ -104,6 +104,17 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
+def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
+    """A ``WebsocketWire`` binds a real socket when it starts, so a startup that rolls back frees the
+    port it took, not only the stub wires that own no socket."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = wire.WebsocketWire('localhost', 0, server.api)
+    with pytest.raises(OSError, match='that port is taken'):
+        server.serve([bound, _UnbindableWire()])
+    # A leaked listener would still hold the port, so binding a fresh socket to it would raise.
+    wire._listening_socket('localhost', bound.endpoint.port).close()
+
+
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
     """No wire ends in silence: one failure raises out of ``serve``, and every other one is logged."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
