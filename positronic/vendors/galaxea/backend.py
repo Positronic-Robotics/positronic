@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 
 _ABSENT_KEYS = '_absent_keys'
 _COT_TEXT = '_cot_text'
-_EVAL_EMBODIMENT = 'eval_embodiment'
-_DISCRETE_ACTION = 'model.model_arch.discrete_action'
-_CONTINUOUS_ACTION = 'model.model_arch.continuous_action'
 
 
 class ChunkBackend:
@@ -61,6 +58,11 @@ class ChunkBackend:
                 logger.exception('G0.5 inference failed')
                 response = {protocol.ERROR: str(exc)}
             connection.send(packb(response))
+
+
+_EVAL_EMBODIMENT = 'eval_embodiment'
+_DISCRETE_ACTION = 'model.model_arch.discrete_action'
+_CONTINUOUS_ACTION = 'model.model_arch.continuous_action'
 
 
 def main():
