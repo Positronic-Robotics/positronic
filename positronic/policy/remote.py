@@ -3,7 +3,6 @@ import logging
 import time
 from typing import Any
 
-import numpy as np
 import pos3
 
 from positronic import telemetry, telemetry_keys
@@ -11,7 +10,7 @@ from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
-from positronic.utils.serialization import encode_jpeg
+from positronic.utils.serialization import encode_jpeg, is_image
 
 from .base import Answer, Layer, Policy, Runtime, Session
 from .recording import Recorder
@@ -24,8 +23,7 @@ INFER = 'infer'
 
 
 def _prepare_value(value: Any) -> Any:
-    # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-    if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+    if is_image(value):
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
         return encode_jpeg(value)
     if isinstance(value, cabc.Mapping):

@@ -78,6 +78,35 @@ A `unix://` URL reaches a server on the same machine over a Unix socket, which n
 binds the path with `--uds`, and `unix:///run/policy.sock[/api/v1/session[/<model_id>]][?query]` dials it. The
 socket path runs to the first `/api/v1` segment; everything after it is the URL path the server reads.
 
+#### The frame ring
+
+A server on a Unix socket carries each observation's images through shared memory instead of the message.
+It declares `frame_ring` in the ready handshake, with this session's id as the value. A client that dialled a
+`unix://` URL then creates a ring, hands the descriptor over, and sends a reference in place of every image.
+A client that ignores the declaration keeps sending whole images, and so does every client over TCP.
+
+- **The ring is a sealed `memfd`.** The client maps it writable, seals it with
+  `F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE`, and only then hands the descriptor over. The server maps
+  it read-only and cannot write it, resize it, or punch a hole in it. That holds whatever the server's code
+  does, so a server that runs untrusted code gets the frames and no way to change them.
+- **The descriptor travels beside the session socket.** The server binds a second `AF_UNIX` socket at the
+  session socket's path plus `.frames`, of type `SOCK_SEQPACKET`, and the client dials the same suffix on the
+  path it dialled. Each side builds that path from the socket path it already holds, so a bind mount that gives
+  the two processes different names for one directory still lands them on the same socket. The client sends the
+  descriptor with `SCM_RIGHTS`, names the session id from the handshake, and waits for the server to map it.
+- **A ring holds four slots.** One round trip is in flight at a time, so the writer returns to a slot four
+  inferences later, and a server that still reads an earlier observation reads the bytes written for it. Each
+  slot carries a sequence number before its payload and one after it; a reader that finds either one different
+  from the reference refuses that observation rather than serving other pixels under it.
+- **A larger frame grows the ring.** The client creates a bigger one and hands it over before it sends any
+  reference to it. The server keeps every mapping it was handed, so a view it built earlier stays readable.
+- **The views are read-only.** Code that writes an observation's image in place raises; a codec that resizes or
+  copies is unaffected.
+
+`--frame_ring=false` on the server keeps every image in the message. A server declares no ring where the
+kernel seals no `memfd` — a macOS server, or Linux before 5.1 — or where the session socket's path plus
+`.frames` is longer than a Unix socket address may be.
+
 ### WebSocket Flow
 
 #### 1. Handshake
@@ -100,7 +129,8 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": false,
-    "positronic_version": "0.2.1"
+    "positronic_version": "0.2.1",
+    "frame_ring": "9f2c1ab4e7d05613"
   }
 }
 ```
@@ -122,6 +152,8 @@ This metadata tells the client:
 - `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
+- `frame_ring` — this session's id, present when the server takes images through shared memory (see above);
+  absent when it does not
 
 #### 2. Status Updates (Long Model Loading)
 

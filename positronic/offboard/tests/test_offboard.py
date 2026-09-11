@@ -1,3 +1,10 @@
+import ctypes
+import ctypes.util
+import errno
+import mmap
+import os
+import socket
+from collections.abc import Generator
 from types import MappingProxyType
 from unittest.mock import ANY
 
@@ -14,8 +21,10 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard import frame_ring
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
+from positronic.offboard.server import PolicyServer
 from positronic.utils.serialization import encode_jpeg
 
 
@@ -269,3 +278,133 @@ class TestServedCommandDecode:
 
         assert isinstance(from_envelope, CartesianPosition) and isinstance(from_bare, CartesianPosition)
         np.testing.assert_allclose(from_bare.pose.translation, from_envelope.pose.translation, atol=1e-6)
+
+
+SESSION_ID = 'session-under-test'
+
+pytestmark_ring = pytest.mark.skipif(
+    not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which Linux has and macOS has not'
+)
+
+
+@pytest.fixture
+def frame_channel(socket_path: str) -> Generator[frame_ring.FrameChannel, None, None]:
+    channel = frame_ring.FrameChannel(frame_ring.channel_path(socket_path))
+    channel.start(PolicyServer.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+    channel.open_session(SESSION_ID)
+    yield channel
+    channel.close()
+
+
+@pytest.fixture
+def frame_writer(socket_path: str, frame_channel) -> Generator[frame_ring.FrameWriter, None, None]:
+    writer = frame_ring.FrameWriter(frame_ring.channel_path(socket_path), SESSION_ID)
+    yield writer
+    writer.close()
+
+
+_PIXELS = np.random.default_rng(0)
+
+
+def _image(height: int = 48, width: int = 64) -> np.ndarray:
+    return _PIXELS.integers(0, 256, (height, width, 3), dtype=np.uint8)
+
+
+def _over_the_wire(obs):
+    """``obs`` as the server reads it, so a reference is tested through msgpack rather than beside it."""
+    return deserialise(serialise(obs))
+
+
+@pytestmark_ring
+def test_a_ring_carries_every_image_of_an_observation_byte_identical(frame_channel, frame_writer):
+    image, stack = _image(), np.stack([_image(), _image()])
+    obs = {'image.left': image, keys.GRIP: 0.5, 'nested': {'frames': [image, stack]}}
+
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
+
+    np.testing.assert_array_equal(served['image.left'], image)
+    np.testing.assert_array_equal(served['nested']['frames'][0], image)
+    np.testing.assert_array_equal(served['nested']['frames'][1], stack)
+    assert served[keys.GRIP] == 0.5
+
+
+@pytestmark_ring
+def test_a_packed_observation_leaves_the_pixels_out_of_the_message(frame_writer):
+    image = _image(720, 1280)
+
+    message = serialise(frame_writer.pack({'image.left': image}))
+
+    assert len(message) < image.nbytes // 100
+
+
+@pytestmark_ring
+def test_an_observation_with_no_image_creates_no_ring(frame_writer):
+    assert frame_writer.pack({keys.GRIP: 0.5}) == {keys.GRIP: 0.5}
+    assert frame_writer._ring is None
+
+
+@pytestmark_ring
+def test_a_sealed_ring_refuses_a_write_a_resize_and_a_hole():
+    ring = frame_ring.FrameRing(1024, slots=2)
+    try:
+        with pytest.raises(PermissionError):
+            mmap.mmap(ring.fd, 1024, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+        with pytest.raises(PermissionError):
+            os.write(ring.fd, b'x')
+        with pytest.raises(PermissionError):
+            os.ftruncate(ring.fd, 1 << 20)
+        libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+        # FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE, from linux/falloc.h.
+        assert libc.fallocate(ring.fd, 0x01 | 0x02, ctypes.c_int64(0), ctypes.c_int64(1024)) == -1
+        assert ctypes.get_errno() == errno.EPERM
+    finally:
+        ring.close()
+
+
+@pytestmark_ring
+def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_writer):
+    stale = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    for _ in range(frame_ring.SLOTS):
+        frame_writer.pack({'image.left': _image()})
+
+    with pytest.raises(frame_ring.TornFrame):
+        frame_channel.resolve(SESSION_ID, stale)
+
+
+@pytestmark_ring
+def test_a_reference_that_points_outside_the_ring_is_refused(frame_channel, frame_writer):
+    packed = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    packed['image.left'][frame_ring._OFFSET] = 1 << 30
+
+    with pytest.raises(ValueError, match='outside the ring'):
+        frame_channel.resolve(SESSION_ID, packed)
+
+
+@pytestmark_ring
+def test_a_reference_from_a_session_that_handed_over_no_ring_is_refused(frame_channel):
+    frame_channel.open_session('another-session')
+
+    with pytest.raises(RuntimeError, match='before it handed over a ring'):
+        frame_channel.resolve('another-session', {frame_ring._RING: True})
+
+
+@pytestmark_ring
+def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(frame_channel, frame_writer):
+    small, large = _image(8, 8), _image(64, 64)
+
+    first = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': small})))
+    second = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': large})))
+
+    np.testing.assert_array_equal(second['image.left'], large)
+    np.testing.assert_array_equal(first['image.left'], small)
+
+
+@pytestmark_ring
+def test_closing_a_channel_that_waits_for_a_handover_ends_its_thread(socket_path):
+    channel = frame_ring.FrameChannel(frame_ring.channel_path(socket_path))
+    channel.start(PolicyServer.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+    accepting = channel._thread
+
+    channel.close()
+
+    assert accepting is not None and not accepting.is_alive()

@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import socket
 import stat
 import time
@@ -20,8 +21,9 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 
+from positronic.offboard import frame_ring as frames
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder
+from positronic.policy import Policy, Recorder, Session
 from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -208,6 +210,9 @@ class PolicyServer:
 
     ``uds`` binds a Unix socket path instead of ``host:port``, which serves a client on the same machine
     over no network. A client reaches it with a ``unix://`` URL.
+
+    ``frame_ring`` takes each observation's images through shared memory, which a Unix socket makes
+    possible; ``positronic.offboard.frame_ring`` states the contract.
     """
 
     def __init__(
@@ -219,6 +224,7 @@ class PolicyServer:
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
         uds: str | None = None,
+        frame_ring: bool = True,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -238,6 +244,13 @@ class PolicyServer:
         self.metadata: dict[str, Any] = (
             {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.UDS: uds}
         )
+        # A ring rides beside the Unix socket, so it needs a kernel that seals a memfd and a companion
+        # path short enough to bind.
+        channel = frames.channel_path(uds) if uds is not None and frame_ring and frames.SUPPORTED else None
+        if channel is not None and len(os.fsencode(channel)) > frames.MAX_SOCKET_PATH:
+            logger.warning('No frame ring: the companion socket path %r is too long to bind', channel)
+            channel = None
+        self._frames = frames.FrameChannel(channel) if channel is not None else None
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -318,6 +331,11 @@ class PolicyServer:
         self._last_activity = time.monotonic()
         policy: Policy | None = None
         session = None
+        # The id a frame ring is handed over under. It names this session and nothing else, so a ring
+        # reaches the session that declared it.
+        session_id = secrets.token_hex(8)
+        if self._frames is not None:
+            self._frames.open_session(session_id)
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
             local, border, remote_half = split(pipeline)
@@ -356,25 +374,11 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: border.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            if self._frames is not None:
+                meta[offboard_keys.FRAME_RING] = session_id
             await websocket.send_bytes(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
-            try:
-                while True:
-                    message = await websocket.receive_bytes()
-                    self._last_activity = time.monotonic()
-                    try:
-                        raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        async with self._infer_lock:
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        await websocket.send_bytes(serialise({protocol.RESULT: actions}))
-                    except Exception as e:
-                        logger.error(f'Error processing message: {e}', exc_info=True)
-                        await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
-            except WebSocketDisconnect:
-                logger.info('Client disconnected')
+            await self._answer_until_disconnect(websocket, session, session_id)
 
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
@@ -388,6 +392,8 @@ class PolicyServer:
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
+            if self._frames is not None:
+                self._frames.close_session(session_id)
             try:
                 if session is not None:
                     # Both ends of a session's life touch the backend — close does a reset round-trip — so
@@ -399,7 +405,31 @@ class PolicyServer:
                 if policy is not None:
                     await self._manager.release_session()
 
+    async def _answer_until_disconnect(self, websocket: WebSocket, session: Session, session_id: str) -> None:
+        """Answer one observation at a time until the client goes away."""
+        try:
+            while True:
+                message = await websocket.receive_bytes()
+                self._last_activity = time.monotonic()
+                try:
+                    raw_obs = deserialise(message)
+                    if self._frames is not None:
+                        raw_obs = self._frames.resolve(session_id, raw_obs)
+                    # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
+                    # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                    async with self._infer_lock:
+                        # The server's clock is not the rig's.
+                        actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                    await websocket.send_bytes(serialise({protocol.RESULT: actions}))
+                except Exception as e:
+                    logger.error(f'Error processing message: {e}', exc_info=True)
+                    await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
+        except WebSocketDisconnect:
+            logger.info('Client disconnected')
+
     async def _startup(self):
+        if self._frames is not None:
+            self._frames.start(self.claim_socket_path(self._frames.path, socket.SOCK_SEQPACKET))
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
         await self._manager.get_policy(self._default_id)
@@ -423,8 +453,8 @@ class PolicyServer:
     LIVE_SOCKET_PROBE_SEC = 1.0
 
     @staticmethod
-    def _is_stale_socket(path: str) -> bool:
-        """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+    def _is_stale_socket(path: str, kind: int) -> bool:
+        """Whether ``path`` is a socket of type ``kind`` no server answers on, so replacing it takes nothing.
 
         A live socket, a probe that runs out of time against a full backlog, and a path that holds
         something other than a socket are none of them stale.
@@ -434,7 +464,7 @@ class PolicyServer:
                 return False
         except FileNotFoundError:
             return False
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        with socket.socket(socket.AF_UNIX, kind) as probe:
             probe.settimeout(PolicyServer.LIVE_SOCKET_PROBE_SEC)
             try:
                 probe.connect(path)
@@ -445,21 +475,21 @@ class PolicyServer:
         return False
 
     @staticmethod
-    def claim_socket_path(path: str) -> socket.socket:
+    def claim_socket_path(path: str, kind: int = socket.SOCK_STREAM) -> socket.socket:
         """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
 
         The bind is the claim, so two servers starting together cannot both take one path: the loser's
         bind fails. A probe follows it only to tell a stale file from a live server. Serve the returned
         socket by its descriptor: a server handed the path instead binds again, and unlinks this claim.
         """
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, kind)
         try:
             try:
                 sock.bind(path)
             except OSError as taken:
                 if taken.errno != errno.EADDRINUSE:
                     raise
-                if not PolicyServer._is_stale_socket(path):
+                if not PolicyServer._is_stale_socket(path, kind):
                     raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
                 os.unlink(path)
                 sock.bind(path)
@@ -498,10 +528,12 @@ class PolicyServer:
         except KeyboardInterrupt:
             logger.info('Server stopped by user')
         finally:
+            if self._frames is not None:
+                self._frames.close()
             self._manager.close()
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, uds=None)
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, uds=None, frame_ring=True)
 def serve(
     pipeline: cfn.Config,
     host: str,
@@ -509,6 +541,7 @@ def serve(
     recording_dir: str | None,
     idle_timeout_min: float | None,
     uds: str | None,
+    frame_ring: bool,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
@@ -516,7 +549,8 @@ def serve(
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
 
-    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused.
+    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused. ``--frame_ring=false``
+    keeps every image in the message.
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
@@ -529,4 +563,5 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
         uds=uds,
+        frame_ring=frame_ring,
     ).serve()
