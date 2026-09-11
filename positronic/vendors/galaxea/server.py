@@ -33,8 +33,8 @@ class _GalaxeaSession(Session):
         self._cancelled = False
         self._connection = connect(url, compression=None, max_size=None)
         try:
-            self._meta = msgpack.unpackb(self._connection.recv(timeout=timeout))
-            if self._meta.get(protocol.PROTOCOL) != protocol.FULL_CHUNK_V1:
+            handshake = msgpack.unpackb(self._connection.recv(timeout=timeout))
+            if handshake.get(protocol.PROTOCOL) != protocol.FULL_CHUNK_V1:
                 raise ValueError('Expected the Galaxea full-chunk backend; see vendors/galaxea/README.md')
         except Exception:
             self._connection.close()
@@ -68,10 +68,6 @@ class _GalaxeaSession(Session):
 
     def cancel(self):
         self._cancelled = self._answer is not None
-
-    @property
-    def meta(self):
-        return self._meta
 
     def close(self):
         assert self._answer is None or self._answer.done(), 'Close the runtime before its session'

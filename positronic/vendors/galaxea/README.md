@@ -120,8 +120,14 @@ inside `checkpoints/g05-droid/`. Start the server on the GPU host:
 
 ```bash
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml \
-  run --rm --service-ports galaxea-server --port=8000
+  run --rm --service-ports --use-aliases galaxea-server --port=8000
 ```
+
+The published API binds to `127.0.0.1:8000` on the Docker host. Use Docker Engine
+28 or newer: older releases can expose localhost ports to the local network
+([Docker reference](https://docs.docker.com/engine/network/port-publishing/)).
+Keep Docker's default bridge networking without external direct routing. Access
+to the host and its Compose network must remain within the authorized corporate group.
 
 With a remote Docker context, set `CACHE_ROOT` to the cache owner's home directory
 on that host. At startup the server loads `g05-droid` by launching
@@ -135,12 +141,26 @@ The `droid` pipeline places the vendor codec after the remote boundary, so exist
 clients use `.remote` without Galaxea dependencies. For a source installation,
 create Galaxea's `.venv` with its locked dependencies. Link or copy the complete
 downloaded checkpoint bundle to `<galaxea_root>/checkpoints`. The upstream config
-resolves the shared action tokenizer and processor files from this location. Pass
-`--pipeline.source.galaxea_root=/path/to/GalaxeaVLA` and
-`--pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt` to
-`uv run --locked python -m positronic.vendors.galaxea.server` in the Positronic environment.
+resolves the shared action tokenizer and processor files from this location. Start
+the server in the Positronic environment with an explicit localhost bind:
 
-Use the existing DROID evaluation configuration:
+```bash
+uv run --locked python -m positronic.vendors.galaxea.server \
+  --host=127.0.0.1 --port=8000 \
+  --pipeline.source.galaxea_root=/path/to/GalaxeaVLA \
+  --pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
+```
+
+For DROID clients on another machine, forward the API through SSH to the GPU host
+(the Docker daemon's host when using a remote context). Run this on the client
+machine and keep it open while evaluating:
+
+```bash
+ssh -N -L 127.0.0.1:8000:127.0.0.1:8000 user@host
+```
+
+Use the existing DROID evaluation configuration in another terminal. The same
+localhost URL works for clients running directly on the GPU host:
 
 ```bash
 uv run --locked positronic eval run --eval=.real.droid.pick_place \
@@ -148,14 +168,17 @@ uv run --locked positronic eval run --eval=.real.droid.pick_place \
   --output_dir=/path/to/evaluation-recordings
 ```
 
-For RoboLab, run its existing image on a GPU host with RTX graphics support.
-Use the Galaxea host's address, reachable from the evaluation container, and a
-unique output directory for each run:
+For RoboLab, the Docker host also needs RTX graphics support. Run both services
+through the same Docker context/daemon and Compose project (the same `-f` path
+and, if set, `--project-name`). The server's `--use-aliases` flag registers
+`galaxea-server` on their shared private bridge network. RoboLab connects directly
+to that service name; its container's localhost is separate from the host.
+Use a unique output directory for each run:
 
 ```bash
 IMAGE_TAG=latest docker compose -f docker/docker-compose.yml run --rm robolab-eval \
   --eval=.sim.robolab.banana_in_bowl --eval.trial_count=1 \
-  --policy=.remote --policy.url=<galaxea-host>:8000 \
+  --policy=.remote --policy.url=galaxea-server:8000 \
   --output_dir=s3://inference/tmp/galaxea-robolab/<run-id>/
 ```
 

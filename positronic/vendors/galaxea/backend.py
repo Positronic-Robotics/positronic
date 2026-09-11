@@ -27,10 +27,9 @@ _COT_TEXT = '_cot_text'
 class ChunkBackend:
     """Serialize access to the shared model; every request recomputes a complete trajectory."""
 
-    def __init__(self, inferencer: PolicyInferencer, processor, checkpoint: Path):
+    def __init__(self, inferencer: PolicyInferencer, processor):
         self._inferencer = inferencer
         self._processor = processor
-        self._checkpoint = checkpoint
         self._lock = threading.Lock()
 
     def infer(self, obs: dict) -> dict:
@@ -48,9 +47,7 @@ class ChunkBackend:
         return protocol.chunk_response(actions)
 
     def handle(self, connection):
-        connection.send(
-            packb({protocol.PROTOCOL: protocol.FULL_CHUNK_V1, protocol.CHECKPOINT_PATH: str(self._checkpoint)})
-        )
+        connection.send(packb({protocol.PROTOCOL: protocol.FULL_CHUNK_V1}))
         for message in connection:
             try:
                 response = self.infer(unpackb(message))
@@ -83,7 +80,7 @@ def main():
     cfg = load_config_from_run_dir(find_run_dir(str(checkpoint)), str(checkpoint), overrides)
     filter_embodiment(cfg, protocol.DROID_FRANKA)
     model, processor = setup(cfg, device=args.device)
-    backend = ChunkBackend(PolicyInferencer(model, processor, device=args.device), processor, checkpoint)
+    backend = ChunkBackend(PolicyInferencer(model, processor, device=args.device), processor)
     logger.info('G0.5 backend: internal, non-commercial evaluation only')
     with serve(backend.handle, args.host, args.port, compression=None, max_size=None) as server:
         server.serve_forever()

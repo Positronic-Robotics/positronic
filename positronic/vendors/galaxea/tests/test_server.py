@@ -10,6 +10,7 @@ import pytest
 from websockets.sync.server import serve
 
 from positronic import keys
+from positronic.policy import keys as policy_keys
 from positronic.policy.executor import Executor, blocking
 from positronic.policy.spec import split
 from positronic.utils.serialization import deserialize
@@ -74,7 +75,8 @@ def backend():
 
 
 def test_live_adapter_returns_full_chunk_with_server_side_gripper_conversion(backend):
-    policy = codecs.droid().wrap(server.GalaxeaPolicy(backend, 5))
+    codec = codecs.droid()
+    policy = codec.wrap(server.GalaxeaPolicy(backend, 5))
     session = blocking(policy).new_session()
     obs = {
         keys.JOINTS: np.zeros(7),
@@ -84,6 +86,7 @@ def test_live_adapter_returns_full_chunk_with_server_side_gripper_conversion(bac
         keys.TASK: 'pick towel',
     }
     try:
+        assert session.meta == codec.meta
         actions = session(obs, 0)
         assert len(actions) == 33
         assert actions[-1] == {keys.ACTION_TIMESTAMP: 32 / 15}
@@ -182,11 +185,14 @@ def test_model_load_failure_stops_child(monkeypatch):
     backend.stop.assert_called_once()
 
 
-def test_policy_close_stops_child(monkeypatch):
+def test_loaded_policy_metadata_and_cleanup(tmp_path, monkeypatch):
     backend = Mock()
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
     progress = Mock()
-    policy = server.GalaxeaSource().load(protocol.MODEL_ID, progress)
+    checkpoint = tmp_path / 'model_state_dict.pt'
+    source = server.GalaxeaSource(checkpoint_path=str(checkpoint))
+    policy = source.load(protocol.MODEL_ID, progress)
+    assert source.meta(protocol.MODEL_ID)[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
     backend.start.assert_called_once_with(progress)
     backend.stop.assert_not_called()
     policy.close()

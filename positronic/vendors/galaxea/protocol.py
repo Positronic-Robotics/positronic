@@ -9,7 +9,6 @@ import numpy as np
 PROTOCOL = 'protocol'
 FULL_CHUNK_V1 = 'galaxea-full-chunk-v1'
 MODEL_ID = 'g05-droid'
-CHECKPOINT_PATH = 'checkpoint_path'
 ACTIONS = 'actions'
 ERROR = 'error'
 IMAGES = 'images'
