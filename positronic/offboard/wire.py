@@ -174,7 +174,7 @@ def _listening_socket(host: str, port: int) -> socket.socket:
     """A socket bound on ``host``, where a ``port`` of 0 takes any free one.
 
     The family comes from ``host`` itself, so an IPv6 host binds an IPv6 socket. Binding here rather
-    than inside uvicorn is what names the port before the wire serves, and holds it from then on.
+    than inside uvicorn names the port before the wire serves, and holds it from then on.
     """
     family, kind, proto, _canonical, address = socket.getaddrinfo(
         host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
@@ -182,8 +182,8 @@ def _listening_socket(host: str, port: int) -> socket.socket:
     sock = socket.socket(family, kind, proto)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(address)
-    # Listening here rather than at the first accept is what makes the port answer from the moment
-    # ``start`` returns: the kernel queues a connect that beats the serving loop to it.
+    # Listening here rather than at the first accept makes the port answer from the moment ``start``
+    # returns: the kernel queues a connect that beats the serving loop to it.
     sock.listen()
     return sock
 
