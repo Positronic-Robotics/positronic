@@ -185,6 +185,7 @@ class _FakeInferenceSession(InferenceSession):
     def __init__(self, action: list[dict[str, Any]], wall_sec: float = 0.0) -> None:
         self._action = action
         self._wall_sec = wall_sec
+        self.served_timing: dict[str, float] = {}
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         time.sleep(self._wall_sec)
