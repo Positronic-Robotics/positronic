@@ -35,10 +35,6 @@ AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 AUTH_HEADER = 'Authorization'
 
-# The probe for a live socket bounds its wait, and reads a wait that runs out as a live server: a
-# server whose backlog is full holds a connect open, and an unbounded one would stall startup.
-LIVE_SOCKET_PROBE_SEC = 1.0
-
 
 def bearer(token: str) -> str:
     """The ``AUTH_HEADER`` value carrying ``token``."""
@@ -422,6 +418,10 @@ class PolicyServer:
                 server.should_exit = True
                 return
 
+    # The probe bounds its wait, and reads a wait that runs out as a live server: a server whose
+    # backlog is full holds a connect open, and an unbounded one would stall startup.
+    LIVE_SOCKET_PROBE_SEC = 1.0
+
     @staticmethod
     def _is_stale_socket(path: str) -> bool:
         """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
@@ -435,7 +435,7 @@ class PolicyServer:
         except FileNotFoundError:
             return False
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-            probe.settimeout(LIVE_SOCKET_PROBE_SEC)
+            probe.settimeout(PolicyServer.LIVE_SOCKET_PROBE_SEC)
             try:
                 probe.connect(path)
             except ConnectionRefusedError:
@@ -449,8 +449,8 @@ class PolicyServer:
         """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
 
         The bind is the claim, so two servers starting together cannot both take one path: the loser's
-        bind fails. A probe follows it only to tell a stale file from a live server. The caller hands the
-        descriptor to uvicorn, which binds nothing and so never unlinks the path.
+        bind fails. A probe follows it only to tell a stale file from a live server. Serve the returned
+        socket by its descriptor: a server handed the path instead binds again, and unlinks this claim.
         """
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
