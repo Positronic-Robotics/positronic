@@ -20,10 +20,11 @@ import time
 from platform_client.client import CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
+from platform_client.eval_plan import plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import RegisterRequest, SubmissionCreateRequest
+from platform_client.requests import RegisterRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 
 
@@ -83,7 +84,7 @@ def walkthrough(
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
     # one the platform does not offer comes back with the names it does, under `PlatformError.evals`.
-    submission = client.create_submission(SubmissionCreateRequest(policy_image=policy_image, eval=eval_ref))
+    submission = client.create_submission(plan_of_image(policy_image, eval_ref))
     print(f'   submission {submission.submission_id} ({submission.status.name})')
     if submission.status in NO_RESULT_STATUSES:
         reason = submission.reason_code.name if submission.reason_code else submission.status.name

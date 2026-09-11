@@ -17,6 +17,7 @@ from platform_client.enums import (
     SubmissionStatus,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
@@ -24,8 +25,8 @@ from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
-    SubmissionCreateRequest,
     SubmissionGetQuery,
+    SubmissionListQuery,
 )
 from platform_client.responses import (
     ID_FIELD,
@@ -33,10 +34,12 @@ from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     STATUS_FIELD,
     ArtifactRefs,
+    BlockedSubmissionView,
     BoardListResponse,
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    EpisodeCounts,
     ErroredSubmissionView,
     FinishedSubmissionView,
     MeResponse,
@@ -46,6 +49,7 @@ from platform_client.responses import (
     RankingsResponse,
     RegisterResponse,
     RunningSubmissionView,
+    RunSummary,
     Scores,
     SubmissionCreateResponse,
     SubmissionListResponse,
@@ -53,6 +57,7 @@ from platform_client.responses import (
     SubmissionView,
 )
 from platform_client.slug import slug_of
+from platform_client.tasks import TaskRef
 from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -88,6 +93,37 @@ CREDITS = QuotaLimit(
     on_exhausted=OnExhausted.meter,
 )
 
+ASK = EvalPlan.model_validate({
+    'tasks': [
+        'eight-spoons-into-grey-tote',
+        {
+            'task_id': 'stack-the-cubes',
+            'episodes_per_endpoint': 2,
+            'cap_per_episode_sec': 90,
+            'policy_preset': 'other',
+            'tote_placement': 'random',
+            'camera_vantage': 'phail',
+            'external_cameras': {'side': 'left'},
+            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+        },
+    ],
+    'endpoints': [
+        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
+        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
+    ],
+    'episodes_per_endpoint': 10,
+    'cap_per_episode_sec': 180,
+    'max_cap_per_episode_sec': 300,
+    'policy_preset': 'example_candidate',
+    'tote_placement': 'left',
+    'clutter': {'count_min': 2, 'count_max': 6},
+    'transaction_key': 'round-1',
+})
+
+PLAN_OF_AN_IMAGE = plan_of_image(
+    PolicyImage('org/policy@sha256:abc'), EvalRef('fake.smoke'), alias='demo', transaction_key=TransactionKey('key-1')
+)
+
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 
 MODELS: list[BaseModel] = [
@@ -97,12 +133,7 @@ MODELS: list[BaseModel] = [
     CREDITS,
     ArtifactRefs(result='s3://pp-artifacts/users/a0/submissions/1f/result.json'),
     RegisterRequest(credential='token', alias='demo', rotate=True),
-    SubmissionCreateRequest(
-        policy_image=PolicyImage('org/policy:v1'),
-        eval=EvalRef('fake.smoke'),
-        alias='demo',
-        transaction_key=TransactionKey('key-1'),
-    ),
+    PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
     RankingsQuery(board=BoardRef('smoke')),
@@ -158,6 +189,20 @@ MODELS: list[BaseModel] = [
         ]
     ),
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
+    ASK,
+    EvalPlan(
+        tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
+        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        episodes_per_endpoint=1,
+    ),
+    SubmissionListQuery(after=SUB, limit=50),
+    SubmissionListQuery(),
+    BlockedSubmissionView(
+        id=SUB,
+        episodes=EpisodeCounts(total=24, done=3, outstanding=21),
+        runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
+        reason='the rig is not ready',
+    ),
 ]
 
 
@@ -194,8 +239,7 @@ def test_ids_and_statuses_leave_as_wire_values():
 
 def test_a_request_rejects_an_unknown_field():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({
-            'policy_image': 'i',
+        EvalPlan.model_validate({
             'eval': 'fake.smoke',
             'evals': 'fake.smoke',  # a plausible typo of eval
         })
@@ -203,17 +247,18 @@ def test_a_request_rejects_an_unknown_field():
 
 def test_a_policy_image_the_registry_could_never_resolve_is_refused_here():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({
-            'policy_image': 'org/policy@',  # a digest separator with nothing behind it
+        EvalPlan.model_validate({
             'eval': 'fake.smoke',
+            # a digest separator with nothing behind it
+            'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/policy@'}],
         })
 
 
 def test_a_digest_pinned_image_is_taken_whole_and_parsed():
-    request = SubmissionCreateRequest(policy_image=PolicyImage('org/policy@sha256:abc'), eval=EvalRef('fake.smoke'))
-    assert isinstance(request.policy_image, PolicyImage)
-    assert request.policy_image.name == 'org/policy'
-    assert request.policy_image.digest == 'sha256:abc'
+    image = PLAN_OF_AN_IMAGE.endpoints[0].image
+    assert isinstance(image, PolicyImage)
+    assert image.name == 'org/policy'
+    assert image.digest == 'sha256:abc'
 
 
 def test_a_reason_code_is_refused_on_a_status_that_did_not_fail():
@@ -281,7 +326,7 @@ def test_an_id_reaches_the_query_string_in_its_hex_wire_form():
 
 def test_an_empty_transaction_key_is_a_client_bug_not_an_absent_one():
     with pytest.raises(ValidationError):
-        SubmissionCreateRequest.model_validate({'policy_image': 'i', 'eval': 'fake.smoke', 'transaction_key': ''})
+        EvalPlan.model_validate({'eval': 'fake.smoke', 'transaction_key': ''})
 
 
 @pytest.mark.parametrize(
@@ -339,11 +384,16 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
     # The discriminator computes a tag from the payload's slug, so a tag spelled any other way names
     # a wire value nothing produces and the variant becomes unreachable.
     variants = get_args(get_args(SubmissionView)[0])
-    assert len(variants) == 5
     for variant in variants:
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
+    # Every status a caller can see carries a variant. This catches one added without one;
+    # `submitting` is internal and INVALID is the unset sentinel.
+    internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
+    assert {get_args(variant)[1].tag for variant in variants} == {
+        slug_of(status) for status in SubmissionStatus if status not in internal
+    }
 
 
 def test_a_minted_outcome_without_its_key_is_refused():
@@ -519,3 +569,24 @@ def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel],
 @pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])
 def test_every_status_a_caller_can_see_is_kept(status: str):
     assert SubmissionCreateResponse.model_validate({'submission_id': 'ff', 'status': status}).status.name == status
+
+
+def test_only_the_blocked_view_says_what_a_run_waits_on():
+    # `reason` lives on the one variant it can be true of. A response model IGNORES a field it does
+    # not declare, so another variant does not refuse a stray `reason`, it drops it — which is what
+    # lets a newer gateway add a field without breaking this client.
+    blocked = {'id': '2a', 'status': 'blocked', 'reason': 'the rig is not ready'}
+    assert SUBMISSION_VIEWS.validate_python(blocked).reason == 'the rig is not ready'
+    running = SUBMISSION_VIEWS.validate_python({
+        'id': '2a',
+        'status': 'running',
+        'running_since': AT,
+        'reason': 'the rig is not ready',
+    })
+    assert isinstance(running, RunningSubmissionView)
+    assert not hasattr(running, 'reason')
+
+
+def test_a_limit_below_one_is_refused():
+    with pytest.raises(ValidationError):
+        SubmissionListQuery(limit=0)

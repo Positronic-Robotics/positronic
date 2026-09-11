@@ -1,7 +1,7 @@
 """What every gateway endpoint answers with — the typed shape both sides bind to.
 
 Timestamps are aware UTC, ids are hex strings (`platform_client.ids`), closed sets are slugs
-(`platform_client.slug`), and locations are opaque. `submissions.get` answers one of five variants,
+(`platform_client.slug`), and locations are opaque. `submissions.get` answers one variant per status,
 discriminated on the status slug.
 """
 
@@ -24,8 +24,8 @@ def _public(status: SubmissionStatus) -> SubmissionStatus:
     return status
 
 
-# Every status a caller-facing model may carry. The five `submissions.get` variants pin their own
-# tag instead (`_TaggedView`), which is the same rule stated per variant.
+# Every status a caller-facing model may carry. The `submissions.get` variants pin their own tag
+# instead (`_TaggedView`), which is the same rule stated per variant.
 PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
@@ -68,6 +68,28 @@ class ArtifactRefs(BaseModel):
     result: str
 
 
+class EpisodeCounts(BaseModel):
+    """What a run asked for and where it stands.
+
+    `total` is fixed when the plan is filed; the other two move as episodes land.
+    """
+
+    total: int = Field(default=0, ge=0)
+    done: int = Field(default=0, ge=0)
+    outstanding: int = Field(default=0, ge=0)
+
+
+class RunSummary(BaseModel):
+    """One launch that served the plan.
+
+    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
+    """
+
+    run_tag: str
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
+
+
 # The outcomes that mint a key. `existing` is the one that does not.
 _MINTING_OUTCOMES = frozenset({KeyStatus.created, KeyStatus.rotated})
 
@@ -82,9 +104,11 @@ class RegisterResponse(BaseModel):
 
     @model_validator(mode='after')
     def _the_key_and_the_outcome_agree(self) -> Self:
-        # The outcome and the key are one fact, held together here rather than inferred apart.
+        # The outcome and the key are one fact, held together here rather than inferred apart. A
+        # blank key is no key: caught here it reads as a malformed response, and caught at the
+        # record it is a traceback out of a command that has already spent its one mint.
         minted = self.key_status in _MINTING_OUTCOMES
-        if minted and self.api_key is None:
+        if minted and not (self.api_key or '').strip():
             raise ValueError(f'key_status is {self.key_status.name} but no api_key came with it')
         if not minted and self.api_key is not None:
             raise ValueError(f'key_status is {self.key_status.name}, which mints no key, yet an api_key is present')
@@ -131,17 +155,27 @@ class SubmissionCreateResponse(_ReasonBearing):
 
 
 class SubmissionListRow(_ReasonBearing):
-    """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users."""
+    """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users.
+
+    `eval` is the name the catalogue expanded, and is absent on a run that stated its own tasks.
+    """
 
     id: SubmissionId
     user_id: UserId
     alias: str | None = None
-    eval: EvalRef
+    eval: EvalRef | None = None
+    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     received_at: AwareDatetime
 
 
 class SubmissionListResponse(BaseModel):
+    """`submissions.list` — one page, oldest first.
+
+    `next` is the cursor for the page after it, and is absent on the last page.
+    """
+
     submissions: list[SubmissionListRow] = Field(default_factory=list)
+    next: SubmissionId | None = None
 
 
 # The field the view union discriminates on, named so a rename moves the discriminator with it.
@@ -160,6 +194,10 @@ class _TaggedView(BaseModel):
     """
 
     status: Slugged[SubmissionStatus]
+    # What the run asked for and what it has landed, and the launches that served it. A run the
+    # platform executes itself reports one launch; a plan the lab rig serves reports one per start.
+    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
+    runs: list[RunSummary] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
@@ -216,6 +254,14 @@ class CancelledSubmissionView(_TaggedView):
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
 
 
+class BlockedSubmissionView(_TaggedView):
+    """A blocked run, and the `reason` it waits on."""
+
+    id: SubmissionId
+    reason: str | None = None
+    status: Slugged[SubmissionStatus] = SubmissionStatus.blocked
+
+
 def _status_tag(value: Any) -> str | None:
     """The status slug a `submissions.get` payload selects its variant by.
 
@@ -235,7 +281,8 @@ SubmissionView = Annotated[
     | Annotated[RunningSubmissionView, Tag(slug_of(SubmissionStatus.running))]
     | Annotated[ErroredSubmissionView, Tag(slug_of(SubmissionStatus.errored))]
     | Annotated[FinishedSubmissionView, Tag(slug_of(SubmissionStatus.finished))]
-    | Annotated[CancelledSubmissionView, Tag(slug_of(SubmissionStatus.cancelled))],
+    | Annotated[CancelledSubmissionView, Tag(slug_of(SubmissionStatus.cancelled))]
+    | Annotated[BlockedSubmissionView, Tag(slug_of(SubmissionStatus.blocked))],
     Discriminator(_status_tag),
 ]
 

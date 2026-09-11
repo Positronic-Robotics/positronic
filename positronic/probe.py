@@ -53,7 +53,7 @@ def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: in
 
 
 def _recording_name(meta: dict) -> str:
-    """A short recording name from server metadata, e.g. ``groot@110000`` / ``gyros@18500``."""
+    """A short recording name from server metadata, e.g. ``groot@110000`` / ``pi05@18500``."""
     server_type = meta.get('server.type', 'model')
     ckpt = meta.get('server.checkpoint_id')
     if not ckpt:

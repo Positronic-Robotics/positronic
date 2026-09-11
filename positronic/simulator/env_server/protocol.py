@@ -1,19 +1,32 @@
-"""The wire contract for the remote env-server boundary: the command vocabulary and the msgpack codec.
+"""Env-server wire names and msgpack encoding for numpy arrays and plain data.
 
-This module is **positronic-free** — it imports only ``msgpack`` and ``numpy`` — so it can be
-imported (or copied) into a benchmark's isolated interpreter alongside the dumb server without
-dragging in pimm or the rest of positronic. Only raw numpy arrays and plain-data dicts cross the
-wire; every canonical<->raw mapping lives client-side in the ``EnvAdapter``.
-
-Arrays travel as raw bytes plus their ``dtype.str`` and shape, so a numpy-2 server round-trips a
-numpy-1 client unchanged.
+This module must work in an isolated interpreter without Positronic installed.
+Arrays use raw bytes, ``dtype.str``, and shape for compatibility between numpy versions.
 """
 
 import functools
-from typing import Any
+from collections.abc import Callable
+from enum import Enum
+from typing import Any, cast
 
 import msgpack
 import numpy as np
+
+CMD = 'cmd'
+OK = 'ok'
+TASKS = 'tasks'
+SPEC = 'spec'
+TOKEN = 'token'
+ACTION = 'action'
+ERROR = 'error'
+
+
+class Command(Enum):
+    TASKS = 'tasks'
+    RESET = 'reset'
+    STEP = 'step'
+    CLOSE = 'close'
+
 
 # The canonical command contract: the tag on every arm command a client puts on the wire. It is total — one
 # contract carries every policy onto every embodiment — so an env adoption converts each of these into
@@ -46,20 +59,6 @@ COMMAND_MODE = 'mode'  # any tag — the pinned control mode, absent when the co
 OPT_HOST = '--host'
 OPT_PORT = '--port'
 
-# The request envelope: the verb the client sends, the arguments each verb carries, and the replies the
-# server writes itself (every other reply is an env's own frame).
-REQUEST_CMD = 'cmd'
-REQUEST_SPEC = 'spec'  # CMD_TASKS — the eval config's task selection
-REQUEST_TOKEN = 'token'  # CMD_RESET — the adapter's reset token
-REQUEST_ACTION = 'action'  # CMD_STEP — the tagged command plus grip
-CMD_TASKS = 'tasks'
-CMD_RESET = 'reset'
-CMD_STEP = 'step'
-CMD_CLOSE = 'close'
-RESPONSE_TASKS = 'tasks'  # CMD_TASKS — the env's own task records
-RESPONSE_OK = 'ok'  # CMD_CLOSE's acknowledgement
-RESPONSE_ERROR = 'error'  # any verb: the server caught an exception and the client re-raises it
-
 # The frames an env reports back. ``reset`` carries the observation, the scene meta, the robot model identity
 # and the control period; ``step`` carries the observation, the terminal, the control period, and — where the
 # env judges one — its success. ``horizon`` is the episode limit the env enforces itself, in sim-seconds,
@@ -85,21 +84,13 @@ def _pack(obj):
 
 def _unpack(obj):
     if b'__ndarray__' in obj:
-        # ``bytearray`` (not the raw msgpack ``bytes``) backs a writable array, so the socket path
-        # matches the in-process path for envs/adapters that mutate a decoded buffer in place.
+        # A bytearray keeps the decoded array writable.
         return np.ndarray(buffer=bytearray(obj[b'data']), dtype=np.dtype(obj[b'dtype']), shape=obj[b'shape'])
     if b'__npgeneric__' in obj:
         return np.dtype(obj[b'dtype']).type(obj[b'data'])
     return obj
 
 
-def encode(obj: Any) -> bytes:
-    """*obj* as a msgpack frame, with the numpy envelope applied to arrays and scalars inside it."""
-    # ``packb`` is annotated ``bytes | None``, for a streaming mode this call does not use; every caller here
-    # hands the result straight to a socket, so the frame is materialized.
-    packed = msgpack.packb(obj, default=_pack)
-    assert packed is not None
-    return packed
-
-
+# msgpack's default autoreset=True makes packb return bytes.
+encode = cast(Callable[[Any], bytes], functools.partial(msgpack.packb, default=_pack))
 decode = functools.partial(msgpack.unpackb, object_hook=_unpack)

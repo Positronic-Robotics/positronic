@@ -54,8 +54,11 @@ class Rollout:
 
         Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
         """
+        logging.info('Rollout.close: closing the runtime')
         self.rt.close()
+        logging.info('Rollout.close: runtime closed, closing the session')
         self.session.close()
+        logging.info('Rollout.close: session closed')
 
 
 class _EpisodeInference:
@@ -297,6 +300,13 @@ class Harness(pimm.ControlSystem):
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
+            # An empty ask answers at once, so the episode would open on a rig that no device moved.
+            if self.prepare and not self._task.prepare_args:
+                rig = self._embodiment.descriptor or 'this rig'
+                raise ValueError(
+                    f'The trial readies nothing on {rig}, which readies {sorted(self.prepare)}; '
+                    'name at least one of them in prepare_args'
+                )
             yield from self._ready(should_stop, clock, self._task.prepare_args)
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)

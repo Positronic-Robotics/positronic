@@ -26,11 +26,12 @@ from platform_client.enums import (
     ReasonCode,
     SubmissionStatus,
 )
-from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, PlatformError
+from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
+from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     BoardListResponse,
@@ -42,6 +43,7 @@ from platform_client.responses import (
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
+from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 BASE = 'http://gateway.test'
@@ -104,6 +106,16 @@ def test_register_carries_back_a_minted_key():
     response = make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
     assert response.api_key == 'pk_live_new'
     assert response.key_status is KeyStatus.created
+
+
+def test_a_minted_key_that_is_blank_is_a_malformed_response():
+    # The record refuses a blank key too, but a command builds that record after the request has
+    # returned, where the refusal is a traceback out of a mint already spent. One owner, here.
+    gateway = Gateway(
+        200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': '  ', 'key_status': 'created'}
+    )
+    with pytest.raises(ValidationError, match='no api_key came with it'):
+        make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
 
 
 def test_register_keeps_the_key_it_is_given_so_the_next_call_is_authenticated():
@@ -169,23 +181,20 @@ def test_create_submission_sends_the_run_defining_fields():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
     client = make_client(gateway)
 
-    response = client.create_submission(
-        SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
-    )
+    response = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
 
     assert isinstance(response, SubmissionCreateResponse)
     assert response.submission_id == 0x1F
     assert response.status is SubmissionStatus.pending
     assert gateway.request().url.path == routes.SUBMISSIONS_CREATE
-    assert gateway.body()['policy_image'] == 'org/policy:v1'
+    assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
+    assert gateway.body()['eval'] == 'fake.smoke'
     assert gateway.body()['transaction_key'] is None
 
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'errored', 'reason_code': 'image_unpullable'})
-    response = make_client(gateway).create_submission(
-        SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
-    )
+    response = make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
     assert response.status is SubmissionStatus.errored
     assert response.reason_code is ReasonCode.image_unpullable
 
@@ -236,9 +245,7 @@ def test_a_numeric_id_is_refused_at_the_boundary():
     # The wire contract is hex text. Decoding the body first would have taken the number.
     gateway = Gateway(200, {'submission_id': 31, 'status': 'pending'})
     with pytest.raises(ValidationError):
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
 
 
 def test_cancel_submission_posts_the_id():
@@ -325,9 +332,7 @@ def test_an_error_envelope_becomes_the_typed_exception():
         },
     )
     with pytest.raises(PlatformError) as raised:
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
 
     assert raised.value.code is ErrorCode.bad_request
     assert raised.value.reason_code is ReasonCode.image_unpullable
@@ -432,6 +437,8 @@ def test_every_endpoint_has_exactly_one_method():
         'cancel_submission',
         'rankings',
         'list_boards',
+        'catalog_evals',
+        'catalog_tasks',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))
@@ -451,9 +458,7 @@ def test_an_unknown_eval_comes_back_carrying_the_ones_on_offer():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smokey'))
-        )
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smokey')))
     assert caught.value.evals == ['fake.smoke', 'robolab.public_subset']
 
 
@@ -487,9 +492,120 @@ def test_a_malformed_eval_list_raises_rather_than_reading_as_no_list():
         _ = caught.value.evals
 
 
+def test_the_catalogue_reads_back_as_task_ids_and_a_malformed_one_raises():
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['a-task']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    tasks = caught.value.tasks
+    assert tasks is not None and tasks == ['a-task'] and all(isinstance(task_id, TaskRef) for task_id in tasks)
+
+    gateway = Gateway(400, {'error': {'code': 'bad_request', 'message': 'x', 'details': {TASKS_DETAIL: ['Not A Key']}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    with pytest.raises(ValidationError):
+        _ = caught.value.tasks
+
+
 def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
     gateway = Gateway(429, {'error': {'code': 'quota_exceeded', 'message': 'x', 'details': {'quota': 'all of it'}}})
     with pytest.raises(PlatformError) as caught:
         make_client(gateway).list_submissions()
     with pytest.raises(ValidationError):
         _ = caught.value.quota
+
+
+# --- eval plans ---------------------------------------------------------------------------------
+
+PLAN = EvalPlan(
+    tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
+    endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
+    episodes_per_endpoint=10,
+)
+
+SUBMISSION_ROW = {
+    'id': '2a',
+    'user_id': 'a0',
+    'status': 'running',
+    'episodes': {'total': 10, 'done': 0, 'outstanding': 10},
+    'received_at': '2026-03-04T05:06:07Z',
+}
+
+
+def test_create_submission_posts_a_whole_plan_and_parses_the_id():
+    gateway = Gateway(200, {'submission_id': '2a', 'status': 'pending'})
+    response = make_client(gateway).create_submission(PLAN)
+
+    assert isinstance(response, SubmissionCreateResponse)
+    assert response.submission_id == SubmissionId(0x2A) and response.status is SubmissionStatus.pending
+    assert gateway.request().url.path == routes.SUBMISSIONS_CREATE
+    assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
+    body = gateway.body()
+    assert body['tasks'][0]['task_id'] == 'eight-spoons-into-grey-tote'
+    assert body['endpoints'][0] == {
+        'name': 'baseline',
+        'kind': 'remote',
+        'url': 'wss://baseline.example/ws',
+        'provider': None,
+        'spec': None,
+        'image': None,
+        'episodes_per_endpoint': None,
+        'cap_per_episode_sec': None,
+        'policy_preset': None,
+        'tote_placement': None,
+        'camera_vantage': None,
+        'external_cameras': {},
+        'clutter': None,
+    }
+    assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
+
+
+def test_a_run_carries_its_episode_counts_into_the_view():
+    gateway = Gateway(
+        200,
+        {
+            'id': '2a',
+            'status': 'running',
+            'running_since': '2026-03-04T05:06:07Z',
+            'episodes': {'total': 10, 'done': 3, 'outstanding': 7},
+        },
+    )
+    view = make_client(gateway).get_submission(SubmissionId(0x2A))
+
+    assert view.status is SubmissionStatus.running and view.episodes.outstanding == 7
+    assert gateway.request().url.path == routes.SUBMISSIONS_GET
+    assert dict(gateway.request().url.params) == {'id': '2a'}
+
+
+def test_list_submissions_sends_the_cursor_and_parses_the_next():
+    gateway = Gateway(200, {'submissions': [SUBMISSION_ROW], 'next': '2a'})
+    page = make_client(gateway).list_submissions(after=SubmissionId(0x1F), limit=1)
+
+    assert isinstance(page, SubmissionListResponse)
+    assert [row.id for row in page.submissions] == [SubmissionId(0x2A)] and page.next == SubmissionId(0x2A)
+    assert page.submissions[0].episodes.total == 10
+    assert gateway.request().url.path == routes.SUBMISSIONS_LIST
+    assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
+
+
+def test_list_submissions_asks_for_the_first_page_with_nothing_in_the_query():
+    gateway = Gateway(200, {'submissions': []})
+    page = make_client(gateway).list_submissions()
+    assert page.submissions == [] and page.next is None
+    assert dict(gateway.request().url.params) == {}
+
+
+def test_an_unknown_task_comes_back_carrying_the_catalogue():
+    gateway = Gateway(
+        400,
+        {
+            'error': {
+                'code': 'bad_request',
+                'message': "unknown task 'nope'",
+                'details': {TASKS_DETAIL: ['eight-spoons-into-grey-tote', 'stack-the-cubes']},
+            }
+        },
+    )
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).create_submission(PLAN)
+    assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
+    assert caught.value.evals is None

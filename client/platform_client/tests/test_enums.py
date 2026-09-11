@@ -14,9 +14,12 @@ from platform_client.enums import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
+    CameraVantage,
+    EndpointKind,
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    Placement,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
@@ -60,6 +63,7 @@ SUBMISSION_STATUS_VALUES = {
     'finished': 4,
     'errored': 5,
     'cancelled': 6,
+    'blocked': 7,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
@@ -70,6 +74,12 @@ QUOTA_SUBJECT_VALUES = {'INVALID': 0, 'user': 1, 'tenant': 2}
 
 BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
+ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2, 'image': 3}
+
+PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
+
+CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
+
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),
     (ReasonCode, REASON_CODE_VALUES),
@@ -78,6 +88,9 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (OnExhausted, ON_EXHAUSTED_VALUES),
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
+    (EndpointKind, ENDPOINT_KIND_VALUES),
+    (Placement, PLACEMENT_VALUES),
+    (CameraVantage, CAMERA_VANTAGE_VALUES),
 ]
 
 
@@ -97,5 +110,10 @@ def test_no_value_is_reused(enum_cls: type[IntEnum], expected: dict[str, int]):
 
 
 def test_the_status_sets_partition_the_decided_from_the_undecided():
+    # `blocked` is the third case: undecided like an active one, and holding no slot, so it belongs
+    # to neither set. Naming it here keeps the three together covering every status.
     assert ACTIVE_STATUSES & TERMINAL_STATUSES == frozenset()
-    assert ACTIVE_STATUSES | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
+    assert SubmissionStatus.blocked not in ACTIVE_STATUSES | TERMINAL_STATUSES
+    assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
+        SubmissionStatus.INVALID
+    }

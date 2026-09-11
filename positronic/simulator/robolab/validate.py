@@ -27,11 +27,12 @@ Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLaunc
 import math
 import sys
 
+import keys
 import numpy as np
 import torch
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
-from env import RobolabEnv, simulation_app
+from env import RobolabEnv, args, simulation_app
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
 
 from robolab.robots.droid import EEF_OFFSET_ROT
@@ -59,13 +60,13 @@ _FLANGE_TO_EEF_QUAT = (-0.707106781, 0.0, 0.0, -0.707106781)
 _FRAME_POS_TOL = 1e-4  # m — float32 body poses, so well above round-off and far below a real geometry change
 _FRAME_ROT_TOL = math.radians(0.05)
 
+# The cameras follow ``--cameras``, so a run of any set checks the set that run renders.
 _OBS_SPECS = {
     'joint_pos': ((7,), np.float32),
     'joint_vel': ((7,), np.float32),
     'eef_pos': ((3,), np.float32),
     'eef_quat': ((4,), np.float32),
-    'over_shoulder_left_camera': ((720, 1280, 3), np.uint8),
-    'wrist_cam': ((720, 1280, 3), np.uint8),
+    **dict.fromkeys(keys.CAMERA_SETS[args.cameras], ((720, 1280, 3), np.uint8)),
     'subtask': ((4,), np.float32),
 }
 
@@ -108,9 +109,11 @@ def _check_obs_contract(env: RobolabEnv) -> None:
             assert isinstance(arr, np.ndarray) and arr.shape == shape and arr.dtype == dtype, (
                 f'{key}: {type(arr).__name__} shape={getattr(arr, "shape", None)} dtype={getattr(arr, "dtype", None)}'
             )
+        rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+        assert rendered == set(keys.CAMERA_SETS[args.cameras]), f'rendered cameras {sorted(rendered)}'
         assert isinstance(obs['grip'], float) and 0.0 <= obs['grip'] <= 1.0, f'grip {obs["grip"]!r}'
         assert abs(float(np.linalg.norm(obs['eef_quat'])) - 1.0) < 1e-3, f'eef_quat norm {obs["eef_quat"]}'
-    print('  obs contract: OK (keys, shapes, dtypes, quat norm, grip range)')
+    print('  obs contract: OK (keys, camera set, shapes, dtypes, quat norm, grip range)')
 
 
 def _check_grip(env: RobolabEnv) -> None:

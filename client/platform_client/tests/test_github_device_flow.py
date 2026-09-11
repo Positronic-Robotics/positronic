@@ -539,6 +539,26 @@ def test_a_plain_http_gateway_client_ignores_an_environment_proxy(platform_url: 
     assert gateway['trust_env'] is trusts_env
 
 
+def test_run_registration_gates_the_url_itself():
+    """A direct caller reaches no transport with a URL the gate refuses: the check is inside."""
+    reached: list[object] = []
+
+    def record(**kwargs: Any) -> httpx.Client:
+        reached.append(kwargs)
+        raise AssertionError('the token must not reach a client on a refused URL')
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(httpx, 'Client', record)
+
+        with pytest.raises(SystemExit) as raised:
+            github_device_flow.run_registration(
+                'x', 'http://gateway.example', alias=None, rotate=False, plaintext_http=False
+            )
+
+    assert 'in the clear' in str(raised.value)
+    assert reached == []
+
+
 def test_the_command_refuses_a_platform_that_would_show_the_token():
     """A shared-address http platform never sees the GitHub token: the command stops before the code."""
     reached: list[object] = []
@@ -601,16 +621,17 @@ def test_a_success_that_is_no_registration_exits_with_one_line():
     assert 'no registration' in str(raised.value)
 
 
-def test_the_user_is_shown_the_code_before_the_poll_starts(capsys):
-    """Only the short code has to reach the user while the flow runs."""
+def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
+    """Only the short code has to reach the user while the flow runs, and it leaves stdout to the answer."""
     github = ScriptedGitHub(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
         register_with_github(platform, flow)
 
-    shown = capsys.readouterr().out
-    assert str(DEVICE_ANSWER['user_code']) in shown and str(DEVICE_ANSWER['verification_uri']) in shown
+    captured = capsys.readouterr()
+    assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
+    assert captured.out == ''
 
 
 def test_the_registration_keeps_the_key_the_gateway_minted():

@@ -1,0 +1,14 @@
+This integration is intended solely for internal, non-commercial evaluation.
+It does not grant permission for production use, customer demonstrations, hosted
+services, or redistribution of Galaxea materials in a commercial product.
+
+G0.5 is licensed under the G0.5 Community License Agreement (Non-Commercial +
+Limited Patent License), not sold, Copyright © 2026 Galaxea. All rights reserved
+by Galaxea. ‘Galaxea’ and related marks are trademarks of Galaxea or its affiliates.
+
+The upstream terms are reproduced in LICENSE-G0.5. Model code and weights remain
+subject to those terms and their third-party licenses. Internal company evaluation
+requires Authorized Hardware and an Authorized Image under that agreement;
+confirm eligibility with Galaxea before running the model.
+
+The Positronic adapter does not imply endorsement or certification by Galaxea.

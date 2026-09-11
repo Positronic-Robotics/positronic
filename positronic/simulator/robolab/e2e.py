@@ -82,7 +82,7 @@ def run_replay(fixture_path: str, *, task: str) -> float:
     """Check the task list, then replay every episode in ``fixture_path``; return the replay success rate."""
     episodes = _load_fixture(fixture_path)
     successes = 0
-    with serve_robolab() as (host, port):
+    with serve_robolab(robolab_keys.WRIST_LEFT) as (host, port):
         conn = EnvConnection(host, port)
         try:
             _check_task_list(conn, task)
