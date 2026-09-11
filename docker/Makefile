@@ -1,6 +1,6 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: build-galaxea tag-galaxea push-galaxea
 
-# Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
 IMAGE_NAME_GROOT := positro/gr00t
@@ -8,14 +8,13 @@ IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
+IMAGE_NAME_GALAXEA := positro/galaxea
 
-# Extract version from pyproject.toml (first literal version entry)
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
 
-# Get git commit SHA (short)
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-# Branch name sanitized for Docker tags (replace / with -)
+# Docker tags cannot contain slashes.
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')
 
 # IMAGE_TAG: branch name locally, overridable via `make push IMAGE_TAG=foo`
@@ -23,16 +22,14 @@ IMAGE_TAG ?= $(BRANCH)
 
 REGISTRY_URL ?= docker.io
 
-# Nebius Container Registry — opt-in path for an in-region pull from serverless
-# jobs (the `push-*` targets above stay on Docker Hub and are unchanged). Override
-# NEBIUS_REGISTRY for a different project/registry; set NEBIUS_PROFILE to use a
+# Nebius publishing is opt-in for in-region pulls; default push targets use Docker Hub.
+# Override NEBIUS_REGISTRY for a different project/registry; set NEBIUS_PROFILE to use a
 # non-default `nebius` CLI profile (e.g. a service-account profile for headless
 # CI). Auth goes through the nebius credential helper — no registry secret here.
 NEBIUS_REGISTRY ?= cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz
 NEBIUS_REGISTRY_HOST := $(firstword $(subst /, ,$(NEBIUS_REGISTRY)))
 NEBIUS_PROFILE_FLAG := $(if $(NEBIUS_PROFILE),--profile $(NEBIUS_PROFILE),)
 
-# Local build tags
 LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
 
 # Base image tags (not parameterized — these are heavy foundational images)
@@ -52,6 +49,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
+	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -98,6 +96,17 @@ build-dreamzero:
 build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
+
+build-galaxea:
+	docker build --platform linux/amd64 -f Dockerfile.galaxea -t $(IMAGE_NAME_GALAXEA):local ..
+
+tag-galaxea: build-galaxea
+	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+
+push-galaxea: tag-galaxea
+	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -252,6 +261,7 @@ endif
 
 all: push
 
+# Optional image tags can be absent; removal errors must not stop attempts on the other tags.
 clean:
 	@echo "Removing all local images..."
 	-docker rmi $(LOCAL_TAG_TRAINING)
@@ -270,7 +280,10 @@ clean:
 	-docker rmi $(IMAGE_NAME_ROBOLAB):local
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
-	@echo "All local images removed."
+	-docker rmi $(IMAGE_NAME_GALAXEA):local
+	-docker rmi $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
 prune:
 	@echo "Pruning dangling and unused Docker images..."

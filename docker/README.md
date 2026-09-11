@@ -44,3 +44,12 @@ docker/build.sh
 
 If you customize `docker-compose.yml` volumes, **do not bind-mount** your host `~/.local/share/uv` into `/root/.local/share/uv` for `positro/gr00t` images.
 GR00T's `/.venv/bin/python` can be a symlink into the image's own uv-managed CPython under `/root/.local/share/uv/python/...`, and the bind mount can hide that target and cause `/.venv/bin/python` to fail with `ENOENT`.
+
+## Galaxea: internal evaluation access
+
+The `galaxea-server` service publishes port 8000 on the Docker host's localhost.
+Use Docker Engine 28 or newer with default bridge networking. Remote DROID clients
+connect through SSH forwarding; RoboLab uses `galaxea-server:8000` on the same
+Compose network and Docker daemon. Start the server with `--service-ports --use-aliases`.
+See the [Galaxea setup](../positronic/vendors/galaxea/README.md#start-the-server)
+for the commands and internal, non-commercial usage conditions.
