@@ -100,8 +100,9 @@ class FakeArm:
         self.targets.append(np.asarray(target, dtype=np.float64))
         self._polls = 0
 
-    def recover_from_errors(self) -> None:
+    def recover_from_errors(self) -> bool:
         self._record(Call.RECOVER_FROM_ERRORS)
+        return self.error == 0
 
     def stop(self) -> None:
         self.calls.append(Call.STOP)
@@ -798,3 +799,63 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     _drive(loop, clock)
 
     assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
+
+
+def test_a_console_recover_ask_runs_recovery_and_reports_the_result(desk):
+    """A console asks the arm to clear a latched fault, and the driver runs the recovery and reports it."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    ask = ManualCommandReceiver()
+    driver.recover._bind(ask)
+    results = RecordingEmitter()
+    driver.recovery_result._bind(results)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    ask.push(True)
+    next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
+    assert results.emitted[-1][1] is True  # a clear arm reports the recovery cleared
+
+
+def test_a_console_recover_ask_reports_a_fault_that_does_not_clear(desk):
+    """The recovery a console asks for reaches a fault libfranka will not clear, and the driver says so."""
+    arm = FakeArm(PARK)
+    arm.error = 1  # a fault recover_from_errors does not clear
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    ask = ManualCommandReceiver()
+    driver.recover._bind(ask)
+    results = RecordingEmitter()
+    driver.recovery_result._bind(results)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    ask.push(True)
+    next(loop)
+
+    assert results.emitted[-1][1] is False
+
+
+def test_the_driver_reports_no_recovery_result_without_an_ask(desk):
+    """The result is the answer to an ask, so an untouched arm reports none."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    driver.recover._bind(ManualCommandReceiver())
+    results = RecordingEmitter()
+    driver.recovery_result._bind(results)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(5):
+        next(loop)
+
+    assert results.emitted == []
