@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 _ABSENT_KEYS = '_absent_keys'
 _COT_TEXT = '_cot_text'
+_EVAL_EMBODIMENT = 'eval_embodiment'
+_DISCRETE_ACTION = 'model.model_arch.discrete_action'
+_CONTINUOUS_ACTION = 'model.model_arch.continuous_action'
 
 
 class ChunkBackend:
@@ -71,9 +74,9 @@ def main():
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
     overrides = [
-        f'eval_embodiment={protocol.DROID_FRANKA}',
-        'model.model_arch.discrete_action=true',
-        'model.model_arch.continuous_action=false',
+        f'{_EVAL_EMBODIMENT}={protocol.DROID_FRANKA}',
+        f'{_DISCRETE_ACTION}=true',
+        f'{_CONTINUOUS_ACTION}=false',
     ]
     cfg = load_config_from_run_dir(find_run_dir(str(checkpoint)), str(checkpoint), overrides)
     filter_embodiment(cfg, protocol.DROID_FRANKA)

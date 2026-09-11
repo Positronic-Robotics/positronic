@@ -200,11 +200,7 @@ class GalaxeaSource(ModelSource):
         return GalaxeaPolicy(backend, self._timeout)
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {
-            'model_id': model_id,
-            policy_keys.CHECKPOINT_PATH: str(self._checkpoint),
-            'usage': 'internal non-commercial evaluation only',
-        }
+        return {policy_keys.CHECKPOINT_PATH: str(self._checkpoint), 'usage': 'internal non-commercial evaluation only'}
 
 
 @cfn.config(codec=codecs.droid, source=cfn.Config(GalaxeaSource))
