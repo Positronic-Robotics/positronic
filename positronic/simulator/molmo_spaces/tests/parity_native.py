@@ -52,18 +52,23 @@ _GRIPPER_QPOS_CLOSED = 0.824033
 
 
 def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
-    """One frame's compared values, read off MolmoSpaces directly: measured joints, the grasp-site world pose,
-    the gripper closure, and each camera's frame."""
+    """One frame's compared values, read off MolmoSpaces directly: measured joints, the grasp-site robot-frame
+    pose, the gripper closure, and each camera's frame.
+
+    Robot frame because that is the frame MolmoSpaces itself reports a TCP in — its own sensors
+    (``env/rby1_sensors.py``) and kinematics read ``leaf_frame_to_robot``, and compose ``base.pose @`` it only
+    where world is wanted explicitly. A reference in another frame would compare unlike with unlike.
+    """
     arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)
+    eef_robot = np.asarray(arm.leaf_frame_to_robot, dtype=np.float64)
     quat = np.zeros(4)  # wxyz
-    mujoco.mju_mat2Quat(quat, np.ascontiguousarray(eef_world[:3, :3].reshape(9)))  # pyright: ignore[reportAttributeAccessIssue]
+    mujoco.mju_mat2Quat(quat, np.ascontiguousarray(eef_robot[:3, :3].reshape(9)))  # pyright: ignore[reportAttributeAccessIssue]
     qpos = env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP]
     grip = np.clip(qpos[0] / _GRIPPER_QPOS_CLOSED, 0.0, 1.0)
     return {
         mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
         mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-        mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+        mapping.OBS_EEF_POS: eef_robot[:3, 3].astype(np.float32),
         mapping.OBS_EEF_QUAT: quat.astype(np.float32),
         mapping.OBS_GRIP: np.float32(grip),
         **{name: np.ascontiguousarray(env_obs[name]) for name in camera_names},
