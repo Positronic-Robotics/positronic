@@ -79,6 +79,7 @@ class RemotePolicy(Policy):
         self._server_meta: dict[str, Any] | None = None
 
     def meta(self) -> dict[str, Any]:
+        # Recorded whole, as the server sent it; `run` reads only the declared stack and `compress_images`.
         if self._server_meta is None:
             session = self._client.new_session()
             try:

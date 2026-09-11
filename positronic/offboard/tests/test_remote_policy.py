@@ -338,6 +338,30 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
 
+class DeclaredPromptModel(FixedModel):
+    def meta(self):
+        return {'model_name': 'fixed', 'prompt': 'Pick up the green cube and place it on the red cube.'}
+
+
+def test_a_prompt_the_server_declares_is_recorded_as_sent_and_the_task_still_goes_out(served):
+    """A ``prompt`` in the handshake is the deployment's declaration. It is recorded whole under the server
+    block, it is not the episode's task, and the task the episode sends reaches the model unchanged."""
+    address, model, _ = served(model=DeclaredPromptModel())
+    policy = RemotePolicy('websocket', address)
+    assert policy.meta()['server.prompt'] == 'Pick up the green cube and place it on the red cube.'
+
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    run = runtime.start(policy)
+    try:
+        run.send({keys.TASK: 'put the banana on the plate'})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        runtime.close()
+        run.close()
+    assert model.observations[-1][keys.TASK] == 'put the banana on the plate'
+    assert 'prompt' not in model.observations[-1]
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('payload', [{protocol.OBSERVATION: {}}, {protocol.END_SESSION: True}], ids=['infer', 'end'])
 def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload):
