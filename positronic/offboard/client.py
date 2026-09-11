@@ -251,12 +251,10 @@ class InferenceClient:
     def _socket_may_still_appear(self, e: OSError) -> bool:
         """Whether a failed dial is a co-located server that has not bound its socket yet.
 
-        Its ``serve`` binds only once the model has loaded, so the path is absent for that whole
-        interval, and a socket that refuses is one restarting. Only an absent path and a refusal say
-        that; every other dial — a permission the path denies, a descriptor or a memory limit this
-        process has hit — is settled, and waiting for it spends the whole deadline on an answer that
-        will not change. A refusal then reads the path, which tells a restarting server from a path
-        naming something that is not a socket.
+        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and
+        waiting for it spends the whole deadline on an answer that will not change. A refusal then
+        reads the path, which tells a restarting server from a path naming something that is not a
+        socket.
         """
         assert self.uds is not None
         if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
