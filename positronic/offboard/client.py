@@ -1,14 +1,18 @@
 import logging
+import os
+import re
 import ssl
+import stat
 import time
 import urllib.parse
 from enum import Enum
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 
 import httpx
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
-from websockets.sync.client import connect
+from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
 from . import protocol
@@ -117,6 +121,23 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str]:
+    """The socket path a ``unix://`` URL names, decoded, and the URL path left over for the server.
+
+    The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
+    Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
+    socket path cannot hold a directory whose own name carries a slash. Only the socket path is
+    decoded, because it names a file; the URL path reaches the server as written, so a model id
+    carries its own escapes.
+    """
+    if split.netloc or not split.path.startswith('/'):
+        raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
+    marker = re.search(r'/api/v1(?=/|$)', split.path)
+    if marker is None:
+        return urllib.parse.unquote(split.path), ''
+    return urllib.parse.unquote(split.path[: marker.start()]), split.path[marker.start() :]
+
+
 class _ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
@@ -131,8 +152,21 @@ class _ConnectRetries:
 
     MAX_FORBIDDEN_ATTEMPTS = 3
 
-    def __init__(self) -> None:
+    def __init__(self, connect_deadline: float, url: str) -> None:
         self._forbidden_attempts = 0
+        self._deadline = time.monotonic() + connect_deadline
+        self._backoff = 1.0
+        self._url = url
+
+    def wait_or_surface(self, e: Exception) -> None:
+        """Spend one refused connect against the budget, or let it surface. Call it from the handler."""
+        if self.take(e) is _ConnectOutcome.SURFACE:
+            raise
+        if time.monotonic() >= self._deadline:
+            raise TimeoutError(f'{e} (connecting to {self._url})') from e
+        logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, self._backoff)
+        time.sleep(self._backoff)
+        self._backoff = min(self._backoff * 2, 30.0)
 
     def take(self, e: Exception) -> _ConnectOutcome:
         """Spend a refused connect against the budget."""
@@ -156,6 +190,11 @@ class InferenceClient:
     session — the model id it names and the query it carries as session params — reaches the server exactly
     as written, so every session opened here serves that model with those params.
 
+    ``unix://<absolute socket path>[/api/v1/session[/<model_id>]][?query]`` reaches a server on the same
+    machine over a Unix domain socket, which needs no network. The socket path runs to the first
+    ``/api/v1`` segment, so ``unix:///run/policy.sock`` is the default session and
+    ``unix:///run/policy.sock/api/v1/session/10000?fps=10`` names a model and a param. TLS does not apply.
+
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
 
@@ -174,45 +213,74 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss', 'unix'):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
         secure = split.scheme in ('https', 'wss')
+        if split.scheme == 'unix':
+            uds, path = _socket_and_path(split, url)
+            # A socket path is not a host. The server reads the path and the query alone, so the
+            # handshake asks for them under a host that stands in for the socket.
+            netloc = 'localhost'
+        else:
+            uds = None
+            if not split.hostname:
+                raise ValueError(f'No host in {url!r}')
+            path = split.path
+            default_port = 443 if secure else 80
+            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+            host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
+            port = default_port if split.port is None else split.port
+            netloc = host if port == default_port else f'{host}:{port}'
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
-        default_port = 443 if secure else 80
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
-        port = default_port if split.port is None else split.port
-        netloc = host if port == default_port else f'{host}:{port}'
         # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever wrote
         # the URL knows whether `true` means the bool or the string.
         query = f'?{split.query}' if split.query else ''
-        self.session_url = f'{ws_scheme}://{netloc}{_session_path(split.path, url)}{query}'
+        session_path = _session_path(path, url)
+        self.uds = uds
+        # The URL the websocket handshake asks for, and the TCP address to dial when there is no socket.
+        self._ws_uri = f'{ws_scheme}://{netloc}{session_path}{query}'
+        # What an error names. Over a socket the stand-in host would not say which socket failed.
+        self.session_url = self._ws_uri if uds is None else f'unix://{uds}{session_path}{query}'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
 
+    def _socket_may_still_appear(self, e: OSError) -> bool:
+        """Whether a failed dial is a co-located server that has not bound its socket yet.
+
+        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and
+        waiting for it spends the whole deadline on an answer that will not change. A refusal then
+        reads the path, which tells a restarting server from a path naming something that is not a
+        socket.
+        """
+        assert self.uds is not None
+        if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
+            return False
+        try:
+            return stat.S_ISSOCK(os.stat(self.uds).st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
-        deadline = time.monotonic() + self.connect_deadline
-        backoff = 1.0
-        retries = _ConnectRetries()
+        retries = _ConnectRetries(self.connect_deadline, self.session_url)
         while True:
             ws = None
             try:
                 # A proxy between here and the server closes a connection it has read nothing from, often
                 # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
                 # answers. The pings keep it open.
-                ws = connect(
-                    self.session_url,
-                    open_timeout=self.open_timeout,
-                    additional_headers=self.headers,
-                    ping_interval=20.0,
+                dial = (
+                    partial(connect, self._ws_uri)
+                    if self.uds is None
+                    else partial(unix_connect, self.uds, uri=self._ws_uri)
                 )
+                ws = dial(open_timeout=self.open_timeout, additional_headers=self.headers, ping_interval=20.0)
                 return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
@@ -226,18 +294,18 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                if retries.take(e) is _ConnectOutcome.SURFACE:
-                    raise
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
-                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                retries.wait_or_surface(e)
             except OSError as e:
-                raise type(e)(f'{e} (connecting to {self.session_url})') from e
+                if ws is not None:
+                    ws.close()
+                if self.uds is None or not self._socket_may_still_appear(e):
+                    raise type(e)(f'{e} (connecting to {self.session_url})') from e
+                retries.wait_or_surface(e)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
-        response = httpx.get(f'{self.api_url}/models', headers=self.headers)
+        transport = None if self.uds is None else httpx.HTTPTransport(uds=self.uds)
+        with httpx.Client(transport=transport) as client:
+            response = client.get(f'{self.api_url}/models', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']

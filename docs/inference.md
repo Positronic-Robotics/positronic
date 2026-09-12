@@ -58,6 +58,8 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
 
+**A Unix socket reaches a server on the same machine.** `--uds /run/policy.sock` binds that socket path in place of a host and a port. `--policy.url=unix:///run/policy.sock` dials it, over no network. A model id and session params follow the socket path as they follow a host: `unix:///run/policy.sock/api/v1/session/10000?codec.fps=10`. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
+
 **Credentials stay out of the URL, and out of the command line.** The URL is meant to be safe to paste around, so a token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
 - `.authed_remote` — a bearer token read from `AUTH_TOKEN`, which it raises about when that is unset. Every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates is gated this way, whether the server checks the token itself or a proxy in front of it does.

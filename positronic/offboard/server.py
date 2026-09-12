@@ -1,10 +1,13 @@
 """The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
+import errno
 import hmac
 import json
 import logging
 import os
+import socket
+import stat
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -202,6 +205,9 @@ class PolicyServer:
     The default checkpoint is resolved once, at startup, and pinned for every request that names no
     explicit one — a running server never switches to a newer checkpoint that lands later. A request
     for /api/v1/session/{model_id} still loads that one on demand.
+
+    ``uds`` binds a Unix socket path instead of ``host:port``, which serves a client on the same machine
+    over no network. A client reaches it with a ``unix://`` URL.
     """
 
     def __init__(
@@ -212,6 +218,7 @@ class PolicyServer:
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        uds: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -226,7 +233,11 @@ class PolicyServer:
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
-        self.metadata: dict[str, Any] = {offboard_keys.HOST: host, offboard_keys.PORT: port}
+        self.uds = uds
+        # Where the server listens, as the handshake reports it. A socket path is not a host, so it has its own key.
+        self.metadata: dict[str, Any] = (
+            {offboard_keys.HOST: host, offboard_keys.PORT: port} if uds is None else {offboard_keys.UDS: uds}
+        )
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -407,20 +418,80 @@ class PolicyServer:
                 server.should_exit = True
                 return
 
+    # The probe bounds its wait, and reads a wait that runs out as a live server: a server whose
+    # backlog is full holds a connect open, and an unbounded one would stall startup.
+    LIVE_SOCKET_PROBE_SEC = 1.0
+
+    @staticmethod
+    def _is_stale_socket(path: str) -> bool:
+        """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+
+        A live socket, a probe that runs out of time against a full backlog, and a path that holds
+        something other than a socket are none of them stale.
+        """
+        try:
+            if not stat.S_ISSOCK(os.stat(path).st_mode):
+                return False
+        except FileNotFoundError:
+            return False
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(PolicyServer.LIVE_SOCKET_PROBE_SEC)
+            try:
+                probe.connect(path)
+            except ConnectionRefusedError:
+                return True
+            except OSError:
+                return False
+        return False
+
+    @staticmethod
+    def claim_socket_path(path: str) -> socket.socket:
+        """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
+
+        The bind is the claim, so two servers starting together cannot both take one path: the loser's
+        bind fails. A probe follows it only to tell a stale file from a live server. Serve the returned
+        socket by its descriptor: a server handed the path instead binds again, and unlinks this claim.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            try:
+                sock.bind(path)
+            except OSError as taken:
+                if taken.errno != errno.EADDRINUSE:
+                    raise
+                if not PolicyServer._is_stale_socket(path):
+                    raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
+                os.unlink(path)
+                sock.bind(path)
+            # The mode is the deployment's, through its umask: widening it here would open the socket
+            # to every local account that can reach the directory.
+            sock.listen()
+        except BaseException:
+            sock.close()
+            raise
+        return sock
+
     def serve(self):
         async def _run():
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-            server = uvicorn.Server(config)
-            self._last_activity = time.monotonic()
-            watchdog = None
-            if self.idle_timeout_min and self.idle_timeout_min > 0:
-                watchdog = asyncio.create_task(self._idle_watchdog(server))
+            sock, watchdog = None, None
             try:
+                if self.uds is not None:
+                    sock = self.claim_socket_path(self.uds)
+                fd = None if sock is None else sock.fileno()
+                config = uvicorn.Config(self.app, host=self.host, port=self.port, fd=fd, log_level='info')
+                server = uvicorn.Server(config)
+                self._last_activity = time.monotonic()
+                if self.idle_timeout_min and self.idle_timeout_min > 0:
+                    watchdog = asyncio.create_task(self._idle_watchdog(server))
                 await server.serve()
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
+                if sock is not None:
+                    # The file stays: a successor reads it as stale, where an unlink here could take a
+                    # path that successor has already claimed.
+                    sock.close()
 
         try:
             asyncio.run(_run())
@@ -430,13 +501,22 @@ class PolicyServer:
             self._manager.close()
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None)
-def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None, idle_timeout_min: float | None):
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, uds=None)
+def serve(
+    pipeline: cfn.Config,
+    host: str,
+    port: int,
+    recording_dir: str | None,
+    idle_timeout_min: float | None,
+    uds: str | None,
+):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
     Only the socket and the recording taps are flags of their own; everything the served model is —
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+
+    ``--uds`` binds that Unix socket path and leaves ``host`` and ``port`` unused.
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
@@ -448,4 +528,5 @@ def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None,
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        uds=uds,
     ).serve()
