@@ -210,13 +210,15 @@ an empty `wandb/` placeholder. SmolVLA matches the same layout; OpenPI and GR00T
 checkpoint shapes (see each vendor's README under `positronic/vendors/`). Live WandB metrics
 flow to your account directly via the API key — they aren't synced to S3.
 
-## Serve a checkpoint as an HTTP endpoint
+## Serve a checkpoint as an endpoint
 
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
-Nebius fronts the container's port 8000 with a managed `https://` URL, which terminates TLS and
-is the contact address. That URL survives endpoint stop/start; deleting an endpoint retires it,
-so a re-created one of the same name gets a new URL. Supported vendors: `lerobot_0_3_3`,
+Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
+the contact address. The server listens on two — port 8000 for the websocket wire and port 9000 for
+the gRPC one — so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one. Both
+survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
+gets new ones. Supported vendors: `lerobot_0_3_3`,
 `lerobot`, `openpi`, `gr00t`.
 
 Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
@@ -254,8 +256,10 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
-`serve.sh` blocks until the managed URL appears (typically <1 min), then prints a banner with
-that URL, the endpoint ID, and the commands to follow logs and tear down. The container takes
+`serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
+of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
+the `https://` URL for the websocket, and for gRPC the port-9000 host dialled as `grpcs://<host>:443`,
+which the banner prints ready to paste. The container takes
 another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
 server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
 in [Authenticated inference](#authenticated-inference)):
@@ -281,15 +285,16 @@ When you're done, `stop.sh` deletes the endpoint:
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-Deleting retires the managed URL, and a re-created endpoint of the same name gets a new one — so anything
-holding it, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
+Deleting retires the managed URLs, and a re-created endpoint of the same name gets new ones — so anything
+holding one, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
 stop <id>` instead: it releases the compute too, and `start` resumes on the same URL.
 
-### The managed URL is assigned, not chosen
+### A managed URL is assigned, not chosen
 
-It belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
-`https://port8000-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. No flag sets it and nothing
-derives it, which is why `serve.sh` polls `status.public_endpoints` to learn it.
+Each belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
+`https://port<container-port>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. The port prefix is
+what tells the two wires apart. No flag sets a URL and nothing derives one, which is why `serve.sh` polls
+`status.public_endpoints` to learn them.
 
 A URL that outlives the endpoint needs a tunnel of your own (`nebius tunnel create`) with its agent in the
 container, which also names the host (`services.name`, up to 20 lowercase alphanumerics — `phail` rather

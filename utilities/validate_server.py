@@ -71,8 +71,9 @@ def main(
 ):
     """Validate an inference server by iterating all available models and running inference for each.
 
-    ``url`` names the server, in any form ``InferenceClient`` takes; a gated one also needs its bearer
-    token exported as ``AUTH_TOKEN``.
+    ``url`` names the server, in any form ``InferenceClient`` takes except ``grpc://`` and ``grpcs://``:
+    this lists the models first, and the gRPC port carries sessions alone. A gated server also needs its
+    bearer token exported as ``AUTH_TOKEN``.
 
     Example:
 
