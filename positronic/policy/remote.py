@@ -50,7 +50,8 @@ def round_trip(
     stack must not run on the thread that calls the session. The span starts after it, because that
     encode is not inference.
     """
-    prepared = _prepare_obs(obs, compress_images)
+    with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
+        prepared = _prepare_obs(obs, compress_images)
     infer_start_ns = time.time_ns()
     try:
         return ws_session.infer(prepared)
