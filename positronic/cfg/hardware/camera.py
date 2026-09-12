@@ -33,12 +33,14 @@ def zed(**kwargs):
 
 zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
+# Serial 13785037 is a ZED-M, so the name and the hardware disagree (Positronic-Robotics/internal#1297).
 zed_2i_second = zed.override(serial_number=13785037)
 
 _DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
 
 droid = {keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM), keys.EXTERIOR_IMAGE: zed_2i.override(**_DROID_STREAM)}
 
+# `exterior_2` runs on `zed_2i_second`, a ZED-M, so its optics differ from `exterior`.
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: zed_2i_second.override(**_DROID_STREAM)}
 
 # YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
