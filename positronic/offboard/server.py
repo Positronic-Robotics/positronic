@@ -177,28 +177,13 @@ class PolicyServer:
     """Serves a policy pipeline: one layer chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
 
-    The half right of the marker wraps the model here; the half left of it is published as the
-    ``local_stack`` spec in the ``ready`` handshake for the rig to build, alongside the marker's own
-    wire settings. The source is the only model loader and is fixed at launch.
+    The half right of the marker wraps the model here. The half left of it goes to the rig as the
+    ``local_stack`` spec in the ``ready`` handshake, with the marker's own wire settings. The source is
+    the only model loader and is fixed at launch.
 
-    When ``pipeline`` is a ``cfn.Config``, query params on the session URL become dotted
-    overrides into the pipeline config (e.g. ``?codec.fps=10``), applied and instantiated per session.
-    Values must be JSON literals (unparseable values pass through as strings) and are applied with
-    ``Config.override_data``, so a param can tune an argument but never name a Python object to
-    import; params that change the model source are rejected too. A server built from an
-    already-instantiated ``Pipeline`` rejects all session params.
-
-    The session flow is:
-        accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
-
-    ``serve`` takes the wires sessions arrive on (``positronic.offboard.wire``). ``api`` holds this
-    server's own HTTP routes, for a wire that speaks HTTP.
-
-    On startup (before accepting connections): resolve(None) → load.
-
-    The default checkpoint is resolved once, at startup, and pinned for every request that names no
-    explicit one — a running server never switches to a newer checkpoint that lands later. A request
-    for /api/v1/session/{model_id} still loads that one on demand.
+    A ``cfn.Config`` pipeline takes session params as dotted overrides (``?codec.fps=10``; the offboard
+    README states the rules). An instantiated ``Pipeline`` refuses every session param. The default
+    checkpoint is resolved at startup and pinned; a session that names a model id loads that one.
     """
 
     def __init__(
@@ -477,8 +462,8 @@ def serve(
 
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
 
-    The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
-    a secret in the process arguments; unset serves open.
+    The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
+    Unset serves open.
     """
     server = PolicyServer(
         pipeline,

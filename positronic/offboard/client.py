@@ -200,21 +200,16 @@ def _session_path(path: str, url: str) -> str:
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
-    Accepted URL forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
-    each with an optional ``?query``. ``https``/``wss``/``grpcs`` enable TLS (bare or ``http``/``ws``/``grpc``
-    forms don't); the port defaults to the scheme's own, 443 for TLS and 80 otherwise. Everything the URL
-    says about the session — the model id it names and the query it carries as session params — reaches
-    the server exactly as written, so every session opened here serves that model with those params.
+    The URL is ``host``, ``host:port`` or ``scheme://host[:port][/api/v1/session[/<model_id>]]``, each with
+    an optional ``?query``. ``https``/``wss``/``grpcs`` enable TLS; the other schemes do not. The port
+    defaults to 443 with TLS and to 80 without. The model id and the query reach the server as written,
+    and every session opened here carries them. ``grpc://`` opens the session on the server's gRPC port;
+    ``grpcs://`` reaches that port through a TLS edge. That port carries sessions alone: ``list_models``
+    needs the HTTP URL.
 
-    ``grpc://`` opens the session on the gRPC wire, on the server's own gRPC port; ``grpcs://`` reaches that
-    port through a TLS edge. That port carries sessions alone: ``list_models`` needs the HTTP URL.
-
-    ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
-    out of the URL, which is meant to be safe to hand around.
-
-    The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
-    handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and
-    ``infer_timeout`` one inference round trip.
+    ``headers`` carry the credentials; the URL carries none. ``open_timeout`` bounds one TCP/TLS handshake,
+    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
+    round trip.
     """
 
     def __init__(

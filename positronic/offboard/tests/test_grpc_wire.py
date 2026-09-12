@@ -456,14 +456,14 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
     unrelated, _key = _self_signed(EDGE_HOST)
     _trust_only(monkeypatch, unrelated)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[0])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE_DETAILS[0])
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A front over a raw TCP port terminates TLS and names no ALPN protocol, and gRPC refuses it."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
     _trust_only(monkeypatch, root)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[1])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE_DETAILS[1])
 
 
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):

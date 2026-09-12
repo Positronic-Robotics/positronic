@@ -47,14 +47,12 @@ _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 # the caller's ``open_timeout``: a target that drops every connect answers neither.
 _REFUSAL_PROBE_SEC = 1.0
 
-# The status details of an edge no client can use: a certificate the roots do not cover, and a front
-# that selects no HTTP/2 over ALPN.
-UNUSABLE_EDGE = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
+UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 
 
 def edge_is_unusable(details: str) -> bool:
     """Whether a gRPC status blames the TLS edge's own configuration."""
-    return any(marker in details for marker in UNUSABLE_EDGE)
+    return any(marker in details for marker in UNUSABLE_EDGE_DETAILS)
 
 
 def _client_options() -> list[tuple[str, int]]:

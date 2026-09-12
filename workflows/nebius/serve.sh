@@ -14,17 +14,13 @@
 # names. The gRPC port is declared as an ordinary HTTP port; a `/tcp` port gets a
 # front gRPC refuses. The offboard README says what each front does to a session.
 #
-# That URL carries the id of a tunnel created with the endpoint, so it cannot be
-# chosen or known in advance, and a delete plus re-create earns a new one even
-# under the same name. Nothing may hold it across a redeploy. `nebius ai endpoint
-# stop`/`start` keeps it where `stop.sh` would not; a URL that survives re-create
-# needs a standalone `nebius tunnel` and its agent in the container. See the
-# README's "The managed URL is assigned, not chosen".
+# The managed URL is assigned, never chosen, and a delete plus re-create of the
+# same name gets a new one; `stop.sh` deletes, `nebius ai endpoint stop`/`start`
+# keeps the URL. See the README's "The managed URL is assigned, not chosen".
 #
-# The server is gated on a bearer token (AUTH_TOKEN, from MysteryBox). Auth is
-# in-process rather than `nebius ai endpoint create --auth token`, because that
-# ingress mode strips the WebSocket upgrade headers and so cannot pass inference
-# sessions at all.
+# The server is gated on a bearer token (AUTH_TOKEN, from MysteryBox). Auth stays
+# in-process: `nebius ai endpoint create --auth token` strips the WebSocket
+# upgrade headers and passes no inference session.
 #
 # Hardcoded: GPU platform, websocket port. Vendor selects image + uv extra. One
 # setting of its own, via env: NEBIUS_PRESET. Everything shared with the other
