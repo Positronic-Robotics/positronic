@@ -455,11 +455,11 @@ def test_a_session_answers_after_a_silence_no_frame_crossed(both_wires, chatty_c
 def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
     start_server, make_mock_policy, chatty_client, monkeypatch
 ):
-    """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``."""
+    """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``, and the session is lost."""
     monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(grpc_wire._MESSAGE_SIZE_OPTIONS))
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
-    with pytest.raises(grpc.RpcError, match='Too many pings'):
+    with pytest.raises(wire.PeerDisconnected, match='Too many pings'):
         _silent_then_infer(served)
 
 
@@ -499,15 +499,29 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
         session.infer({'image': 'test'})
 
 
-def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
-    """gRPC stops reading the request iterator, and a write waits out a whole timeout."""
+def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
+    """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires
     target = f'{served.host}:{served.grpc_port}'
     conn = grpc_wire.dial(target, f'{wire.SESSION_PATH}/unknown-model', '', None, 10.0, secure=False)
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.
-        with pytest.raises(grpc.RpcError):
+        with pytest.raises(wire.PeerDisconnected) as gone:
+            conn.recv(timeout=10.0)
+        assert isinstance(gone.value.__cause__, grpc.RpcError)
+    finally:
+        conn.close()
+
+
+def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
+    """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
+    served, _policy = both_wires
+    target = f'{served.host}:{served.grpc_port}'
+    conn = grpc_wire.dial(target, f'{wire.SESSION_PATH}/unknown-model', '', None, 10.0, secure=False)
+    try:
+        conn.recv(timeout=10.0)
+        with pytest.raises(wire.PeerDisconnected):
             conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):
             conn.send(b'an observation the stream can no longer carry')

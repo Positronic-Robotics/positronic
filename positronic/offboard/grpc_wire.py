@@ -197,9 +197,12 @@ class GrpcClientConnection:
         if isinstance(answer, BaseException):
             # What ended the stream is queued once. The caller reads it before ``send`` refuses a write.
             self._ended = True
-            # A status before any message crossed is the server refusing the call.
-            if isinstance(answer, grpc.RpcError) and not self._received:
-                raise wire.ConnectRefused(_refusal(answer), str(answer)) from answer
+            if isinstance(answer, grpc.RpcError):
+                # A status before any message crossed is the server refusing the call. A status after one is a
+                # lost peer, which is what the other wire reports and what the connect retry reads as cold.
+                if not self._received:
+                    raise wire.ConnectRefused(_refusal(answer), str(answer)) from answer
+                raise wire.PeerDisconnected(f'{self._target} ended the session: {answer}') from answer
             raise answer
         self._received = True
         return answer
