@@ -28,9 +28,10 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 from positronic.utils import package_assets_path
 
-from . import RobotStatus, State, command
+from . import RobotStatus, command
 from .ik import qpos_from_site_pose
 from .models import DEFAULT_FRAME
+from .state import PackedState
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
 with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
@@ -62,44 +63,6 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
-
-
-class YamState(State, pimm.shared_memory.NumpySMAdapter):
-    Q_OFFSET = 0
-    DQ_OFFSET = Q_OFFSET + 6
-    EE_POSE_OFFSET = DQ_OFFSET + 6
-    STATUS_OFFSET = EE_POSE_OFFSET + 7
-    TOTAL = STATUS_OFFSET + 1
-
-    def __init__(self):
-        super().__init__(shape=(YamState.TOTAL,), dtype=np.dtype(np.float32))
-
-    def instantiation_params(self) -> tuple[Any, ...]:
-        return ()
-
-    @property
-    def q(self) -> np.ndarray:
-        return self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6].copy()
-
-    @property
-    def dq(self) -> np.ndarray:
-        return self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6].copy()
-
-    @property
-    def ee_pose(self) -> geom.Transform3D:
-        pose = self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 7].copy()
-        return geom.Transform3D(pose[:3], geom.Rotation.from_quat(pose[3:7]))
-
-    @property
-    def status(self) -> RobotStatus:
-        return RobotStatus(int(self.array[YamState.STATUS_OFFSET]))
-
-    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus):
-        self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6] = q
-        self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6] = dq
-        self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 3] = ee_pose.translation
-        self.array[YamState.EE_POSE_OFFSET + 3 : YamState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
-        self.array[YamState.STATUS_OFFSET] = status.value
 
 
 class _Kinematics:
@@ -169,7 +132,7 @@ class _Chain(DriverRun[command.CommandType]):
         vendor: Any,
         sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
-        out: pimm.SignalEmitter[YamState],
+        out: pimm.SignalEmitter[PackedState],
         grip_out: pimm.SignalEmitter[float],
         base_pose: geom.Transform3D,
         should_stop: pimm.SignalReceiver,
@@ -179,7 +142,7 @@ class _Chain(DriverRun[command.CommandType]):
         self.vendor = vendor
         self.out = out
         self.grip_out = grip_out
-        self.state = YamState()
+        self.state = PackedState(len(_JOINT_NAMES))
         self._base_pose = base_pose
         self._kin = _Kinematics()
 
@@ -350,7 +313,7 @@ class Robot(pimm.ControlSystem):
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.state = pimm.ControlSystemEmitter[YamState](self)
+        self.state = pimm.ControlSystemEmitter[PackedState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
