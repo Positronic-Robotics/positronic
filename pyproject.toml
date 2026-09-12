@@ -60,6 +60,7 @@ positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-probe="positronic.probe:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
+positronic-franka-desk="positronic.drivers.roboarm.franka_desk:_internal_main"
 
 
 [project.optional-dependencies]
