@@ -22,7 +22,7 @@ from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
-from . import grpc_wire, protocol, wire
+from . import grpc_wire, protocol, websocket_wire, wire
 from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -495,7 +495,7 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[wire.Wire] = [wire.WebsocketWire(host, port, server.api)]
+    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
     if grpc_port is not None:
         wires.append(grpc_wire.GrpcWire(host, grpc_port))
     server.serve(wires)

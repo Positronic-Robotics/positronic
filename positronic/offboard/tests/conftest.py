@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from positronic.offboard import grpc_wire, wire
+from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
@@ -37,7 +37,7 @@ def start_server() -> Generator[StartServer, None, None]:
     def start(pipeline, *, grpc: bool = False, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, **server_kwargs)
-        wires: list[wire.Wire] = [wire.WebsocketWire(host, 0, server.api)]
+        wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api)]
         if grpc:
             wires.append(grpc_wire.GrpcWire(host, 0))
         ready = threading.Event()

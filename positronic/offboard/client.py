@@ -11,7 +11,7 @@ import httpx
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 from websockets.sync.client import connect
 
-from . import grpc_wire, protocol, wire
+from . import grpc_wire, protocol, websocket_wire, wire
 from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
@@ -278,7 +278,7 @@ class InferenceClient:
             ping_interval=20.0,
             max_size=wire.MAX_MESSAGE_BYTES,
         )
-        return wire.WebsocketClientConnection(websocket)
+        return websocket_wire.WebsocketClientConnection(websocket)
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session, closing the connection whenever the handshake does not finish.

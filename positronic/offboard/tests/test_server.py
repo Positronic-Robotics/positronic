@@ -17,13 +17,13 @@ from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import wire
+from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
-from positronic.offboard.wire import WebsocketClientConnection
+from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
@@ -108,11 +108,11 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_po
     """A ``WebsocketWire`` binds a real socket when it starts, so a startup that rolls back frees the
     port it took, not only the stub wires that own no socket."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = wire.WebsocketWire('localhost', 0, server.api)
+    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener would still hold the port, so binding a fresh socket to it would raise.
-    wire._listening_socket('localhost', bound.endpoint.port).close()
+    websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
@@ -129,7 +129,7 @@ def test_an_idle_server_stops_itself(make_mock_policy):
     server = PolicyServer(
         ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
     )
-    serving = threading.Thread(target=server.serve, args=([wire.WebsocketWire('localhost', 0, server.api)],))
+    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
     serving.start()
     serving.join(timeout=_A_MOMENT_IDLE * 20)
     assert not serving.is_alive(), 'the idle watchdog left the server running'

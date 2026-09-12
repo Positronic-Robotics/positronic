@@ -253,7 +253,7 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 
 ```python
 from positronic.offboard import PolicyServer
-from positronic.offboard.wire import WebsocketWire
+from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule
 

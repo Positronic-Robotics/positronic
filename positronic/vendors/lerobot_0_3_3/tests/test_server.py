@@ -4,7 +4,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
-from positronic.offboard import wire
+from positronic.offboard import websocket_wire, wire
 from positronic.offboard.protocol import deserialise
 from positronic.policy.executor import blocking
 from positronic.policy.layers import ChunkedSchedule
@@ -54,9 +54,9 @@ class _DummyWebSocket:
         self.events.append('close')
         await self._close(**kwargs)
 
-    def as_connection(self) -> wire.WebsocketServerConnection:
+    def as_connection(self) -> websocket_wire.WebsocketServerConnection:
         """What the websocket wire hands the server for one session it has accepted."""
-        return wire.WebsocketServerConnection(self, wire.Endpoint('localhost', 8000))
+        return websocket_wire.WebsocketServerConnection(self, wire.Endpoint('localhost', 8000))
 
 
 def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
