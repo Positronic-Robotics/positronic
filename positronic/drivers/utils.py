@@ -78,18 +78,40 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         return self._target
 
+    def take_newest_setpoint(self) -> T | None:
+        """The newest setpoint streamed at the device, letting go of every setpoint older than it.
+
+        A transport that queues setpoints hands the oldest over first, and a setpoint says where the device
+        is wanted now, not where it was wanted when the setpoint was written.
+        """
+        latest = None
+        while (message := self._async_move.read()) is not None and message.updated:
+            latest = message.data
+        return latest
+
     def next_request(self) -> pimm.calls.Call[T, None] | T | None:
         """What the device is asked for now: a call whose asker waits to hear it arrive, a streamed setpoint
         nobody waits on, or nothing.
 
-        A call comes first, because a signal holds only its latest value and a setpoint read in the same tick
-        would be lost. A device a move already owns is asked for nothing.
+        A call comes first: a setpoint says where the device is wanted now, and the move that follows it
+        puts the device somewhere else. A device a move already owns is asked for nothing, and neither is
+        one whose move has settled and whose asker is still owed the news. The stream is read only when a
+        setpoint is what comes back, so a call refused before the device moved leaves it where it stands.
         """
         if self.busy:
             return None
         if (call := next(self._sync_move.incoming(), None)) is not None:
             return call
-        return pimm.value_updated(self._async_move)
+        return self.take_newest_setpoint()
+
+    def discard_streamed_setpoints(self) -> None:
+        """Let go of every setpoint streamed at the device while a move owned it.
+
+        Those setpoints say where the device was wanted on the way to the pose it now holds, and applying
+        one would drive it straight back off that pose. ``settle`` does this for a move it ends; a driver
+        held inside the call for the whole travel does it when the travel is over.
+        """
+        self.take_newest_setpoint()
 
     def accept(
         self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
@@ -118,10 +140,12 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         if bool(np.all(np.abs(np.asarray(position) - np.asarray(self._target)) < self._tol)):
             self._settled, self._call, self.errored = (self._call, None), None, False
+            self.discard_streamed_setpoints()
             return MoveStatus.ARRIVED
         if now >= self._deadline:
             short = TimeoutError(f'stopped at {np.round(position, 3)}, short of {np.round(self._target, 3)}')
             self._settled, self._call, self.errored = (self._call, short), None, True
+            self.discard_streamed_setpoints()
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
 
@@ -191,6 +215,8 @@ def grip_setpoint(moves: Moves[float], grip: float, now: float) -> float | None:
     driver writes before calling ``Moves.answer``.
     """
     if moves.active:
+        # A width streamed at fingers a move owns is older than where the move puts them.
+        moves.take_newest_setpoint()
         return grip if moves.settle(grip, now) is MoveStatus.GAVE_UP else None
     asked = moves.next_request()
     if isinstance(asked, pimm.calls.Call):

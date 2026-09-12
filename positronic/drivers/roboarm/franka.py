@@ -206,18 +206,23 @@ class _Arm(DriverRun[command.CommandType]):
 
         try:
             self.command_target(target, mode)
-            for wait in self.await_goal(should_stop, self.limiter.wait):
-                st = self.robot.state()
-                self.state.encode(st, RobotStatus.BUSY)
-                self.out.emit(self.state)
-                if st.error != 0 and not at_teardown:
-                    self.robot.recover_from_errors()
-                yield wait
-            # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
-            if expired() and self.robot.goal().status != pf.GoalStatus.REACHED:
-                # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
-                self.robot.set_target_joints(self.robot.state().q)
-                raise TimeoutError(f'the arm stopped short of {target}')
+            try:
+                for wait in self.await_goal(should_stop, self.limiter.wait):
+                    st = self.robot.state()
+                    self.state.encode(st, RobotStatus.BUSY)
+                    self.out.emit(self.state)
+                    if st.error != 0 and not at_teardown:
+                        self.robot.recover_from_errors()
+                    yield wait
+                # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
+                if expired() and self.robot.goal().status != pf.GoalStatus.REACHED:
+                    # The robot still tracks the goal it missed, and would resume it once the arm comes free.
+                    self.robot.set_target_joints(self.robot.state().q)
+                    raise TimeoutError(f'the arm stopped short of {target}')
+            finally:
+                # The arm has the target, so it travelled however this ends, and the loop read nothing
+                # while it did: what was streamed at it in the meantime is where it was wanted on the way.
+                self.moves.discard_streamed_setpoints()
         except Exception:
             self.moves.errored = True
             raise
@@ -260,7 +265,8 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         cmd = call.request
         try:
-            if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
+            status = yield from self.move_to(self.to_joints(cmd), cmd.mode)
+            if status is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())

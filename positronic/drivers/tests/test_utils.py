@@ -174,8 +174,10 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
     assert answer.result() is None
 
 
-def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
-    """A signal holds only its latest value, so a stream read in the same tick as a call would be lost."""
+def test_a_setpoint_the_device_was_moved_away_from_is_let_go(asking):
+    """A setpoint says where the device is wanted now, and the move taken after it puts the device
+    somewhere else. Applying the setpoint once the move lands takes the device back off the pose it was
+    asked for, in one step and with nobody asking."""
     ask, moves, stream = asking
     stream.push(0.25)
     ask(0.9)
@@ -183,8 +185,34 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.9
     assert grip_setpoint(moves, grip=0.9, now=0.1) is None  # the call arrives
     moves.answer()
-    assert grip_setpoint(moves, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(moves, grip=0.25, now=0.3) is None
+    assert grip_setpoint(moves, grip=0.9, now=0.2) is None, 'the setpoint the move superseded reached the device'
+
+
+def test_the_newest_setpoint_is_what_the_device_is_asked_for(asking):
+    """A transport that queues setpoints hands the oldest over first. A device asked for one a tick is
+    driven through what its asker has already done, and falls further behind the longer it runs."""
+    _ask, moves, stream = asking
+    for width in (0.1, 0.2, 0.3):
+        stream.push(width)
+
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.3
+    assert grip_setpoint(moves, grip=0.3, now=0.1) is None, 'the device was asked for a width it had passed'
+
+
+def test_setpoints_streamed_at_a_travelling_device_do_not_reach_it_when_the_move_lands(asking):
+    """Nothing reads the stream for as long as a move owns the device, so what arrives in that time is
+    where the asker wanted the device before the move — every setpoint of it, oldest first."""
+    ask, moves, stream = asking
+    ask(0.9)
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.9
+
+    stream.push(0.25)
+    stream.push(0.30)
+    assert grip_setpoint(moves, grip=0.0, now=0.1) is None  # the move still travels
+    assert grip_setpoint(moves, grip=0.9, now=0.2) is None  # ... and lands
+    moves.answer()
+
+    assert grip_setpoint(moves, grip=0.9, now=0.3) is None, 'the device was driven back through the stream'
 
 
 def test_how_long_a_move_gets_is_the_driver_s_to_say():
@@ -246,6 +274,86 @@ def test_a_device_still_travelling_is_asked_for_nothing(asking):
 
     assert moves.next_request() is None
     assert moves.settle(0.0, now=0.1) is MoveStatus.MOVING
+
+
+def test_a_setpoint_written_while_a_blocking_move_travelled_is_let_go(asking):
+    """A driver held inside the call reads nothing while it moves, so what queued up is older than the pose
+    it now holds -- and applying it would drive the device straight back off the target it was asked for."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request()
+    assert isinstance(call, pimm.calls.Call)
+
+    stream.push(0.25)  # written while the device travelled, and never polled for
+    call.set_result(None)
+    moves.discard_streamed_setpoints()  # the driver blocked for the whole travel and lets go of what queued up
+
+    assert moves.next_request() is None
+
+    stream.push(0.75)
+    assert moves.next_request() == 0.75
+
+
+def test_a_setpoint_written_after_a_blocking_move_ended_survives_the_wait_for_the_next_poll(asking):
+    """A blocking driver yields to its limiter before it polls again, so a setpoint can arrive between the
+    end of the travel and the poll. It was written after the move, and is what the device does next."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request()
+    assert isinstance(call, pimm.calls.Call)
+    call.set_result(None)
+    moves.discard_streamed_setpoints()
+
+    stream.push(0.25)  # written after the travel, while the driver slept
+
+    assert moves.next_request() == 0.25
+
+
+def test_a_call_refused_before_the_device_moved_leaves_the_stream_alone(asking):
+    """A target the device cannot be put at is answered without it moving, so nothing streamed at it since
+    says where it was wanted on the way anywhere."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request()
+    assert isinstance(call, pimm.calls.Call)
+    call.set_exception(ValueError('out of reach'))  # refused before the device took a step
+
+    stream.push(0.25)
+
+    assert moves.next_request() == 0.25
+
+
+def test_a_setpoint_written_while_a_settled_move_waits_to_be_answered_is_kept(asking):
+    """A move settles before the state that goes with it is published, and its asker is answered after. A
+    setpoint that arrives in between was written after the move ended."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request()
+    assert isinstance(call, pimm.calls.Call)
+    moves.accept(call, 1.0, TOL, now=0.0, timeout_s=3.0)
+    assert moves.settle(1.0, now=0.1) is MoveStatus.ARRIVED
+
+    stream.push(0.25)  # settled, and its asker not yet told
+    assert moves.next_request() is None
+
+    moves.answer()
+    assert moves.next_request() == 0.25
+
+
+def test_a_setpoint_written_after_a_move_arrived_is_kept(asking):
+    """A move settles at the end of a tick, and a driver that keeps it in flight polls again only after its
+    limiter sleeps. A setpoint written in between is newer than the move, and is what the device does next."""
+    ask, moves, stream = asking
+    ask(1.0)
+    call = moves.next_request()
+    assert isinstance(call, pimm.calls.Call)
+    moves.accept(call, 1.0, TOL, now=0.0, timeout_s=3.0)
+    assert moves.settle(1.0, now=0.1) is MoveStatus.ARRIVED
+    moves.answer()
+
+    stream.push(0.25)  # written while the driver slept, and after the move was over
+
+    assert moves.next_request() == 0.25
 
 
 def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_both():
