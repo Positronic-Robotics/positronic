@@ -1,8 +1,11 @@
 from types import MappingProxyType
+from typing import Any, cast
 from unittest.mock import ANY
 
 import numpy as np
 import pytest
+from websockets.exceptions import ConnectionClosedError
+from websockets.sync.connection import Connection
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -14,7 +17,8 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
-from positronic.offboard.client import InferenceClient
+from positronic.offboard import protocol
+from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
 from positronic.utils.serialization import encode_jpeg
 
@@ -269,3 +273,79 @@ class TestServedCommandDecode:
 
         assert isinstance(from_envelope, CartesianPosition) and isinstance(from_bare, CartesianPosition)
         np.testing.assert_allclose(from_bare.pose.translation, from_envelope.pose.translation, atol=1e-6)
+
+
+class _FakeConnection:
+    """A websocket answering one canned result, which drops the connection on its first ``send`` if told to."""
+
+    def __init__(self, result: Any, *, drops_first_send: bool = False):
+        self._result = result
+        self._drops = drops_first_send
+        self.sent: list[bytes] = []
+        self.closed = False
+
+    def send(self, data: bytes) -> None:
+        if self._drops:
+            raise ConnectionClosedError(None, None)
+        self.sent.append(data)
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        return serialise({protocol.RESULT: self._result})
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _session(*sockets: _FakeConnection) -> InferenceSession:
+    """A session over ``sockets[0]``, reconnecting onto each of the rest in turn."""
+    spares = iter(sockets[1:])
+    return InferenceSession(
+        cast(Connection, sockets[0]), metadata={'model_name': 'test'}, reopen=lambda: cast(Connection, next(spares))
+    )
+
+
+class TestInferDropsTheConnection:
+    """A backend that scales to zero drops the socket when its container recycles. The session that can
+    reconnect sends the observation again; the one that cannot says so."""
+
+    def test_a_dropped_send_reconnects_and_serves_the_observation(self):
+        dropped = _FakeConnection(None, drops_first_send=True)
+        fresh = _FakeConnection({'action_data': [1, 2, 3]})
+
+        result = _session(dropped, fresh).infer({'image': 'test'})
+
+        assert result == {'action_data': [1, 2, 3]}
+        assert dropped.closed, 'the dropped socket is closed before the reconnect'
+        assert [deserialise(sent) for sent in fresh.sent] == [{'image': 'test'}]
+
+    def test_a_session_that_cannot_reconnect_raises(self):
+        """``reopen`` is what makes a drop recoverable; without one the caller hears the drop."""
+        dropped = _FakeConnection(None, drops_first_send=True)
+        session = InferenceSession(cast(Connection, dropped), metadata={'model_name': 'test'})
+
+        with pytest.raises(ConnectionClosedError):
+            session.infer({'image': 'test'})
+
+    def test_a_second_drop_reaches_the_caller(self):
+        """One retry, on a session the server has just built. A backend dropping that one too cannot serve
+        this observation at all."""
+        session = _session(_FakeConnection(None, drops_first_send=True), _FakeConnection(None, drops_first_send=True))
+
+        with pytest.raises(ConnectionClosedError):
+            session.infer({'image': 'test'})
+
+    def test_a_stalled_server_is_not_reconnected(self):
+        """A recv timeout leaves the observation with a server that may still be computing it, so sending it
+        again would double the work on a backend already too slow. It surfaces, and the socket stays closed."""
+
+        def stall(timeout: float | None = None) -> bytes:
+            raise TimeoutError
+
+        stalled = _FakeConnection(None)
+        stalled.recv = stall
+        spare = _FakeConnection({'action_data': ['unused']})
+
+        with pytest.raises(TimeoutError):
+            _session(stalled, spare).infer({'image': 'test'})
+
+        assert stalled.closed and spare.sent == [], 'a stall must not reconnect'

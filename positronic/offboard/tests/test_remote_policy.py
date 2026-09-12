@@ -95,19 +95,21 @@ class TestInferenceClientHeaders:
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client._handshake') as mock_handshake,
         ):
             client = InferenceClient('localhost:8000', headers=headers)
-            client.new_session()
+            session = client.new_session()
 
             mock_connect.assert_called_once()
             assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=DEFAULT_INFER_TIMEOUT)
+            assert session._websocket is mock_connect.return_value
+            assert session.metadata is mock_handshake.return_value
+            assert session._infer_timeout == DEFAULT_INFER_TIMEOUT
 
     def test_new_session_without_headers_passes_none(self):
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client._handshake'),
         ):
             client = InferenceClient('localhost:8000')
             client.new_session()
@@ -197,7 +199,7 @@ class TestInferenceClientUrl:
     def test_every_session_dials_the_session_url(self):
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client._handshake'),
         ):
             client = InferenceClient('localhost:8000/api/v1/session/10000?fps=10')
             client.new_session()
@@ -220,13 +222,13 @@ class TestNewSessionRetriesRefusedUpgrades:
             patch(
                 'positronic.offboard.client.connect', side_effect=[_refused(HTTPStatus.FORBIDDEN), MagicMock()]
             ) as mock_connect,
-            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client._handshake') as mock_handshake,
             patch('positronic.offboard.client.time.sleep'),
         ):
             session = InferenceClient('localhost:8000').new_session()
 
             assert mock_connect.call_count == 2
-            assert session is mock_session_cls.return_value
+            assert session.metadata is mock_handshake.return_value
 
     def test_a_403_gives_up_once_its_attempts_are_spent(self):
         with (
@@ -234,7 +236,7 @@ class TestNewSessionRetriesRefusedUpgrades:
                 'positronic.offboard.client.connect',
                 side_effect=[_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
             ) as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client._handshake'),
             patch('positronic.offboard.client.time.sleep'),
             pytest.raises(InvalidStatus),
         ):
@@ -246,7 +248,7 @@ class TestNewSessionRetriesRefusedUpgrades:
     def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status):
         with (
             patch('positronic.offboard.client.connect', side_effect=_refused(status)) as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client._handshake'),
             patch('positronic.offboard.client.time.sleep'),
             pytest.raises(InvalidStatus),
         ):
@@ -259,7 +261,7 @@ class TestNewSessionRetriesRefusedUpgrades:
         one_session = [_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
         with (
             patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client._handshake'),
             patch('positronic.offboard.client.time.sleep'),
         ):
             client = InferenceClient('localhost:8000')
