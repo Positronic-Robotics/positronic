@@ -34,6 +34,9 @@ def droid(robot_arm, gripper, cameras):
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
+        recorded={
+            keys.camera_state(name): Observation(cam.state, Serializers.camera_state) for name, cam in cameras.items()
+        },
     )
 
 

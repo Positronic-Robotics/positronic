@@ -2536,3 +2536,28 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
     assert not _emitted_commands(cmd_recorder)
+
+
+def test_a_recorded_signal_reaches_the_recorder_and_not_the_policy(world, tmp_path):
+    """A device read-back the embodiment lists under ``recorded`` is a recorder input under its own name, expanded
+    as its serializer says, and no observation the harness reads."""
+    device = _FrameIndexDevice()
+    embodiment = Embodiment(
+        descriptor='',
+        observations={'frame': Observation(device.state, None)},
+        commands={keys.ROBOT_COMMAND: Command(device.cmd, None)},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=device.meta,
+        control_systems=(device,),
+        recorded={keys.camera_state(CAM): Observation(device.state, Serializers.camera_state)},
+    )
+    harness = Harness(embodiment)
+
+    ds_agent = wire.wire_embodiment(world, harness, embodiment)
+
+    assert ds_agent is not None
+    assert keys.camera_state(CAM) == 'camera_state.cam'
+    assert set(ds_agent.inputs) == {'frame', keys.ROBOT_COMMAND, 'camera_state.cam'}
+    assert set(harness.observations) == {'frame'}
+    assert Serializers.camera_state({'exposure': 45, 'gain': 12}) == {'.exposure': 45, '.gain': 12}

@@ -14,6 +14,27 @@ with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
 
 logger = logging.getLogger(__name__)
 
+# The settings a camera's automatic control moves, keyed by the name each records under, valued by the SDK's
+# ``VIDEO_SETTINGS`` member. The two ``auto_*`` flags say whether the values beside them are the sensor's own
+# choice or a set point.
+CAMERA_STATE_SETTINGS = {
+    'exposure': 'EXPOSURE',
+    'gain': 'GAIN',
+    'white_balance_temperature': 'WHITEBALANCE_TEMPERATURE',
+    'auto_exposure': 'AEC_AGC',
+    'auto_white_balance': 'WHITEBALANCE_AUTO',
+}
+
+
+def read_camera_state(zed) -> dict[str, int]:
+    """What the camera reports for each of ``CAMERA_STATE_SETTINGS`` now. A setting the SDK refuses is left out."""
+    state = {}
+    for name, sdk_name in CAMERA_STATE_SETTINGS.items():
+        error_code, value = zed.get_camera_settings(getattr(sl.VIDEO_SETTINGS, sdk_name))
+        if error_code == sl.ERROR_CODE.SUCCESS:
+            state[name] = int(value)
+    return state
+
 
 class SLCamera(pimm.ControlSystem):
     def __init__(
@@ -30,6 +51,7 @@ class SLCamera(pimm.ControlSystem):
         max_recovery_time_sec: float = 10,
         image_enhancement: bool = False,
         mono: bool = False,
+        state_period_sec: float = 1.0,
     ):
         """
         StereoLabs camera driver.
@@ -46,6 +68,10 @@ class SLCamera(pimm.ControlSystem):
             max_recovery_time_sec: (float) Maximum time to wait for camera recovery. If exceeded, will stop the camera.
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
+            state_period_sec: (float) How often ``state`` reports the exposure, gain and white balance the
+                  camera runs at. Automatic control moves them as the scene changes, so one reading per
+                  episode is not enough; each reading is a control request to the camera, so once a frame
+                  is too many.
         """
         super().__init__()
         # IMPORTANT: This control system may be spawned under multiprocessing "spawn".
@@ -59,6 +85,7 @@ class SLCamera(pimm.ControlSystem):
         self._image_enhancement = image_enhancement
         self._depth_mask_requested = depth_mask
         self._mono = mono
+        self._state_period_sec = state_period_sec
 
         self.max_depth = max_depth
         self.max_recovery_time_sec = max_recovery_time_sec
@@ -73,6 +100,9 @@ class SLCamera(pimm.ControlSystem):
 
         self.depth_mask: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
+
+        # The exposure, gain and white balance the camera runs at, read back from it every ``state_period_sec``.
+        self.state: pimm.SignalEmitter[dict[str, int]] = pimm.ControlSystemEmitter(self)
 
     @staticmethod
     def _open_under_device_lock(zed, init_params) -> Iterator[pimm.Sleep]:
@@ -132,6 +162,7 @@ class SLCamera(pimm.ControlSystem):
         yield from self._open_under_device_lock(zed, init_params)
 
         self.recovery_start_time = None
+        next_state_read = clock.now()
 
         while not should_stop.value:
             result = zed.grab()
@@ -148,6 +179,10 @@ class SLCamera(pimm.ControlSystem):
             if self.recovery_start_time is not None:
                 logger.info(f'Camera recovered after {clock.now() - self.recovery_start_time:.2f} seconds')
                 self.recovery_start_time = None
+
+            if clock.now() >= next_state_read:
+                self.state.emit(read_camera_state(zed))
+                next_state_read = clock.now() + self._state_period_sec
 
             image = sl.Mat()
             ts_s = zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds() / 1e9
