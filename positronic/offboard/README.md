@@ -74,16 +74,19 @@ curl http://localhost:8000/api/v1/models
 
 Use this to discover which models are available before connecting.
 
-#### `WS /api/v1/session`
+#### `/api/v1/session`
 Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
 
-#### `WS /api/v1/session/{model_id}`
+#### `/api/v1/session/{model_id}`
 Establishes an inference session with a **specific** model.
 
 **Example:**
 - `ws://localhost:8000/api/v1/session` → Default model
+- `grpc://localhost:9000/api/v1/session` → Default model, over gRPC
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
-- `ws://localhost:8000/api/v1/session/20000` → Model 20000
+- `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
+
+Each wire from the table above takes the same path; only the scheme and the port change.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else

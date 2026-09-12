@@ -175,6 +175,7 @@ Implement a `Policy`, close a pipeline over it with `PolicySource`, and hand the
 ```python
 from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
+from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
@@ -209,7 +210,8 @@ class MyPolicy(Policy):
 
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
-PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
+server = PolicyServer(pipeline)
+server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
