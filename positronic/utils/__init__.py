@@ -15,7 +15,7 @@ import yaml
 from positronic import __file__ as pkg_init_file
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.frozen_dict import frozen_keys_dict, frozen_view
-from positronic.utils.git import get_git_diff, get_git_state
+from positronic.utils.git import get_git_diff, get_git_state, get_package_checkout, get_package_git_state
 
 # Positronic's public S3 bucket, registered under the name 'PUBLIC' here in a low-level module
 # every S3 entrypoint imports, so the `s3://PUBLIC@positronic-public/...` URL form resolves to
@@ -168,8 +168,10 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         - python: Python version
         - platform: Platform string
         - package_version: Positronic package version (if available)
-        - git: Git state (commit, branch, dirty flag)
-        - git_diff: Git diff for uncommitted changes matching patterns
+        - git.positronic: the installed positronic revision (a wheel names the commit it was built
+          from; an editable install names its checkout)
+        - git.current: the git state of the working directory, where it differs
+        - git.*.diff: Git diff for uncommitted changes matching patterns
         - environment: Environment information (VIRTUAL_ENV, uv.lock presence, docker info)
     """
 
@@ -186,12 +188,12 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
 
     pkg_dir = Path(pkg_init_file).resolve().parent
 
-    # Check if package directory is in a different git repo
-    pkg_git_state = get_git_state(workdir=pkg_dir)
+    pkg_git_state = get_package_git_state()
     if pkg_git_state:
         metadata['git.positronic'] = pkg_git_state
-        if add_git_diff:
-            git_diff = get_git_diff(workdir=pkg_dir, patterns=patterns)
+        pkg_checkout = get_package_checkout()
+        if add_git_diff and pkg_checkout is not None:
+            git_diff = get_git_diff(workdir=pkg_checkout, patterns=patterns)
             if git_diff:
                 metadata['git.positronic.diff'] = git_diff
 

@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pyarrow.parquet as pq
 
-from positronic.utils.git import get_git_state
+from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
@@ -73,7 +73,7 @@ def _cached_env_writer_info() -> dict:
         info['version'] = importlib_metadata.version('positronic')
     except Exception:
         info['version'] = ''
-    git_state = get_git_state()
+    git_state = get_package_git_state()
     if git_state is not None:
         info['git'] = git_state
     return info
