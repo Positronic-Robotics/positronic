@@ -3330,38 +3330,6 @@
                     "endColumn": 29,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 46,
-                    "endColumn": 50,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 43,
-                    "endColumn": 49,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 18,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/drivers/camera/luxonis.py": [
