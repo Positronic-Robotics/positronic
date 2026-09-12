@@ -456,9 +456,8 @@ def serve(
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
-    Only the sockets and the recording taps are flags of their own; everything the served model is —
-    codec, source, checkpoint directory — is reached through the pipeline itself
-    (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+    Only the sockets and the recording taps are flags of their own. The codec, the source and the checkpoint
+    directory are reached through the pipeline (``--pipeline.source.checkpoints_dir=...``), each under one name.
 
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
 
