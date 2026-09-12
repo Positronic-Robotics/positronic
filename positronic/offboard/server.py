@@ -389,12 +389,25 @@ class PolicyServer:
                 logger.warning(f'No activity for {idle:.0f}s (idle timeout {timeout_s:.0f}s); shutting down server')
                 return
 
+    @staticmethod
+    def _raise_first_wire_failure(started: Sequence[wire.Wire], outcomes: Sequence[Any]):
+        """Raise the first wire that ended on an error, and log every other one."""
+        failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
+        # Only one failure can raise; the rest are logged here or nowhere.
+        for w, error in failed[1:]:
+            logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
+        if failed:
+            # A wire that ended on an error raises; a silent return reads as a shutdown.
+            raise failed[0][1]
+
     def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
         Every wire shares this server's model slot and inference lock. ``on_ready`` runs on the server's
         own loop once every wire has bound; a caller that asked for port 0 reads the port there.
         """
+        if not wires:
+            raise ValueError('wires must hold at least one wire; a server with none binds nothing and answers nobody')
 
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
@@ -424,13 +437,7 @@ class PolicyServer:
                 # Each wire ends the sessions it carries before this returns and the model slot closes.
                 outcomes = await asyncio.gather(*serving, return_exceptions=True)
 
-            failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
-            # Only one failure can raise; the rest are logged here or nowhere.
-            for w, error in failed[1:]:
-                logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
-            if failed:
-                # A wire that ended on an error raises; a silent return reads as a shutdown.
-                raise failed[0][1]
+            self._raise_first_wire_failure(started, outcomes)
 
         try:
             asyncio.run(_run())

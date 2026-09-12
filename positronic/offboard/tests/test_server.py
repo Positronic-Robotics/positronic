@@ -97,6 +97,13 @@ class _UnbindableWire(wire.Wire):
         pass
 
 
+def test_a_server_with_no_wire_refuses_to_serve(make_mock_policy):
+    """A server that binds nothing answers nobody, so it raises instead of reporting itself ready."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    with pytest.raises(ValueError, match='at least one wire'):
+        server.serve([], on_ready=lambda: pytest.fail('it reported ready with no wire bound'))
+
+
 def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
