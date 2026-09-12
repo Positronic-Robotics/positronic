@@ -368,6 +368,11 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
+        # A console asks here to clear a latched fault the automatic path never reaches: the arm can sit
+        # in libfranka mode Reflex while ``state().error`` reads 0, so nothing else fires recovery. The
+        # emitter reports whether the recovery cleared it.
+        self.recover = pimm.ControlSystemReceiver[bool](self)
+        self.recovery_result = pimm.ControlSystemEmitter[bool](self)
         self._load = load
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
@@ -487,6 +492,11 @@ class Robot(pimm.ControlSystem):
             while not should_stop.value:
                 st = robot.state()
                 arm.publish(st)
+
+                if pimm.read_updated(self.recover) is not None:
+                    cleared = robot.recover_from_errors()
+                    logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
+                    self.recovery_result.emit(cleared)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
