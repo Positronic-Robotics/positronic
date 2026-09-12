@@ -1,6 +1,6 @@
 # Connect Your Model
 
-Positronic lets any robot run any policy over one WebSocket protocol. A trained model runs as a server; the robot — or a simulator — runs a client that streams observations to it and executes the actions it returns. This guide explains how that split works and how to plug in your own model.
+Positronic lets any robot run any policy over one protocol, which a WebSocket or a gRPC wire carries. A trained model runs as a server; the robot — or a simulator — runs a client that streams observations to it and executes the actions it returns. This guide explains how that split works and how to plug in your own model.
 
 **What you need:** [uv](https://docs.astral.sh/uv/) and a clone of the repo (`git clone git@github.com:Positronic-Robotics/positronic.git`). Docker is optional — it is only a convenient way to get a vendor model's Python dependencies; the server itself is an ordinary webserver you can also run from a checkout.
 
@@ -90,7 +90,7 @@ Four small concepts make up the API. You meet them whether you use a built-in se
 
 ## The wire format
 
-This is the concrete data crossing the WebSocket. Every message is [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization)).
+This is the concrete data a wire carries. Every message is [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization)).
 
 ### Observation (client → server)
 
@@ -166,7 +166,7 @@ The client side can record too: `--output_dir` saves the full episode as a Posit
 
 ## Implement your own server
 
-To connect a custom model you implement this WebSocket protocol. The full low-level spec — endpoints, handshake, status messages — is in the [Offboard README](../positronic/offboard/README.md); the rest of this section shows the shortcut for Positronic-based servers.
+To connect a custom model you implement this protocol. The full low-level spec — endpoints, handshake, status messages — is in the [Offboard README](../positronic/offboard/README.md); the rest of this section shows the shortcut for Positronic-based servers.
 
 ### Ready, in-process models
 
@@ -175,6 +175,7 @@ Implement a `Policy`, close a pipeline over it with `PolicySource`, and hand the
 ```python
 from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
+from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
@@ -209,7 +210,8 @@ class MyPolicy(Policy):
 
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
-PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
+server = PolicyServer(pipeline)
+server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.

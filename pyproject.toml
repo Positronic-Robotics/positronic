@@ -24,6 +24,9 @@ dependencies = [
     "starlette>=1.0.0",
     "jinja2",
     "fire",
+    # The gRPC wire, one of the two transports `positronic.offboard` serves. The rig client and the
+    # server both import it, so it is not an extra.
+    "grpcio",
     "httpx",
     "msgpack",
     "mujoco",

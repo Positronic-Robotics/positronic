@@ -7,23 +7,22 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import configuronic as cfn
 import pos3
-import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
+from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder
+from positronic.policy import Policy, Recorder, Session
 from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
-from . import protocol
+from . import grpc_wire, protocol, websocket_wire, wire
 from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ def bearer(token: str) -> str:
     return f'Bearer {token}'
 
 
-async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
+async def _acquire_with_keepalives(lock: asyncio.Lock, conn: wire.ServerConnection | None, message: str):
     """Acquire ``lock``, emitting ``waiting`` keepalives while queued behind another holder.
 
     A peer may hold the lock for a slow load, first-call compile or inference; a silent wait here
@@ -49,10 +48,8 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | No
             await asyncio.wait_for(lock.acquire(), timeout=10.0)
             return
         except TimeoutError:
-            if websocket is not None:
-                await websocket.send_bytes(
-                    serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
-                )
+            if conn is not None:
+                await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message}))
 
 
 class PolicyManager:
@@ -70,8 +67,8 @@ class PolicyManager:
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
 
-    async def get_policy(self, checkpoint_id: str, websocket: WebSocket | None = None) -> Policy:
-        await _acquire_with_keepalives(self._lock, websocket, 'Waiting for the model slot')
+    async def get_policy(self, checkpoint_id: str, conn: wire.ServerConnection | None = None) -> Policy:
+        await _acquire_with_keepalives(self._lock, conn, 'Waiting for the model slot')
         try:
             if self.current_checkpoint_id != checkpoint_id:
                 logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
@@ -79,8 +76,8 @@ class PolicyManager:
                 while self.active_sessions > 0:
                     message = f'Waiting for {self.active_sessions} active session(s) to finish...'
                     logger.info(message)
-                    if websocket:
-                        await websocket.send_bytes(
+                    if conn:
+                        await conn.send(
                             serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
                         )
 
@@ -96,8 +93,8 @@ class PolicyManager:
                     self.current_policy = None
                     self.current_checkpoint_id = None
 
-                if websocket:
-                    await websocket.send_bytes(
+                if conn:
+                    await conn.send(
                         serialise({
                             protocol.STATUS: protocol.ServerStatus.LOADING,
                             protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
@@ -105,34 +102,31 @@ class PolicyManager:
                     )
 
                 logger.info(f'Loading policy {checkpoint_id}')
-                on_progress = self._progress_callback(websocket)
+                on_progress = self._progress_callback(conn)
                 self.current_policy = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
                 self.current_checkpoint_id = checkpoint_id
 
             assert self.current_policy is not None
-            if websocket:
+            if conn:
                 self.active_sessions += 1
             return self.current_policy
         finally:
             self._lock.release()
 
     @staticmethod
-    def _progress_callback(websocket: WebSocket | None) -> Callable[[str], None] | None:
+    def _progress_callback(conn: wire.ServerConnection | None) -> Callable[[str], None] | None:
         """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
 
         Blocks the loader until each message is on the wire, so one emitted at the very end of a load
         cannot overtake the ``ready`` that follows it and be read as the first inference result.
         """
-        if websocket is None:
+        if conn is None:
             return None
         loop = asyncio.get_running_loop()
 
         def on_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(
-                websocket.send_bytes(
-                    serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})
-                ),
-                loop,
+                conn.send(serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})), loop
             ).result()
 
         return on_progress
@@ -183,32 +177,18 @@ class PolicyServer:
     """Serves a policy pipeline: one layer chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
 
-    The half right of the marker wraps the model here; the half left of it is published as the
-    ``local_stack`` spec in the ``ready`` handshake for the rig to build, alongside the marker's own
-    wire settings. The source is the only model loader and is fixed at launch.
+    The half right of the marker wraps the model here. The half left of it goes to the rig as the
+    ``local_stack`` spec in the ``ready`` handshake, with the marker's own wire settings. The source is
+    the only model loader and is fixed at launch.
 
-    When ``pipeline`` is a ``cfn.Config``, query params on the session websocket URL become dotted
-    overrides into the pipeline config (e.g. ``?codec.fps=10``), applied and instantiated per session.
-    Values must be JSON literals (unparseable values pass through as strings) and are applied with
-    ``Config.override_data``, so a param can tune an argument but never name a Python object to
-    import; params that change the model source are rejected too. A server built from an
-    already-instantiated ``Pipeline`` rejects all session params.
-
-    The WebSocket session flow is:
-        accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
-
-    On startup (before accepting connections): resolve(None) → load.
-
-    The default checkpoint is resolved once, at startup, and pinned for every request that names no
-    explicit one — a running server never switches to a newer checkpoint that lands later. A request
-    for /api/v1/session/{model_id} still loads that one on demand.
+    A ``cfn.Config`` pipeline takes session params as dotted overrides (``?codec.fps=10``; the offboard
+    README states the rules). An instantiated ``Pipeline`` refuses every session param. The default
+    checkpoint is resolved at startup and pinned; a session that names a model id loads that one.
     """
 
     def __init__(
         self,
         pipeline: cfn.Config | Pipeline,
-        host: str = '0.0.0.0',
-        port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
@@ -224,9 +204,6 @@ class PolicyServer:
         _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
-        self.host = host
-        self.port = port
-        self.metadata: dict[str, Any] = {offboard_keys.HOST: host, offboard_keys.PORT: port}
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -238,6 +215,9 @@ class PolicyServer:
         self._infer_lock = asyncio.Lock()
 
         self._default_id: str | None = None
+        # Set while ``serve`` runs; ``shutdown`` reaches the loop from another thread.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
 
         # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
         # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
@@ -246,15 +226,15 @@ class PolicyServer:
             raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
 
-        self.app = FastAPI()
-        http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
-        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
-        self.app.websocket('/api/v1/session', dependencies=ws_auth)(self.default_session)
-        # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
-        # ``/api/v1/models`` advertises.
-        self.app.websocket('/api/v1/session/{model_id:path}', dependencies=ws_auth)(self.model_session)
+        self._api = APIRouter()
+        self._api.get('/api/v1/models', dependencies=[Depends(self._require_http_auth)])(self.get_models)
 
-    def _authorized(self, authorization: str | None) -> bool:
+    @property
+    def api(self) -> APIRouter:
+        """The server's own HTTP routes: the model catalogue a client reads before it opens a session."""
+        return self._api
+
+    def _token_matches(self, authorization: str | None) -> bool:
         if self._auth_token is None:
             return True
         if authorization is None:
@@ -263,14 +243,13 @@ class PolicyServer:
         # a non-ASCII ``str``, which would answer a malformed header with a 500 instead of a refusal.
         return hmac.compare_digest(authorization.encode(), bearer(self._auth_token).encode())
 
-    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
-        if not self._authorized(authorization):
-            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+    def _authorized(self, headers: Mapping[str, str]) -> bool:
+        """Whether the session headers carry the bearer token this server gates on."""
+        return self._token_matches(headers.get(AUTH_HEADER.lower()))
 
-    async def _require_ws_auth(self, websocket: WebSocket) -> None:
-        """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
-        if not self._authorized(websocket.headers.get(AUTH_HEADER)):
-            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
+        if not self._token_matches(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
@@ -291,30 +270,44 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def default_session(self, websocket: WebSocket):
-        """Serves the model pinned at startup. Naming a model is the path's job, so every query param here
-        is a pipeline override."""
-        await self._serve_session(websocket, None)
+    async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
+        """Answer every observation the client sends, until it disconnects."""
+        while True:
+            message = await conn.receive()
+            self._last_activity = time.monotonic()
+            try:
+                raw_obs = deserialise(message)
+                # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
+                # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                async with self._infer_lock:
+                    try:
+                        # The server's clock is not the rig's.
+                        actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                    except asyncio.CancelledError:
+                        # A cancelled await does not stop the worker, and the session close runs beside a live
+                        # inference. The log gives a later wrong answer a cause.
+                        logger.error('Cancelled mid-inference: the worker is still in the backend')
+                        raise
+                await conn.send(serialise({protocol.RESULT: actions}))
+            except Exception as e:
+                logger.error(f'Error processing message: {e}', exc_info=True)
+                await conn.send(serialise({protocol.ERROR: str(e)}))
 
-    async def model_session(self, websocket: WebSocket, model_id: str):
-        await self._serve_session(websocket, model_id)
-
-    async def _serve_session(self, websocket: WebSocket, model_id: str | None):
-        await websocket.accept()
-        logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
+    async def _serve_session(self, conn: wire.ServerConnection, model_id: str | None):
+        logger.info(f'Connected to {conn.peer} requesting {model_id or "default"}')
 
         self._active_sessions += 1
         self._last_activity = time.monotonic()
         policy: Policy | None = None
         session = None
         try:
-            pipeline = self._session_pipeline(_session_params(websocket.query_params))
+            pipeline = self._session_pipeline(_session_params(conn.query_params))
             local, border, remote_half = split(pipeline)
             local_spec = _declared_stack(local)
 
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
-            policy = await self._manager.get_policy(rid, websocket)
+            policy = await self._manager.get_policy(rid, conn)
             # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
             # above it sees one call per answer rather than one per call the answer took.
             answered = blocking(policy)
@@ -329,15 +322,17 @@ class PolicyServer:
                 served = remote_half.wrap(answered) if remote_half is not None else answered
             # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
             # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
-            await _acquire_with_keepalives(self._infer_lock, websocket, 'Waiting for inference slot')
+            await _acquire_with_keepalives(self._infer_lock, conn, 'Waiting for inference slot')
             try:
                 session = await asyncio.to_thread(served.new_session)
             finally:
                 self._infer_lock.release()
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
+            endpoint = conn.endpoint
             meta = {
-                **self.metadata,
+                offboard_keys.HOST: endpoint.host,
+                offboard_keys.PORT: endpoint.port,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,
@@ -345,35 +340,22 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: border.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            await websocket.send_bytes(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
+            await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
             try:
-                while True:
-                    message = await websocket.receive_bytes()
-                    self._last_activity = time.monotonic()
-                    try:
-                        raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        async with self._infer_lock:
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        await websocket.send_bytes(serialise({protocol.RESULT: actions}))
-                    except Exception as e:
-                        logger.error(f'Error processing message: {e}', exc_info=True)
-                        await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
-            except WebSocketDisconnect:
+                await self._answer_observations(conn, session)
+            except wire.PeerDisconnected:
                 logger.info('Client disconnected')
 
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await websocket.send_bytes(
-                    serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)})
-                )
-                await websocket.close(code=1008, reason=str(e)[:100])
+                await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)}))
+                await conn.refuse(str(e))
+            except wire.PeerDisconnected:
+                logger.debug('The client was gone before the error reached it', exc_info=True)
             except Exception:
-                logger.debug('Failed to send error to client', exc_info=True)
+                logger.error(f'Failed to tell {conn.peer} its session failed: {e}', exc_info=True)
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
@@ -393,59 +375,111 @@ class PolicyServer:
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
         await self._manager.get_policy(self._default_id)
 
-    async def _idle_watchdog(self, server: uvicorn.Server):
+    async def _idle_watchdog(self):
+        """Return once no session has touched the server for ``idle_timeout_min``."""
         assert self.idle_timeout_min is not None
         timeout_s = self.idle_timeout_min * 60
         poll = min(timeout_s, 30)
-        while not server.should_exit:
+        while True:
             await asyncio.sleep(poll)
             if self._active_sessions > 0:
                 continue
             idle = time.monotonic() - self._last_activity
             if idle >= timeout_s:
                 logger.warning(f'No activity for {idle:.0f}s (idle timeout {timeout_s:.0f}s); shutting down server')
-                server.should_exit = True
                 return
 
-    def serve(self):
+    @staticmethod
+    def _raise_first_wire_failure(started: Sequence[wire.Wire], outcomes: Sequence[Any]):
+        """Raise the first wire that ended on an error, and log every other one."""
+        failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
+        # Only one failure can raise; the rest are logged here or nowhere.
+        for w, error in failed[1:]:
+            logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
+        if failed:
+            # A wire that ended on an error raises; a silent return reads as a shutdown.
+            raise failed[0][1]
+
+    def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
+        """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
+
+        Every wire shares this server's model slot and inference lock. ``on_ready`` runs on the server's
+        own loop once every wire has bound; a caller that asked for port 0 reads the port there.
+        """
+        if not wires:
+            raise ValueError('wires must hold at least one wire; a server with none binds nothing and answers nobody')
+
         async def _run():
+            self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-            server = uvicorn.Server(config)
-            self._last_activity = time.monotonic()
-            watchdog = None
-            if self.idle_timeout_min and self.idle_timeout_min > 0:
-                watchdog = asyncio.create_task(self._idle_watchdog(server))
+            # A wire binds when it starts, and a started wire is stopped even when a later one cannot bind.
+            started: list[wire.Wire] = []
+            serving: list[asyncio.Task] = []
+            ending: list[asyncio.Task] = []
             try:
-                await server.serve()
+                for w in wires:
+                    await w.start(self._serve_session, self._authorized)
+                    started.append(w)
+                self._last_activity = time.monotonic()
+                if on_ready is not None:
+                    on_ready()
+                serving = [asyncio.create_task(w.serve()) for w in started]
+                # What else ends the server: a caller's ``shutdown``, and the idle timeout.
+                ending = [asyncio.create_task(self._stop.wait())]
+                if self.idle_timeout_min and self.idle_timeout_min > 0:
+                    ending.append(asyncio.create_task(self._idle_watchdog()))
+                await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
             finally:
-                if watchdog is not None:
-                    watchdog.cancel()
+                for task in ending:
+                    task.cancel()
+                for w in started:
+                    await w.stop()
+                # Each wire ends the sessions it carries before this returns and the model slot closes.
+                outcomes = await asyncio.gather(*serving, return_exceptions=True)
+
+            self._raise_first_wire_failure(started, outcomes)
 
         try:
             asyncio.run(_run())
         except KeyboardInterrupt:
             logger.info('Server stopped by user')
         finally:
+            self._loop, self._stop = None, None
             self._manager.close()
 
+    def shutdown(self):
+        """Ask a running ``serve`` to end, from any thread. A server that is not serving ignores it."""
+        loop, stop = self._loop, self._stop
+        if loop is not None and stop is not None:
+            loop.call_soon_threadsafe(stop.set)
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None)
-def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None, idle_timeout_min: float | None):
+
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None)
+def serve(
+    pipeline: cfn.Config,
+    host: str,
+    port: int,
+    recording_dir: str | None,
+    idle_timeout_min: float | None,
+    grpc_port: int | None,
+):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
-    Only the socket and the recording taps are flags of their own; everything the served model is —
-    codec, source, checkpoint directory — is reached through the pipeline itself
-    (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+    Only the sockets and the recording taps are flags of their own. The codec, the source and the checkpoint
+    directory are reached through the pipeline (``--pipeline.source.checkpoints_dir=...``), each under one name.
 
-    The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
-    a secret in the process arguments; unset serves open.
+    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
+
+    The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
+    Unset serves open.
     """
-    PolicyServer(
+    server = PolicyServer(
         pipeline,
-        host=host,
-        port=port,
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
-    ).serve()
+    )
+    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
+    if grpc_port is not None:
+        wires.append(grpc_wire.GrpcWire(host, grpc_port))
+    server.serve(wires)

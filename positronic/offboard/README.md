@@ -4,13 +4,53 @@ This package implements the protocol and utilities for offboard policy inference
 
 ## Protocol v1
 
-The unified WebSocket protocol is built to enable ANY hardware to connect to ANY model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement this protocol, allowing a single `.remote` policy client to work across all vendors.
+The protocol connects any hardware to any model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement it, so a single `.remote` policy client works across all vendors.
+
+### Wires
+
+The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
+the same order; everything below holds on each.
+
+| Wire | URL | Port |
+|---|---|---|
+| WebSocket | `ws://host:8000/api/v1/session[/<model_id>]` | the server's `port`, beside the HTTP routes |
+| gRPC | `grpc://host:9000/api/v1/session[/<model_id>]` | the server's `grpc_port`, sessions alone |
+| gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
+
+The WebSocket wire is the default, and a server serves gRPC only when `grpc_port` names a port. A
+gRPC session is one bidirectional stream of the same frames; no `.proto` file describes them.
+The session path and the query cross as the `positronic-session-path` and `positronic-session-query`
+metadata, and `Authorization` crosses as the `authorization` metadata.
+
+Python's WebSocket stack spends about 30 ms per 846 KiB observation on framing and reassembly; gRPC
+spends about 1 ms. Take the gRPC wire wherever it reaches.
+
+It reaches through a managed HTTPS front, which is how an authenticated endpoint is served. The front
+terminates TLS, and the HTTP/2 connection runs end to end; the server binds a plaintext port and holds
+no certificate. The front must select HTTP/2 over ALPN. Check a new front with
+`openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint, declare the gRPC
+port as an ordinary HTTP port and dial its `https://` host as `grpcs://<host>:443`. A port declared
+`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
+`Cannot check peer: missing selected ALPN property`.
+
+Through such an endpoint an 846 KiB observation round-trips in about 6 ms over gRPC and about 60 ms
+over the WebSocket. gRPC holds 6 ms at 10 Hz, which is 8 MB/s of observation. The front shapes a
+session that sends faster: a back-to-back loop settles at about 83 ms a round trip after some 11 MB,
+and returns to 6 ms after a minute of quiet. The WebSocket holds its 60 ms throughout, below the rate
+the front shapes at.
+
+Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
+front after about 90 s), and the pings keep an inference open through that wait.
+
+`/api/v1/models` is an HTTP route and stays on the server's `port`. `InferenceClient.list_models`
+refuses a `grpc://` URL.
 
 ### Authentication
 
 `PolicyServer(auth_token=...)` gates every route below on `Authorization: Bearer <token>`, answering
-`401` on the HTTP route and refusing the WebSocket upgrade before the session opens. `serve` — the
-entry point every vendor CLI exposes — takes that token from the `AUTH_TOKEN` environment variable, so
+`401` on the HTTP route, refusing the WebSocket upgrade before the session opens, and answering
+`PERMISSION_DENIED` on the gRPC wire. `serve` — the entry point every vendor CLI exposes — takes that
+token from the `AUTH_TOKEN` environment variable, so
 a secret never lands in the process arguments. No token serves open, which is the usual shape on a
 trusted LAN; an empty one is a broken secret and refuses to start. `InferenceClient(headers=...)`
 carries the header, and `positronic.cfg.policy.authed_remote` fills it in from the same variable.
@@ -34,16 +74,19 @@ curl http://localhost:8000/api/v1/models
 
 Use this to discover which models are available before connecting.
 
-#### `WS /api/v1/session`
+#### `/api/v1/session`
 Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
 
-#### `WS /api/v1/session/{model_id}`
+#### `/api/v1/session/{model_id}`
 Establishes an inference session with a **specific** model.
 
 **Example:**
 - `ws://localhost:8000/api/v1/session` → Default model
+- `grpc://localhost:9000/api/v1/session` → Default model, over gRPC
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
-- `ws://localhost:8000/api/v1/session/20000` → Model 20000
+- `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
+
+Each wire from the table above takes the same path; only the scheme and the port change.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
@@ -67,14 +110,14 @@ Rules:
 - **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is the path.
 - **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipeline rejects every param.
 
-Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and closes the socket (code 1008) before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
+Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
-Because the whole session configuration fits in the URL, one string is a complete endpoint description:
+One string is a complete endpoint description, because the whole session configuration fits in the URL:
 `--policy=.remote --policy.url='gpu-host:8000?codec.fps=10'` accepts `host`, `host:port`, and full
-`http(s)`/`ws(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
+`http(s)`/`ws(s)`/`grpc(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
 Credentials are the exception and stay a separate `headers` argument, so the URL itself is safe to hand around.
 
-### WebSocket Flow
+### Session Flow
 
 #### 1. Handshake
 Upon connection, the server sends a ready packet with metadata:
@@ -121,7 +164,7 @@ This metadata tells the client:
 
 #### 2. Status Updates (Long Model Loading)
 
-Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The server sends periodic status updates during loading to prevent WebSocket keepalive timeouts:
+Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The client gives the handshake 30 s per message; the server sends status updates during loading, on either wire:
 
 ```json
 {
@@ -202,9 +245,9 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **Status Streaming:** Long model loads are handled gracefully with progress updates.
 
-**Server-side recording:** Servers accept an optional `recording_dir`. When set, each WebSocket session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
+**Server-side recording:** Servers accept an optional `recording_dir`. When set, each session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
 
-**Python Client:** We provide a Python client (`positronic.offboard.client.InferenceClient`) that handles the WebSocket protocol automatically. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
+**Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
 ## Classes
 
@@ -213,22 +256,30 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 
 ```python
 from positronic.offboard import PolicyServer
+from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
-PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
+server = PolicyServer(pipeline)
+server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
+`serve` takes the wires sessions arrive on. Each wire binds its own port, reads its own route for the
+model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)` to
+the list to serve gRPC beside the websocket. A wire that speaks HTTP takes `server.api`, the model
+catalogue, and answers it on the port it carries sessions on. A wire asked for port 0 binds any free
+one and names it in `wire.endpoint`.
+
+`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. One URL addresses it, in the same forms
-`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for `https`/`wss` and 80 otherwise. The URL
-fixes the model and the session params, so serving another model means another client.
+`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for a TLS scheme and 80 otherwise. The URL
+fixes the wire, the model and the session params, so serving another model means another client.
 
 ```python
 from positronic.offboard.client import InferenceClient
@@ -237,11 +288,19 @@ from positronic.offboard.client import InferenceClient
 client = InferenceClient('localhost:8000')
 # A named model, tuned for every session this client opens
 # client = InferenceClient('localhost:8000/api/v1/session/model_a?codec.fps=10')
+# The same session on the gRPC wire, on a LAN and behind a TLS edge
+# client = InferenceClient('grpc://localhost:9000/api/v1/session/model_a')
+# client = InferenceClient('grpcs://gpu-host:443/api/v1/session/model_a')
 
 session = client.new_session()
 meta = session.metadata
 action = session.infer(observation)
 ```
+
+`new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
+cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
+answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
+exception of the websocket or gRPC library.
 
 ## Vendor Implementations
 

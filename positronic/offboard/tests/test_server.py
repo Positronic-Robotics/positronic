@@ -1,24 +1,32 @@
+import asyncio
+import logging
 import os
 import socket
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
+from http import HTTPStatus
 from typing import Any
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
 import httpx
 import pytest
+from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
+from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
@@ -46,10 +54,99 @@ class _StubSource(ModelSource):
         return {'type': 'stub'}
 
 
+# Short enough for a quick test, long enough that a loaded box reaches the first poll.
+_A_MOMENT_IDLE = 0.5
+
+
+class _FailingWire(wire.Wire):
+    """Serves for ``after`` seconds, then raises."""
+
+    def __init__(self, after: float):
+        self._after = after
+        self.stopped = False
+
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        return wire.Endpoint('localhost', 0)
+
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        pass
+
+    async def serve(self) -> None:
+        await asyncio.sleep(self._after)
+        raise RuntimeError(f'the {self._after}s wire fell over')
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class _UnbindableWire(wire.Wire):
+    """A wire whose port is taken."""
+
+    @property
+    def endpoint(self) -> wire.Endpoint:
+        raise AssertionError('it never bound')
+
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        raise OSError('that port is taken')
+
+    async def serve(self) -> None:
+        raise AssertionError('it never served')
+
+    async def stop(self) -> None:
+        pass
+
+
+def test_a_server_with_no_wire_refuses_to_serve(make_mock_policy):
+    """A server that binds nothing answers nobody, so it raises instead of reporting itself ready."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    with pytest.raises(ValueError, match='at least one wire'):
+        server.serve([], on_ready=lambda: pytest.fail('it reported ready with no wire bound'))
+
+
+def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
+    """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = _FailingWire(_A_MOMENT_IDLE)
+    with pytest.raises(OSError, match='that port is taken'):
+        server.serve([bound, _UnbindableWire()])
+    assert bound.stopped, 'the wire that had bound was left holding its port'
+
+
+def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
+    """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
+    with pytest.raises(OSError, match='that port is taken'):
+        server.serve([bound, _UnbindableWire()])
+    # A leaked listener holds the port, and a fresh bind to it raises.
+    websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
+
+
+def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
+    """No wire ends in silence: one failure raises out of ``serve``, and every other one is logged."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
+        with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):
+            server.serve([_FailingWire(0.05), _FailingWire(0.1)])
+    assert any('the 0.1s wire fell over' in record.getMessage() for record in caplog.records)
+
+
+def test_an_idle_server_stops_itself(make_mock_policy):
+    """The idle watchdog ends every wire, and ``serve`` returns with no ``shutdown`` call."""
+    server = PolicyServer(
+        ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
+    )
+    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
+    serving.start()
+    serving.join(timeout=_A_MOMENT_IDLE * 20)
+    assert not serving.is_alive(), 'the idle watchdog left the server running'
+
+
 @pytest.fixture
 def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+    host, port, server, _ = start_server(ChunkedSchedule() | remote | _StubSource(policy))
     return host, port, server, policy
 
 
@@ -126,7 +223,7 @@ class _LatestSource(ModelSource):
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy):
     source = _LatestSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
-    host, port, _server = start_server(ChunkedSchedule() | remote | source)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
     client = InferenceClient(f'{host}:{port}')
@@ -155,7 +252,7 @@ class _ProgressSource(_StubSource):
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
     ws = connect(f'ws://{host}:{port}/api/v1/session/other')
@@ -184,7 +281,7 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
     return host, port, policy
 
 
@@ -223,7 +320,7 @@ def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_sessi
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
-    host, port, _server = start_server(pipeline)
+    host, port, *_ = start_server(pipeline)
     client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
@@ -275,7 +372,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
-    host, port, _server = start_server(pipeline())
+    host, port, *_ = start_server(pipeline())
     remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'))
 
     local_session, local_rt = open_session(inline(pipeline()))
@@ -304,14 +401,14 @@ def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0),
 
 def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> InferenceSession:
     uri = f'ws://{host}:{port}/api/v1/session?' + urllib.parse.urlencode(query)
-    return InferenceSession(connect(uri))
+    return InferenceSession(WebsocketClientConnection(connect(uri)))
 
 
 @pytest.fixture
 def param_server(start_server, make_mock_policy) -> Generator[tuple[str, int], None, None]:
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipe_cfg = cfn.Config(_tunable_pipe, source=cfn.Config(_StubSource, policy=stub))
-    host, port, _server = start_server(pipe_cfg)
+    host, port, *_ = start_server(pipe_cfg)
     yield host, port
 
 
@@ -341,7 +438,7 @@ def _fps_pipe(source: ModelSource, fps: float = 10.0):
 
 def test_session_param_retunes_the_served_remote_half(start_server):
     pipe_cfg = cfn.Config(_fps_pipe, source=cfn.Config(PolicySource, policy=_ScriptedPolicy()))
-    host, port, _server = start_server(pipe_cfg)
+    host, port, *_ = start_server(pipe_cfg)
 
     # The wire carries the server-side half's output: relative timestamps spaced 1/fps.
     default_session = _param_session(host, port, [])
@@ -359,7 +456,8 @@ def test_model_id_is_named_by_path_not_query(param_server):
     with pytest.raises(RuntimeError, match='model_id'):
         _param_session(host, port, [('model_id', 'other')])
 
-    session = InferenceSession(connect(f'ws://{host}:{port}/api/v1/session/other?pad_start=false'))
+    uri = f'ws://{host}:{port}/api/v1/session/other?pad_start=false'
+    session = InferenceSession(WebsocketClientConnection(connect(uri)))
     try:
         assert session.metadata['checkpoint_id'] == 'other'
         assert session.metadata['local_stack']['seq'][0]['args']['pad_start'] is False
@@ -405,7 +503,7 @@ def test_source_touching_session_param_rejected(param_server):
 
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(_tunable_pipe(_StubSource(stub)))
+    host, port, *_ = start_server(_tunable_pipe(_StubSource(stub)))
     with pytest.raises(RuntimeError, match='config-launched'):
         _param_session(host, port, [('pad_start', 'false')])
 
@@ -431,7 +529,7 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
     if _LIVE_ENDPOINT:
         return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
     return f'{host}:{port}', _TOKEN
 
 
@@ -451,10 +549,33 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     url, token = authed_endpoint
     header = make_header(token)
     client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})
-    with pytest.raises(InvalidStatus):
+    with pytest.raises(wire.ConnectRefused) as refused:
         client.new_session()
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
     with pytest.raises(httpx.HTTPStatusError):
         client.list_models()
+
+
+@pytest.mark.parametrize(
+    ('status', 'refusal'),
+    [
+        (HTTPStatus.FORBIDDEN, wire.Refusal.FORBIDDEN),
+        (HTTPStatus.TOO_MANY_REQUESTS, wire.Refusal.COLD),
+        (HTTPStatus.SERVICE_UNAVAILABLE, wire.Refusal.COLD),
+        (HTTPStatus.BAD_GATEWAY, wire.Refusal.COLD),
+        (HTTPStatus.UNAUTHORIZED, wire.Refusal.FINAL),
+        (HTTPStatus.NOT_FOUND, wire.Refusal.FINAL),
+    ],
+)
+def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal):
+    refused_upgrade = InvalidStatus(Response(status, 'refused', Headers()))
+    with (
+        patch('positronic.offboard.websocket_wire.connect', side_effect=refused_upgrade),
+        pytest.raises(wire.ConnectRefused) as refused,
+    ):
+        websocket_wire.dial('ws://localhost:8000/api/v1/session', None, 1.0)
+    assert refused.value.refusal is refusal
+    assert refused.value.__cause__ is refused_upgrade
 
 
 @pytest.mark.endpoint
@@ -484,7 +605,9 @@ def test_session_outlives_an_idle_ingress_window(authed_endpoint):
     session = InferenceClient(url, headers={AUTH_HEADER: bearer(token)}).new_session()
     try:
         time.sleep(_IDLE_WINDOW_SEC)
-        assert session._websocket.ping().wait(timeout=30.0)
+        conn = session._conn
+        assert isinstance(conn, WebsocketClientConnection), "the idle window is the websocket wire's"
+        assert conn._websocket.ping().wait(timeout=30.0)
     finally:
         session.close()
 
@@ -513,7 +636,7 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'

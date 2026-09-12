@@ -1,13 +1,11 @@
-import asyncio
-import socket
 import threading
-import time
 from collections.abc import Callable, Generator, Mapping
+from typing import NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
-import uvicorn
 
+from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
@@ -15,45 +13,46 @@ from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import ModelSource, PolicySource, remote
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
+class Served(NamedTuple):
+    """A running server, and the ports its wires took."""
+
+    host: str
+    port: int
+    server: PolicyServer
+    grpc_port: int | None
 
 
-StartServer = Callable[..., tuple[str, int, PolicyServer]]
+StartServer = Callable[..., Served]
 
 
 @pytest.fixture
 def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown."""
-    running: list[tuple[uvicorn.Server, threading.Thread]] = []
+    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown.
 
-    def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
-        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
-        uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
+    Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
+    serves the gRPC wire beside the websocket one.
+    """
+    running: list[tuple[PolicyServer, threading.Thread]] = []
 
-        async def _run():
-            await server._startup()
-            await uv_server.serve()
-
-        thread = threading.Thread(target=asyncio.run, args=(_run(),), daemon=True)
+    def start(pipeline, *, grpc: bool = False, **server_kwargs) -> Served:
+        host = server_kwargs.pop('host', 'localhost')
+        server = PolicyServer(pipeline, **server_kwargs)
+        wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api)]
+        if grpc:
+            wires.append(grpc_wire.GrpcWire(host, 0))
+        ready = threading.Event()
+        thread = threading.Thread(target=server.serve, args=(wires, ready.set), daemon=True)
         thread.start()
-        running.append((uv_server, thread))
-
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            try:
-                with socket.create_connection((server.host, server.port), timeout=0.1):
-                    return server.host, server.port, server
-            except (ConnectionRefusedError, OSError):
-                time.sleep(0.05)
-        raise RuntimeError('Server failed to start')
+        running.append((server, thread))
+        if not ready.wait(timeout=10.0):
+            raise RuntimeError('Server failed to start')
+        return Served(host, wires[0].endpoint.port, server, wires[1].endpoint.port if grpc else None)
 
     yield start
-    for uv_server, thread in running:
-        uv_server.should_exit = True
-        thread.join(timeout=5.0)
+    for server, thread in running:
+        server.shutdown()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), 'the server did not stop when asked'
 
 
 @pytest.fixture
@@ -104,7 +103,7 @@ def make_mock_policy() -> Callable[..., MagicMock]:
     return _make_mock_policy
 
 
-class _DictSource(ModelSource):
+class DictSource(ModelSource):
     """Multi-model source over ready policies; the dict's first key is the default."""
 
     def __init__(self, policies: Mapping[str, Policy]):
@@ -145,7 +144,7 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, _server = start_server(ChunkedSchedule() | remote | PolicySource(mock_policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | PolicySource(mock_policy))
     return host, port
 
 
@@ -153,5 +152,5 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
 def multi_policy_server(
     start_server: StartServer, mock_policy_registry: dict[str, MagicMock]
 ) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, _server = start_server(ChunkedSchedule() | remote | _DictSource(mock_policy_registry))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | DictSource(mock_policy_registry))
     return host, port, mock_policy_registry
