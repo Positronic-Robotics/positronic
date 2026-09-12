@@ -114,8 +114,13 @@ class _CodecSession(DelegatingSession):
         super().__init__(inner)
         self._codec = codec
 
+    def reads_observation(self, obs, time_ns):
+        # Forwarded because this session encodes rather than reads: told no, it hands its own input on.
+        return self._inner.reads_observation(obs, time_ns)
+
     def __call__(self, obs, time_ns):
-        encoded = self._codec.encode(obs)
+        reads = self._inner.reads_observation(obs, time_ns)
+        encoded = self._codec.encode(obs) if reads else obs
         action = self._inner(encoded, time_ns)
         if action is None:
             return None
