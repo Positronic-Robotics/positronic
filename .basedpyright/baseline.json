@@ -1156,22 +1156,6 @@
         ],
         "./positronic/data_collection.py": [
             {
-                "code": "reportOptionalOperand",
-                "range": {
-                    "startColumn": 25,
-                    "endColumn": 48,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 89,
-                    "endColumn": 92,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
                     "startColumn": 64,
@@ -1224,14 +1208,6 @@
                 "range": {
                     "startColumn": 33,
                     "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 66,
-                    "endColumn": 71,
                     "lineCount": 1
                 }
             },
@@ -4000,40 +3976,8 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 12,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 12,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 36,
                     "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 59,
-                    "endColumn": 70,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 59,
-                    "endColumn": 70,
                     "lineCount": 1
                 }
             },

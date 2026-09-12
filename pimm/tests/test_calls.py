@@ -175,6 +175,17 @@ class Deaf(ControlSystem):
         yield Sleep(0.001)
 
 
+class Interrupted(ControlSystem):
+    """Ends on the interrupt an operator sends, which reaches every process of a run at once."""
+
+    def __init__(self):
+        self.add = ControlSystemHandler[tuple[int, int], int](self)
+
+    def run(self, should_stop, clock):
+        yield Sleep(0.001)
+        raise KeyboardInterrupt
+
+
 class TestAllOf:
     def test_one_answer_stands_for_many(self, bound):
         caller, handler = bound
@@ -266,6 +277,18 @@ class TestWorldConnect:
             world.connect(client.add, deaf.add)
             world.run([client, deaf])
         assert isinstance(client.results[0], HandlerStopped)
+
+    def test_a_handler_the_operator_interrupts_answers_nothing(self):
+        """An interrupt can land inside a manager call, and the connection then carries half a message.
+
+        Reading it again returns the tail of another, so an interrupted system says nothing at all.
+        """
+        client, interrupted = Client([(1, 2)]), Interrupted()
+        with World(virtual_time=True) as world:
+            world.connect(client.add, interrupted.add)
+            with pytest.raises(KeyboardInterrupt):
+                world.run([client, interrupted])
+        assert client.results == []
 
     def test_a_stopped_handler_survives_the_trip_to_another_process(self):
         """A reply crosses a pipe as pickle, and an exception is rebuilt by calling its class with its args."""

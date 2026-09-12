@@ -456,11 +456,19 @@ class _CallAnsweringLoop:
         self.__name__ = f'{type(cs).__name__}.run'
 
     def __call__(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
+        interrupted = False
         try:
             yield from self.cs.run(should_stop, clock)
+        except KeyboardInterrupt:
+            # An interrupt lands in every process at once, and it can land inside a manager call, which
+            # leaves that connection in the middle of a message. Reading it again returns the tail of
+            # somebody else's, so a call is left unanswered here rather than answered from a torn stream.
+            interrupted = True
+            raise
         finally:
-            for handler in handlers_of(self.cs):
-                handler.fail_queued()
+            if not interrupted:
+                for handler in handlers_of(self.cs):
+                    handler.fail_queued()
 
 
 def _bg_wrapper(

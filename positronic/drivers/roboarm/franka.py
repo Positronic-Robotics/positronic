@@ -405,7 +405,7 @@ class Robot(pimm.ControlSystem):
         return {
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
-            'meshes': meshes,
+            roboarm_keys.MESHES: meshes,
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
             roboarm_keys.GRIPPER: gripper,
         }
