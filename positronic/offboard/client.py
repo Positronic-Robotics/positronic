@@ -192,9 +192,8 @@ def _session_path(path: str, url: str) -> str:
         return wire.SESSION_PATH
     if not path.startswith(f'{wire.SESSION_PATH}/'):
         raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    # Kept as written, percent-encoding included, so the server decodes exactly the id whoever handed out
-    # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
-    # repo, say), whose own slashes stay separators.
+    # Kept as written, percent-encoding included: a trailing slash is part of the id, and an id that is
+    # itself a path (a HuggingFace repo) keeps its slashes as separators.
     return path
 
 
@@ -266,9 +265,8 @@ class InferenceClient:
                 self.open_timeout,
                 secure=self._grpc_secure,
             )
-        # A proxy between here and the server closes a connection it has read nothing from, often
-        # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
-        # answers. The pings keep it open.
+        # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
+        # nothing until it answers. The pings keep it open.
         websocket = connect(
             self.session_url,
             open_timeout=self.open_timeout,

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Submit a Nebius Serverless Endpoint running a vendor inference server.
 #
+# Usage
+#   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
+#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server ee --num_gpus=8
+#
 # The endpoint gets no public IP: Nebius fronts every HTTP container port with a
 # managed https:// URL, which is what this polls for and prints. The container
 # itself takes ~10-15 min more to finish uv sync and load the model into GPU
