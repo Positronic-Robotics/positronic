@@ -1,4 +1,4 @@
-"""The gRPC wire: one session runs over it exactly as it runs over the websocket."""
+"""The gRPC wire: a session runs over it as it runs over the websocket."""
 
 import asyncio
 import datetime
@@ -40,7 +40,7 @@ def grpc_url(served: Served, path: str = '') -> str:
 
 @pytest.fixture
 def both_wires(start_server: StartServer, make_mock_policy) -> tuple[Served, MagicMock]:
-    """A server offering both wires over one policy."""
+    """A server that offers both wires over one policy."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
     return served, policy
@@ -76,7 +76,6 @@ def test_both_wires_answer_one_observation_alike(both_wires):
 
 
 def test_each_wire_names_its_own_port_in_the_meta(both_wires):
-    """The two wires bind two ports, and a session reads back the one that carried it."""
     served, _policy = both_wires
     over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
     over_grpc = InferenceClient(grpc_url(served)).new_session()
@@ -89,9 +88,7 @@ def test_each_wire_names_its_own_port_in_the_meta(both_wires):
 
 
 def test_both_wires_report_what_their_close_saw(both_wires, caplog):
-    """A close the server answered has to read differently from one it never saw, whichever wire carried
-    the session. The second leaves the server holding the slot, and the next session's handshake waits on
-    it, so each wire reports the distinction in the terms its own protocol offers."""
+    """The server holds the slot of a session whose close it never saw, and the next handshake waits on it."""
     served, _policy = both_wires
     over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
     over_grpc = InferenceClient(grpc_url(served)).new_session()
@@ -106,7 +103,7 @@ def test_both_wires_report_what_their_close_saw(both_wires, caplog):
 
 
 def test_closing_a_session_ends_it_on_the_server(both_wires):
-    """``close`` half-closes the stream and waits, so the server releases the session before it returns."""
+    """``close`` returns after the server has released the session."""
     served, _policy = both_wires
     session = InferenceClient(grpc_url(served)).new_session()
     assert served.server._active_sessions == 1
@@ -158,8 +155,6 @@ def test_the_query_carries_the_session_params(start_server, make_mock_policy):
     session = InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
     try:
         stack = session.metadata[offboard_keys.LOCAL_STACK][SEQ]
-        # `args` and the layer's own constructor keyword are the spec grammar's, written wherever a
-        # layer renders itself; this reader spells them as the wire carries them.
         assert stack[0]['args']['offsets_sec'] == [-0.5, 0.0]
     finally:
         session.close()
@@ -182,8 +177,8 @@ def test_the_grpc_wire_gates_on_the_bearer_token(authed_server):
 
 @pytest.mark.parametrize('header', [None, bearer('wrong'), _TOKEN])
 def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header, monkeypatch):
-    # A refused credential and a cold backend answer alike, so the client spends attempts on it; one
-    # is enough to see the refusal.
+    # A refused credential answers like a cold backend, and the client retries it; one attempt shows the
+    # refusal.
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     headers = None if header is None else {AUTH_HEADER: header}
     with pytest.raises(grpc.RpcError) as refused:
@@ -191,8 +186,8 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
 
 
-# The edge answers on one address, not on both families a name resolves to: gRPC reports the last
-# address it failed on, so a second leg refusing the connection would hide what the first blamed.
+# An address, and no name that resolves to two families: gRPC reports the last address it failed on,
+# and a refused second family would hide what the first blamed.
 EDGE_HOST = '127.0.0.1'
 
 
@@ -223,8 +218,8 @@ async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         while chunk := await reader.read(65536):
             writer.write(chunk)
             await writer.drain()
-    # Whichever end closes first leaves the other half of the pair writing into a dead socket, which
-    # is how a session ends. Anything else is the edge itself failing and belongs in the test's face.
+    # The end that closes first leaves the other half of the pair writing into a dead socket, which is how
+    # a session ends. Any other error is the edge's own, and fails the test.
     except (ConnectionResetError, BrokenPipeError):
         pass
     finally:
@@ -233,12 +228,11 @@ async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
 
 @pytest.fixture
 def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]:
-    """Starts a TLS front over a plaintext gRPC port, the shape an authenticated endpoint takes.
+    """Starts a TLS front over a plaintext gRPC port, as an authenticated endpoint is served.
 
-    It terminates TLS, selects HTTP/2 over ALPN and copies the bytes on, so the client and the server
-    speak one h2 connection end to end and the server holds no certificate. Answers the front's own
-    port and the root to verify it against. ``alpn=False`` selects no protocol at all, which is what
-    a front fronting a raw TCP port does.
+    The front terminates TLS, selects HTTP/2 over ALPN and copies the bytes on. It answers its own port
+    and the root to verify it against. ``alpn=False`` selects no protocol, as a front over a raw TCP
+    port does.
     """
     stops: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
 
@@ -284,7 +278,7 @@ def _trust_only(monkeypatch, root: bytes) -> None:
 
 @pytest.fixture
 def edged(tls_edge, monkeypatch) -> Callable[[Served], str]:
-    """The ``grpcs://`` URL of a server reached through a TLS edge, with the client trusting its root."""
+    """The ``grpcs://`` URL of a server reached through a TLS edge; the client trusts the edge's root."""
 
     def url(served: Served) -> str:
         port, root = tls_edge(served.host, served.grpc_port)
@@ -366,14 +360,13 @@ def test_a_path_outside_the_session_route_is_refused():
 
 
 def test_a_port_that_never_answers_is_named_at_the_deadline():
-    """Nothing listens on port 1, so the channel never becomes ready and the connect deadline passes."""
+    """Nothing listens on port 1; the channel never becomes ready."""
     client = InferenceClient('grpc://localhost:1', open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='grpc://localhost:1'):
         client.new_session()
 
 
 def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
-    """The refusal probe takes a share of the budget, so a healthy server answers a short one."""
     served, _policy = both_wires
     budget = grpc_wire._REFUSAL_PROBE_SEC / 2
     session = InferenceClient(grpc_url(served), open_timeout=budget, connect_deadline=0.0).new_session()
@@ -384,7 +377,7 @@ def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
 
 
 def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
-    """gRPC's target syntax brackets an IPv6 literal, so a bare '::1' would bind ':::<port>' and fail."""
+    """A bare '::1' binds as ':::<port>', which gRPC refuses."""
     assert grpc_wire._bind_target('::', 9000) == '[::]:9000'
     assert grpc_wire._bind_target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
@@ -398,8 +391,8 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_pol
 
 
 def test_a_refused_handshake_closes_the_connection(both_wires):
-    """A model the source does not know is refused in a protocol frame, past the transport handlers,
-    and the gRPC connection behind it holds a reader thread until something closes it."""
+    """A refusal in a protocol frame raises past the transport handlers, and the connection holds a reader
+    thread until it is closed."""
     client = InferenceClient(grpc_url(both_wires[0], f'{wire.SESSION_PATH}/unknown-model'))
     opened = []
     connect = client._connect
@@ -421,7 +414,7 @@ _SILENCE_SEC = 8.0
 
 @pytest.fixture
 def chatty_client(monkeypatch) -> None:
-    """Pings often enough that a silence measured in seconds stands in for one measured in minutes."""
+    """Pings every 500 ms, and a silence of seconds stands in for one of minutes."""
     monkeypatch.setattr(grpc_wire, '_PING_EVERY_MS', 500)
 
 
@@ -435,7 +428,7 @@ def _silent_then_infer(served: Served) -> list[dict]:
 
 
 def test_a_session_answers_after_a_silence_no_frame_crossed(both_wires, chatty_client):
-    """One inference can outlast a front's idle close, so the wire's own pings hold the stream open."""
+    """The wire's own pings hold the stream open through an inference that outlasts a front's idle close."""
     assert _silent_then_infer(both_wires[0]) == [{'action': [1, 2, 3]}]
 
 
@@ -451,7 +444,7 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
 
 
 def _surfaces_at_once(url: str, blamed: str) -> None:
-    """Assert a connect to ``url`` fails naming ``blamed``, without spending its retry deadline."""
+    """Assert that a connect to ``url`` fails, names ``blamed``, and spends no retry deadline."""
     client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
     started = time.monotonic()
     with pytest.raises(grpc.RpcError, match=blamed):
@@ -460,7 +453,6 @@ def _surfaces_at_once(url: str, blamed: str) -> None:
 
 
 def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_edge, monkeypatch):
-    """A root that does not cover the edge is permanent, so it surfaces on the first attempt."""
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
     unrelated, _key = _self_signed(EDGE_HOST)
     _trust_only(monkeypatch, unrelated)
@@ -468,7 +460,7 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
-    """A front fronting a raw TCP port terminates TLS and names no protocol, which gRPC cannot use."""
+    """A front over a raw TCP port terminates TLS and names no ALPN protocol, and gRPC refuses it."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
     _trust_only(monkeypatch, root)
     _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE[1])
@@ -481,13 +473,13 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     session = InferenceClient(grpc_url(served), infer_timeout=0.2).new_session()
     with pytest.raises(TimeoutError):
         session.infer({'image': 'test'})
-    # Without the guard this answers the first observation's actions, against the second's state.
+    # The late answer is the first observation's actions.
     with pytest.raises(wire.PeerDisconnected):
         session.infer({'image': 'test'})
 
 
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
-    """gRPC stops reading the request iterator then, so a write would wait out a whole timeout."""
+    """gRPC stops reading the request iterator, and a write waits out a whole timeout."""
     served, _policy = both_wires
     conn = grpc_wire.GrpcClientConnection(f'{served.host}:{served.grpc_port}', f'{wire.SESSION_PATH}/unknown-model', '')
     try:
@@ -497,7 +489,7 @@ def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires
             conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):
             conn.send(b'an observation the stream can no longer carry')
-        # The peer ended the stream, so this close reads differently from one the server answered.
+        # The close report says the peer ended the stream.
         assert 'peer had ended the stream True' in conn.close()
     finally:
         conn.close()

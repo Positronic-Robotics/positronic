@@ -103,20 +103,19 @@ class _ConnectOutcome(Enum):
 class _Refusal(Enum):
     """What a refused connect says about the server."""
 
-    COLD = 'cold'  # still coming up; retry to the deadline
+    COLD = 'cold'  # a backend still starting; retry to the deadline
     FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
-    FINAL = 'final'  # the endpoint is saying no; surface at once
+    FINAL = 'final'  # a permanent refusal; surface at once
 
 
 _COLD_GRPC_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
 
 
 def _refusal(e: Exception) -> _Refusal:
-    """How to read a refused connect, over either wire.
+    """What a refused connect says about the server, over either wire.
 
-    Each gRPC code stands for the HTTP status its wire twin answers: ``PERMISSION_DENIED`` for 403,
-    ``UNAVAILABLE`` for 503, ``RESOURCE_EXHAUSTED`` for 429. A TLS edge no client can use answers
-    ``UNAVAILABLE`` too, exactly as a cold backend does, so its details tell them apart.
+    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. A TLS
+    edge no client can use answers ``UNAVAILABLE`` too; its details tell it from a cold backend.
     """
     if isinstance(e, InvalidStatus):
         status = e.response.status_code
@@ -139,8 +138,8 @@ def _refusal(e: Exception) -> _Refusal:
 class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
-    A refusal both wires answer for a cold backend and for a refused credential — HTTP 403, gRPC
-    ``PERMISSION_DENIED`` — gets a few attempts rather than the whole ``connect_deadline``.
+    A 403 or a ``PERMISSION_DENIED`` means a cold backend or a refused credential, and gets
+    ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
@@ -208,9 +207,8 @@ class InferenceClient:
     says about the session — the model id it names and the query it carries as session params — reaches
     the server exactly as written, so every session opened here serves that model with those params.
 
-    ``grpc://`` names the same session on the gRPC wire, which the server offers on a port of its own, and
-    ``grpcs://`` names that port behind a TLS edge. Either port carries sessions alone, so ``list_models``
-    needs the HTTP URL.
+    ``grpc://`` opens the session on the gRPC wire, on the server's own gRPC port; ``grpcs://`` reaches that
+    port through a TLS edge. That port carries sessions alone: ``list_models`` needs the HTTP URL.
 
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
@@ -281,11 +279,10 @@ class InferenceClient:
         return websocket_wire.WebsocketClientConnection(websocket)
 
     def _open_session(self) -> InferenceSession:
-        """One attempt at a session, closing the connection whenever the handshake does not finish.
+        """One attempt at a session. The connection closes when the handshake does not finish.
 
-        A refusal the server sends as a protocol frame — an unknown model, a session param it rejects
-        — raises past every transport handler, and a gRPC connection holds a reader thread until it
-        is closed.
+        A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
+        transport handler, and a gRPC connection holds a reader thread until it is closed.
         """
         conn = self._connect()
         try:
@@ -306,9 +303,9 @@ class InferenceClient:
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
-            # Each of these is a backend that is not ready yet — a timed-out connect, a reset TLS
-            # handshake, a refused upgrade or gRPC call, a dropped status handshake — so one must not
-            # kill the run. ``_ConnectRetries`` decides which of them is the endpoint saying no.
+            # Each of these can be a backend that is not ready: a timed-out connect, a reset TLS handshake, a
+            # refused upgrade or gRPC call, a dropped status handshake. ``_ConnectRetries`` tells a permanent
+            # refusal apart.
             except (
                 TimeoutError,
                 ssl.SSLError,

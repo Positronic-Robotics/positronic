@@ -1,7 +1,6 @@
-"""The gRPC wire: one bidirectional stream per session, carrying the same ``protocol`` frames.
+"""The gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames.
 
-The stream is untyped bytes on both sides, so there is no protobuf schema and no generated code: a
-generic handler with no serialiser hands each frame over as it arrived.
+The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
 
 import logging
@@ -24,7 +23,7 @@ SERVICE = 'positronic.offboard.v1.Inference'
 METHOD = 'Session'
 METHOD_PATH = f'/{SERVICE}/{METHOD}'
 
-# What the websocket wire says in the URL, said here in the session metadata.
+# The session path and the query cross as metadata; the websocket wire carries them in the URL.
 SESSION_PATH_HEADER = 'positronic-session-path'
 SESSION_QUERY_HEADER = 'positronic-session-query'
 
@@ -33,29 +32,28 @@ _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
-# How often the client pings a connection nothing is crossing, so no front reads it as dead.
+# How often the client pings an idle connection. A front drops a connection it reads nothing from.
 _PING_EVERY_MS = 20_000
 _PING_ANSWER_TIMEOUT_MS = 10_000
 _PING_TOLERATED_EVERY_MS = 10_000
 
-# How long ``close`` waits for the server to end the stream, so its own session cleanup runs.
+# How long ``close`` waits for the server to end the stream and release the session.
 _CLOSE_TIMEOUT_SEC = 5.0
 
-# A path no handler serves, so asking why a channel is down never opens a session on a server that
-# turns out to be up after all.
+# A path no handler serves: a probe of it opens no session on a server that is up.
 _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 
-# The largest slice of one connect attempt's budget the refusal probe may spend. A target that black-holes
-# connection attempts answers neither, so both waits must fit inside the caller's ``open_timeout``.
+# The largest share of one connect attempt's budget the refusal probe may spend. Both waits fit inside
+# the caller's ``open_timeout``: a target that drops every connect answers neither.
 _REFUSAL_PROBE_SEC = 1.0
 
-# What gRPC's status details call an edge no client can use: a certificate its roots do not cover,
-# and a front that selects no HTTP/2 over ALPN.
+# The status details of an edge no client can use: a certificate the roots do not cover, and a front
+# that selects no HTTP/2 over ALPN.
 UNUSABLE_EDGE = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 
 
 def edge_is_unusable(details: str) -> bool:
-    """Whether a gRPC status blames the TLS edge's own configuration rather than a cold backend."""
+    """Whether a gRPC status blames the TLS edge's own configuration."""
     return any(marker in details for marker in UNUSABLE_EDGE)
 
 
@@ -64,7 +62,7 @@ def _client_options() -> list[tuple[str, int]]:
         *_MESSAGE_SIZE_OPTIONS,
         ('grpc.keepalive_time_ms', _PING_EVERY_MS),
         ('grpc.keepalive_timeout_ms', _PING_ANSWER_TIMEOUT_MS),
-        # Left to itself gRPC sends two pings without data, five minutes apart.
+        # The gRPC default sends two pings without data, five minutes apart.
         ('grpc.http2.max_pings_without_data', 0),
         ('grpc.http2.min_time_between_pings_ms', _PING_EVERY_MS),
     ]
@@ -73,22 +71,21 @@ def _client_options() -> list[tuple[str, int]]:
 def _channel(target: str, secure: bool) -> grpc.Channel:
     options = _client_options()
     if secure:
-        # No roots named, so the channel verifies the edge against the system's own.
+        # No roots named: the channel verifies the edge against the system's own roots.
         return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
     return grpc.insecure_channel(target, options=options)
 
 
 def _probe_share(open_timeout: float) -> float:
-    """What one connect attempt gives the refusal probe, leaving the readiness wait the rest.
+    """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
 
-    Half at most, so an ``open_timeout`` under ``_REFUSAL_PROBE_SEC`` still waits for a healthy server
-    instead of going straight to asking why it is down.
+    Half at most: an ``open_timeout`` under ``_REFUSAL_PROBE_SEC`` still waits for a healthy server.
     """
     return min(_REFUSAL_PROBE_SEC, open_timeout / 2)
 
 
 def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
-    """What gRPC says stopped the channel coming up. Its readiness future carries only that it did not."""
+    """What gRPC says stopped the channel. The readiness future says only that the channel is not ready."""
     probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
     try:
         next(probe(iter(()), timeout=timeout))
@@ -102,11 +99,8 @@ def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | N
 class GrpcClientConnection:
     """A client's end of one gRPC session.
 
-    A reader thread drains the response stream into a queue, because the stream itself has no
-    per-message timeout and ``recv`` needs one.
-
-    ``secure`` dials over TLS, which is the shape an authenticated endpoint takes: a TLS edge in front
-    of the server's plaintext gRPC port.
+    A reader thread drains the response stream into a queue: the stream has no per-message timeout, and
+    ``recv`` needs one. ``secure`` dials over TLS, to a TLS edge in front of the server's plaintext port.
     """
 
     def __init__(
@@ -125,16 +119,15 @@ class GrpcClientConnection:
             grpc.channel_ready_future(self._channel).result(timeout=open_timeout - _probe_share(open_timeout))
         except grpc.FutureTimeoutError:
             refusal = _connect_refusal(self._channel, timeout=max(0.0, deadline - time.monotonic()))
-            # The probe path is served by no handler, so an UNIMPLEMENTED means the edge carried the call:
-            # the channel is up, and the readiness wait was short rather than the server absent.
+            # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
             if refusal is None or refusal.code() is not grpc.StatusCode.UNIMPLEMENTED:
                 self._channel.close()
-                # An edge that refuses every client is permanent, so raise what gRPC blamed rather than a
-                # timeout: the connect loop reads the status and stops instead of retrying its deadline out.
+                # An edge that refuses every client is permanent, and the connect loop retries a ``TimeoutError``
+                # to its deadline.
                 if refusal is not None and edge_is_unusable(refusal.details() or ''):
                     raise refusal from None
                 raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
-        # gRPC metadata keys are lower case, and they are the same header names the websocket wire sends.
+        # gRPC metadata keys are lower case; the header names are the websocket wire's.
         metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
             (SESSION_PATH_HEADER, session_path),
             (SESSION_QUERY_HEADER, query),
@@ -154,7 +147,7 @@ class GrpcClientConnection:
             yield message
 
     def _read(self) -> None:
-        """Drain the response stream into the inbox, ending it with what stopped it."""
+        """Drain the response stream into the inbox, and end the inbox with what stopped the stream."""
         try:
             for message in self._responses:
                 self._inbox.put(message)
@@ -165,15 +158,15 @@ class GrpcClientConnection:
             self._responses.cancel()
 
     def send(self, message: bytes) -> None:
-        # A write past either of these sits in the outbox while ``recv`` waits out a whole inference
-        # timeout on an inbox nothing refills: gRPC has stopped reading the request iterator.
+        # gRPC stops reading the request iterator once the stream ends, and a write then sits in the outbox
+        # until ``recv`` times out.
         if self._closed or self._ended:
             raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)
 
     def recv(self, timeout: float | None = None) -> bytes:
-        # A closed session's inbox may hold a reply that arrived during ``close``, which would pair one
-        # observation's actions with the next observation's state.
+        # A reply that arrived during ``close`` sits in the inbox, and would pair one observation's actions
+        # with the next observation.
         if self._closed:
             raise wire.PeerDisconnected(f'The session on {self._target} is closed')
         try:
@@ -181,7 +174,7 @@ class GrpcClientConnection:
         except queue.Empty:
             raise TimeoutError(f'No message from {self._target} within {timeout}s') from None
         if isinstance(answer, BaseException):
-            # What ended the stream is queued once, so the caller learns why before writes are refused.
+            # What ended the stream is queued once. The caller reads it before ``send`` refuses a write.
             self._ended = True
             raise answer
         return answer
@@ -191,13 +184,13 @@ class GrpcClientConnection:
             return 'already closed'
         self._closed = True
         self._outbox.put(None)
-        # The half-close ends the server's session, and the server then ends the stream. Waiting for
-        # that lets the server release its model slot; closing the channel now would cut it short.
+        # The half-close ends the server's session, and the server then ends the stream. A channel closed
+        # before that cuts the server's cleanup short.
         self._reader.join(timeout=_CLOSE_TIMEOUT_SEC)
         server_ended_stream = not self._reader.is_alive()
         self._channel.close()
-        # The websocket wire reads the same two facts off a close code. A stream the server never ended
-        # means it still holds this session, so the next one's handshake waits on a slot nobody released.
+        # A stream the server never ended means the server still holds this session, and the next session's
+        # handshake waits on its slot.
         return (
             f'peer had ended the stream {self._ended}, '
             f'server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
@@ -205,7 +198,7 @@ class GrpcClientConnection:
 
 
 def model_id_of(session_path: str) -> str | None:
-    """The model a session path names, or ``None`` where it names the model the server pinned."""
+    """The model a session path names, or ``None`` for the model the server pinned."""
     prefix = f'{wire.SESSION_PATH}/'
     if session_path == wire.SESSION_PATH:
         return None
@@ -305,8 +298,8 @@ class GrpcWire(wire.Wire):
             try:
                 await session(conn, model_id_of(conn.session_path))
             except Exception as e:
-                # The session itself reports what it can over the stream; anything reaching here happened
-                # before or beyond that, so the client learns of it from the status alone.
+                # The session reports its own errors over the stream. One that reaches here reaches the client
+                # as the status alone.
                 logger.error(f'Failed gRPC session: {e}', exc_info=True)
                 await context.abort(grpc.StatusCode.INTERNAL, str(e))
 
@@ -315,8 +308,7 @@ class GrpcWire(wire.Wire):
         server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
         bound = server.add_insecure_port(_bind_target(self._host, self._port))
         if bound == 0:
-            # gRPC reports a refused bind by returning port 0, so a server left to start here would
-            # accept nothing and say nothing.
+            # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.
             raise OSError(f'gRPC could not bind {_bind_target(self._host, self._port)}')
         self._server = server
         self._endpoint = wire.Endpoint(self._host, bound)

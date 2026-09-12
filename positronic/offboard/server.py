@@ -191,9 +191,8 @@ class PolicyServer:
     The session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    ``serve`` takes the wires sessions arrive on, and names none of them (see
-    ``positronic.offboard.wire``, which states what a wire owes a server). ``api`` holds this server's
-    own HTTP routes, which a wire that speaks HTTP serves beside its sessions.
+    ``serve`` takes the wires sessions arrive on (``positronic.offboard.wire``). ``api`` holds this
+    server's own HTTP routes, for a wire that speaks HTTP.
 
     On startup (before accepting connections): resolve(None) → load.
 
@@ -231,7 +230,7 @@ class PolicyServer:
         self._infer_lock = asyncio.Lock()
 
         self._default_id: str | None = None
-        # Set while ``serve`` runs, so ``shutdown`` can reach its loop from another thread.
+        # Set while ``serve`` runs; ``shutdown`` reaches the loop from another thread.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
 
@@ -260,7 +259,7 @@ class PolicyServer:
         return hmac.compare_digest(authorization.encode(), bearer(self._auth_token).encode())
 
     def _authorized(self, headers: Mapping[str, str]) -> bool:
-        """Whether session headers carry the bearer token this server gates on. Every wire asks this."""
+        """Whether the session headers carry the bearer token this server gates on."""
         return self._token_matches(headers.get(AUTH_HEADER.lower()))
 
     def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
@@ -300,8 +299,8 @@ class PolicyServer:
                         # The server's clock is not the rig's.
                         actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                     except asyncio.CancelledError:
-                        # Cancelling this await does not stop the worker, so the session close runs beside
-                        # a live inference. Logged to give a later wrong answer a cause.
+                        # A cancelled await does not stop the worker, and the session close runs beside a live
+                        # inference. The log gives a later wrong answer a cause.
                         logger.error('Cancelled mid-inference: the worker is still in the backend')
                         raise
                 await conn.send(serialise({protocol.RESULT: actions}))
@@ -406,18 +405,14 @@ class PolicyServer:
     def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
-        Every wire shares this server's model slot and inference lock, so a session is served the same
-        whichever one carried it.
-
-        ``on_ready`` runs on the server's own loop once every wire has bound, which is where a caller
-        that asked for port 0 reads back the port each wire took.
+        Every wire shares this server's model slot and inference lock. ``on_ready`` runs on the server's
+        own loop once every wire has bound; a caller that asked for port 0 reads the port there.
         """
 
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
-            # A wire binds when it starts, so one that started is stopped even where a later one cannot
-            # bind and nothing ever serves.
+            # A wire binds when it starts, and a started wire is stopped even when a later one cannot bind.
             started: list[wire.Wire] = []
             serving: list[asyncio.Task] = []
             ending: list[asyncio.Task] = []
@@ -429,8 +424,7 @@ class PolicyServer:
                 if on_ready is not None:
                     on_ready()
                 serving = [asyncio.create_task(w.serve()) for w in started]
-                # What ends the server, beside a wire ending on its own: a caller's ``shutdown``, and
-                # the idle timeout.
+                # What else ends the server: a caller's ``shutdown``, and the idle timeout.
                 ending = [asyncio.create_task(self._stop.wait())]
                 if self.idle_timeout_min and self.idle_timeout_min > 0:
                     ending.append(asyncio.create_task(self._idle_watchdog()))
@@ -444,11 +438,11 @@ class PolicyServer:
                 outcomes = await asyncio.gather(*serving, return_exceptions=True)
 
             failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
-            # Only one failure can reach the caller, so the rest are reported here or nowhere.
+            # Only one failure can raise; the rest are logged here or nowhere.
             for w, error in failed[1:]:
                 logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
             if failed:
-                # A wire that ended on an error raises, rather than reading as the shutdown this waits for.
+                # A wire that ended on an error raises; a silent return reads as a shutdown.
                 raise failed[0][1]
 
         try:
@@ -485,9 +479,6 @@ def serve(
 
     The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
     a secret in the process arguments; unset serves open.
-
-    This is where the flags name the wires, and the only place either wire is named: ``PolicyServer``
-    takes whatever list it is handed.
     """
     server = PolicyServer(
         pipeline,

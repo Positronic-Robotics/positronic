@@ -51,12 +51,12 @@ class _StubSource(ModelSource):
         return {'type': 'stub'}
 
 
-# Short enough to keep this test quick, long enough that a loaded box still reaches the first poll.
+# Short enough for a quick test, long enough that a loaded box reaches the first poll.
 _A_MOMENT_IDLE = 0.5
 
 
 class _FailingWire(wire.Wire):
-    """Serves for ``after`` seconds, then falls over."""
+    """Serves for ``after`` seconds, then raises."""
 
     def __init__(self, after: float):
         self._after = after
@@ -95,8 +95,7 @@ class _UnbindableWire(wire.Wire):
 
 
 def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
-    """A wire binds when it starts, so a startup that gives up does not leave an earlier one holding a
-    port against a server nothing is serving."""
+    """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
     bound = _FailingWire(_A_MOMENT_IDLE)
     with pytest.raises(OSError, match='that port is taken'):
@@ -105,13 +104,12 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
 
 
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
-    """A ``WebsocketWire`` binds a real socket when it starts, so a startup that rolls back frees the
-    port it took, not only the stub wires that own no socket."""
+    """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
     bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
-    # A leaked listener would still hold the port, so binding a fresh socket to it would raise.
+    # A leaked listener holds the port, and a fresh bind to it raises.
     websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
 
 
@@ -125,7 +123,7 @@ def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_pol
 
 
 def test_an_idle_server_stops_itself(make_mock_policy):
-    """The idle watchdog ends every wire it is serving on, so ``serve`` returns with nobody asking it to."""
+    """The idle watchdog ends every wire, and ``serve`` returns with no ``shutdown`` call."""
     server = PolicyServer(
         ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
     )

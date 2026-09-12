@@ -64,32 +64,24 @@ class WebsocketServerConnection(wire.ServerConnection):
 
 
 def _listening_socket(host: str, port: int) -> socket.socket:
-    """A socket bound on ``host``, where a ``port`` of 0 takes any free one.
-
-    The family comes from ``host`` itself, so an IPv6 host binds an IPv6 socket. Binding here rather
-    than inside uvicorn names the port before the wire serves, and holds it from then on.
-    """
+    """A listening socket bound on ``host``, where a ``port`` of 0 takes any free one."""
     family, kind, proto, _canonical, address = socket.getaddrinfo(
         host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
     )[0]
     sock = socket.socket(family, kind, proto)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(address)
-    # Listening here rather than at the first accept makes the port answer from the moment ``start``
-    # returns: the kernel queues a connect that beats the serving loop to it.
+    # The port answers from the moment ``start`` returns: the kernel queues a connect that arrives before
+    # the serving loop runs.
     sock.listen()
     return sock
 
 
 class WebsocketWire(wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port.
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
 
-    One uvicorn serves both, so the routes a client reads a model catalogue from sit on the endpoint it
-    opens sessions on.
-    """
-
-    # How long ``stop`` lets an open session finish before it cuts the connection. Left to itself
-    # uvicorn waits for ever, so a session mid-inference would hold the whole server open.
+    # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
+    # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
     def __init__(self, host: str, port: int, api: APIRouter):
@@ -124,13 +116,12 @@ class WebsocketWire(wire.Wire):
 
     def _route_sessions(self, app: FastAPI, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         async def require_auth(websocket: WebSocket) -> None:
-            """Refuses before ``accept()``, so an unauthorized peer never reaches the session handshake."""
+            """Refuse before ``accept()``. An unauthorized peer never reaches the session handshake."""
             if not authorized(websocket.headers):
                 raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
         async def serve_pinned_model(websocket: WebSocket) -> None:
-            """Serves the model the server pinned. Naming a model is the path's job, so every query param
-            here is a pipeline override."""
+            """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
             await websocket.accept()
             await session(WebsocketServerConnection(websocket, self.endpoint), None)
 
@@ -140,8 +131,8 @@ class WebsocketWire(wire.Wire):
 
         auth = [Depends(require_auth)]
         app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)
-        # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name the
-        # model catalogue advertises.
+        # ``:path``: a model id can itself be a path (a HuggingFace repo), and opens under the name the
+        # catalogue advertises.
         app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_named_model)
 
     async def serve(self) -> None:
@@ -152,7 +143,7 @@ class WebsocketWire(wire.Wire):
     async def stop(self) -> None:
         if self._server is not None:
             self._server.should_exit = True
-        # uvicorn releases the socket as it shuts down. A startup that rolls back stops a wire that
-        # bound but never served, so uvicorn never runs; close the socket here to free the port.
+        # uvicorn releases the socket when it shuts down. A wire that bound but never served has no
+        # uvicorn to release it.
         if self._socket is not None and not self._served:
             self._socket.close()

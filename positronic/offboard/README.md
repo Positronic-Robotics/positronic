@@ -9,7 +9,7 @@ The unified protocol is built to enable ANY hardware to connect to ANY model. Al
 ### Wires
 
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
-the same order, so everything below holds on each.
+the same order; everything below holds on each.
 
 | Wire | URL | Port |
 |---|---|---|
@@ -18,32 +18,32 @@ the same order, so everything below holds on each.
 | gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
 
 The WebSocket wire is the default, and a server serves gRPC only when `grpc_port` names a port. A
-gRPC session is one bidirectional stream of the same frames, so no `.proto` file describes them.
+gRPC session is one bidirectional stream of the same frames; no `.proto` file describes them.
 The session path and the query cross as the `positronic-session-path` and `positronic-session-query`
 metadata, and `Authorization` crosses as the `authorization` metadata.
 
-Python's WebSocket stack costs about 30 ms per 846 KiB observation in framing and reassembly, which
-gRPC does in about 1 ms, so take the gRPC wire wherever it reaches.
+Python's WebSocket stack spends about 30 ms per 846 KiB observation on framing and reassembly; gRPC
+spends about 1 ms. Take the gRPC wire wherever it reaches.
 
-It reaches through a managed HTTPS front, which is how an authenticated endpoint is served: the front
-terminates TLS and the HTTP/2 connection runs end to end, so the server binds a plaintext port and
-holds no certificate of its own. The front has to negotiate HTTP/2 over ALPN — check a new one with
-`openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint that means declaring
-the gRPC port as an ordinary HTTP port and dialling its `https://` host as `grpcs://<host>:443`; a
-port declared `/tcp` is fronted by a `tls://` URL that negotiates no ALPN, which gRPC refuses with
+It reaches through a managed HTTPS front, which is how an authenticated endpoint is served. The front
+terminates TLS, and the HTTP/2 connection runs end to end; the server binds a plaintext port and holds
+no certificate. The front must select HTTP/2 over ALPN. Check a new front with
+`openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint, declare the gRPC
+port as an ordinary HTTP port and dial its `https://` host as `grpcs://<host>:443`. A port declared
+`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
 `Cannot check peer: missing selected ALPN property`.
 
-Through such an endpoint an 846 KiB observation round-trips in about 6 ms over gRPC against about
-60 ms over the WebSocket, and gRPC holds that at 10 Hz, which is 8 MB/s of observation. The front
-shapes a session that outruns it: a back-to-back loop settles at about 83 ms a round trip after some
-11 MB, and gets its speed back after a minute of quiet. The WebSocket holds its 60 ms throughout,
-below the rate the front shapes at.
+Through such an endpoint an 846 KiB observation round-trips in about 6 ms over gRPC and about 60 ms
+over the WebSocket. gRPC holds 6 ms at 10 Hz, which is 8 MB/s of observation. The front shapes a
+session that sends faster: a back-to-back loop settles at about 83 ms a round trip after some 11 MB,
+and returns to 6 ms after a minute of quiet. The WebSocket holds its 60 ms throughout, below the rate
+the front shapes at.
 
-Both wires ping through a silent wait, so a front that drops a connection it has read nothing from —
-the managed one after about 90 s — does not cut an inference the model is still working on.
+Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
+front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route, so it stays on the server's `port`. `InferenceClient.list_models`
-over a `grpc://` URL says so.
+`/api/v1/models` is an HTTP route and stays on the server's `port`. `InferenceClient.list_models`
+refuses a `grpc://` URL.
 
 ### Authentication
 
@@ -161,7 +161,7 @@ This metadata tells the client:
 
 #### 2. Status Updates (Long Model Loading)
 
-Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The client gives the handshake 30s per message, so the server sends periodic status updates during loading. This holds on either wire:
+Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The client gives the handshake 30 s per message; the server sends status updates during loading, on either wire:
 
 ```json
 {
@@ -262,11 +262,11 @@ server = PolicyServer(pipeline)
 server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`serve` takes the wires sessions arrive on, and the server names none of them: each wire binds its own
-port, reads its own route for the model a session asks for, and checks its own session headers. Add
-`grpc_wire.GrpcWire(host, port)` to the list to serve gRPC beside the websocket. A wire that speaks HTTP
-takes `server.api`, the model catalogue, and answers it on the same port it carries sessions on. A wire
-asked for port 0 binds any free one and names it in `wire.endpoint`.
+`serve` takes the wires sessions arrive on. Each wire binds its own port, reads its own route for the
+model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)` to
+the list to serve gRPC beside the websocket. A wire that speaks HTTP takes `server.api`, the model
+catalogue, and answers it on the port it carries sessions on. A wire asked for port 0 binds any free
+one and names it in `wire.endpoint`.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 

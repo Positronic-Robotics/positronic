@@ -29,8 +29,8 @@ StartServer = Callable[..., Served]
 def start_server() -> Generator[StartServer, None, None]:
     """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown.
 
-    Each wire asks for port 0 and holds what it binds, so servers started in parallel never draw the same
-    port. ``grpc=True`` serves the gRPC wire beside the websocket one.
+    Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
+    serves the gRPC wire beside the websocket one.
     """
     running: list[tuple[PolicyServer, threading.Thread]] = []
 

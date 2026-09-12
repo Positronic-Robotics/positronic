@@ -1,7 +1,7 @@
-"""The transports a session runs over, the two ends of an open one, and the server's end of a wire.
+"""The transports a session runs over, and the two ends of one open session.
 
-A wire carries the ``protocol`` frames as opaque bytes and reads none of them, so the handshake and
-the inference loop read the same over every wire. ``websocket_wire`` and ``grpc_wire`` hold the two.
+A wire carries the ``protocol`` frames as opaque bytes and reads none of them. ``websocket_wire`` and
+``grpc_wire`` hold the two wires.
 """
 
 import abc
@@ -10,13 +10,11 @@ from typing import NamedTuple, Protocol
 
 from starlette.datastructures import QueryParams
 
-# The route a session opens on. The websocket wire puts it in the URL; the gRPC wire names it in the
-# session metadata, so both wires address a model the same way.
+# The route a session opens on: in the URL on the websocket wire, in the session metadata on the gRPC wire.
 SESSION_PATH = '/api/v1/session'
 
-# The largest frame a session may carry, on either wire. An observation is a stack of camera frames,
-# so the gRPC default of 4 MiB refuses one; uvicorn's own default happens to be this, and passing it
-# explicitly is what keeps the two wires equal when that default moves.
+# The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
+# the gRPC default of 4 MiB refuses one.
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
@@ -43,9 +41,8 @@ class ClientConnection(Protocol):
     def close(self) -> str:
         """Close this end, and report what the wire saw, for the log.
 
-        A peer that answered the close leaves a different trace from one that had already gone while the
-        server still held the session, and the second is what strands the next session's handshake. Only
-        the wire can tell the two apart, and each says it in its own terms.
+        The report says whether the peer answered the close, in the wire's own terms. A server that still
+        holds a session strands the next session's handshake, and only the wire can see that.
         """
         ...
 
@@ -77,11 +74,11 @@ class ServerConnection(abc.ABC):
 
     @abc.abstractmethod
     async def refuse(self, reason: str) -> None:
-        """End a session the server cannot serve, telling the client why."""
+        """End a session the server cannot serve, and tell the client why."""
 
 
 # What a wire hands the server for each session it accepts: the connection, and the model the route
-# names, which is ``None`` where the route names the model the server pinned.
+# names, or ``None`` for the model the server pinned.
 SessionHandler = Callable[[ServerConnection, str | None], Awaitable[None]]
 
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
@@ -92,13 +89,13 @@ class Wire(abc.ABC):
     """One transport that sessions arrive on.
 
     A wire reads its own route for the model a session names, and refuses an unauthorized peer before
-    the session opens. So a server hands every wire one ``SessionHandler`` and serves them all alike.
+    the session opens.
     """
 
     @property
     @abc.abstractmethod
     def endpoint(self) -> Endpoint:
-        """Where this wire serves. The port is bound, and so known, once ``start`` returns."""
+        """Where this wire serves. The port is known once ``start`` returns."""
 
     @abc.abstractmethod
     async def start(self, session: SessionHandler, authorized: Authorized) -> None:

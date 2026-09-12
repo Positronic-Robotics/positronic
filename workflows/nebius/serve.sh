@@ -6,9 +6,9 @@
 # itself takes ~10-15 min more to finish uv sync and load the model into GPU
 # memory after the URL appears.
 #
-# Both wires are served: the websocket on 8000, and gRPC on whatever `--grpc_port`
-# names. The gRPC port is declared as an ordinary HTTP port and never `/tcp` — the
-# offboard README says what each front does to a gRPC session.
+# Both wires are served: the websocket on 8000, and gRPC on the port `--grpc_port`
+# names. The gRPC port is declared as an ordinary HTTP port; a `/tcp` port gets a
+# front gRPC refuses. The offboard README says what each front does to a session.
 #
 # That URL carries the id of a tunnel created with the endpoint, so it cannot be
 # chosen or known in advance, and a delete plus re-create earns a new one even
@@ -94,11 +94,10 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
-# The port the websocket wire listens on, named once: the create declares it and the poll below
-# selects the managed URL that fronts it.
+# The websocket port: the create declares it, and the poll below selects the managed URL that fronts it.
 WS_PORT=8000
 
-# The endpoint exposes the port the server listens on, so a caller's own --grpc_port decides both.
+# The endpoint exposes the port the server listens on; a caller's own --grpc_port names both.
 ARGS=" $* "
 case "$ARGS" in
   *" --grpc_port="*) GRPC_PORT=${ARGS#*--grpc_port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
@@ -144,9 +143,9 @@ echo "Waiting for the managed HTTPS URL (typically <1 min)..."
 
 URL=""
 for i in $(seq 1 30); do
-  # Each managed URL names the container port it fronts, so the two wires are told apart by that
-  # prefix. This field also carries bare `IP:port` entries, which serve no TLS and would put the
-  # bearer token on the wire in cleartext — take the https:// ones, and fail rather than fall back.
+  # Each managed URL names the container port it fronts, and that prefix tells the two wires apart.
+  # This field also carries bare `IP:port` entries, which serve no TLS and would put the bearer
+  # token on the wire in cleartext: take the https:// ones, and fail with no fallback.
   URL=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
     | jq -r "[.status.public_endpoints[]? | select(startswith(\"https://port${WS_PORT}-\"))] | first // empty")
   if [ -n "$URL" ]; then break; fi

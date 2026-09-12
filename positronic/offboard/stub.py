@@ -1,7 +1,7 @@
-"""A server with no model: every inference answers the same chunk, so a session measures the wire alone.
+"""A server with no model: every inference answers the same chunk, and a session measures the wire alone.
 
-``delay_sec`` is a session param, so ``?delay_sec=120`` holds one inference open for two minutes —
-what a cold model does to a connection, with nothing on the wire meanwhile.
+``delay_sec`` is a session param: ``?delay_sec=120`` holds one inference open for two minutes, with
+nothing on the wire meanwhile.
 """
 
 import time
@@ -18,8 +18,7 @@ from positronic.policy.base import DelegatingSession, Layer, Runtime
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import Pipeline, PolicySource, remote
 
-# One action, at the start of the chunk. A served session must answer a trajectory, and this is the
-# smallest one that is.
+# The smallest trajectory a served session can answer: one action, at the start of the chunk.
 CHUNK = [{keys.ACTION_TIMESTAMP: 0.0}]
 
 
@@ -50,8 +49,9 @@ class DelayedSession(DelegatingSession):
 
 
 class Delay(Layer):
-    """Holds every answer for ``delay_sec``, standing in for a model slow enough to outlast a front's
-    idle close. A session param may tune the pipeline around the model source, never the source itself.
+    """Holds every answer for ``delay_sec``, in place of a model slow enough to outlast a front's idle close.
+
+    A session param can tune a layer and cannot change the model source.
     """
 
     def __init__(self, delay_sec: float = 0.0):
@@ -61,8 +61,8 @@ class Delay(Layer):
         return DelayedSession(inner, self._delay_sec)
 
 
-# One instance for the process: a server compares the source a session param rebuilds against the one
-# it launched with, and two sources are equal only when they hold the same policy.
+# One instance for the process. A server refuses a session param that rebuilds a different source, and
+# two ``PolicySource``s are equal only over one policy object.
 POLICY = StubPolicy()
 
 
