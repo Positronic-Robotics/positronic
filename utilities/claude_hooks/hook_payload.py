@@ -7,6 +7,7 @@ project venv; the harness runs a hook by path, which puts this directory on `sys
 
 from __future__ import annotations
 
+TOOL_NAME = 'tool_name'
 TOOL_INPUT = 'tool_input'
 COMMAND = 'command'
 FILE_PATH = 'file_path'
@@ -19,6 +20,17 @@ PRE_TOOL_USE = 'PreToolUse'
 SESSION_START = 'SessionStart'
 
 
+def tool_name(payload: dict) -> str:
+    """The tool a call names, or '' when the payload names none."""
+    return str(payload.get(TOOL_NAME) or '')
+
+
+def tool_input(payload: dict) -> dict:
+    """The arguments a tool call carries, or {} when it carries none readable as arguments."""
+    arguments = payload.get(TOOL_INPUT)
+    return arguments if isinstance(arguments, dict) else {}
+
+
 def command(payload: dict) -> str:
     """The shell command a Bash tool call runs, or '' when the payload carries none."""
     return str((payload.get(TOOL_INPUT) or {}).get(COMMAND) or '')
@@ -26,8 +38,8 @@ def command(payload: dict) -> str:
 
 def target_path(payload: dict) -> str:
     """The file a write-shaped tool call targets, or '' when it names none."""
-    tool_input = payload.get(TOOL_INPUT) or {}
-    return str(tool_input.get(FILE_PATH) or tool_input.get(NOTEBOOK_PATH) or '')
+    arguments = payload.get(TOOL_INPUT) or {}
+    return str(arguments.get(FILE_PATH) or arguments.get(NOTEBOOK_PATH) or '')
 
 
 def additional_context(text: str, event: str) -> dict:
