@@ -93,6 +93,7 @@ ee_traj = pipeline.override(codec=lerobot_codecs.ee_traj)
 joints_traj = pipeline.override(codec=lerobot_codecs.joints_traj)
 joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+trossen_joints = pipeline.override(codec=lerobot_codecs.trossen_joints)
 # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
 ee_flip = pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True))
 
@@ -107,6 +108,7 @@ COMMANDS = {
     'joints_traj': serve.override(pipeline=joints_traj),
     'joints_ik': serve.override(pipeline=joints_ik),
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'trossen_joints': serve.override(pipeline=trossen_joints),
     'ee_flip': serve.override(pipeline=ee_flip),
     'phail': serve.override(
         pipeline=ee.override(

@@ -561,7 +561,7 @@ def _log_urdf_robot(
     """Log the episode's robot model, its joints animated by `joint_sig`."""
     joint_names = ep.static.get(roboarm_keys.JOINT_NAMES)
     urdf_str = ep.static.get(roboarm_keys.URDF)
-    meshes = ep.static.get('meshes')
+    meshes = ep.static.get(roboarm_keys.MESHES)
     if not (joint_names and urdf_str and meshes):
         return
     ts_arr, q_vals = numeric_data[joint_sig]

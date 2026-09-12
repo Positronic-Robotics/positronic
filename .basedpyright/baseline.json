@@ -1156,30 +1156,6 @@
         ],
         "./positronic/data_collection.py": [
             {
-                "code": "reportOptionalOperand",
-                "range": {
-                    "startColumn": 25,
-                    "endColumn": 48,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 89,
-                    "endColumn": 92,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 64,
-                    "endColumn": 80,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportReturnType",
                 "range": {
                     "startColumn": 11,
@@ -1212,26 +1188,10 @@
                 }
             },
             {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 73,
-                    "endColumn": 99,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 33,
                     "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 66,
-                    "endColumn": 71,
                     "lineCount": 1
                 }
             },
@@ -3332,30 +3292,6 @@
                 }
             },
             {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 46,
-                    "endColumn": 50,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 43,
-                    "endColumn": 49,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportReturnType",
                 "range": {
                     "startColumn": 18,
@@ -4000,40 +3936,8 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 12,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 12,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 36,
                     "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 59,
-                    "endColumn": 70,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 59,
-                    "endColumn": 70,
                     "lineCount": 1
                 }
             },

@@ -362,7 +362,7 @@ class Robot(pimm.ControlSystem):
         with _opened(self._connect, self._channel, self._sim) as vendor:
             chain = self._chain(vendor, should_stop, clock)
             meta = {
-                'robot': 'i2rt_yam',
+                roboarm_keys.ROBOT: 'i2rt_yam',
                 roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
                 roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
             }

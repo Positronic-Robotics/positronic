@@ -39,6 +39,7 @@ _NOISY_LIBRARY_LOGGERS = (
     'boto3',
     's3transfer',  # per part of a multipart upload
     'asyncio',  # per selector event, under its debug mode
+    'linuxpy',  # per ioctl, which is several times a frame for every camera
 )
 
 
