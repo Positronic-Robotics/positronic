@@ -8,6 +8,7 @@ import fcntl
 import shutil
 import socket
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -57,22 +58,50 @@ def terminate(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+# How long a server may take to bind its port, and how often the wait re-checks. The deadline must cover a
+# cold first boot, where a simulator compiles shaders and loads asset packs before serving.
+_BIND_DEADLINE = 1800.0
+_BIND_POLL_INTERVAL = 0.2
+
+
+def _await_bind(proc: subprocess.Popen, host: str, port: int, deadline: float) -> None:
+    """Block until *proc* accepts connections on *port*, raising if it exits or the deadline passes.
+
+    The server's accept loop drops a connection that never handshakes, so this probe costs it nothing.
+    """
+    end = time.monotonic() + deadline
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return
+        except OSError:
+            pass
+        status = proc.poll()
+        if status is not None:
+            raise RuntimeError(f'env server exited with status {status} before binding {host}:{port}')
+        if time.monotonic() >= end:
+            raise TimeoutError(f'env server did not bind {host}:{port} within {deadline:.0f}s')
+        time.sleep(_BIND_POLL_INTERVAL)
+
+
 @contextmanager
-def serve_subprocess(spawn: Callable[[str, int], subprocess.Popen], host: str) -> Iterator[tuple[str, int]]:
-    """Run an env-server subprocess for the body's lifetime, yielding its ``(host, port)``.
+def serve_subprocess(
+    spawn: Callable[[str, int], subprocess.Popen], host: str, bind_deadline: float = _BIND_DEADLINE
+) -> Iterator[tuple[str, int]]:
+    """Run an env-server subprocess for the body's lifetime, yielding its ``(host, port)`` once it is bound.
 
     The single owner of the subprocess: ``RemoteEnvControlSystem`` enters it to tie the subprocess to the
     World run, and a plain client (e.g. an e2e demo replay) enters it directly to talk over the socket without
     a World. The task spec rides the reset token, so the subprocess needs only its address — it serves
-    whatever task the first reset asks for. The port is picked before the spawn; the client's connect retry
-    covers the gap until the server binds it.
+    whatever task the first reset asks for.
 
-    TODO: a subprocess that dies at startup goes unnoticed until the client's connect deadline — nothing
-    surfaces its exit during the retry wait.
+    ``bind_deadline`` must cover a cold first boot: a heavy simulator spends minutes compiling shaders and
+    loading assets before it binds.
     """
     port = free_port()
     proc = spawn(host, port)
     try:
+        _await_bind(proc, host, port, bind_deadline)
         yield host, port
     finally:
         terminate(proc)

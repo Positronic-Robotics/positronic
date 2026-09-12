@@ -19,6 +19,7 @@ from positronic.policy.codec import (
     FlipGrip,
 )
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.spec import from_spec
 
 
 def test_observation_encode_images_and_state_shapes():
@@ -65,6 +66,14 @@ def test_observation_encode_task():
 
     obs_no_task = enc.encode({'a': 1.0})
     assert obs_keys.TASK not in obs_no_task
+
+
+def test_observation_codec_spec_preserves_lowercase_task():
+    enc = ObservationCodec(state={}, images={}, lowercase_task=True)
+    rebuilt = from_spec(enc.to_spec())
+    assert isinstance(rebuilt, ObservationCodec)
+    obs = rebuilt.encode({obs_keys.TASK: 'MixedCase'})
+    assert obs[obs_keys.TASK] == 'mixedcase'
 
 
 def test_absolute_position_action_encode_decode_quat():

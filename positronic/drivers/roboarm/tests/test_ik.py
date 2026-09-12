@@ -23,6 +23,8 @@ from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     DROID_EEF_LINK,
     EE_LINK,
+    FLANGE_LINK,
+    GRASP_SITE_LINK,
     bundled_franka_model,
     bundled_panda_model,
 )
@@ -245,3 +247,20 @@ def test_pickle_roundtrip(solver_cls):
     q_result = restored.solve(q_start, target_pose)
     result_pose = _fk(PANDA_URDF, q_result)
     np.testing.assert_allclose(result_pose[:3], target_pose[:3], atol=1e-3)
+
+
+def test_grasp_site_sits_at_the_2f85_grasp_point():
+    """The 2F-85's grasp point is 155mm along the flange approach axis, in the flange's own orientation —
+    where MolmoSpaces' franka_droid model places its ``gripper/grasp_site``."""
+    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], FLANGE_LINK, GRASP_SITE_LINK)
+    np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.155], atol=1e-9)
+    np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
+
+
+def test_grasp_site_model_declares_the_frame_it_reports_in():
+    """A rig measuring at the grasp point declares ``DEFAULT_FRAME`` there, so the frame it publishes poses
+    in is the frame it drives."""
+    model = bundled_franka_model(GRASP_SITE_LINK)
+    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+    transform = frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK)
+    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-9)

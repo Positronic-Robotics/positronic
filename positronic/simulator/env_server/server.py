@@ -4,7 +4,7 @@ This module must work in an isolated interpreter without Positronic installed.
 
 Protocol (msgpack frames, see ``protocol``):
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
-  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt', 'horizon'?}``
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
@@ -46,6 +46,10 @@ class EnvProtocol(ABC):
 
         Return ``obs``, scene ``meta``, ``robot_meta``, and ``control_dt`` in seconds.
         Either metadata dict may be empty when the client supplies it.
+
+        ``horizon`` (optional) is the sim-enforced episode deadline in sim-seconds — the env's own time limit,
+        which it delivers as a terminal ``done`` on expiry. It is reported for observability, so a run can be
+        checked against the horizon the env actually resolved; omit it when the env enforces none.
         """
 
     @abstractmethod
