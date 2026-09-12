@@ -50,17 +50,22 @@ _REFUSAL_PROBE_SEC = 1.0
 # Status details that blame the TLS edge's own configuration. No client can use such an edge.
 _UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 
+# Status details carrying an authoritative answer that the host has no address. A resolver that timed out
+# says something else, and stays cold: a name can start resolving, where a misspelt one never does.
+_NO_SUCH_HOST_DETAILS = ('Domain name not found', 'DNS server returned answer with no data')
+
 _COLD_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
 
 
 def _refusal(status: grpc.RpcError) -> wire.Refusal:
     """What a status that ended a call before it opened says about the server.
 
-    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. An unusable
-    edge answers ``UNAVAILABLE`` too; its details tell it from a cold backend.
+    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. Two refusals
+    no wait fixes answer ``UNAVAILABLE`` too — an unusable edge, and a host with no address — and their
+    details tell them from a cold backend.
     """
     details = status.details() or ''
-    if any(marker in details for marker in _UNUSABLE_EDGE_DETAILS):
+    if any(marker in details for marker in _UNUSABLE_EDGE_DETAILS + _NO_SUCH_HOST_DETAILS):
         return wire.Refusal.FINAL
     code = status.code()
     if code is grpc.StatusCode.PERMISSION_DENIED:

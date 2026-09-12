@@ -324,6 +324,21 @@ def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, m
         (grpc.StatusCode.DEADLINE_EXCEEDED, '', wire.Refusal.COLD),
         (grpc.StatusCode.UNAVAILABLE, 'Cannot check peer: missing selected ALPN property', wire.Refusal.FINAL),
         (grpc.StatusCode.UNAVAILABLE, 'CERTIFICATE_VERIFY_FAILED', wire.Refusal.FINAL),
+        (
+            grpc.StatusCode.UNAVAILABLE,
+            'address lookup failed for gpu-host:443: Domain name not found',
+            wire.Refusal.FINAL,
+        ),
+        (
+            grpc.StatusCode.UNAVAILABLE,
+            'address lookup failed for gpu-host:443: DNS server returned answer with no data',
+            wire.Refusal.FINAL,
+        ),
+        (
+            grpc.StatusCode.UNAVAILABLE,
+            'address lookup failed for gpu-host:443: Timeout while contacting DNS servers',
+            wire.Refusal.COLD,
+        ),
         (grpc.StatusCode.UNIMPLEMENTED, '', wire.Refusal.FINAL),
         (grpc.StatusCode.INTERNAL, '', wire.Refusal.FINAL),
     ],
