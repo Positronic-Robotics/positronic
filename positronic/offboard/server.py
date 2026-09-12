@@ -352,8 +352,10 @@ class PolicyServer:
             try:
                 await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)}))
                 await conn.refuse(str(e))
+            except wire.PeerDisconnected:
+                logger.debug('The client was gone before the error reached it', exc_info=True)
             except Exception:
-                logger.debug('Failed to send error to client', exc_info=True)
+                logger.error(f'Failed to tell {conn.peer} its session failed: {e}', exc_info=True)
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
