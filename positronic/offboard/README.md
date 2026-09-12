@@ -294,6 +294,11 @@ meta = session.metadata
 action = session.infer(observation)
 ```
 
+`new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
+cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
+answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
+exception of the websocket or gRPC library.
+
 ## Vendor Implementations
 
 Every vendor ships a `ModelSource` plus named pipelines and serves them through the one `PolicyServer`:

@@ -6,13 +6,16 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
+from http import HTTPStatus
 from typing import Any
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
 import httpx
 import pytest
+from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 from websockets.sync.client import connect
 
 from positronic import keys
@@ -539,10 +542,33 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     url, token = authed_endpoint
     header = make_header(token)
     client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})
-    with pytest.raises(InvalidStatus):
+    with pytest.raises(wire.ConnectRefused) as refused:
         client.new_session()
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
     with pytest.raises(httpx.HTTPStatusError):
         client.list_models()
+
+
+@pytest.mark.parametrize(
+    ('status', 'refusal'),
+    [
+        (HTTPStatus.FORBIDDEN, wire.Refusal.FORBIDDEN),
+        (HTTPStatus.TOO_MANY_REQUESTS, wire.Refusal.COLD),
+        (HTTPStatus.SERVICE_UNAVAILABLE, wire.Refusal.COLD),
+        (HTTPStatus.BAD_GATEWAY, wire.Refusal.COLD),
+        (HTTPStatus.UNAUTHORIZED, wire.Refusal.FINAL),
+        (HTTPStatus.NOT_FOUND, wire.Refusal.FINAL),
+    ],
+)
+def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal):
+    refused_upgrade = InvalidStatus(Response(status, 'refused', Headers()))
+    with (
+        patch('positronic.offboard.websocket_wire.connect', side_effect=refused_upgrade),
+        pytest.raises(wire.ConnectRefused) as refused,
+    ):
+        websocket_wire.dial('ws://localhost:8000/api/v1/session', None, 1.0)
+    assert refused.value.refusal is refusal
+    assert refused.value.__cause__ is refused_upgrade
 
 
 @pytest.mark.endpoint

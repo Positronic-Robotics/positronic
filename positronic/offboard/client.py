@@ -1,15 +1,10 @@
 import logging
-import ssl
 import time
 import urllib.parse
 from enum import Enum
-from http import HTTPStatus
 from typing import Any
 
-import grpc
 import httpx
-from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
-from websockets.sync.client import connect
 
 from . import grpc_wire, protocol, websocket_wire, wire
 from .protocol import deserialise, serialise, typed_commands
@@ -100,46 +95,11 @@ class _ConnectOutcome(Enum):
     SURFACE = 'surface'
 
 
-class _Refusal(Enum):
-    """What a refused connect says about the server."""
-
-    COLD = 'cold'  # a backend still starting; retry to the deadline
-    FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
-    FINAL = 'final'  # a permanent refusal; surface at once
-
-
-_COLD_GRPC_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
-
-
-def _refusal(e: Exception) -> _Refusal:
-    """What a refused connect says about the server, over either wire.
-
-    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. A TLS
-    edge no client can use answers ``UNAVAILABLE`` too; its details tell it from a cold backend.
-    """
-    if isinstance(e, InvalidStatus):
-        status = e.response.status_code
-        if status == HTTPStatus.FORBIDDEN:
-            return _Refusal.FORBIDDEN
-        if status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS:
-            return _Refusal.COLD
-        return _Refusal.FINAL
-    # A gRPC error carries its code as a `Call`; anything else says nothing about the server.
-    if isinstance(e, grpc.Call):
-        if grpc_wire.edge_is_unusable(e.details() or ''):
-            return _Refusal.FINAL
-        code = e.code()
-        if code is grpc.StatusCode.PERMISSION_DENIED:
-            return _Refusal.FORBIDDEN
-        return _Refusal.COLD if code in _COLD_GRPC_CODES else _Refusal.FINAL
-    return _Refusal.COLD
-
-
 class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
-    A 403 or a ``PERMISSION_DENIED`` means a cold backend or a refused credential, and gets
-    ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
+    A ``FORBIDDEN`` refusal means a cold backend or a refused credential, and gets ``MAX_FORBIDDEN_ATTEMPTS``
+    attempts.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
@@ -147,14 +107,13 @@ class _ConnectRetries:
     def __init__(self) -> None:
         self._forbidden_attempts = 0
 
-    def take(self, e: Exception) -> _ConnectOutcome:
+    def take(self, refusal: wire.Refusal) -> _ConnectOutcome:
         """Spend a refused connect against the budget."""
-        refusal = _refusal(e)
-        if refusal is _Refusal.FORBIDDEN:
+        if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         else:
-            again = refusal is _Refusal.COLD
+            again = refusal is wire.Refusal.COLD
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
@@ -252,7 +211,7 @@ class InferenceClient:
     def _connect(self) -> wire.ClientConnection:
         """One session's connection, over the wire the URL names."""
         if self._grpc_target is not None:
-            return grpc_wire.GrpcClientConnection(
+            return grpc_wire.dial(
                 self._grpc_target,
                 self._session_path,
                 self._query,
@@ -260,16 +219,7 @@ class InferenceClient:
                 self.open_timeout,
                 secure=self._grpc_secure,
             )
-        # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
-        # nothing until it answers. The pings keep it open.
-        websocket = connect(
-            self.session_url,
-            open_timeout=self.open_timeout,
-            additional_headers=self.headers,
-            ping_interval=20.0,
-            max_size=wire.MAX_MESSAGE_BYTES,
-        )
-        return websocket_wire.WebsocketClientConnection(websocket)
+        return websocket_wire.dial(self.session_url, self.headers, self.open_timeout)
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
@@ -285,37 +235,30 @@ class InferenceClient:
             raise
 
     def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the URL names."""
+        """Creates a new inference session on the model the URL names.
+
+        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
+        """
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
         retries = _ConnectRetries()
         while True:
             try:
                 return self._open_session()
-            # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
-            # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
-            except ssl.SSLCertVerificationError as e:
-                raise type(e)(f'{e} (connecting to {self.session_url})') from e
-            # Each of these can be a backend that is not ready: a timed-out connect, a reset TLS handshake, a
-            # refused upgrade or gRPC call, a dropped status handshake. ``_ConnectRetries`` tells a permanent
-            # refusal apart.
-            except (
-                TimeoutError,
-                ssl.SSLError,
-                ConnectionClosed,
-                InvalidHandshake,
-                grpc.RpcError,
-                wire.PeerDisconnected,
-            ) as e:
-                if retries.take(e) is _ConnectOutcome.SURFACE:
-                    raise
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
-                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+            except wire.ConnectRefused as e:
+                refusal, not_ready = e.refusal, e
+            # A status handshake the server did not finish: a backend that is not ready.
+            except (TimeoutError, wire.PeerDisconnected) as e:
+                refusal, not_ready = wire.Refusal.COLD, e
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
+            if retries.take(refusal) is _ConnectOutcome.SURFACE:
+                raise not_ready
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
+            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""

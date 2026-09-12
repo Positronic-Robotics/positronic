@@ -47,12 +47,25 @@ _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 # the caller's ``open_timeout``: a target that drops every connect answers neither.
 _REFUSAL_PROBE_SEC = 1.0
 
-UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
+# Status details that blame the TLS edge's own configuration. No client can use such an edge.
+_UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
+
+_COLD_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
 
 
-def edge_is_unusable(details: str) -> bool:
-    """Whether a gRPC status blames the TLS edge's own configuration."""
-    return any(marker in details for marker in UNUSABLE_EDGE_DETAILS)
+def _refusal(status: grpc.RpcError) -> wire.Refusal:
+    """What a status that ended a call before it opened says about the server.
+
+    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. An unusable
+    edge answers ``UNAVAILABLE`` too; its details tell it from a cold backend.
+    """
+    details = status.details() or ''
+    if any(marker in details for marker in _UNUSABLE_EDGE_DETAILS):
+        return wire.Refusal.FINAL
+    code = status.code()
+    if code is grpc.StatusCode.PERMISSION_DENIED:
+        return wire.Refusal.FORBIDDEN
+    return wire.Refusal.COLD if code in _COLD_CODES else wire.Refusal.FINAL
 
 
 def _client_options() -> list[tuple[str, int]]:
@@ -94,46 +107,56 @@ def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | N
     return None
 
 
+def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
+    """A channel to ``target`` that is ready. Raises ``wire.ConnectRefused`` when it is not within ``open_timeout``."""
+    channel = _channel(target, secure)
+    deadline = time.monotonic() + open_timeout
+    try:
+        grpc.channel_ready_future(channel).result(timeout=open_timeout - _probe_share(open_timeout))
+    except grpc.FutureTimeoutError as not_ready:
+        refusal = _connect_refusal(channel, timeout=max(0.0, deadline - time.monotonic()))
+        # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
+        if refusal is not None and refusal.code() is grpc.StatusCode.UNIMPLEMENTED:
+            return channel
+        channel.close()
+        if refusal is None:
+            message = f'gRPC channel to {target} is not ready within {open_timeout}s'
+            raise wire.ConnectRefused(wire.Refusal.COLD, message) from not_ready
+        raise wire.ConnectRefused(_refusal(refusal), str(refusal)) from refusal
+    return channel
+
+
+def dial(
+    target: str, session_path: str, query: str, headers: Mapping[str, str] | None, open_timeout: float, secure: bool
+) -> 'GrpcClientConnection':
+    """A client's end of one session on ``target``. Raises ``wire.ConnectRefused`` when the channel does not open.
+
+    ``secure`` dials over TLS, to a TLS edge in front of the server's plaintext port.
+    """
+    channel = _ready_channel(target, secure, open_timeout)
+    # gRPC metadata keys are lower case; the header names are the websocket wire's.
+    metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
+        (SESSION_PATH_HEADER, session_path),
+        (SESSION_QUERY_HEADER, query),
+    )
+    return GrpcClientConnection(channel, target, metadata)
+
+
 class GrpcClientConnection:
-    """A client's end of one gRPC session.
+    """A client's end of one gRPC session, over a ready ``channel``.
 
     A reader thread drains the response stream into a queue: the stream has no per-message timeout, and
-    ``recv`` needs one. ``secure`` dials over TLS, to a TLS edge in front of the server's plaintext port.
+    ``recv`` needs one.
     """
 
-    def __init__(
-        self,
-        target: str,
-        session_path: str,
-        query: str,
-        headers: Mapping[str, str] | None = None,
-        open_timeout: float = 10.0,
-        secure: bool = False,
-    ):
+    def __init__(self, channel: grpc.Channel, target: str, metadata: tuple[tuple[str, str], ...]):
         self._target = target
-        self._channel = _channel(target, secure)
-        deadline = time.monotonic() + open_timeout
-        try:
-            grpc.channel_ready_future(self._channel).result(timeout=open_timeout - _probe_share(open_timeout))
-        except grpc.FutureTimeoutError:
-            refusal = _connect_refusal(self._channel, timeout=max(0.0, deadline - time.monotonic()))
-            # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
-            if refusal is None or refusal.code() is not grpc.StatusCode.UNIMPLEMENTED:
-                self._channel.close()
-                # An edge that refuses every client is permanent, and the connect loop retries a ``TimeoutError``
-                # to its deadline.
-                if refusal is not None and edge_is_unusable(refusal.details() or ''):
-                    raise refusal from None
-                raise TimeoutError(f'gRPC channel to {target} is not ready within {open_timeout}s') from None
-        # gRPC metadata keys are lower case; the header names are the websocket wire's.
-        metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
-            (SESSION_PATH_HEADER, session_path),
-            (SESSION_QUERY_HEADER, query),
-        )
+        self._channel = channel
         self._outbox: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._inbox: queue.SimpleQueue[bytes | BaseException] = queue.SimpleQueue()
         self._closed = False
         self._ended = False
+        self._received = False
         call = self._channel.stream_stream(METHOD_PATH, request_serializer=None, response_deserializer=None)
         self._responses = call(self._requests(), metadata=metadata)
         self._reader = threading.Thread(target=self._read, name='grpc-session-reader', daemon=True)
@@ -174,7 +197,11 @@ class GrpcClientConnection:
         if isinstance(answer, BaseException):
             # What ended the stream is queued once. The caller reads it before ``send`` refuses a write.
             self._ended = True
+            # A status before any message crossed is the server refusing the call.
+            if isinstance(answer, grpc.RpcError) and not self._received:
+                raise wire.ConnectRefused(_refusal(answer), str(answer)) from answer
             raise answer
+        self._received = True
         return answer
 
     def close(self) -> str:

@@ -1,10 +1,15 @@
 """The websocket wire, and the two ends of a websocket session."""
 
 import socket
+import ssl
+from collections.abc import Mapping
+from http import HTTPStatus
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
+from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
+from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from . import wire
@@ -17,10 +22,16 @@ class WebsocketClientConnection:
         self._websocket = websocket
 
     def send(self, message: bytes) -> None:
-        self._websocket.send(message)
+        try:
+            self._websocket.send(message)
+        except ConnectionClosed as e:
+            raise wire.PeerDisconnected(str(e)) from e
 
     def recv(self, timeout: float | None = None) -> bytes:
-        message = self._websocket.recv(timeout=timeout)
+        try:
+            message = self._websocket.recv(timeout=timeout)
+        except ConnectionClosed as e:
+            raise wire.PeerDisconnected(str(e)) from e
         assert isinstance(message, bytes), f'A frame is bytes, and this one is {type(message).__name__}'
         return message
 
@@ -29,6 +40,38 @@ class WebsocketClientConnection:
         self._websocket.close()
         # A close that times out still reaches CLOSED locally; only the close code says the server answered.
         return f'state {state_before_close} -> {self._websocket.state.name}, close code {self._websocket.close_code}'
+
+
+def _status_refusal(status_code: int) -> wire.Refusal:
+    """What a non-101 answer to the upgrade says about the server."""
+    if status_code == HTTPStatus.FORBIDDEN:
+        return wire.Refusal.FORBIDDEN
+    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR or status_code == HTTPStatus.TOO_MANY_REQUESTS:
+        return wire.Refusal.COLD
+    return wire.Refusal.FINAL
+
+
+def dial(url: str, headers: Mapping[str, str] | None, open_timeout: float) -> WebsocketClientConnection:
+    """A client's end of one session on ``url``. Raises ``wire.ConnectRefused`` when the upgrade does not open."""
+    try:
+        # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
+        # nothing until it answers. The pings keep it open.
+        websocket = connect(
+            url,
+            open_timeout=open_timeout,
+            additional_headers=headers,
+            ping_interval=20.0,
+            max_size=wire.MAX_MESSAGE_BYTES,
+        )
+    except InvalidStatus as e:
+        raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
+    except ssl.SSLCertVerificationError as e:
+        raise wire.ConnectRefused(wire.Refusal.FINAL, str(e)) from e
+    # A timed-out connect, a reset TLS handshake, a refused upgrade, a dropped handshake: a backend that is
+    # not ready.
+    except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
+        raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
+    return WebsocketClientConnection(websocket)
 
 
 class WebsocketServerConnection(wire.ServerConnection):

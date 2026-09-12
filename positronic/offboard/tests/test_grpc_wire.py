@@ -181,9 +181,9 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     # refusal.
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     headers = None if header is None else {AUTH_HEADER: header}
-    with pytest.raises(grpc.RpcError) as refused:
+    with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(grpc_url(authed_server), headers=headers).new_session()
-    assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
 # An address, and no name that resolves to two families: gRPC reports the last address it failed on,
@@ -310,9 +310,29 @@ def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
 
 def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, monkeypatch):
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
-    with pytest.raises(grpc.RpcError) as refused:
+    with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(edged(authed_server)).new_session()
-    assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
+
+
+@pytest.mark.parametrize(
+    ('code', 'details', 'refusal'),
+    [
+        (grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token', wire.Refusal.FORBIDDEN),
+        (grpc.StatusCode.UNAVAILABLE, 'connection refused', wire.Refusal.COLD),
+        (grpc.StatusCode.RESOURCE_EXHAUSTED, '', wire.Refusal.COLD),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, '', wire.Refusal.COLD),
+        (grpc.StatusCode.UNAVAILABLE, 'Cannot check peer: missing selected ALPN property', wire.Refusal.FINAL),
+        (grpc.StatusCode.UNAVAILABLE, 'CERTIFICATE_VERIFY_FAILED', wire.Refusal.FINAL),
+        (grpc.StatusCode.UNIMPLEMENTED, '', wire.Refusal.FINAL),
+        (grpc.StatusCode.INTERNAL, '', wire.Refusal.FINAL),
+    ],
+)
+def test_a_status_that_refuses_the_call_reads_as_its_http_status_does(code, details, refusal):
+    status = MagicMock()
+    status.code.return_value = code
+    status.details.return_value = details
+    assert grpc_wire._refusal(status) is refusal
 
 
 def test_an_unknown_scheme_is_refused():
@@ -447,8 +467,9 @@ def _surfaces_at_once(url: str, blamed: str) -> None:
     """Assert that a connect to ``url`` fails, names ``blamed``, and spends no retry deadline."""
     client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
     started = time.monotonic()
-    with pytest.raises(grpc.RpcError, match=blamed):
+    with pytest.raises(wire.ConnectRefused, match=blamed) as refused:
         client.new_session()
+    assert refused.value.refusal is wire.Refusal.FINAL
     assert time.monotonic() - started < 8.0, 'the connect retried a permanent failure'
 
 
@@ -456,14 +477,14 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
     unrelated, _key = _self_signed(EDGE_HOST)
     _trust_only(monkeypatch, unrelated)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE_DETAILS[0])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[0])
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A front over a raw TCP port terminates TLS and names no ALPN protocol, and gRPC refuses it."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
     _trust_only(monkeypatch, root)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire.UNUSABLE_EDGE_DETAILS[1])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[1])
 
 
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
@@ -481,7 +502,8 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """gRPC stops reading the request iterator, and a write waits out a whole timeout."""
     served, _policy = both_wires
-    conn = grpc_wire.GrpcClientConnection(f'{served.host}:{served.grpc_port}', f'{wire.SESSION_PATH}/unknown-model', '')
+    target = f'{served.host}:{served.grpc_port}'
+    conn = grpc_wire.dial(target, f'{wire.SESSION_PATH}/unknown-model', '', None, 10.0, secure=False)
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.

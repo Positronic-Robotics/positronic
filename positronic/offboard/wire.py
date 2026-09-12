@@ -6,6 +6,7 @@ A wire carries the ``protocol`` frames as opaque bytes and reads none of them. `
 
 import abc
 from collections.abc import Awaitable, Callable, Mapping
+from enum import Enum
 from typing import NamedTuple, Protocol
 
 from starlette.datastructures import QueryParams
@@ -22,6 +23,22 @@ class PeerDisconnected(Exception):
     """The peer ended the session."""
 
 
+class Refusal(Enum):
+    """What a refused connect says about the server."""
+
+    COLD = 'cold'  # a backend still starting; retry to the deadline
+    FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
+    FINAL = 'final'  # a permanent refusal; surface at once
+
+
+class ConnectRefused(Exception):
+    """A wire could not open a session. The library error that refused it is the cause."""
+
+    def __init__(self, refusal: Refusal, message: str):
+        super().__init__(message)
+        self.refusal = refusal
+
+
 class Endpoint(NamedTuple):
     """Where a wire serves."""
 
@@ -35,7 +52,11 @@ class ClientConnection(Protocol):
     def send(self, message: bytes) -> None: ...
 
     def recv(self, timeout: float | None = None) -> bytes:
-        """The next message. Raises ``TimeoutError`` when none arrives in time."""
+        """The next message.
+
+        Raises ``TimeoutError`` when none arrives in time, ``PeerDisconnected`` once the server ends the
+        session, and ``ConnectRefused`` when the server refuses the session before its first message.
+        """
         ...
 
     def close(self) -> str:
