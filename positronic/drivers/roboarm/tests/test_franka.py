@@ -949,6 +949,47 @@ def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
     assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
 
 
+def test_a_move_the_arm_refused_as_its_deadline_expired_is_still_logged(desk, caplog):
+    """The hold target the deadline sets replaces the goal, so nothing after this reading can name the refusal."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(60.0)  # the deadline expires
+    arm.goal_status = franka.pf.GoalStatus.ABORTED  # and the arm refuses in the same moment
+
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(travel)
+
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+
+
+def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
+    """The count is of refusals, and a goal still in flight at the deadline has refused nothing."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(60.0)  # the deadline expires, and the goal is still in flight
+
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(travel)
+
+    assert _refusals(caplog) == []
+
+
 def test_a_move_the_arm_reached_ends_the_refusal_streak(desk, caplog):
     """The count says the refusals ran in a row, so a goal the arm reached has to end it."""
     driver = _driver(FakeArm(PARK))

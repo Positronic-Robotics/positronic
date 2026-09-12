@@ -344,7 +344,8 @@ class _Arm(DriverRun[command.CommandType]):
                     self.robot.recover_from_errors()
                 yield wait
             # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
-            if expired() and self.robot.goal().status != pf.GoalStatus.REACHED:
+            if expired() and (missed := self.robot.goal()).status != pf.GoalStatus.REACHED:
+                self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
                 # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
                 self.robot.set_target_joints(self.robot.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
