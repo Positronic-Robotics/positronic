@@ -4,7 +4,7 @@ This package implements the protocol and utilities for offboard policy inference
 
 ## Protocol v1
 
-The unified protocol is built to enable ANY hardware to connect to ANY model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement this protocol, allowing a single `.remote` policy client to work across all vendors.
+The protocol connects any hardware to any model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement it, so a single `.remote` policy client works across all vendors.
 
 ### Wires
 
@@ -244,7 +244,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **Server-side recording:** Servers accept an optional `recording_dir`. When set, each session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
 
-**Python Client:** We provide a Python client (`positronic.offboard.client.InferenceClient`) that handles the protocol automatically. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
+**Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
 ## Classes
 
