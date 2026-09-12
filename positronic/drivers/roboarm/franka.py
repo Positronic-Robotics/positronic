@@ -2,11 +2,12 @@ import contextlib
 import functools
 import logging
 import os
+import threading
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -102,6 +103,105 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
+# The field Desk answers the safe inputs in.
+SAFE_INPUT_STATE = 'safeInputState'
+
+
+class _Reading(NamedTuple):
+    """One reading of the safe inputs, published in one assignment so a reader never sees half of it."""
+
+    sampled: bool
+    triggered: frozenset[str]
+
+
+class _SafeInputs:
+    """The control box's safe inputs, which libfranka does not report and Desk does.
+
+    A thread reads them every ``_POLL_S``, over a Desk client this owns: the read needs no control
+    token, and the session that drives the arm must stay on one thread.
+    """
+
+    # Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
+    # safety log records the same two: 'Not triggered (Motion permitted)' and 'Triggered (Motion prohibited)'.
+    _MOTION_PERMITTED = 'not triggered'
+    # How often the watch thread reads the safe inputs.
+    _POLL_S = 0.5
+
+    def __init__(self, ip: str, credentials: tuple[str, str] | None):
+        self._ip = ip
+        self._credentials = credentials
+        self._desk: Desk | None = None
+        self._reading = _Reading(False, frozenset())
+        self._unreadable = False
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def triggered(self) -> list[str]:
+        """The safe inputs the last reading found triggered; empty where no reading is in hand."""
+        reading = self._reading
+        return sorted(reading.triggered) if reading.sampled else []
+
+    @staticmethod
+    def _triggered(reading: object) -> bool:
+        """Whether Desk reports a safe input as triggered.
+
+        A reading this does not recognise counts as triggered: the driver cannot read it as clear.
+        """
+        return _SafeInputs._MOTION_PERMITTED not in str(reading).casefold()
+
+    def sample(self) -> None:
+        """Take one reading, and log a safe input that changed."""
+        credentials = self._credentials
+        if credentials is None:
+            return
+        try:
+            desk = self._desk
+            if desk is None:
+                desk = Desk(self._ip, *credentials)
+                desk._authenticate()  # Desk publishes the read; the login behind it stays underscored
+                self._desk = desk
+            self._note(desk.safety_status()[SAFE_INPUT_STATE])
+        # rules-allow: swallowed-error — a control box that stops answering must not end the run; the
+        # reading goes stale instead, and a stale reading names no input.
+        except Exception as exc:
+            if not self._unreadable:
+                logger.error(f'Cannot read the safe inputs: {exc}')
+            self._desk, self._unreadable = None, True
+            self._reading = self._reading._replace(sampled=False)
+
+    def _note(self, state: Mapping[str, object]) -> None:
+        """Record a reading, and log a safe input whose state changed."""
+        sampled, was_triggered = self._reading
+        if not sampled:
+            logger.info(f'The control box reports its safe inputs as {dict(state)}')
+        self._unreadable = False
+        triggered = frozenset(name for name, reading in state.items() if self._triggered(reading))
+        if triggered != was_triggered:
+            if triggered:
+                logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
+            else:
+                logger.info('The control box permits motion: every safe input is clear')
+        self._reading = _Reading(True, triggered)
+
+    def __enter__(self) -> '_SafeInputs':
+        """Take the first reading, then keep it fresh on a thread until the block ends."""
+        if self._credentials is not None:
+            self.sample()
+            self._thread = threading.Thread(target=self._sample_until_stopped, name='franka-safe-inputs', daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._POLL_S * 4)
+            self._thread = None
+
+    def _sample_until_stopped(self) -> None:
+        while not self._stop.wait(self._POLL_S):
+            self.sample()
+
 
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the robot handle, and the state and moves that go with it."""
@@ -112,6 +212,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
+    # How long the arm must accept moves again before the count of the moves it refused is logged.
+    _REFUSAL_QUIET_S = 2.0
 
     def __init__(
         self,
@@ -122,12 +224,17 @@ class _Arm(DriverRun[command.CommandType]):
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
+        safe_inputs: _SafeInputs,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
         self.robot = robot
         self.out = out
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
+        self.safe_inputs = safe_inputs
+        self._refusals = 0
+        self._refused = False
+        self._quiet_at = 0.0
 
     def __enter__(self) -> '_Arm':
         return self
@@ -159,6 +266,7 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
         self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
         self.robot.set_target_joints(target)
+        self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(
         self, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
@@ -172,6 +280,7 @@ class _Arm(DriverRun[command.CommandType]):
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
+                self.note_refusals(goal)
                 raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
             yield pace()
         return MoveStatus.GAVE_UP
@@ -180,6 +289,27 @@ class _Arm(DriverRun[command.CommandType]):
         """How long the arm may take to reach ``target``, from the speed its dynamics factor allows."""
         cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
+
+    def note_refusals(self, goal: pf.Goal) -> None:
+        """Log the moves the arm refuses: the first one as it happens, the rest as a count once they stop.
+
+        libfranka prints the same rejection from the control thread, unstamped and outside Python.
+        """
+        refused = goal.status is pf.GoalStatus.ABORTED
+        if refused and not self._refused:
+            self._refusals += 1
+            self._quiet_at = self.clock.now() + self._REFUSAL_QUIET_S
+            if self._refusals == 1:
+                triggered = self.safe_inputs.triggered
+                cause = f'; safe inputs {triggered} are triggered' if triggered else ''
+                logger.warning(f'The arm refused a move: {goal.reason or goal.status}{cause}')
+        self._refused = refused
+        # A goal the arm reached breaks the streak outright; any other unrefused one has to hold for the quiet time.
+        reached = goal.status is pf.GoalStatus.REACHED
+        if self._refusals and (reached or (not refused and self.clock.now() >= self._quiet_at)):
+            if self._refusals > 1:  # the line above already reported a single one, with its reason
+                logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
+            self._refusals = 0
 
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
@@ -214,7 +344,8 @@ class _Arm(DriverRun[command.CommandType]):
                     self.robot.recover_from_errors()
                 yield wait
             # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
-            if expired() and self.robot.goal().status != pf.GoalStatus.REACHED:
+            if expired() and (missed := self.robot.goal()).status != pf.GoalStatus.REACHED:
+                self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
                 # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
                 self.robot.set_target_joints(self.robot.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
@@ -310,15 +441,15 @@ class _Brakes:
         finally:
             self._idle_since = self._clock.now()
 
-    def close_if_idle(self) -> None:
+    def close_if_idle(self, goal: pf.Goal) -> None:
         """Close the brakes once the idle time passes with the arm at rest.
 
-        A streamed setpoint is published and done with, so the goal is the only thing that says the arm is
+        A streamed setpoint is published and done with, so ``goal`` is the only thing that says the arm is
         still travelling towards it.
         """
         if self._closed or self._desk is None or self._after_idle_s is None:
             return
-        if self._robot.goal().status == pf.GoalStatus.IN_FLIGHT:
+        if goal.status == pf.GoalStatus.IN_FLIGHT:
             self._idle_since = self._clock.now()
             return
         if self._clock.now() - self._idle_since < self._after_idle_s:
@@ -466,14 +597,22 @@ class Robot(pimm.ControlSystem):
             self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
         )
 
-    def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
+    def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, safe_inputs: _SafeInputs) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            self._robot, self.sync_move, self.commands, self.state, self._relative_dynamics_factor, should_stop, clock
+            self._robot,
+            self.sync_move,
+            self.commands,
+            self.state,
+            self._relative_dynamics_factor,
+            should_stop,
+            clock,
+            safe_inputs,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with self._desk_session() as desk, self._arm(should_stop, clock) as arm:
+        safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
+        with self._desk_session() as desk, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
             robot = arm.robot
             self._init_robot(robot)
             self.robot_meta.emit(Robot._build_robot_meta(robot))
@@ -487,6 +626,8 @@ class Robot(pimm.ControlSystem):
             while not should_stop.value:
                 st = robot.state()
                 arm.publish(st)
+                goal = robot.goal()
+                arm.note_refusals(goal)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
@@ -505,7 +646,7 @@ class Robot(pimm.ControlSystem):
                     with brakes.opened(), log_failure(asked):
                         arm.command_target(arm.to_joints(asked), asked.mode)
                 else:
-                    brakes.close_if_idle()
+                    brakes.close_if_idle(goal)
 
                 yield arm.limiter.wait()
 
