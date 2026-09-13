@@ -159,13 +159,12 @@ class TaskNode(Cascade):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
     `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
-    to a plan endpoint by its name. A bare id takes every value from the plan.
+    to a plan endpoint by its name. A bare id takes every value from the plan. A plan may carry two
+    nodes of one task, so a node is identified by its place in the plan's list and not by `task_id`.
     """
 
     task_id: TaskRef
     endpoints: list[Endpoint] | None = Field(default=None, min_length=1)
-    # This node's index in the plan's task list, stamped by `EvalPlan._number_the_nodes`.
-    position: int = Field(default=0, ge=0, exclude=True)
 
     @model_validator(mode='before')
     @classmethod
@@ -222,18 +221,6 @@ class EvalPlan(Cascade):
     def _states_a_count(self) -> Self:
         if self.episodes_per_endpoint is None and not self.names_an_eval:
             raise ValueError('a plan states episodes_per_endpoint; a task or an endpoint overrides it')
-        return self
-
-    @model_validator(mode='after')
-    def _number_the_nodes(self) -> Self:
-        """Stamp each node with its place in the list, which identifies it.
-
-        A plan may name one catalogue task twice, each node with its own scene, so `task_id` names
-        no single node and the position does. The stamp overwrites a value a caller sent: the index
-        is the only answer consistent with where the node sits.
-        """
-        for position, task in enumerate(self.tasks):
-            task.position = position
         return self
 
     @model_validator(mode='after')
