@@ -159,8 +159,8 @@ class TaskNode(Cascade):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
     `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
-    to a plan endpoint by its name. A bare id takes every value from the plan. A plan may carry two
-    nodes of one task, so a node is identified by its place in the plan's list and not by `task_id`.
+    to a plan endpoint by its name. A bare id takes every value from the plan. A node is identified
+    by its place in the plan's list, not by `task_id`: a plan may carry two nodes of one task.
     """
 
     task_id: TaskRef
