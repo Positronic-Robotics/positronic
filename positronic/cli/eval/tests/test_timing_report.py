@@ -15,6 +15,7 @@ from positronic.cli.eval.timing_report import (
 from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
     ATTR_PROCESS_NAME,
+    ATTR_RUN_ID,
     GPU_INDEX,
     GPU_MEM_USED_B,
     GPU_PROC_MEM_B,
@@ -41,7 +42,7 @@ from positronic.telemetry_keys import (
 _S = 1_000_000_000  # seconds -> ns
 
 
-def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process=HARNESS_PROCESS):
+def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process=HARNESS_PROCESS, run_id=''):
     encoded = {
         'traceId': '0' * 32,
         'spanId': span_id,
@@ -52,14 +53,10 @@ def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process=HAR
     }
     if parent_id is not None:
         encoded['parentSpanId'] = parent_id
-    return {
-        'resourceSpans': [
-            {
-                'resource': {'attributes': [{'key': ATTR_PROCESS_NAME, 'value': {'stringValue': process}}]},
-                'scopeSpans': [{'spans': [encoded]}],
-            }
-        ]
-    }
+    resource = [{'key': ATTR_PROCESS_NAME, 'value': {'stringValue': process}}]
+    if run_id:
+        resource.append({'key': ATTR_RUN_ID, 'value': {'stringValue': run_id}})
+    return {'resourceSpans': [{'resource': {'attributes': resource}, 'scopeSpans': [{'spans': [encoded]}]}]}
 
 
 def _write_lines(path, docs):
@@ -245,6 +242,26 @@ def test_two_killed_runs_in_one_directory_get_a_window_each(tmp_path):
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
     assert report.episodes == 2
+    assert report.wall_s == pytest.approx(80.0)
+    assert report.wall_split.between_episodes == pytest.approx(0.0)
+
+
+def test_two_attended_runs_in_one_directory_get_a_window_each(tmp_path):
+    """An attended rollout opens no ``eval.pass`` span, so its episodes are roots and the parent they share
+    says nothing about which run wrote them. The run id does — and without it one window spans both runs and
+    reports 1040 s of wall for 80 s of work."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    for run, (start, end) in (('rik-0', (0, 40)), ('rik-1', (1000, 1040))):
+        _write_lines(
+            telemetry_dir / f'{HARNESS_PROCESS}.{run}{SPANS_SUFFIX}',
+            [_span(SPAN_EPISODE, start, end, f'ep-{run}', attrs={ATTR_EPISODE_VIRTUAL_S: 20.0}, run_id=run)],
+        )
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 2
+    assert report.window is WallWindow.W_EPISODES
     assert report.wall_s == pytest.approx(80.0)
     assert report.wall_split.between_episodes == pytest.approx(0.0)
 
