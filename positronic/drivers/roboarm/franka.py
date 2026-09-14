@@ -471,8 +471,7 @@ class RecoveryOutcome(Enum):
 def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
     """Run the arm's error recovery once, and answer every console that asked for it on this tick.
 
-    A console that asked hears what the recovery returned, the vendor's throw included. A recovery nobody
-    asked for has no one to hear it, so its throw ends the run.
+    A throw reaches the consoles that asked; one nobody asked for reaches no caller, so it ends the run.
     """
     try:
         cleared = robot.recover_from_errors()
@@ -668,7 +667,7 @@ class Robot(pimm.ControlSystem):
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
                     _recover(robot, asked_to_recover)
-                    # What the recovery left behind is what the next tick reads, so this one commands nothing.
+                    # This tick commands nothing; the next one reads the arm the recovery left behind.
                     yield arm.limiter.wait()
                     continue
 

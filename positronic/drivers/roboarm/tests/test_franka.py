@@ -1184,7 +1184,7 @@ def test_a_recovery_that_clears_the_fault_leaves_the_tick_no_second_one(desk, wo
 
 
 def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
-    """A fault the driver reads is one it clears itself, whether or not a console asked."""
+    """The driver clears a fault it reads itself, whether or not a console asked."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
