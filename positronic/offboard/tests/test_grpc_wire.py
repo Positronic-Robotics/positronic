@@ -426,10 +426,35 @@ def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
         session.close()
 
 
+def _dialled_target(host: str, monkeypatch) -> str:
+    """The gRPC target ``dial`` builds for ``host``, without opening a channel."""
+    targets = []
+
+    def refuse(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
+        targets.append(target)
+        raise wire.ConnectRefused(wire.Refusal.FINAL, 'this test opens no channel')
+
+    monkeypatch.setattr(grpc_wire, '_ready_channel', refuse)
+    address = wire.SessionAddress(host, 9000, wire.SESSION_PATH, '', secure=False)
+    with pytest.raises(wire.ConnectRefused):
+        grpc_wire.GrpcClientWire().dial(address, None, 1.0)
+    return targets[0]
+
+
+def test_an_ipv6_host_dials_in_brackets(monkeypatch):
+    """An address holds the host raw, and a bare '::1' dials as ':::<port>', which gRPC refuses."""
+    assert _dialled_target('::1', monkeypatch) == '[::1]:9000'
+
+
+@pytest.mark.parametrize('host', ['127.0.0.1', 'gpu-host'])
+def test_a_host_that_is_no_ipv6_literal_dials_unchanged(host, monkeypatch):
+    assert _dialled_target(host, monkeypatch) == f'{host}:9000'
+
+
 def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
     """A bare '::1' binds as ':::<port>', which gRPC refuses."""
-    assert grpc_wire._bind_target('::', 9000) == '[::]:9000'
-    assert grpc_wire._bind_target('0.0.0.0', 9000) == '0.0.0.0:9000'
+    assert grpc_wire._target('::', 9000) == '[::]:9000'
+    assert grpc_wire._target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
     policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')

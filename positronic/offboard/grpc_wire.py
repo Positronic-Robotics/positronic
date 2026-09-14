@@ -174,6 +174,11 @@ def _client_options() -> list[tuple[str, int]]:
     ]
 
 
+def _target(host: str, port: int) -> str:
+    """``host:port`` in gRPC's target syntax, which needs an IPv6 literal in brackets."""
+    return f'{wire.bracket_ipv6(host)}:{port}'
+
+
 def _channel(target: str, secure: bool) -> grpc.Channel:
     options = _client_options()
     if secure:
@@ -238,7 +243,7 @@ class GrpcClientWire(wire.ClientWire):
 
         A TLS address dials a TLS edge in front of the server's plaintext port.
         """
-        target = f'{address.host}:{address.port}'
+        target = _target(address.host, address.port)
         channel = _ready_channel(target, address.secure, open_timeout)
         # gRPC metadata keys are lower case, as ``wire.Authorized`` reads them.
         metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
@@ -301,11 +306,6 @@ def _headers(context: grpc.aio.ServicerContext) -> dict[str, str]:
     return {key: value for key, value in (context.invocation_metadata() or ()) if isinstance(value, str)}
 
 
-def _bind_target(host: str, port: int) -> str:
-    """The address to bind, with an IPv6 literal in the brackets gRPC's target syntax requires."""
-    return f'[{host}]:{port}' if ':' in host else f'{host}:{port}'
-
-
 def _server_options() -> list[tuple[str, int]]:
     return [
         *_MESSAGE_SIZE_OPTIONS,
@@ -360,10 +360,10 @@ class GrpcWire(wire.Wire):
         handler = grpc.stream_stream_rpc_method_handler(serve_one, request_deserializer=None, response_serializer=None)
         server = grpc.aio.server(options=_server_options())
         server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
-        bound = server.add_insecure_port(_bind_target(self._host, self._port))
+        bound = server.add_insecure_port(_target(self._host, self._port))
         if bound == 0:
             # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.
-            raise OSError(f'gRPC could not bind {_bind_target(self._host, self._port)}')
+            raise OSError(f'gRPC could not bind {_target(self._host, self._port)}')
         self._server = server
         self._endpoint = wire.Endpoint(self._host, bound)
         await server.start()

@@ -205,8 +205,7 @@ class InferenceClient:
             raise ValueError(f'No host in {url!r}')
         client_wire, scheme = selected
         address = wire.SessionAddress(
-            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-            host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
+            host=split.hostname,
             port=wire.default_port(scheme.secure) if split.port is None else split.port,
             path=_session_path(split.path, url),
             # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever

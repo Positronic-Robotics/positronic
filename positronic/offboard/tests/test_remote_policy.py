@@ -9,7 +9,7 @@ import pytest
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import wire
+from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
@@ -163,6 +163,20 @@ class TestInferenceClientUrl:
         client = InferenceClient.from_url('localhost:8000')
         assert client.session_url == 'ws://localhost:8000/api/v1/session'
         assert client.api_url == 'http://localhost:8000/api/v1'
+
+    def test_an_ipv6_host_is_bracketed_in_the_url(self):
+        """A caller that builds the address itself passes the host raw, brackets included by the wire."""
+        address = wire.SessionAddress('::1', 8000, wire.SESSION_PATH, '', secure=False)
+        client = InferenceClient(websocket_wire.WebsocketClientWire(), address)
+        assert client.session_url == 'ws://[::1]:8000/api/v1/session'
+        assert client.api_url == 'http://[::1]:8000/api/v1'
+
+    @pytest.mark.parametrize('host', ['127.0.0.1', 'gpu-host'])
+    def test_a_host_that_is_no_ipv6_literal_reaches_the_url_unchanged(self, host):
+        address = wire.SessionAddress(host, 8000, wire.SESSION_PATH, '', secure=False)
+        client = InferenceClient(websocket_wire.WebsocketClientWire(), address)
+        assert client.session_url == f'ws://{host}:8000/api/v1/session'
+        assert client.api_url == f'http://{host}:8000/api/v1'
 
     def test_query_rides_along_verbatim(self):
         """Nothing re-encodes the query: 'false' stays the JSON literal whoever wrote the URL meant."""

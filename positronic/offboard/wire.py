@@ -23,8 +23,13 @@ def default_port(secure: bool) -> int:
     return 443 if secure else 80
 
 
+def bracket_ipv6(host: str) -> str:
+    """``host`` in the brackets an IPv6 literal needs before a port. Every other host is unchanged."""
+    return f'[{host}]' if ':' in host else host
+
+
 class SessionAddress(NamedTuple):
-    """Where one session opens."""
+    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax."""
 
     host: str
     port: int
@@ -35,7 +40,8 @@ class SessionAddress(NamedTuple):
     @property
     def netloc(self) -> str:
         """``host:port``, less the port a URL at this TLS setting defaults to."""
-        return self.host if self.port == default_port(self.secure) else f'{self.host}:{self.port}'
+        host = bracket_ipv6(self.host)
+        return host if self.port == default_port(self.secure) else f'{host}:{self.port}'
 
     def url(self, scheme: str) -> str:
         """This session as a URL on ``scheme``."""
