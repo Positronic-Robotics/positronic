@@ -1,6 +1,8 @@
 import ctypes
 import ctypes.util
 import errno
+import fcntl
+import logging
 import mmap
 import os
 import socket
@@ -397,6 +399,89 @@ def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(fram
 
     np.testing.assert_array_equal(second['image.left'], large)
     np.testing.assert_array_equal(first['image.left'], small)
+
+
+@pytestmark_ring
+def test_an_unsealed_descriptor_is_refused_before_it_is_mapped():
+    """An unsealed ring may shrink under the mapping, and the next read of a dropped page is a SIGBUS."""
+    fd = os.memfd_create('unsealed', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    os.ftruncate(fd, 1 << 16)
+    try:
+        with pytest.raises(ValueError, match='without the seals'):
+            frame_ring.MappedRing(fd, slots=2, slot_bytes=1024)
+    finally:
+        os.close(fd)
+
+
+@pytestmark_ring
+def test_a_descriptor_sealed_beyond_what_the_server_needs_is_accepted():
+    """The server needs its seals present, not alone: a peer may seal the ring against further seals."""
+    ring = frame_ring.FrameRing(1024, slots=2)
+    try:
+        # F_SEAL_SEAL, from linux/fcntl.h: no further seal may be added.
+        fcntl.fcntl(ring.fd, frame_ring._F_ADD_SEALS, 0x0001)
+
+        assert frame_ring.MappedRing(ring.fd, slots=2, slot_bytes=1024).array is not None
+    finally:
+        ring.close()
+
+
+@pytestmark_ring
+def test_a_reference_naming_a_dtype_the_wire_refuses_is_refused(frame_channel, frame_writer):
+    """An object dtype reads the ring's bytes as pointers into this process, and touching one segfaults."""
+    packed = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    packed['image.left'][frame_ring._DTYPE] = '|O'
+
+    with pytest.raises(ValueError, match='which the wire does not carry'):
+        frame_channel.resolve(SESSION_ID, packed)
+
+
+@pytestmark_ring
+def test_an_image_whose_dtype_the_wire_refuses_never_reaches_the_ring(frame_writer):
+    """``is_image`` asks about shape alone, so the ring keeps the serializer's dtype policy itself."""
+    forgeable = np.empty((4, 4, 3), dtype=object)
+    forgeable[:] = 'not pixels'
+
+    packed = frame_writer.pack({'image.left': forgeable})
+
+    assert packed['image.left'] is forgeable
+    assert frame_writer._ring is None
+    with pytest.raises(ValueError, match='Unsupported dtype'):
+        serialise(packed)
+
+
+@pytestmark_ring
+def test_a_float_image_travels_through_the_ring(frame_channel, frame_writer):
+    """The ring carries every dtype the wire carries, not the uint8 frames alone."""
+    depth = _PIXELS.random((8, 8, 3)).astype(np.float32)
+
+    packed = frame_writer.pack({'image.left': depth})
+
+    # The message path carries a float image too, so the reference is what says the ring took this one.
+    assert isinstance(packed['image.left'], dict) and frame_ring._RING in packed['image.left']
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(packed))
+    np.testing.assert_array_equal(served['image.left'], depth)
+    assert served['image.left'].dtype == np.float32
+
+
+@pytestmark_ring
+@pytest.mark.parametrize('refused', ['memfd_create', 'seals'])
+def test_a_host_that_builds_no_ring_says_so_at_error_level(monkeypatch, caplog, refused):
+    """The fallback costs every frame a JPEG round trip, so the reason it was taken is not a warning."""
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EPERM, 'refused under test')
+
+    if refused == 'memfd_create':
+        monkeypatch.setattr(os, 'memfd_create', refuse)
+    else:
+        monkeypatch.setattr(frame_ring.fcntl, 'fcntl', refuse)
+
+    with caplog.at_level(logging.WARNING, logger=frame_ring.logger.name):
+        assert not frame_ring._ring_is_supported()
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert 'No frame ring' in caplog.records[0].message
 
 
 @pytestmark_ring
