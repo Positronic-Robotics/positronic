@@ -1,7 +1,9 @@
 import logging
 import time
 import urllib.parse
+from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Self
 
 import httpx
@@ -25,6 +27,11 @@ DEFAULT_CONNECT_DEADLINE = 900.0
 
 class InferenceSession:
     """One session over one open connection, whichever wire carries it."""
+
+    # The timing block of the last decoded inference response; empty when the server sent none, and
+    # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
+    # still carries it.
+    served_timing: Mapping[str, float] = MappingProxyType({})
 
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
@@ -71,6 +78,7 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
+        self.served_timing = {}
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
@@ -90,6 +98,7 @@ class InferenceSession:
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
         response = deserialise(received)
+        self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:

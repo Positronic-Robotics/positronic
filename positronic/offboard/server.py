@@ -7,7 +7,8 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -173,6 +174,31 @@ def _declared_stack(local: Layer | None) -> dict[str, Any]:
     return local.to_spec()
 
 
+class _ServedTiming:
+    """What one inference cost the server, in milliseconds on the server's own clock.
+
+    Every figure is a duration. ``served_ms`` opens when the observation arrives and brackets the
+    phases inside it. The answer's serialisation and send fall outside every figure: the report rides
+    in that answer.
+    """
+
+    def __init__(self) -> None:
+        self._opened = time.perf_counter()
+        self._phases: dict[str, float] = {}
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._phases[name] = (time.perf_counter() - started) * 1000.0
+
+    def report(self) -> dict[str, float]:
+        """The phases closed so far, under the span bracketing them."""
+        return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
+
+
 class PolicyServer:
     """Serves a policy pipeline: one layer chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
@@ -276,19 +302,25 @@ class PolicyServer:
             message = await conn.receive()
             self._last_activity = time.monotonic()
             try:
-                raw_obs = deserialise(message)
+                timing = _ServedTiming()
+                with timing.phase(protocol.TIMING_DECODE):
+                    raw_obs = deserialise(message)
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                async with self._infer_lock:
-                    try:
+                with timing.phase(protocol.TIMING_QUEUED):
+                    await self._infer_lock.acquire()
+                try:
+                    with timing.phase(protocol.TIMING_INFER):
                         # The server's clock is not the rig's.
                         actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                    except asyncio.CancelledError:
-                        # A cancelled await does not stop the worker, and the session close runs beside a live
-                        # inference. The log gives a later wrong answer a cause.
-                        logger.error('Cancelled mid-inference: the worker is still in the backend')
-                        raise
-                await conn.send(serialise({protocol.RESULT: actions}))
+                except asyncio.CancelledError:
+                    # A cancelled await does not stop the worker, and the session close runs beside a live
+                    # inference. The log gives a later wrong answer a cause.
+                    logger.error('Cancelled mid-inference: the worker is still in the backend')
+                    raise
+                finally:
+                    self._infer_lock.release()
+                await conn.send(serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()}))
             except wire.PeerDisconnected:
                 raise
             except Exception as e:

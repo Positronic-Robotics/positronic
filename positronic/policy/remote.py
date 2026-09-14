@@ -56,7 +56,9 @@ def round_trip(
     try:
         return session.infer(prepared)
     finally:
-        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
+        # The server's timing fields ride on the round-trip span under the ``served.`` prefix.
+        served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns(), **served)
 
 
 class RemoteSession(Session):
