@@ -220,11 +220,8 @@ class _TimeTheModel(Layer):
     """Time the model's own call and record it on the report of the call that asked for it.
 
     It goes innermost, so the figure holds the model alone and the codecs and layers around it fall
-    outside. A model that reaches its weights over a further hop spends that hop inside it.
-
-    It keeps no figure of its own, and it writes only inside ``reporting_to``. A served call that never
-    reaches the model writes nothing, one that raises writes onto its own report, which goes with it,
-    and a call made outside the block writes nowhere. No call can read another's figure.
+    outside. It writes only inside ``reporting_to``, so a call that never reaches the model, one that
+    raises, and one made outside the block each leave the report with no model figure.
     """
 
     def __init__(self) -> None:
