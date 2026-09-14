@@ -461,68 +461,8 @@ def _run_id(path):
 
 
 def _env_sidecars(tmp_path):
-    """The sidecars `bind_from_env` wrote under a telemetry dir, which it names per run."""
+    """The sidecars ``bind_from_env`` wrote under a telemetry dir."""
     return sorted((tmp_path / telemetry.TELEMETRY_SUBDIR).glob(f'*{telemetry.SPANS_SUFFIX}'))
-
-
-@pytest.mark.parametrize('run_id', ['../../escaped', 'a/b', '..', 'has spaces', ''])
-def test_bind_from_env_keeps_a_run_id_inside_the_telemetry_dir(tmp_path, monkeypatch, run_id):
-    """The run id reaches this from an operator's environment and names a file, so a value naming a path
-    must not write outside the directory that turned recording on."""
-    telemetry_dir = tmp_path / telemetry.TELEMETRY_SUBDIR
-    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(telemetry_dir))
-    monkeypatch.setenv(ENV_RUN_ID, run_id)
-    with telemetry.bind_from_env(HARNESS_PROCESS):
-        with telemetry.span('client'):
-            pass
-    (path,) = _env_sidecars(tmp_path)
-    assert path.parent == telemetry_dir  # nothing escaped the directory that turned recording on
-    if run_id:
-        assert _run_id(path) == run_id  # the resource block still holds it verbatim
-
-
-def _bind_once(tmp_path, monkeypatch, run_id):
-    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
-    monkeypatch.setenv(ENV_RUN_ID, run_id)
-    with telemetry.bind_from_env(HARNESS_PROCESS):
-        with telemetry.span('client'):
-            pass
-
-
-def test_two_run_ids_that_reduce_alike_get_their_own_sidecar(tmp_path, monkeypatch):
-    """Reducing a run id to filename characters is many-to-one: `a/b` and `a_b` reduce alike. The digest
-    separates them, so each run keeps its own sidecar — the reduce reads a directory whole, and two runs
-    sharing a file would mix."""
-    _bind_once(tmp_path, monkeypatch, 'a/b')
-    _bind_once(tmp_path, monkeypatch, 'a_b')
-    assert sorted(_run_id(path) for path in _env_sidecars(tmp_path)) == ['a/b', 'a_b']
-
-
-def test_a_run_id_a_filename_may_carry_names_its_sidecar_as_written(tmp_path, monkeypatch):
-    """Only a reduced id needs a digest to stay distinct, so an id that survives the reduction is the name
-    an operator reads on the file."""
-    _bind_once(tmp_path, monkeypatch, 'rik-0')
-    (path,) = _env_sidecars(tmp_path)
-    assert path.name == f'{HARNESS_PROCESS}.rik-0{telemetry.SPANS_SUFFIX}'
-
-
-def test_a_run_id_too_long_for_a_filename_still_names_a_sidecar(tmp_path, monkeypatch):
-    """The run id reaches this from an operator's environment, and one longer than the filesystem's component
-    limit fails the export with `ENAMETOOLONG` before the harness records a span."""
-    run_id = 'r' * 500
-    _bind_once(tmp_path, monkeypatch, run_id)
-    (path,) = _env_sidecars(tmp_path)
-    assert len(path.name.encode()) <= os.pathconf(str(path.parent), 'PC_NAME_MAX')
-    assert _run_id(path) == run_id  # the resource block still holds it verbatim
-
-
-def test_two_long_run_ids_that_share_a_prefix_get_their_own_sidecar(tmp_path, monkeypatch):
-    """Capping the token is many-to-one just as reducing its characters is, so two ids that differ only past
-    the cap must not append to one sidecar. These two share the first 32 bits of their SHA-256, so the
-    digest has to be wider than that to tell them apart."""
-    _bind_once(tmp_path, monkeypatch, 'r' * 65 + '18966')
-    _bind_once(tmp_path, monkeypatch, 'r' * 65 + '155513')
-    assert len(_env_sidecars(tmp_path)) == 2
 
 
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):

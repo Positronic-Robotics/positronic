@@ -246,17 +246,20 @@ def test_two_killed_runs_in_one_directory_get_a_window_each(tmp_path):
     assert report.wall_split.between_episodes == pytest.approx(0.0)
 
 
-def test_two_attended_runs_in_one_directory_get_a_window_each(tmp_path):
-    """An attended rollout opens no ``eval.pass`` span, so its episodes are roots and the parent they share
-    says nothing about which run wrote them. The run id does — and without it one window spans both runs and
+def test_two_attended_runs_in_one_sidecar_get_a_window_each(tmp_path):
+    """A process names its sidecar, so two attended runs against one telemetry directory write one file. An
+    attended rollout opens no ``eval.pass`` span, so its episodes are roots and the parent they share says
+    nothing about which run wrote them. The run id does — and without it one window spans both runs and
     reports 1040 s of wall for 80 s of work."""
     telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    for run, (start, end) in (('rik-0', (0, 40)), ('rik-1', (1000, 1040))):
-        _write_lines(
-            telemetry_dir / f'{HARNESS_PROCESS}.{run}{SPANS_SUFFIX}',
-            [_span(SPAN_EPISODE, start, end, f'ep-{run}', attrs={ATTR_EPISODE_VIRTUAL_S: 20.0}, run_id=run)],
-        )
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, start, end, f'ep-{run}', attrs={ATTR_EPISODE_VIRTUAL_S: 20.0}, run_id=run)
+            for run, (start, end) in (('rik-0', (0, 40)), ('rik-1', (1000, 1040)))
+        ],
+    )
 
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
