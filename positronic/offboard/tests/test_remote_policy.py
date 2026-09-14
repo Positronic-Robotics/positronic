@@ -251,6 +251,16 @@ class TestInferenceClientUrl:
         assert client.session_url == 'unix:///run/policy.sock/api/v1/session/10000?fps=10'
         assert InferenceClient(client.session_url).uds == client.uds
 
+    def test_a_url_naming_no_socket_is_refused(self):
+        """The marker at offset zero leaves no socket path, so there is nothing to dial."""
+        with pytest.raises(ValueError, match='No socket path'):
+            InferenceClient('unix:///api/v1/session')
+
+    def test_a_one_segment_socket_path_is_enough(self):
+        client = InferenceClient('unix:///s.sock/api/v1/session')
+        assert client.uds == '/s.sock'
+        assert client.session_url == 'unix:///s.sock/api/v1/session'
+
     def test_an_escaped_separator_is_a_separator_once_decoded(self):
         """The decode resolves every escape, so no socket path can hold a slash inside one name."""
         client = InferenceClient('unix:///run/odd%2Fname/policy.sock')

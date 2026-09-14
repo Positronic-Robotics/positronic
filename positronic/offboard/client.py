@@ -153,6 +153,8 @@ def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, st
         raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
     marker = re.search(r'/api/v1(?=/|$)', split.path)
     written = split.path if marker is None else split.path[: marker.start()]
+    if not written:
+        raise ValueError(f'No socket path in {url!r}; write unix:///path/to.sock/api/v1/session')
     return urllib.parse.unquote(written), written, ('' if marker is None else split.path[marker.start() :])
 
 
