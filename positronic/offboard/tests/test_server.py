@@ -163,6 +163,22 @@ def test_a_host_with_two_addresses_binds_each_of_them_on_one_port(monkeypatch):
             sock.close()
 
 
+def test_an_address_resolved_twice_binds_once(monkeypatch):
+    """A second bind on the same address fails the whole set, so a repeated answer counts once."""
+
+    def loopback_twice(host, port, *_args, **_kwargs):
+        entry = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))
+        return [entry, entry]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', loopback_twice)
+    sockets = websocket_wire._listening_sockets('twice.test', 0)
+    try:
+        assert [sock.getsockname()[0] for sock in sockets] == ['127.0.0.1']
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_policy):
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
     bound = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)

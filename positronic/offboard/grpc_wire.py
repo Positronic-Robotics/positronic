@@ -33,11 +33,6 @@ _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
 ]
 
-# How often the client pings an idle connection. A front drops a connection it reads nothing from.
-_PING_EVERY_MS = 20_000
-_PING_ANSWER_TIMEOUT_MS = 10_000
-_PING_TOLERATED_EVERY_MS = 10_000
-
 # How long ``close`` waits for the server to end the stream and release the session.
 _CLOSE_TIMEOUT_SEC = 5.0
 
@@ -176,6 +171,11 @@ _PROBE_PATH = f'/{SERVICE}/ChannelProbe'
 # The largest share of one connect attempt's budget the refusal probe may spend. Both waits fit inside
 # the caller's ``open_timeout``: a target that drops every connect answers neither.
 _REFUSAL_PROBE_SEC = 1.0
+
+
+# How often the client pings an idle connection. A front drops a connection it reads nothing from.
+_PING_EVERY_MS = 20_000
+_PING_ANSWER_TIMEOUT_MS = 10_000
 
 
 def _client_options() -> list[tuple[str, int]]:
@@ -319,6 +319,11 @@ class GrpcServerConnection(wire.ServerConnection):
 def _headers(context: grpc.aio.ServicerContext) -> dict[str, str]:
     """The session metadata, as the header names both wires share. A ``-bin`` key carries no header."""
     return {key: value for key, value in (context.invocation_metadata() or ()) if isinstance(value, str)}
+
+
+# The shortest ping interval the server answers without a strike: half of `_PING_EVERY_MS`, so a client
+# ping that arrives early is never one.
+_PING_TOLERATED_EVERY_MS = _PING_EVERY_MS // 2
 
 
 def _server_options() -> list[tuple[str, int]]:

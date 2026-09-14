@@ -14,10 +14,6 @@ from websockets.sync.connection import Connection
 
 from . import wire
 
-# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
-# (measured by positronic/offboard/serving_cost.py).
-WS_IMPL = 'websockets-sansio'
-
 
 class WebsocketClientConnection(wire.ClientConnection):
     """A client's end of one websocket session."""
@@ -134,9 +130,9 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
     sockets: list[socket.socket] = []
     bound_port = port
     try:
-        for family, kind, proto, _canonical, address in socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
-        ):
+        resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+        # A name can resolve to one address more than once, and a second bind on it fails the whole set.
+        for family, kind, proto, address in dict.fromkeys((f, k, pr, a) for f, k, pr, _c, a in resolved):
             sock = socket.socket(family, kind, proto)
             sockets.append(sock)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -153,6 +149,11 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
             sock.close()
         raise
     return sockets
+
+
+# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
+# (measured by positronic/offboard/serving_cost.py).
+WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(wire.Wire):
