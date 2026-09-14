@@ -677,6 +677,20 @@ def test_a_send_on_a_call_that_ends_mid_write_raises_a_lost_peer():
     assert isinstance(sender.outcome, wire.PeerDisconnected)
 
 
+@pytest.mark.timeout(10.0)
+def test_a_send_after_a_failed_send_raises_at_once():
+    """The failed send records the end, so the next one does not wait for a receipt that never comes."""
+    channel, conn = _manual_connection()
+    sender = _Sender(conn)
+    assert channel.taken(timeout=5.0) == b'frame'
+    channel.end()
+    assert sender.returned.wait(5.0), 'the send waited on a write the ended call can never make'
+    refused = time.monotonic()
+    with pytest.raises(wire.PeerDisconnected):
+        conn.send(b'again')
+    assert time.monotonic() - refused < 1.0, 'the second send waited instead of raising'
+
+
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires

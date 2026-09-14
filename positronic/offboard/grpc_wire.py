@@ -121,8 +121,10 @@ class GrpcClientConnection(wire.ClientConnection):
         if self._closed or self._ended:
             raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)
-        # The call's end releases this wait, so a dead connection raises here instead of blocking.
+        # The call's end releases this wait, so a dead connection raises here instead of blocking. The end is
+        # recorded here too: the receipt queue says it once, and a later send must not wait for it again.
         if not self._written.get():
+            self._ended = True
             raise wire.PeerDisconnected(f'{self._target} ended the session: {self._stopped_by}') from self._stopped_by
 
     def recv(self, timeout: float | None = None) -> bytes:
