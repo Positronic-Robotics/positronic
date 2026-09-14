@@ -34,7 +34,7 @@ from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
-from positronic.offboard.server import WS_IMPL, PolicyServer
+from positronic.offboard.server import WS_IMPL, WS_MAX_BYTES, PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -105,10 +105,6 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
 # meshes, every recorded command — and none of that crosses the wire.
 STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
 
-# uvicorn's default ``ws_max_size``, which ``PolicyServer`` keeps: a larger message closes the socket with
-# code 1009 before the server reads it, and a raw 25-frame stack at 1024x288 is about 42 MiB.
-WS_MAX_BYTES = 16 * 1024 * 1024
-
 
 def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[dict[str, Any]]:
     """The episode as the harness hands it to the stack: one observation per control tick."""
@@ -142,7 +138,9 @@ def serve(pipeline) -> tuple[uvicorn.Server, threading.Thread, int]:
         port = free_port.getsockname()[1]
     policy_server = PolicyServer(pipeline, host='127.0.0.1', port=port)
     served = uvicorn.Server(
-        uvicorn.Config(policy_server.app, host='127.0.0.1', port=port, log_level='warning', ws=WS_IMPL)
+        uvicorn.Config(
+            policy_server.app, host='127.0.0.1', port=port, log_level='warning', ws=WS_IMPL, ws_max_size=WS_MAX_BYTES
+        )
     )
 
     async def run():

@@ -36,6 +36,9 @@ AUTH_HEADER = 'Authorization'
 # uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
 # (measured by positronic/offboard/serving_cost.py).
 WS_IMPL = 'websockets-sansio'
+# The largest frame a session may carry. A larger one closes the socket with code 1009 before the server
+# reads it; a raw 25-frame stack of two cameras at 1024x288 is about 42 MiB.
+WS_MAX_BYTES = 16 * 1024 * 1024
 
 
 def bearer(token: str) -> str:
@@ -448,7 +451,9 @@ class PolicyServer:
     def serve(self):
         async def _run():
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info', ws=WS_IMPL)
+            config = uvicorn.Config(
+                self.app, host=self.host, port=self.port, log_level='info', ws=WS_IMPL, ws_max_size=WS_MAX_BYTES
+            )
             server = uvicorn.Server(config)
             self._last_activity = time.monotonic()
             watchdog = None
