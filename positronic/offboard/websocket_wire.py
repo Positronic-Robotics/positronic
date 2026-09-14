@@ -14,6 +14,13 @@ from websockets.sync.connection import Connection
 
 from . import wire
 
+# The URL schemes that select this wire, and whether each one is TLS.
+SESSION_SCHEMES: Mapping[str, bool] = {'': False, 'http': False, 'ws': False, 'https': True, 'wss': True}
+
+
+def session_scheme(secure: bool) -> str:
+    return 'wss' if secure else 'ws'
+
 
 class WebsocketClientConnection:
     """A client's end of one websocket session."""

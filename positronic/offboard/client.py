@@ -2,12 +2,13 @@ import logging
 import time
 import urllib.parse
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
 from . import grpc_wire, protocol, websocket_wire, wire
 from .protocol import deserialise, serialise, typed_commands
+from .wire import ClientWire
 
 logger = logging.getLogger(__name__)
 
@@ -117,43 +118,18 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-class _Wire(Enum):
-    """A transport a session opens on."""
+class _Scheme(NamedTuple):
+    """The wire a URL scheme selects, and whether it is TLS."""
 
-    WEBSOCKET = ('ws', 'wss')
-    GRPC = ('grpc', 'grpcs')
-
-    def __init__(self, plain_scheme: str, secure_scheme: str):
-        self._plain_scheme = plain_scheme
-        self._secure_scheme = secure_scheme
-
-    def session_scheme(self, secure: bool) -> str:
-        """The scheme a session URL carries on this wire."""
-        return self._secure_scheme if secure else self._plain_scheme
+    secure: bool
+    wire: ClientWire
 
 
-class _Scheme(Enum):
-    """A URL scheme, and the wire and TLS it names."""
+def _schemes_of(client_wire: ClientWire) -> dict[str, _Scheme]:
+    return {text: _Scheme(secure, client_wire) for text, secure in client_wire.SESSION_SCHEMES.items()}
 
-    EMPTY = ('', False, _Wire.WEBSOCKET)
-    HTTP = ('http', False, _Wire.WEBSOCKET)
-    WS = ('ws', False, _Wire.WEBSOCKET)
-    HTTPS = ('https', True, _Wire.WEBSOCKET)
-    WSS = ('wss', True, _Wire.WEBSOCKET)
-    GRPC = ('grpc', False, _Wire.GRPC)
-    GRPCS = ('grpcs', True, _Wire.GRPC)
 
-    def __init__(self, text: str, secure: bool, wire: _Wire):
-        self.text = text
-        self.secure = secure
-        self.wire = wire
-
-    @classmethod
-    def of(cls, text: str) -> '_Scheme':
-        for scheme in cls:
-            if scheme.text == text:
-                return scheme
-        raise ValueError(f'Unsupported scheme {text!r}')
+_SCHEMES = _schemes_of(websocket_wire) | _schemes_of(grpc_wire)
 
 
 def _session_path(path: str, url: str) -> str:
@@ -196,10 +172,9 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        try:
-            scheme = _Scheme.of(split.scheme)
-        except ValueError:
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}') from None
+        scheme = _SCHEMES.get(split.scheme)
+        if scheme is None:
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
         session_scheme = scheme.wire.session_scheme(scheme.secure)
@@ -218,7 +193,7 @@ class InferenceClient:
         self._secure = scheme.secure
         self._target = f'{host}:{port}'
         self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
-        self.api_url = None if self._wire is _Wire.GRPC else f'{http_scheme}://{netloc}/api/v1'
+        self.api_url = None if self._wire is grpc_wire else f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -226,7 +201,7 @@ class InferenceClient:
 
     def _connect(self) -> wire.ClientConnection:
         """One session's connection, over the wire the URL names."""
-        if self._wire is _Wire.GRPC:
+        if self._wire is grpc_wire:
             return grpc_wire.dial(
                 self._target, self._session_path, self._query, self.headers, self.open_timeout, secure=self._secure
             )

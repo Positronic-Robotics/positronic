@@ -46,6 +46,17 @@ class Endpoint(NamedTuple):
     port: int
 
 
+class ClientWire(Protocol):
+    """The client side of one wire. Each wire module is one."""
+
+    # The URL schemes that select this wire, and whether each one is TLS.
+    SESSION_SCHEMES: Mapping[str, bool]
+
+    def session_scheme(self, secure: bool) -> str:
+        """The URL scheme a session on this wire carries."""
+        ...
+
+
 class ClientConnection(Protocol):
     """A client's end of one open session."""
 

@@ -18,6 +18,15 @@ from . import wire
 
 logger = logging.getLogger(__name__)
 
+
+# The URL schemes that select this wire, and whether each one is TLS.
+SESSION_SCHEMES: Mapping[str, bool] = {'grpc': False, 'grpcs': True}
+
+
+def session_scheme(secure: bool) -> str:
+    return 'grpcs' if secure else 'grpc'
+
+
 # The one method every session runs on. gRPC routes by this path alone.
 SERVICE = 'positronic.offboard.v1.Inference'
 METHOD = 'Session'
