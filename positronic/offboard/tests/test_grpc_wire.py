@@ -339,6 +339,21 @@ def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, m
             'address lookup failed for gpu-host:443: Timeout while contacting DNS servers',
             wire.Refusal.COLD,
         ),
+        (
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            'received metadata size exceeds hard limit (value length 200000 vs. 16384)',
+            wire.Refusal.FINAL,
+        ),
+        (
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            'CLIENT: Received message larger than max (85 vs. 10)',
+            wire.Refusal.FINAL,
+        ),
+        (
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            'Sent message larger than max (20000000 vs. 16777216)',
+            wire.Refusal.FINAL,
+        ),
         (grpc.StatusCode.UNIMPLEMENTED, '', wire.Refusal.FINAL),
         (grpc.StatusCode.INTERNAL, '', wire.Refusal.FINAL),
     ],
