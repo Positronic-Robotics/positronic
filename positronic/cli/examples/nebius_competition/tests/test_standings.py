@@ -112,7 +112,8 @@ def test_with_a_board_it_prints_rank_name_tag_score_and_submission(standings: di
 
 
 def test_an_empty_board_says_so(standings: dict[str, Any]):
-    platform = Platform({routes.RANKINGS_GET: ({**STANDINGS, 'rankings': []}, 200)})
+    empty = {**STANDINGS, 'rankings': []}  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
+    platform = Platform({routes.RANKINGS_GET: (empty, 200)})
     assert standings['run'](make_client(platform), BoardRef('a.board')) == [
         'a.board: ranks a.eval by success_rate',
         'no entries',

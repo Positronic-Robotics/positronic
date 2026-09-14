@@ -143,8 +143,8 @@ def main() -> None:
     )
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args()
-    if args.eval is not None and args.policy_image is None:
-        parser.error('--policy-image is required with --eval')
+    if (args.eval is None) != (args.policy_image is None):
+        parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
 
     with PlatformClient(args.platform_url) as client:
         # The boards are public, so the list needs no credential and comes before the check for one.
