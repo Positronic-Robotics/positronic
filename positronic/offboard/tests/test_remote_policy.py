@@ -434,8 +434,8 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
 
 
 def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
-    """A runtime closes before the session it serves. A caller that closes the websocket under a round trip
-    gets an error that names the order, and not a failure on a dead socket."""
+    """A runtime closes before the session it serves. A caller that closes the connection under a round trip
+    gets an error that names the order, and not a failure on a dead connection."""
     endpoint, mock_session = _mock_endpoint()
     release = threading.Event()
 

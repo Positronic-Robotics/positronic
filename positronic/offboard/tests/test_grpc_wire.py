@@ -442,7 +442,7 @@ def _dialled_target(host: str, monkeypatch) -> str:
 
 
 def test_an_ipv6_host_dials_in_brackets(monkeypatch):
-    """An address holds the host raw, and a bare '::1' dials as ':::<port>', which gRPC refuses."""
+    """An address holds the host raw; the dial target carries the brackets gRPC's syntax needs."""
     assert _dialled_target('::1', monkeypatch) == '[::1]:9000'
 
 
@@ -452,7 +452,7 @@ def test_a_host_that_is_no_ipv6_literal_dials_unchanged(host, monkeypatch):
 
 
 def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
-    """A bare '::1' binds as ':::<port>', which gRPC refuses."""
+    """The bind target carries the brackets gRPC's syntax needs, and a session opens on the bound server."""
     assert grpc_wire._target('::', 9000) == '[::]:9000'
     assert grpc_wire._target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
