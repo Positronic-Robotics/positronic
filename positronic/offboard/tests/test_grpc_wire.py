@@ -232,12 +232,14 @@ def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]
 
     The front terminates TLS, selects HTTP/2 over ALPN and copies the bytes on. It answers its own port
     and the root to verify it against. ``alpn=False`` selects no protocol, as a front over a raw TCP
-    port does.
+    port does, and ``certificate_host`` names the address its certificate covers.
     """
     stops: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
 
-    def start(backend_host: str, backend_port: int, alpn: bool = True) -> tuple[int, bytes]:
-        certificate, private = _self_signed(EDGE_HOST)
+    def start(
+        backend_host: str, backend_port: int, alpn: bool = True, certificate_host: str = EDGE_HOST
+    ) -> tuple[int, bytes]:
+        certificate, private = _self_signed(certificate_host)
         started: queue.SimpleQueue = queue.SimpleQueue()
 
         async def _serve_edge() -> None:
@@ -542,6 +544,13 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
     unrelated, _key = _self_signed(EDGE_HOST)
     _trust_only(monkeypatch, unrelated)
     _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[0])
+
+
+def test_a_certificate_that_covers_another_host_is_not_retried(both_wires, tls_edge, monkeypatch):
+    """The client trusts this root, and the edge presents a certificate for an address nobody dialled."""
+    port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, certificate_host='127.0.0.2')
+    _trust_only(monkeypatch, root)
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[2])
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):

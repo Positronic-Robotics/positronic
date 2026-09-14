@@ -41,8 +41,13 @@ _PING_TOLERATED_EVERY_MS = 10_000
 # How long ``close`` waits for the server to end the stream and release the session.
 _CLOSE_TIMEOUT_SEC = 5.0
 
-# Status details that blame the TLS edge's own configuration. No client can use such an edge.
-_UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
+# Status details naming a TLS failure that no retry clears: the edge's own configuration, or a certificate
+# that covers an address this client did not dial.
+_UNUSABLE_EDGE_DETAILS = (
+    'CERTIFICATE_VERIFY_FAILED',
+    'missing selected ALPN property',
+    'Hostname Verification Check failed',
+)
 
 # Status details carrying an authoritative answer that the host has no address. A resolver that timed out
 # says something else, and stays cold: a name can start resolving, where a misspelt one never does.
