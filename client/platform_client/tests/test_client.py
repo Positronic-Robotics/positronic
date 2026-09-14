@@ -22,6 +22,7 @@ from platform_client.enums import (
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
@@ -29,7 +30,7 @@ from platform_client.enums import (
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
 from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
@@ -38,6 +39,9 @@ from platform_client.responses import (
     CancelResponse,
     MeResponse,
     PendingSubmissionView,
+    PlanFiled,
+    PlanListResponse,
+    PlanView,
     RankingsResponse,
     RegisterResponse,
     SubmissionCreateResponse,
@@ -435,6 +439,9 @@ def test_every_endpoint_has_exactly_one_method():
         'list_submissions',
         'get_submission',
         'cancel_submission',
+        'run_eval',
+        'get_plan',
+        'list_plans',
         'rankings',
         'list_boards',
         'catalog_evals',
@@ -609,3 +616,67 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         make_client(gateway).create_submission(PLAN)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None
+
+
+def test_run_eval_posts_the_whole_plan_and_parses_the_filed_id():
+    gateway = Gateway(200, {'plan_id': '3c', 'status': 'received'})
+    plan = EvalPlan(
+        tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
+        endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
+        episodes_per_endpoint=10,
+    )
+
+    filed = make_client(gateway).run_eval(plan)
+
+    assert isinstance(filed, PlanFiled)
+    assert filed.plan_id == PlanId(0x3C) and filed.status is PlanStatus.received
+    assert gateway.request().url.path == routes.EVALS_RUN
+    body = gateway.body()
+    assert body['episodes_per_endpoint'] == 10
+    assert [t['task_id'] for t in body['tasks']] == ['stack-the-cubes']
+
+
+def test_get_plan_sends_the_hex_id_and_parses_the_counts_and_the_runs():
+    gateway = Gateway(
+        200,
+        {
+            'plan_id': '3c',
+            'status': 'running',
+            'episodes': {'total': 24, 'done': 3, 'outstanding': 21},
+            'runs': [{'run_tag': 'blind_20260904-160621', 'started_at': AT}],
+            'artifacts': 's3://inference/runway/140926/spoons/',
+        },
+    )
+
+    view = make_client(gateway).get_plan(PlanId(0x3C))
+
+    assert isinstance(view, PlanView)
+    assert view.status is PlanStatus.running and view.episodes.outstanding == 21
+    assert [run.run_tag for run in view.runs] == ['blind_20260904-160621']
+    assert view.artifacts == 's3://inference/runway/140926/spoons/'
+    assert gateway.request().url.path == routes.EVALS_GET
+    assert dict(gateway.request().url.params) == {'id': '3c'}
+
+
+def test_list_plans_sends_the_cursor_and_parses_the_next():
+    gateway = Gateway(
+        200,
+        {
+            'plans': [{'plan_id': '3c', 'status': 'filed', 'episodes': {'total': 10, 'done': 0, 'outstanding': 10}}],
+            'next': '3c',
+        },
+    )
+
+    page = make_client(gateway).list_plans(after=PlanId(0x1F), limit=1)
+
+    assert isinstance(page, PlanListResponse)
+    assert [row.plan_id for row in page.plans] == [PlanId(0x3C)] and page.next == PlanId(0x3C)
+    assert gateway.request().url.path == routes.EVALS_LIST
+    assert dict(gateway.request().url.params) == {'after': '1f', 'limit': '1'}
+
+
+def test_list_plans_asks_for_the_first_page_with_nothing_in_the_query():
+    gateway = Gateway(200, {'plans': []})
+    page = make_client(gateway).list_plans()
+    assert page.plans == [] and page.next is None
+    assert dict(gateway.request().url.params) == {}

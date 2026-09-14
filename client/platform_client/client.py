@@ -22,9 +22,11 @@ from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import EvalPlan
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, PlanId, SubmissionId
 from platform_client.requests import (
     CancelRequest,
+    EvalGetQuery,
+    EvalListQuery,
     RankingsQuery,
     RegisterRequest,
     SubmissionGetQuery,
@@ -34,6 +36,9 @@ from platform_client.responses import (
     BoardListResponse,
     CancelResponse,
     MeResponse,
+    PlanFiled,
+    PlanListResponse,
+    PlanView,
     RankingsResponse,
     RegisterResponse,
     SubmissionCreateResponse,
@@ -183,6 +188,20 @@ class PlatformClient:
 
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
         return self._post(routes.SUBMISSIONS_CANCEL, request, CancelResponse)
+
+    def run_eval(self, plan: EvalPlan) -> PlanFiled:
+        """File one plan for the lab rig. Needs a customer grant: a key without one is refused
+        `forbidden`."""
+        return self._post(routes.EVALS_RUN, plan, PlanFiled)
+
+    def get_plan(self, plan_id: PlanId) -> PlanView:
+        return self._get(routes.EVALS_GET, PlanView, query=EvalGetQuery(id=plan_id))
+
+    def list_plans(self, *, after: PlanId | None = None, limit: int | None = None) -> PlanListResponse:
+        """One page of the caller's plans, oldest first. Pass a page's `next` as `after` for the
+        page after it."""
+        query = EvalListQuery(after=after, limit=limit)
+        return self._get(routes.EVALS_LIST, PlanListResponse, query=query)
 
     def rankings(self, *, board: BoardRef) -> RankingsResponse:
         """One board by slug."""

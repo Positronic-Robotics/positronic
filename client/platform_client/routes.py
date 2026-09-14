@@ -14,6 +14,11 @@ SUBMISSIONS_CREATE = f'{API_PREFIX}/submissions.create'
 SUBMISSIONS_LIST = f'{API_PREFIX}/submissions.list'
 SUBMISSIONS_GET = f'{API_PREFIX}/submissions.get'
 SUBMISSIONS_CANCEL = f'{API_PREFIX}/submissions.cancel'
+# A plan a caller composes, filed and read back. These routes reach the lab rig; `submissions.*`
+# reach the platform's own runners.
+EVALS_RUN = f'{API_PREFIX}/evals.run'
+EVALS_GET = f'{API_PREFIX}/evals.get'
+EVALS_LIST = f'{API_PREFIX}/evals.list'
 RANKINGS_GET = f'{API_PREFIX}/rankings.get'
 RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
 # What the platform offers the caller: the evals a plan may name, and the tasks it may compose.

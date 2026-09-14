@@ -178,8 +178,8 @@ class TaskNode(Cascade):
 
 
 class EvalPlan(Cascade):
-    """`submissions.create` — one eval to run: the tasks, the endpoints each task runs, and the
-    count per endpoint.
+    """The body of `submissions.create` and of `evals.run` — one eval to run: the tasks, the
+    endpoints each task runs, and the count per endpoint.
 
     The plan states the count once. A task may override it for that task, and an endpoint for that
     endpoint. It either states its own tasks or names an eval the platform offers, and the catalogue

@@ -10,9 +10,18 @@ from __future__ import annotations
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import (
+    PLAN_STOPPED_STATUSES,
+    BoardVisibility,
+    KeyStatus,
+    OnExhausted,
+    PlanStatus,
+    QuotaSubject,
+    ReasonCode,
+    SubmissionStatus,
+)
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, UserId
+from platform_client.ids import ApiKey, PlanId, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
@@ -341,3 +350,41 @@ class RankingsResponse(BaseModel):
     eval: EvalRef
     primary_metric: str
     rankings: list[RankingRow] = Field(default_factory=list)
+
+
+class PlanFiled(BaseModel):
+    """`evals.run` — a new plan, or the plan an earlier call with the same `transaction_key` filed."""
+
+    plan_id: PlanId
+    status: Slugged[PlanStatus]
+
+
+class PlanView(BaseModel):
+    """`evals.get`, and one row of `evals.list`.
+
+    `artifacts` is the prefix the episodes land under, once one exists. `error` says why a `blocked`
+    plan waits, or why an `errored` one stopped.
+    """
+
+    plan_id: PlanId
+    status: Slugged[PlanStatus]
+    episodes: EpisodeCounts
+    runs: list[RunSummary] = Field(default_factory=list)
+    artifacts: str | None = None
+    error: str | None = None
+
+    @model_validator(mode='after')
+    def _an_error_travels_with_a_stopped_status(self) -> Self:
+        if self.error is not None and self.status not in PLAN_STOPPED_STATUSES:
+            raise ValueError(f'an error on a {self.status.name} plan')
+        return self
+
+
+class PlanListResponse(BaseModel):
+    """`evals.list` — one page, oldest first.
+
+    `next` is the cursor for the page after it, and is absent on the last page.
+    """
+
+    plans: list[PlanView] = Field(default_factory=list)
+    next: PlanId | None = None

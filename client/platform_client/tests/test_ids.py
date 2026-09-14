@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from platform_client.ids import ID_LIMIT, Id64, SubmissionId, UserId
+from platform_client.ids import ID_LIMIT, Id64, PlanId, SubmissionId, UserId
 from pydantic import BaseModel, ValidationError
 
 
@@ -84,8 +84,10 @@ def test_zero_is_rejected_in_both_forms():
 
 
 def test_the_subclasses_are_distinct_types():
-    assert {type(UserId(1)), type(SubmissionId(1)), type(ServiceId(1))} == {UserId, SubmissionId, ServiceId}
+    minted = {type(UserId(1)), type(SubmissionId(1)), type(PlanId(1)), type(ServiceId(1))}
+    assert minted == {UserId, SubmissionId, PlanId, ServiceId}
     assert not isinstance(UserId(1), SubmissionId)
+    assert not isinstance(PlanId(1), SubmissionId)
     assert issubclass(UserId, Id64)
 
 

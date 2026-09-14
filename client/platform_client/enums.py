@@ -141,6 +141,31 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 
 
 @unique
+class PlanStatus(IntEnum):
+    """A filed plan's lifecycle: received -> filed -> running -> done|cancelled|errored.
+
+    The gateway sets `received`; the coordinator reports every status from `filed` on. `blocked`
+    pauses the plan: it waits on what `error` names, and a later report moves it on.
+    """
+
+    INVALID = 0
+    received = 1
+    filed = 2
+    running = 3
+    done = 4
+    cancelled = 5
+    errored = 6
+    blocked = 7
+
+
+# A plan the coordinator reports no later status for.
+PLAN_TERMINAL_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored})
+
+# A plan that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
+PLAN_STOPPED_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.blocked, PlanStatus.errored})
+
+
+@unique
 class EndpointKind(IntEnum):
     """Where a policy comes from: an address the caller provides (`remote`), a checkpoint the
     platform serves (`served`), or a container image the platform runs (`image`)."""

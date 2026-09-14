@@ -12,6 +12,7 @@ from platform_client.enums import (
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
@@ -19,10 +20,12 @@ from platform_client.enums import (
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
 from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, PlanId, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
+    EvalGetQuery,
+    EvalListQuery,
     RankingsQuery,
     RegisterRequest,
     SubmissionGetQuery,
@@ -44,6 +47,9 @@ from platform_client.responses import (
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
+    PlanFiled,
+    PlanListResponse,
+    PlanView,
     QuotaLimit,
     RankingRow,
     RankingsResponse,
@@ -62,6 +68,7 @@ from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 SUB = SubmissionId(0x1F)
+PLAN = PlanId(0x3C)
 USER = UserId(0xA0)
 
 SCORES = Scores(primary=0.75)
@@ -197,6 +204,20 @@ MODELS: list[BaseModel] = [
     ),
     SubmissionListQuery(after=SUB, limit=50),
     SubmissionListQuery(),
+    EvalGetQuery(id=PLAN),
+    EvalListQuery(after=PLAN, limit=50),
+    EvalListQuery(),
+    PlanFiled(plan_id=PLAN, status=PlanStatus.received),
+    PlanView(plan_id=PLAN, status=PlanStatus.filed, episodes=EpisodeCounts(total=10, outstanding=10)),
+    PlanView(
+        plan_id=PLAN,
+        status=PlanStatus.blocked,
+        episodes=EpisodeCounts(total=24, done=3, outstanding=21),
+        runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT)],
+        artifacts='s3://inference/runway/140926/spoons/',
+        error='the rig is not ready',
+    ),
+    PlanListResponse(),
     BlockedSubmissionView(
         id=SUB,
         episodes=EpisodeCounts(total=24, done=3, outstanding=21),
@@ -590,3 +611,25 @@ def test_only_the_blocked_view_says_what_a_run_waits_on():
 def test_a_limit_below_one_is_refused():
     with pytest.raises(ValidationError):
         SubmissionListQuery(limit=0)
+
+
+def test_a_plan_view_carries_an_error_only_on_a_stopped_status():
+    # The pair is one fact: an error on a running plan is a gateway that reported the two apart,
+    # and a reader would otherwise render a stall that is not there.
+    stopped = PlanView(plan_id=PLAN, status=PlanStatus.errored, episodes=EpisodeCounts(), error='the policy faulted')
+    assert stopped.error == 'the policy faulted'
+    with pytest.raises(ValidationError):
+        PlanView(plan_id=PLAN, status=PlanStatus.running, episodes=EpisodeCounts(), error='the policy faulted')
+
+
+def test_a_plan_page_reads_its_cursor_and_its_rows_as_plan_ids():
+    page = PlanListResponse.model_validate({
+        'plans': [{'plan_id': '3c', 'status': 'filed', 'episodes': {'total': 10, 'done': 0, 'outstanding': 10}}],
+        'next': '3c',
+    })
+    assert [row.plan_id for row in page.plans] == [PLAN] and page.next == PLAN
+
+
+def test_an_eval_limit_below_one_is_refused():
+    with pytest.raises(ValidationError):
+        EvalListQuery(limit=0)

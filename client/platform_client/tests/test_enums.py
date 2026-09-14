@@ -12,6 +12,8 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     ACTIVE_STATUSES,
+    PLAN_STOPPED_STATUSES,
+    PLAN_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
     CameraVantage,
@@ -20,6 +22,7 @@ from platform_client.enums import (
     KeyStatus,
     OnExhausted,
     Placement,
+    PlanStatus,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
@@ -66,6 +69,17 @@ SUBMISSION_STATUS_VALUES = {
     'blocked': 7,
 }
 
+PLAN_STATUS_VALUES = {
+    'INVALID': 0,
+    'received': 1,
+    'filed': 2,
+    'running': 3,
+    'done': 4,
+    'cancelled': 5,
+    'errored': 6,
+    'blocked': 7,
+}
+
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
 
 ON_EXHAUSTED_VALUES = {'INVALID': 0, 'block': 1, 'meter': 2}
@@ -84,6 +98,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),
     (ReasonCode, REASON_CODE_VALUES),
     (SubmissionStatus, SUBMISSION_STATUS_VALUES),
+    (PlanStatus, PLAN_STATUS_VALUES),
     (KeyStatus, KEY_STATUS_VALUES),
     (OnExhausted, ON_EXHAUSTED_VALUES),
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
@@ -117,3 +132,11 @@ def test_the_status_sets_partition_the_decided_from_the_undecided():
     assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
         SubmissionStatus.INVALID
     }
+
+
+def test_the_plan_sets_name_the_statuses_they_claim():
+    # Stopped spans the two kinds: `blocked` waits on its error, `errored` ended on one. Terminal
+    # is the decided set, so the two overlap on `errored` alone.
+    assert PLAN_STOPPED_STATUSES & PLAN_TERMINAL_STATUSES == {PlanStatus.errored}
+    assert PLAN_TERMINAL_STATUSES < set(PlanStatus) - {PlanStatus.INVALID}
+    assert PlanStatus.received not in PLAN_TERMINAL_STATUSES | PLAN_STOPPED_STATUSES

@@ -1,14 +1,14 @@
 """What a caller sends: the POST bodies, and the query models the GET endpoints take.
 
 Unknown fields are rejected, so a typo'd field is a 422 rather than a silently dropped input that
-would change what the submission means. `submissions.create` takes an `EvalPlan`, which lives in
-`eval_plan` with the cascade it carries.
+would change what the submission means. `submissions.create` and `evals.run` both take an
+`EvalPlan`, which lives in `eval_plan` with the cascade it carries.
 """
 
 from __future__ import annotations
 
 from platform_client.boards import BoardRef
-from platform_client.ids import SubmissionId
+from platform_client.ids import PlanId, SubmissionId
 from pydantic import BaseModel, ConfigDict, Field
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
@@ -54,4 +54,21 @@ class SubmissionListQuery(BaseModel):
     model_config = _FORBID_EXTRA
 
     after: SubmissionId | None = None
+    limit: int | None = Field(default=None, gt=0)
+
+
+class EvalGetQuery(BaseModel):
+    """`evals.get` — the id travels in the query string, in its hex wire form."""
+
+    model_config = _FORBID_EXTRA
+
+    id: PlanId
+
+
+class EvalListQuery(BaseModel):
+    """`evals.list` — the page after the last id seen. A `limit` above the gateway's cap is clamped to it."""
+
+    model_config = _FORBID_EXTRA
+
+    after: PlanId | None = None
     limit: int | None = Field(default=None, gt=0)

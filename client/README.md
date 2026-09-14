@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.8.0"
+uv add "positronic-platform-client==0.9.0"
 ```
 
 `platform_client` never imports `positronic`. One command ships here, `platform-register`, which
@@ -97,6 +97,12 @@ offered to the grant's client.
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
 definition.
+
+`evals.run` files the same plan for the lab rig, and has no command yet: `PlatformClient.run_eval`
+files it, `.get_plan` and `.list_plans` read it back by the `PlanId` it answers with. A plan carries
+its own status words (`PlanStatus`) and its own counts: `PlanView` holds the episodes the plan asked
+for and has landed, one `RunSummary` per launch that served it, the prefix the episodes land under,
+and the `error` a `blocked` or `errored` plan stopped on.
 
 ## From the command line
 
