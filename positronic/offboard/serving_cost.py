@@ -2,8 +2,9 @@
 
 Replays a recorded episode against a real ``PolicyServer`` on loopback whose model answers a fixed
 chunk instantly, so every millisecond reported is serving cost, divided by the phases the server
-reports. The default stack is the one a DROID endpoint declares: 25 frames of two cameras and the
-arm's pose, bounded to 1024x288, JPEG-encoded per frame and re-queried every 24 rows.
+reports. The default stack is the one the rig's client builds: 25 frames of two cameras and the
+arm's pose, bounded to 1024x288, JPEG-encoded per frame and re-queried every 24 rows. A vendor's
+served pipeline may sample fewer frames at a smaller bound; the flags below set any other load.
 
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
