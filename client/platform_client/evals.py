@@ -2,8 +2,6 @@
 
 A name is a task suite AND the embodiment that runs it, so there is no second axis to get wrong.
 The platform owns the set, so a name this client has never heard of still reaches the server.
-`rankings.list` names the eval each public board ranks. A refused `submissions.create` names every
-eval on offer.
 """
 
 from __future__ import annotations
