@@ -24,6 +24,18 @@ MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
 ERROR = 'error'
+# What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
+# milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
+TIMING = 'timing'
+
+# The phases ``TIMING`` reports. `SERVED` brackets the other three: it opens on the observation
+# arriving and closes as the answer goes back, so a client's round trip minus `SERVED` is network.
+TIMING_SERVED = 'served_ms'
+TIMING_DECODE = 'decode_ms'
+TIMING_INFER = 'infer_ms'
+TIMING_ENCODE = 'encode_ms'
+# Time the observation waited for the inference slot, inside `SERVED` — a queue rather than compute.
+TIMING_QUEUED = 'queued_ms'
 
 
 class ServerStatus(StrEnum):
