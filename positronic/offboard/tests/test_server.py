@@ -123,6 +123,21 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_po
     websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
 
 
+def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_policy):
+    """A wire that served and stopped starts again with a fresh socket, and a rollback before it serves frees it."""
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
+    serving = threading.Thread(target=server.serve, args=([bound],))
+    serving.start()
+    time.sleep(_A_MOMENT_IDLE)
+    server.shutdown()
+    serving.join(timeout=10.0)
+    assert not serving.is_alive(), 'the first serve did not end'
+    with pytest.raises(OSError, match='that port is taken'):
+        server.serve([bound, _UnbindableWire()])
+    websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
+
+
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
     """No wire ends in silence: one failure raises out of ``serve``, and ``serve`` logs every other one."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))

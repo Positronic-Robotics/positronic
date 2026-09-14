@@ -170,6 +170,7 @@ class WebsocketWire(wire.Wire):
         return self._endpoint
 
     async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+        self._served = False
         self._socket = _listening_socket(self._host, self._port)
         self._endpoint = wire.Endpoint(self._host, self._socket.getsockname()[1])
         app = FastAPI()
