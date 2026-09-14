@@ -60,6 +60,9 @@ class Embodiment:
     meta_source: pimm.ControlSystemEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
+    # What a device reports about itself during an episode, recorded beside the observations and never fed
+    # to the policy: a camera's read-back exposure, gain and white balance.
+    recorded: dict[str, Observation] = field(default_factory=dict)
 
 
 @dataclass
