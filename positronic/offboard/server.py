@@ -418,7 +418,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized, self.api)
+                    await w.start(self._serve_session, self._authorized)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
@@ -479,7 +479,7 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port)]
+    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
     if grpc_port is not None:
         wires.append(grpc_wire.GrpcWire(host, grpc_port))
     server.serve(wires)

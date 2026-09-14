@@ -8,7 +8,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
 from typing import NamedTuple, Protocol
 
-from fastapi import APIRouter
 from starlette.datastructures import QueryParams
 
 # The server's HTTP API, and the route a session opens on under it.
@@ -175,11 +174,8 @@ class Wire(abc.ABC):
         """Where this wire serves. The port is known once ``start`` returns."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
-        """Bind, and give every accepted session to ``session``. Raises when the port is not free.
-
-        ``api`` is the server's HTTP routes. A wire that carries HTTP answers them on its port.
-        """
+    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
+        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
 
     @abc.abstractmethod
     async def serve(self) -> None:

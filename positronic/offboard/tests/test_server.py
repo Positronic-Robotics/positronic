@@ -13,7 +13,6 @@ from unittest.mock import ANY, MagicMock, patch
 import configuronic as cfn
 import httpx
 import pytest
-from fastapi import APIRouter
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
@@ -70,7 +69,7 @@ class _FailingWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         return wire.Endpoint('localhost', 0)
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         pass
 
     async def serve(self) -> None:
@@ -88,7 +87,7 @@ class _UnbindableWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         raise AssertionError('it never bound')
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         raise OSError('that port is taken')
 
     async def serve(self) -> None:
@@ -117,7 +116,7 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = websocket_wire.WebsocketWire('localhost', 0)
+    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener holds the port, and a fresh bind to it raises.
@@ -138,7 +137,7 @@ def test_an_idle_server_stops_itself(make_mock_policy):
     server = PolicyServer(
         ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
     )
-    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0)],))
+    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
     serving.start()
     serving.join(timeout=_A_MOMENT_IDLE * 20)
     assert not serving.is_alive(), 'the idle watchdog left the server running'

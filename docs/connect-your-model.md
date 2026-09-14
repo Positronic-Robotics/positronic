@@ -211,7 +211,7 @@ class MyPolicy(Policy):
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
 server = PolicyServer(pipeline)
-server.serve([WebsocketWire('0.0.0.0', 8000)])
+server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.

@@ -136,28 +136,6 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
-def _wire_and_address(url: str) -> tuple[ClientWire, wire.SessionAddress]:
-    """The wire ``url`` selects, and the session it addresses on that wire."""
-    split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-    selected = wires.BY_SCHEME.get(split.scheme)
-    if selected is None:
-        raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-    if not split.hostname:
-        raise ValueError(f'No host in {url!r}')
-    client_wire, scheme = selected
-    address = wire.SessionAddress(
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
-        port=wire.default_port(scheme.secure) if split.port is None else split.port,
-        path=_session_path(split.path, url),
-        # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
-        # wrote the URL knows whether `true` means the bool or the string.
-        query=split.query,
-        secure=scheme.secure,
-    )
-    return client_wire, address
-
-
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
@@ -203,7 +181,23 @@ class InferenceClient:
         without TLS. The port defaults to 443 with TLS and to 80 without. The model id and the query reach
         the server as written, and every session opened here carries them.
         """
-        client_wire, address = _wire_and_address(url)
+        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
+        selected = wires.BY_SCHEME.get(split.scheme)
+        if selected is None:
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+        if not split.hostname:
+            raise ValueError(f'No host in {url!r}')
+        client_wire, scheme = selected
+        address = wire.SessionAddress(
+            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+            host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
+            port=wire.default_port(scheme.secure) if split.port is None else split.port,
+            path=_session_path(split.path, url),
+            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
+            # wrote the URL knows whether `true` means the bool or the string.
+            query=split.query,
+            secure=scheme.secure,
+        )
         return cls(
             client_wire,
             address,

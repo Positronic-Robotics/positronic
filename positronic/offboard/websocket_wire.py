@@ -142,15 +142,16 @@ def _listening_socket(host: str, port: int) -> socket.socket:
 
 
 class WebsocketWire(wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the server's API answers on its port."""
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, api: APIRouter):
         self._host = host
         self._port = port
+        self._api = api
         self._socket: socket.socket | None = None
         self._server: uvicorn.Server | None = None
         self._endpoint: wire.Endpoint | None = None
@@ -161,11 +162,11 @@ class WebsocketWire(wire.Wire):
         assert self._endpoint is not None, 'The websocket wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         self._socket = _listening_socket(self._host, self._port)
         self._endpoint = wire.Endpoint(self._host, self._socket.getsockname()[1])
         app = FastAPI()
-        app.include_router(api)
+        app.include_router(self._api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,

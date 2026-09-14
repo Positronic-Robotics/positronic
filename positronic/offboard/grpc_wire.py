@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator, Mapping
 
 import grpc
 import grpc.aio
-from fastapi import APIRouter
 from starlette.datastructures import QueryParams
 
 from . import wire
@@ -338,7 +337,7 @@ class GrpcWire(wire.Wire):
         assert self._endpoint is not None, 'The gRPC wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):
