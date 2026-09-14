@@ -628,7 +628,7 @@ class Robot(pimm.ControlSystem):
         """
         try:
             cleared = robot.recover_from_errors()
-        # rules-allow: swallowed-error — the throw is not dropped but handed to every console that asked
+        # rules-allow: swallowed-error — the throw is handed to every console that asked
         except Exception as exc:
             if not asked:
                 raise

@@ -225,7 +225,7 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
 
 
 def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, franka.RecoveryOutcome]:
-    """A caller on ``driver.recover``, the same way ``_mover`` calls a move."""
+    """A caller on ``driver.recover``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[None, franka.RecoveryOutcome](driver)
     wire_call(world, caller, driver.recover)
     return caller
@@ -1096,7 +1096,7 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
 
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
     """A console calls the arm to clear a latched fault: the driver runs the recovery and the answer to
-    THAT call carries what it returned."""
+    that call carries what it returned."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
@@ -1132,8 +1132,7 @@ def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, w
 
 def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_run(desk, world):
     """libfranka throws mid-recovery on an arm the tick also reads in error. One recovery serves the
-    console and the fault, so the throw reaches the caller instead of being raised a second time with
-    nobody to hear it."""
+    console and the fault, so the throw reaches the caller and the run goes on."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
