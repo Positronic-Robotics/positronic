@@ -137,7 +137,8 @@ A client that ignores the declaration keeps sending whole images, and so does ev
   slot carries a sequence number before its payload and one after it; a reader that finds either one different
   from the reference refuses that observation rather than serving other pixels under it.
 - **A larger frame grows the ring.** The client creates a bigger one and hands it over before it sends any
-  reference to it. The server keeps every mapping it was handed, so a view it built earlier stays readable.
+  reference to it. The server holds the newest mapping alone, and a view it built earlier keeps its own
+  mapping alive for as long as that view lives, so the view stays readable.
 - **The views are read-only.** Code that writes an observation's image in place raises; a codec that resizes or
   copies is unaffected.
 
