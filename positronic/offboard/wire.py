@@ -13,6 +13,9 @@ from starlette.datastructures import QueryParams
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
+# The model catalogue, served under the HTTP API.
+MODELS_ROUTE = 'models'
+MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
 
 
 def default_port(secure: bool) -> int:
@@ -142,7 +145,8 @@ class ServerConnection(abc.ABC):
         """The session params the client asked for."""
 
     @abc.abstractmethod
-    async def send(self, message: bytes) -> None: ...
+    async def send(self, message: bytes) -> None:
+        """Raises ``PeerDisconnected`` once the client ends the session."""
 
     @abc.abstractmethod
     async def receive(self) -> bytes:

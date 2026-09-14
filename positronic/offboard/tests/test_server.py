@@ -22,7 +22,7 @@ from positronic import keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
-from positronic.offboard.protocol import deserialise
+from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
@@ -264,6 +264,23 @@ def test_load_progress_frames_reach_the_client(start_server, make_mock_policy):
         assert any('halfway there' in m for m in messages)
     finally:
         ws.close()
+
+
+def test_a_client_that_leaves_mid_inference_is_a_lost_peer_not_an_error(stub_server, caplog):
+    """The answer meets a closed socket; the wire reports a lost peer, and the server logs no error."""
+    host, port, _server, policy = stub_server
+    policy._mock_session.side_effect = lambda *_: time.sleep(0.3) or [{'action': [1, 2, 3]}]
+    ws = connect(f'ws://{host}:{port}/api/v1/session')
+    while deserialise(ws.recv(timeout=10)).get('status') != 'ready':
+        pass
+    with caplog.at_level(logging.INFO, logger='positronic.offboard.server'):
+        ws.send(serialise({'image': 'test'}))
+        ws.close()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not any('Client disconnected' in r.getMessage() for r in caplog.records):
+            time.sleep(0.05)
+    assert any('Client disconnected' in r.getMessage() for r in caplog.records)
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
 
 
 class _IdentityCodec(Codec):

@@ -115,7 +115,10 @@ class WebsocketServerConnection(wire.ServerConnection):
         return self._websocket.query_params
 
     async def send(self, message: bytes) -> None:
-        await self._websocket.send_bytes(message)
+        try:
+            await self._websocket.send_bytes(message)
+        except WebSocketDisconnect as e:
+            raise wire.PeerDisconnected(str(e)) from e
 
     async def receive(self) -> bytes:
         try:

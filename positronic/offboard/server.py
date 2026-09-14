@@ -227,7 +227,7 @@ class PolicyServer:
         self._auth_token = auth_token
 
         self._api = APIRouter()
-        self._api.get('/api/v1/models', dependencies=[Depends(self._require_http_auth)])(self.get_models)
+        self._api.get(wire.MODELS_PATH, dependencies=[Depends(self._require_http_auth)])(self.get_models)
 
     @property
     def api(self) -> APIRouter:
@@ -289,6 +289,8 @@ class PolicyServer:
                         logger.error('Cancelled mid-inference: the worker is still in the backend')
                         raise
                 await conn.send(serialise({protocol.RESULT: actions}))
+            except wire.PeerDisconnected:
+                raise
             except Exception as e:
                 logger.error(f'Error processing message: {e}', exc_info=True)
                 await conn.send(serialise({protocol.ERROR: str(e)}))

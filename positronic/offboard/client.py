@@ -261,6 +261,6 @@ class InferenceClient:
         """List available models from the server."""
         if self.api_url is None:
             raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        response = httpx.get(f'{self.api_url}/models', headers=self.headers)
+        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']

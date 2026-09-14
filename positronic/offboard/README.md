@@ -18,7 +18,8 @@ the same order; everything below holds on each.
 | gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
 
 The WebSocket wire is the default, and a server serves gRPC only when `grpc_port` names a port. A
-gRPC session is one bidirectional stream of the same frames; no `.proto` file describes them.
+gRPC session is one bidirectional stream of the same frames on the generic RPC method
+`/positronic.offboard.v1.Inference/Session`; no `.proto` file describes them.
 The session path and the query cross as the `positronic-session-path` and `positronic-session-query`
 metadata, and `Authorization` crosses as the `authorization` metadata.
 

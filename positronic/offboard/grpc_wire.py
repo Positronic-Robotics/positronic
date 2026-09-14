@@ -277,7 +277,10 @@ class GrpcServerConnection(wire.ServerConnection):
         return QueryParams(self._headers.get(SESSION_QUERY_HEADER, ''))
 
     async def send(self, message: bytes) -> None:
-        await self._context.write(message)
+        try:
+            await self._context.write(message)
+        except grpc.RpcError as e:
+            raise wire.PeerDisconnected(f'{self.peer} ended the session: {e}') from e
 
     async def receive(self) -> bytes:
         try:
