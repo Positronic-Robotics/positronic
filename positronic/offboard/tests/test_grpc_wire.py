@@ -373,7 +373,7 @@ def test_a_grpc_url_names_the_session_port_alone(url):
 )
 def test_the_scheme_fixes_the_port_and_the_tls(url, target, secure):
     client = InferenceClient(url)
-    assert (client._grpc_target, client._grpc_secure) == (target, secure)
+    assert (client._target, client._secure) == (target, secure)
 
 
 @pytest.mark.parametrize(

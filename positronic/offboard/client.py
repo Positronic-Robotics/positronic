@@ -117,21 +117,36 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
+class _Wire(Enum):
+    """A transport a session opens on."""
+
+    WEBSOCKET = ('ws', 'wss')
+    GRPC = ('grpc', 'grpcs')
+
+    def __init__(self, plain_scheme: str, secure_scheme: str):
+        self._plain_scheme = plain_scheme
+        self._secure_scheme = secure_scheme
+
+    def session_scheme(self, secure: bool) -> str:
+        """The scheme a session URL carries on this wire."""
+        return self._secure_scheme if secure else self._plain_scheme
+
+
 class _Scheme(Enum):
-    """A URL scheme a session may open on, and what it settles: which wire, and whether it is TLS."""
+    """A URL scheme, and the wire and TLS it names."""
 
-    EMPTY = ('', False, False)
-    HTTP = ('http', False, False)
-    WS = ('ws', False, False)
-    HTTPS = ('https', True, False)
-    WSS = ('wss', True, False)
-    GRPC = ('grpc', False, True)
-    GRPCS = ('grpcs', True, True)
+    EMPTY = ('', False, _Wire.WEBSOCKET)
+    HTTP = ('http', False, _Wire.WEBSOCKET)
+    WS = ('ws', False, _Wire.WEBSOCKET)
+    HTTPS = ('https', True, _Wire.WEBSOCKET)
+    WSS = ('wss', True, _Wire.WEBSOCKET)
+    GRPC = ('grpc', False, _Wire.GRPC)
+    GRPCS = ('grpcs', True, _Wire.GRPC)
 
-    def __init__(self, text: str, secure: bool, grpc_wired: bool):
+    def __init__(self, text: str, secure: bool, wire: _Wire):
         self.text = text
         self.secure = secure
-        self.grpc_wired = grpc_wired
+        self.wire = wire
 
     @classmethod
     def of(cls, text: str) -> '_Scheme':
@@ -187,7 +202,7 @@ class InferenceClient:
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}') from None
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        session_scheme = scheme.text if scheme.grpc_wired else ('wss' if scheme.secure else 'ws')
+        session_scheme = scheme.wire.session_scheme(scheme.secure)
         http_scheme = 'https' if scheme.secure else 'http'
         default_port = 443 if scheme.secure else 80
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
@@ -199,10 +214,11 @@ class InferenceClient:
         query = f'?{split.query}' if split.query else ''
         self._session_path = _session_path(split.path, url)
         self._query = split.query
-        self._grpc_target = f'{host}:{port}' if scheme.grpc_wired else None
-        self._grpc_secure = scheme.secure
+        self._wire = scheme.wire
+        self._secure = scheme.secure
+        self._target = f'{host}:{port}'
         self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
-        self.api_url = None if self._grpc_target else f'{http_scheme}://{netloc}/api/v1'
+        self.api_url = None if self._wire is _Wire.GRPC else f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -210,14 +226,9 @@ class InferenceClient:
 
     def _connect(self) -> wire.ClientConnection:
         """One session's connection, over the wire the URL names."""
-        if self._grpc_target is not None:
+        if self._wire is _Wire.GRPC:
             return grpc_wire.dial(
-                self._grpc_target,
-                self._session_path,
-                self._query,
-                self.headers,
-                self.open_timeout,
-                secure=self._grpc_secure,
+                self._target, self._session_path, self._query, self.headers, self.open_timeout, secure=self._secure
             )
         return websocket_wire.dial(self.session_url, self.headers, self.open_timeout)
 
