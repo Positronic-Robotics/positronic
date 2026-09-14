@@ -335,6 +335,11 @@ cold checkpoint's first inference, so the client holds sessions open with pings 
 `positronic/offboard/grpc_wire.py`). `pytest -m endpoint` dials the websocket URL that the banner prints,
 so it catches a change on that wire alone. No endpoint-marked test dials the gRPC URL.
 
+A smoke test measured a third behaviour. The managed front passes about 10 MB before its rate limit
+takes effect, and then holds both wires to about 83 Mbit/s. Above that limit, one 846 KiB observation
+goes from 7 ms to 83 ms per call. Calls 500 ms apart stay at 7 ms. A rollout sends about 0.5 MB/s and
+stays under it.
+
 ### Letting the config read the secret
 
 `.nebius_remote` fetches the token from MysteryBox itself, so nothing is exported and a
