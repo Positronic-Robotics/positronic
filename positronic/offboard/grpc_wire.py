@@ -19,8 +19,8 @@ from . import wire
 logger = logging.getLogger(__name__)
 
 
-# The URL schemes that select this wire, and whether each one is TLS.
-SESSION_SCHEMES: Mapping[str, bool] = {'grpc': False, 'grpcs': True}
+def schemes() -> tuple[wire.Scheme, ...]:
+    return (wire.Scheme('grpc', secure=False), wire.Scheme('grpcs', secure=True))
 
 
 def session_url(address: wire.SessionAddress) -> str:

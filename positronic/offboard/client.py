@@ -2,7 +2,7 @@ import logging
 import time
 import urllib.parse
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import Any
 
 import httpx
 
@@ -118,15 +118,8 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-class _Scheme(NamedTuple):
-    """The wire a URL scheme selects, and whether it is TLS."""
-
-    secure: bool
-    wire: ClientWire
-
-
-def _schemes_of(client_wire: ClientWire) -> dict[str, _Scheme]:
-    return {text: _Scheme(secure, client_wire) for text, secure in client_wire.SESSION_SCHEMES.items()}
+def _schemes_of(client_wire: ClientWire) -> dict[str, tuple[ClientWire, wire.Scheme]]:
+    return {scheme.text: (client_wire, scheme) for scheme in client_wire.schemes()}
 
 
 _SCHEMES = _schemes_of(websocket_wire) | _schemes_of(grpc_wire)
@@ -172,12 +165,12 @@ class InferenceClient:
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        scheme = _SCHEMES.get(split.scheme)
-        if scheme is None:
+        selected = _SCHEMES.get(split.scheme)
+        if selected is None:
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        self._wire = scheme.wire
+        self._wire, scheme = selected
         self._address = wire.SessionAddress(
             # urlsplit strips the brackets an IPv6 host needs back in a netloc.
             host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
@@ -188,8 +181,8 @@ class InferenceClient:
             query=split.query,
             secure=scheme.secure,
         )
-        self.session_url = scheme.wire.session_url(self._address)
-        self.api_url = scheme.wire.api_url(self._address)
+        self.session_url = self._wire.session_url(self._address)
+        self.api_url = self._wire.api_url(self._address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline

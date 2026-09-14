@@ -14,8 +14,16 @@ from websockets.sync.connection import Connection
 
 from . import wire
 
-# The URL schemes that select this wire, and whether each one is TLS.
-SESSION_SCHEMES: Mapping[str, bool] = {'': False, 'http': False, 'ws': False, 'https': True, 'wss': True}
+
+def schemes() -> tuple[wire.Scheme, ...]:
+    # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
+    return (
+        wire.Scheme('', secure=False),
+        wire.Scheme('http', secure=False),
+        wire.Scheme('ws', secure=False),
+        wire.Scheme('https', secure=True),
+        wire.Scheme('wss', secure=True),
+    )
 
 
 def session_url(address: wire.SessionAddress) -> str:

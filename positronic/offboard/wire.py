@@ -74,11 +74,19 @@ class Endpoint(NamedTuple):
     port: int
 
 
+class Scheme(NamedTuple):
+    """A URL scheme that selects a wire, and whether it names TLS."""
+
+    text: str
+    secure: bool
+
+
 class ClientWire(Protocol):
     """The client side of one wire. Each wire module is one."""
 
-    # The URL schemes that select this wire, and whether each one is TLS.
-    SESSION_SCHEMES: Mapping[str, bool]
+    def schemes(self) -> tuple['Scheme', ...]:
+        """The URL schemes that select this wire."""
+        ...
 
     def session_url(self, address: 'SessionAddress') -> str:
         """``address`` as this wire spells it."""
