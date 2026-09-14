@@ -12,8 +12,13 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.8.0"
+uv add "positronic-platform-client==0.8.1"
+uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
+
+The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit. The
+platform serves the same contract as an OpenAPI schema at `<platform>/openapi.json`, and `/docs`
+browses it.
 
 `platform_client` never imports `positronic`. One command ships here, `platform-register`, which
 mints a key from GitHub. The commands that drive an eval, `positronic eval run`, `eval status`,
@@ -102,12 +107,14 @@ definition.
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
 runs an eval here when given a policy, on the platform when given a policy image, and on the lab rig
-when given a policy URL. `account register` registers with a credential you already hold and saves
-the key it mints; `platform-register` mints one from GitHub and prints it:
+when given a policy URL. From zero, `platform-register` is the one path to a key: it runs GitHub's
+device flow and prints the `export` line. In a checkout, run it through `uv run`. `account register`
+takes a GitHub token the platform's OAuth app minted, in `POSITRONIC_PLATFORM_CREDENTIAL`, and saves
+the key in the record the other commands read; a new user holds no such token.
 
 ```bash
-export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
-uv run positronic account register --alias=<display name>
+platform-register --alias=<display name>            # in a checkout: uv run platform-register
+export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
 uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
@@ -128,15 +135,23 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 | `POSITRONIC_PLATFORM_URL` | a platform other than the default one, overridden per call by `--platform-url` |
 | `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment or the saved record, never an argument, so it reaches no process listing |
 | `POSITRONIC_PLATFORM_CONFIG_DIR` | where `positronic account register` saves that record, else `~/.config/positronic-platform` |
-| `POSITRONIC_PLATFORM_CREDENTIAL` | the identity `register` registers with — read the same way, for the same reason |
+| `POSITRONIC_PLATFORM_CREDENTIAL` | a GitHub token the platform's OAuth app minted, for `account register` — read the same way, for the same reason. `platform-register` mints that token itself and needs none |
 
 The record's key and its platform are read one at a time. A command that names another platform, and
 no key, sends the record's key to the platform it names. The client speaks one wire contract and runs
 against any platform that serves it, but it is built for ours. You take the risk of another one.
 
-Boards have no command yet — `PlatformClient.list_boards` and `.rankings` read them from Python, the
-latter taking a `BoardRef` (`platform_client.boards`). Both take the key when one is set and work
-without: a public board is readable by anyone, a tenant's board only by its members.
+`rankings.list` names the boards, and `rankings.get?board=<slug>` reads one. From the command line,
+`positronic/cli/examples/nebius_competition/standings.py` prints the boards, or the rows of one:
+
+```bash
+uv run positronic/cli/examples/nebius_competition/standings.py
+uv run positronic/cli/examples/nebius_competition/standings.py --board=<slug>
+```
+
+From Python, `PlatformClient.list_boards` and `.rankings` read them, the latter taking a `BoardRef`
+(`platform_client.boards`). Both take the key when one is set and work without: a public board is
+readable by anyone, a tenant's board only by its members.
 
 A board row reads `<display name>#<tag>`. The name is an alias and is not unique — a board may hide
 it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
@@ -147,20 +162,27 @@ same on every board you appear on.
 ```python
 from platform_client.client import PlatformClient
 from platform_client.eval_plan import plan_of_image
-from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
 
 with PlatformClient(api_key=key) as client:
-    created = client.create_submission(
-        plan_of_image(PolicyImage('org/policy:v1'), EvalRef('robolab.public_subset'))
-    )
+    boards = client.list_boards().boards  # public; each names the eval it ranks
+    for board in boards:
+        print(board.board, board.eval, board.primary_metric)
+    created = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), boards[0].eval))
     view = client.get_submission(created.submission_id)
 ```
 
+The platform resolves the image reference to a digest at submission and records it as
+`policy_image_digest`, so a tag is safe for the run: the run uses the bytes the tag named at that
+moment. Pin by digest to know which image was scored.
+
 An **eval** is the whole of what a submission chooses: it names a task suite and the embodiment that
 runs it — one simulator, or one real robot — so there is no second axis to get wrong. The platform
-owns the set of names; asking for one it does not offer raises a `PlatformError` whose `evals`
-carries the ones it does.
+owns the set of names. Do not copy a name from a document; read it from the platform:
+
+- `rankings.list` needs no key. Each board it returns names the eval it ranks.
+- `submissions.create` with a name the platform does not offer raises a `PlatformError` whose
+  `evals` carries every eval on offer, with a board or without one.
 
 Ids are 64-bit ints in Python and bare lowercase hex on the wire; closed sets are `IntEnum`s carried
 as slugs. A non-2xx response raises `PlatformError`, which carries the parsed error envelope: `code`
