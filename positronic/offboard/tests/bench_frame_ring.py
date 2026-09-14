@@ -11,6 +11,7 @@ Usage
 
 import argparse
 import asyncio
+import socket
 import statistics
 import tempfile
 import threading
@@ -26,7 +27,7 @@ from positronic import keys
 from positronic.offboard import client
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import WS_IMPL, WS_MAX_BYTES, PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import PolicySource, remote
@@ -35,7 +36,7 @@ HD720 = (720, 1280, 3)
 
 
 class _ReadEveryPixel(Session):
-    """A session that reads each frame once and answers, so both arms pay the same read."""
+    """A session that reads each frame once and answers."""
 
     def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]]:
         for value in obs.values():
@@ -63,12 +64,13 @@ class _StubPolicy(Policy):
         pass
 
 
-def _serve(socket_path: str, frame_ring: bool) -> tuple[PolicyServer, uvicorn.Server, threading.Thread]:
+def _serve(socket_path: str, frame_ring: bool) -> tuple[PolicyServer, uvicorn.Server, threading.Thread, socket.socket]:
     server = PolicyServer(
         ChunkedSchedule() | remote | PolicySource(_StubPolicy()), uds=socket_path, frame_ring=frame_ring
     )
-    PolicyServer.claim_socket_path(socket_path)
-    uv_server = uvicorn.Server(uvicorn.Config(server.app, uds=socket_path, log_level='error'))
+    claim = PolicyServer.claim_socket_path(socket_path)
+    config = uvicorn.Config(server.app, fd=claim.fileno(), log_level='error', ws=WS_IMPL, ws_max_size=WS_MAX_BYTES)
+    uv_server = uvicorn.Server(config)
 
     async def run():
         await server._startup()
@@ -78,11 +80,11 @@ def _serve(socket_path: str, frame_ring: bool) -> tuple[PolicyServer, uvicorn.Se
     thread.start()
     while not uv_server.started:
         time.sleep(0.02)
-    return server, uv_server, thread
+    return server, uv_server, thread, claim
 
 
 def _measure(socket_path: str, frame_ring: bool, calls: int, cameras: int) -> tuple[list[float], int, bool]:
-    server, uv_server, thread = _serve(socket_path, frame_ring)
+    server, uv_server, thread, claim = _serve(socket_path, frame_ring)
     sent: list[int] = []
     packer = client.serialise
     client.serialise = lambda obj: _record(packer(obj), sent)
@@ -108,6 +110,7 @@ def _measure(socket_path: str, frame_ring: bool, calls: int, cameras: int) -> tu
         thread.join(timeout=5.0)
         if server._frames is not None:
             server._frames.close()
+        claim.close()
     return times, message, declared
 
 
