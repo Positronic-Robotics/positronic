@@ -222,16 +222,22 @@ class _TimeTheModel(Layer):
     It goes innermost, so the figure holds the model alone and the codecs and layers around it fall
     outside. A model that reaches its weights over a further hop spends that hop inside it.
 
-    It keeps no figure of its own. A served call that never reaches the model writes nothing, and one
-    that raises writes onto its own report, which goes with it, so no later call can read either.
+    It keeps no figure of its own, and it writes only inside ``reporting_to``. A served call that never
+    reaches the model writes nothing, one that raises writes onto its own report, which goes with it,
+    and a call made outside the block writes nowhere. No call can read another's figure.
     """
 
     def __init__(self) -> None:
         self._report: _ServedTiming | None = None
 
-    def reports_to(self, timing: _ServedTiming) -> None:
-        """Take the report of the call about to be served. Before the first, the model reports nowhere."""
+    @contextmanager
+    def reporting_to(self, timing: _ServedTiming) -> Iterator[None]:
+        """Send the model's figure to this call's report, for the length of the call and no longer."""
         self._report = timing
+        try:
+            yield
+        finally:
+            self._report = None
 
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, timed: '_TimeTheModel') -> None:
@@ -425,7 +431,6 @@ class PolicyServer:
                     self._last_activity = time.monotonic()
                     try:
                         timing = _ServedTiming()
-                        time_the_model.reports_to(timing)
                         with timing.phase(protocol.TIMING_DECODE):
                             raw_obs = deserialise(message)
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
@@ -433,7 +438,7 @@ class PolicyServer:
                         with timing.phase(protocol.TIMING_QUEUED):
                             await self._infer_lock.acquire()
                         try:
-                            with timing.phase(protocol.TIMING_INFER):
+                            with timing.phase(protocol.TIMING_INFER), time_the_model.reporting_to(timing):
                                 # The server's clock is not the rig's.
                                 actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         finally:
