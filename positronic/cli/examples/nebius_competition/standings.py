@@ -68,6 +68,13 @@ def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
         raise SystemExit(f'{exc.message}: {board}\nboards on offer: {offered}') from exc
 
 
+def anonymous_client(platform_url: str | None) -> PlatformClient:
+    """A client that sends no key: a public board is readable by anyone, whatever the environment holds."""
+    client = PlatformClient(platform_url)
+    client.api_key = None
+    return client
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
@@ -78,7 +85,7 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    with PlatformClient(args.platform_url) as client:
+    with anonymous_client(args.platform_url) as client:
         try:
             lines = run(client, board)
         except PlatformError as exc:

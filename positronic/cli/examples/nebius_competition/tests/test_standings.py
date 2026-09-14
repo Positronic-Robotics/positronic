@@ -10,7 +10,7 @@ import httpx
 import pytest
 from platform_client import routes
 from platform_client.boards import BoardRef
-from platform_client.client import AUTH_HEADER, PlatformClient
+from platform_client.client import API_KEY_ENV, AUTH_HEADER, PlatformClient
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'standings.py'
 BASE = 'http://gateway.test'
@@ -133,3 +133,9 @@ def test_an_empty_board_slug_is_refused_before_any_request(standings: dict[str, 
     with pytest.raises(SystemExit) as exit_info:
         standings['main'](['--board='])
     assert str(exit_info.value) == "not a board slug: ''"
+
+
+def test_the_client_sends_no_key_even_when_the_environment_holds_one(standings: dict[str, Any], monkeypatch):
+    monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
+    with standings['anonymous_client'](BASE) as client:
+        assert client.api_key is None

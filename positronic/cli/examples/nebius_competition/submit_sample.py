@@ -65,7 +65,7 @@ def poll_until_terminal(
     raise SystemExit(f'still running after {timeout_s:.0f}s — `positronic eval status` follows it')
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--eval', required=True, help='the eval to run; `standings.py` lists the ones with a board')
@@ -73,7 +73,13 @@ def main() -> None:
     parser.add_argument('--alias', default=None, help='a per-submission label; the board shows your user alias')
     parser.add_argument('--transaction-key', default=None, help='reuse it to retry without a second charge')
     parser.add_argument('--timeout', type=float, default=3600.0, help='seconds to wait for a terminal status')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        eval_ref = EvalRef(args.eval)
+        policy_image = PolicyImage(args.policy_image)
+        transaction_key = TransactionKey(args.transaction_key) if args.transaction_key else None
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     key = os.environ.get(API_KEY_ENV)
     if not key:
@@ -84,11 +90,7 @@ def main() -> None:
     with PlatformClient(args.platform_url, api_key=ApiKey(key)) as client:
         try:
             submission = submit(
-                client,
-                eval_ref=EvalRef(args.eval),
-                policy_image=PolicyImage(args.policy_image),
-                alias=args.alias,
-                transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,
+                client, eval_ref=eval_ref, policy_image=policy_image, alias=args.alias, transaction_key=transaction_key
             )
             if submission.status in NO_RESULT_STATUSES:
                 reason = submission.reason_code.name if submission.reason_code else submission.status.name

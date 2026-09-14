@@ -145,10 +145,15 @@ def main() -> None:
     args = parser.parse_args()
     if (args.eval is None) != (args.policy_image is None):
         parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
+    try:
+        eval_ref = EvalRef(args.eval) if args.eval is not None else None
+        policy_image = PolicyImage(args.policy_image) if args.policy_image is not None else None
+    except ValueError as exc:
+        parser.error(str(exc))
 
     with PlatformClient(args.platform_url) as client:
         # The boards are public, so the list needs no credential and comes before the check for one.
-        if args.eval is None:
+        if eval_ref is None or policy_image is None:
             print('pass --eval=<name>; the public boards rank these evals:')
             for board in client.list_boards().boards:
                 print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
@@ -158,8 +163,8 @@ def main() -> None:
                 client,
                 credential=os.environ.get(CREDENTIAL_ENV) or None,
                 alias=args.alias,
-                eval_ref=EvalRef(args.eval),
-                policy_image=PolicyImage(args.policy_image),
+                eval_ref=eval_ref,
+                policy_image=policy_image,
                 timeout_s=args.timeout,
             )
         except PlatformError as exc:
