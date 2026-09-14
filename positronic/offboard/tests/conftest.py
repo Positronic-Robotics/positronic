@@ -23,7 +23,7 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-RunningServers = list[tuple[uvicorn.Server, threading.Thread]]
+RunningServers = list[tuple[uvicorn.Server, threading.Thread, PolicyServer]]
 
 StartServer = Callable[..., tuple[str, int, PolicyServer]]
 
@@ -35,9 +35,12 @@ def running_servers() -> Generator[RunningServers, None, None]:
     """Every server a test started, stopped and joined at teardown."""
     running: RunningServers = []
     yield running
-    for uv_server, thread in running:
+    for uv_server, thread, server in running:
         uv_server.should_exit = True
         thread.join(timeout=5.0)
+        # A server started here never runs through ``serve``, so nothing else closes its frame channel.
+        if server._frames is not None:
+            server._frames.close()
 
 
 def _serve_in_background(server: PolicyServer, config: uvicorn.Config, running: RunningServers) -> None:
@@ -49,7 +52,7 @@ def _serve_in_background(server: PolicyServer, config: uvicorn.Config, running: 
 
     thread = threading.Thread(target=asyncio.run, args=(_run(),), daemon=True)
     thread.start()
-    running.append((uv_server, thread))
+    running.append((uv_server, thread, server))
 
 
 def _wait_until_it_accepts(dial: Callable[[], None]) -> None:
