@@ -1,7 +1,6 @@
 """The transports a session runs over, and the two ends of one open session.
 
-A wire carries the ``protocol`` frames as opaque bytes and reads none of them. ``websocket_wire`` and
-``grpc_wire`` hold the two wires.
+A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
 """
 
 import abc
@@ -9,10 +8,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
 from typing import NamedTuple, Protocol
 
+from fastapi import APIRouter
 from starlette.datastructures import QueryParams
 
-# The server's HTTP API, and the route a session opens on under it: in the URL on the websocket wire,
-# in the session metadata on the gRPC wire.
+# The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
 
@@ -82,7 +81,7 @@ class Scheme(NamedTuple):
 
 
 class ClientWire(Protocol):
-    """The client side of one wire. Each wire module is one."""
+    """The client side of one wire: the schemes that select it, how it spells a session, and how it dials one."""
 
     def schemes(self) -> tuple['Scheme', ...]:
         """The URL schemes that select this wire."""
@@ -176,8 +175,11 @@ class Wire(abc.ABC):
         """Where this wire serves. The port is known once ``start`` returns."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
-        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
+    async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
+        """Bind, and give every accepted session to ``session``. Raises when the port is not free.
+
+        ``api`` is the server's HTTP routes. A wire that carries HTTP answers them on its port.
+        """
 
     @abc.abstractmethod
     async def serve(self) -> None:

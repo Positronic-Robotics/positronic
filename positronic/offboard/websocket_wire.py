@@ -15,25 +15,6 @@ from websockets.sync.connection import Connection
 from . import wire
 
 
-def schemes() -> tuple[wire.Scheme, ...]:
-    # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
-    return (
-        wire.Scheme('', secure=False),
-        wire.Scheme('http', secure=False),
-        wire.Scheme('ws', secure=False),
-        wire.Scheme('https', secure=True),
-        wire.Scheme('wss', secure=True),
-    )
-
-
-def session_url(address: wire.SessionAddress) -> str:
-    return address.url('wss' if address.secure else 'ws')
-
-
-def api_url(address: wire.SessionAddress) -> str:
-    return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
-
-
 class WebsocketClientConnection:
     """A client's end of one websocket session."""
 
@@ -70,29 +51,48 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
-def dial(
-    address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
-) -> WebsocketClientConnection:
-    """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the upgrade does not open."""
-    try:
-        # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
-        # nothing until it answers. The pings keep it open.
-        websocket = connect(
-            session_url(address),
-            open_timeout=open_timeout,
-            additional_headers=headers,
-            ping_interval=20.0,
-            max_size=wire.MAX_MESSAGE_BYTES,
+class WebsocketClientWire:
+    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
+
+    def schemes(self) -> tuple[wire.Scheme, ...]:
+        # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
+        return (
+            wire.Scheme('', secure=False),
+            wire.Scheme('http', secure=False),
+            wire.Scheme('ws', secure=False),
+            wire.Scheme('https', secure=True),
+            wire.Scheme('wss', secure=True),
         )
-    except InvalidStatus as e:
-        raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
-    except ssl.SSLCertVerificationError as e:
-        raise wire.ConnectRefused(wire.Refusal.FINAL, str(e)) from e
-    # A timed-out connect, a reset TLS handshake, a refused upgrade, a dropped handshake: a backend that is
-    # not ready.
-    except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
-        raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
-    return WebsocketClientConnection(websocket)
+
+    def session_url(self, address: wire.SessionAddress) -> str:
+        return address.url('wss' if address.secure else 'ws')
+
+    def api_url(self, address: wire.SessionAddress) -> str:
+        return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
+
+    def dial(
+        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> WebsocketClientConnection:
+        """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
+        try:
+            # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
+            # nothing until it answers. The pings keep it open.
+            websocket = connect(
+                self.session_url(address),
+                open_timeout=open_timeout,
+                additional_headers=headers,
+                ping_interval=20.0,
+                max_size=wire.MAX_MESSAGE_BYTES,
+            )
+        except InvalidStatus as e:
+            raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
+        except ssl.SSLCertVerificationError as e:
+            raise wire.ConnectRefused(wire.Refusal.FINAL, str(e)) from e
+        # A timed-out connect, a reset TLS handshake, a refused upgrade, a dropped handshake: a backend that is
+        # not ready.
+        except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
+            raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
+        return WebsocketClientConnection(websocket)
 
 
 class WebsocketServerConnection(wire.ServerConnection):
@@ -142,16 +142,15 @@ def _listening_socket(host: str, port: int) -> socket.socket:
 
 
 class WebsocketWire(wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the server's API answers on its port."""
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter):
+    def __init__(self, host: str, port: int):
         self._host = host
         self._port = port
-        self._api = api
         self._socket: socket.socket | None = None
         self._server: uvicorn.Server | None = None
         self._endpoint: wire.Endpoint | None = None
@@ -162,11 +161,11 @@ class WebsocketWire(wire.Wire):
         assert self._endpoint is not None, 'The websocket wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
         self._socket = _listening_socket(self._host, self._port)
         self._endpoint = wire.Endpoint(self._host, self._socket.getsockname()[1])
         app = FastAPI()
-        app.include_router(self._api)
+        app.include_router(api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,

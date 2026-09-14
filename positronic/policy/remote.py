@@ -26,7 +26,7 @@ INFER = 'infer'
 def _prepare_value(value: Any) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-        # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
+        # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value)
     if isinstance(value, cabc.Mapping):
         return {k: _prepare_value(v) for k, v in value.items()}
@@ -122,7 +122,7 @@ class _Endpoint(Policy):
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
-        self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
+        self._client = InferenceClient.from_url(url, headers=headers, infer_timeout=infer_timeout)
         # Filled on first contact, through a session opened for it alone.
         self._server_meta: dict[str, Any] | None = None
 

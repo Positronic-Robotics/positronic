@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Mapping
 
 import grpc
 import grpc.aio
+from fastapi import APIRouter
 from starlette.datastructures import QueryParams
 
 from . import wire
@@ -19,25 +20,12 @@ from . import wire
 logger = logging.getLogger(__name__)
 
 
-def schemes() -> tuple[wire.Scheme, ...]:
-    return (wire.Scheme('grpc', secure=False), wire.Scheme('grpcs', secure=True))
-
-
-def session_url(address: wire.SessionAddress) -> str:
-    return address.url('grpcs' if address.secure else 'grpc')
-
-
-def api_url(address: wire.SessionAddress) -> str | None:
-    """None: this wire's port carries sessions alone, and the HTTP API answers on the server's own."""
-    return None
-
-
 # The one method every session runs on. gRPC routes by this path alone.
 SERVICE = 'positronic.offboard.v1.Inference'
 METHOD = 'Session'
 METHOD_PATH = f'/{SERVICE}/{METHOD}'
 
-# The session path and the query cross as metadata; the websocket wire carries them in the URL.
+# The session path and the query cross as metadata: a gRPC call carries no URL path of its own.
 SESSION_PATH_HEADER = 'positronic-session-path'
 SESSION_QUERY_HEADER = 'positronic-session-query'
 
@@ -145,23 +133,6 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
     return channel
 
 
-def dial(
-    address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
-) -> 'GrpcClientConnection':
-    """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the channel does not open.
-
-    A TLS address dials a TLS edge in front of the server's plaintext port.
-    """
-    target = f'{address.host}:{address.port}'
-    channel = _ready_channel(target, address.secure, open_timeout)
-    # gRPC metadata keys are lower case; the header names are the websocket wire's.
-    metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
-        (SESSION_PATH_HEADER, address.path),
-        (SESSION_QUERY_HEADER, address.query),
-    )
-    return GrpcClientConnection(channel, target, metadata)
-
-
 class GrpcClientConnection:
     """A client's end of one gRPC session, over a ready ``channel``.
 
@@ -219,7 +190,7 @@ class GrpcClientConnection:
             self._ended = True
             if isinstance(answer, grpc.RpcError):
                 # A status before any message crossed is the server refusing the call. A status after one is a
-                # lost peer: the websocket wire reports the same, and the connect retry reads it as cold.
+                # lost peer, which the connect retry reads as cold.
                 if not self._received:
                     raise wire.ConnectRefused(_refusal(answer), str(answer)) from answer
                 raise wire.PeerDisconnected(f'{self._target} ended the session: {answer}') from answer
@@ -243,6 +214,36 @@ class GrpcClientConnection:
             f'peer had ended the stream {self._ended}, '
             f'server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
         )
+
+
+class GrpcClientWire:
+    """The client side of the gRPC wire, whose port carries sessions alone."""
+
+    def schemes(self) -> tuple[wire.Scheme, ...]:
+        return (wire.Scheme('grpc', secure=False), wire.Scheme('grpcs', secure=True))
+
+    def session_url(self, address: wire.SessionAddress) -> str:
+        return address.url('grpcs' if address.secure else 'grpc')
+
+    def api_url(self, address: wire.SessionAddress) -> None:
+        """None: the HTTP API answers on the server's own port."""
+        return None
+
+    def dial(
+        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> GrpcClientConnection:
+        """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the channel does not open.
+
+        A TLS address dials a TLS edge in front of the server's plaintext port.
+        """
+        target = f'{address.host}:{address.port}'
+        channel = _ready_channel(target, address.secure, open_timeout)
+        # gRPC metadata keys are lower case, as ``wire.Authorized`` reads them.
+        metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
+            (SESSION_PATH_HEADER, address.path),
+            (SESSION_QUERY_HEADER, address.query),
+        )
+        return GrpcClientConnection(channel, target, metadata)
 
 
 class GrpcServerConnection(wire.ServerConnection):
@@ -337,7 +338,7 @@ class GrpcWire(wire.Wire):
         assert self._endpoint is not None, 'The gRPC wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):

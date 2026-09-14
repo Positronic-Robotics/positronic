@@ -48,7 +48,7 @@ def both_wires(start_server: StartServer, make_mock_policy) -> tuple[Served, Mag
 
 def test_a_grpc_session_handshakes_and_infers(both_wires):
     served, policy = both_wires
-    session = InferenceClient(grpc_url(served)).new_session()
+    session = InferenceClient.from_url(grpc_url(served)).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
@@ -65,8 +65,8 @@ def _apart_from_the_endpoint(meta: dict) -> dict:
 def test_both_wires_answer_one_observation_alike(both_wires):
     served, _policy = both_wires
     obs = {'image': 'test'}
-    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
-    over_grpc = InferenceClient(grpc_url(served)).new_session()
+    over_ws = InferenceClient.from_url(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient.from_url(grpc_url(served)).new_session()
     try:
         assert _apart_from_the_endpoint(over_grpc.metadata) == _apart_from_the_endpoint(over_ws.metadata)
         assert over_grpc.infer(obs) == over_ws.infer(obs)
@@ -77,8 +77,8 @@ def test_both_wires_answer_one_observation_alike(both_wires):
 
 def test_each_wire_names_its_own_port_in_the_meta(both_wires):
     served, _policy = both_wires
-    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
-    over_grpc = InferenceClient(grpc_url(served)).new_session()
+    over_ws = InferenceClient.from_url(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient.from_url(grpc_url(served)).new_session()
     try:
         assert over_ws.metadata[offboard_keys.PORT] == served.port
         assert over_grpc.metadata[offboard_keys.PORT] == served.grpc_port
@@ -90,8 +90,8 @@ def test_each_wire_names_its_own_port_in_the_meta(both_wires):
 def test_both_wires_report_what_their_close_saw(both_wires, caplog):
     """The server holds the slot of a session whose close it never saw, and the next handshake waits on it."""
     served, _policy = both_wires
-    over_ws = InferenceClient(f'{served.host}:{served.port}').new_session()
-    over_grpc = InferenceClient(grpc_url(served)).new_session()
+    over_ws = InferenceClient.from_url(f'{served.host}:{served.port}').new_session()
+    over_grpc = InferenceClient.from_url(grpc_url(served)).new_session()
 
     with caplog.at_level(logging.INFO, logger='positronic.offboard.client'):
         over_ws.close()
@@ -105,7 +105,7 @@ def test_both_wires_report_what_their_close_saw(both_wires, caplog):
 def test_closing_a_session_ends_it_on_the_server(both_wires):
     """``close`` returns after the server has released the session."""
     served, _policy = both_wires
-    session = InferenceClient(grpc_url(served)).new_session()
+    session = InferenceClient.from_url(grpc_url(served)).new_session()
     assert served.server._active_sessions == 1
     session.close()
     assert served.server._active_sessions == 0
@@ -113,7 +113,7 @@ def test_closing_a_session_ends_it_on_the_server(both_wires):
 
 def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
     served, policy = both_wires
-    session = InferenceClient(grpc_url(served)).new_session()
+    session = InferenceClient.from_url(grpc_url(served)).new_session()
     try:
         policy._mock_session.side_effect = RuntimeError('no such joint')
         with pytest.raises(RuntimeError, match='no such joint'):
@@ -127,7 +127,7 @@ def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_ser
     policies = {'alpha': make_mock_policy([{'action': [1]}], {'model_name': 'alpha'})}
     served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
     with pytest.raises(RuntimeError, match='Unknown model'):
-        InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
+        InferenceClient.from_url(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
 
 
 def test_the_session_path_names_the_model(start_server, make_mock_policy):
@@ -136,7 +136,7 @@ def test_the_session_path_names_the_model(start_server, make_mock_policy):
         'beta': make_mock_policy([{'action': ['beta']}], {'model_name': 'beta'}),
     }
     served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
-    session = InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
+    session = InferenceClient.from_url(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
     try:
         assert session.metadata['model_name'] == 'beta'
         assert session.infer({'obs': 'beta'}) == [{'action': ['beta']}]
@@ -152,7 +152,7 @@ def test_the_query_carries_the_session_params(start_server, make_mock_policy):
     policies = {'alpha': make_mock_policy([{'action': ['alpha']}], {'model_name': 'alpha'})}
     pipe = cfn.Config(_tunable_pipe, source=cfn.Config(DictSource, policies=policies))
     served = start_server(pipe, grpc=True)
-    session = InferenceClient(grpc_url(served, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
+    session = InferenceClient.from_url(grpc_url(served, f'{wire.SESSION_PATH}?offsets=[-0.5, 0.0]')).new_session()
     try:
         stack = session.metadata[offboard_keys.LOCAL_STACK][SEQ]
         assert stack[0]['args']['offsets_sec'] == [-0.5, 0.0]
@@ -168,7 +168,7 @@ def authed_server(start_server: StartServer, make_mock_policy) -> Served:
 
 
 def test_the_grpc_wire_gates_on_the_bearer_token(authed_server):
-    session = InferenceClient(grpc_url(authed_server), headers={AUTH_HEADER: bearer(_TOKEN)}).new_session()
+    session = InferenceClient.from_url(grpc_url(authed_server), headers={AUTH_HEADER: bearer(_TOKEN)}).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
     finally:
@@ -182,7 +182,7 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     headers = None if header is None else {AUTH_HEADER: header}
     with pytest.raises(wire.ConnectRefused) as refused:
-        InferenceClient(grpc_url(authed_server), headers=headers).new_session()
+        InferenceClient.from_url(grpc_url(authed_server), headers=headers).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
@@ -290,7 +290,7 @@ def edged(tls_edge, monkeypatch) -> Callable[[Served], str]:
 
 def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
     served, policy = both_wires
-    session = InferenceClient(edged(served)).new_session()
+    session = InferenceClient.from_url(edged(served)).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
@@ -301,7 +301,7 @@ def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
 
 
 def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
-    session = InferenceClient(edged(authed_server), headers={AUTH_HEADER: bearer(_TOKEN)}).new_session()
+    session = InferenceClient.from_url(edged(authed_server), headers={AUTH_HEADER: bearer(_TOKEN)}).new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
     finally:
@@ -311,7 +311,7 @@ def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
 def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, monkeypatch):
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     with pytest.raises(wire.ConnectRefused) as refused:
-        InferenceClient(edged(authed_server)).new_session()
+        InferenceClient.from_url(edged(authed_server)).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
@@ -352,14 +352,14 @@ def test_a_status_that_refuses_the_call_reads_as_its_http_status_does(code, deta
 
 def test_an_unknown_scheme_is_refused():
     with pytest.raises(ValueError, match='Unsupported scheme'):
-        InferenceClient('tcp://gpu-host:9000')
+        InferenceClient.from_url('tcp://gpu-host:9000')
 
 
 @pytest.mark.parametrize('url', ['grpc://gpu-host:9000', 'grpcs://gpu-host:9000'])
 def test_a_grpc_url_names_the_session_port_alone(url):
-    client = InferenceClient(url)
+    client = InferenceClient.from_url(url)
     assert client.session_url == f'{url}/api/v1/session'
-    with pytest.raises(ValueError, match='gRPC session port'):
+    with pytest.raises(ValueError, match='carries sessions alone'):
         client.list_models()
 
 
@@ -372,7 +372,7 @@ def test_a_grpc_url_names_the_session_port_alone(url):
     ],
 )
 def test_the_scheme_fixes_the_port_and_the_tls(url, target, secure):
-    client = InferenceClient(url)
+    client = InferenceClient.from_url(url)
     assert (f'{client._address.host}:{client._address.port}', client._address.secure) == (target, secure)
 
 
@@ -396,7 +396,7 @@ def test_a_path_outside_the_session_route_is_refused():
 
 def test_a_port_that_never_answers_is_named_at_the_deadline():
     """Nothing listens on port 1; the channel never becomes ready."""
-    client = InferenceClient('grpc://localhost:1', open_timeout=0.2, connect_deadline=0.0)
+    client = InferenceClient.from_url('grpc://localhost:1', open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='grpc://localhost:1'):
         client.new_session()
 
@@ -404,7 +404,7 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
 def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
     served, _policy = both_wires
     budget = grpc_wire._REFUSAL_PROBE_SEC / 2
-    session = InferenceClient(grpc_url(served), open_timeout=budget, connect_deadline=0.0).new_session()
+    session = InferenceClient.from_url(grpc_url(served), open_timeout=budget, connect_deadline=0.0).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [1, 2, 3]}]
     finally:
@@ -418,7 +418,7 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_pol
 
     policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
-    session = InferenceClient(f'grpc://[{served.host}]:{served.grpc_port}').new_session()
+    session = InferenceClient.from_url(f'grpc://[{served.host}]:{served.grpc_port}').new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
     finally:
@@ -428,7 +428,7 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_pol
 def test_a_refused_handshake_closes_the_connection(both_wires):
     """A refusal in a protocol frame raises past the transport handlers, and the connection holds a reader
     thread until it is closed."""
-    client = InferenceClient(grpc_url(both_wires[0], f'{wire.SESSION_PATH}/unknown-model'))
+    client = InferenceClient.from_url(grpc_url(both_wires[0], f'{wire.SESSION_PATH}/unknown-model'))
     opened = []
     connect = client._connect
 
@@ -454,7 +454,7 @@ def chatty_client(monkeypatch) -> None:
 
 
 def _silent_then_infer(served: Served) -> list[dict]:
-    session = InferenceClient(grpc_url(served)).new_session()
+    session = InferenceClient.from_url(grpc_url(served)).new_session()
     try:
         time.sleep(_SILENCE_SEC)
         return session.infer({'image': 'test'})
@@ -480,7 +480,7 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
 
 def _surfaces_at_once(url: str, blamed: str) -> None:
     """Assert that a connect to ``url`` fails, names ``blamed``, and spends no retry deadline."""
-    client = InferenceClient(url, open_timeout=2.0, connect_deadline=20.0)
+    client = InferenceClient.from_url(url, open_timeout=2.0, connect_deadline=20.0)
     started = time.monotonic()
     with pytest.raises(wire.ConnectRefused, match=blamed) as refused:
         client.new_session()
@@ -506,7 +506,7 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     """The timeout closes the connection, and the server may answer inside the close's own wait."""
     served, policy = both_wires
     policy._mock_session.side_effect = lambda *_: time.sleep(1.0) or [{'action': [1, 2, 3]}]
-    session = InferenceClient(grpc_url(served), infer_timeout=0.2).new_session()
+    session = InferenceClient.from_url(grpc_url(served), infer_timeout=0.2).new_session()
     with pytest.raises(TimeoutError):
         session.infer({'image': 'test'})
     # The late answer is the first observation's actions.
@@ -518,7 +518,7 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
     """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires
     address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
-    conn = grpc_wire.dial(address, None, 10.0)
+    conn = grpc_wire.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.
@@ -533,7 +533,7 @@ def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires
     address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
-    conn = grpc_wire.dial(address, None, 10.0)
+    conn = grpc_wire.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):

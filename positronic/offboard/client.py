@@ -2,11 +2,11 @@ import logging
 import time
 import urllib.parse
 from enum import Enum
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
-from . import grpc_wire, protocol, websocket_wire, wire
+from . import protocol, wire, wires
 from .protocol import deserialise, serialise, typed_commands
 from .wire import ClientWire
 
@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
+# One TCP/TLS handshake, and the retries until a cold backend answers.
+DEFAULT_OPEN_TIMEOUT = 10.0
+DEFAULT_CONNECT_DEADLINE = 900.0
 
 
 class InferenceSession:
@@ -118,13 +121,6 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-def _schemes_of(client_wire: ClientWire) -> dict[str, tuple[ClientWire, wire.Scheme]]:
-    return {scheme.text: (client_wire, scheme) for scheme in client_wire.schemes()}
-
-
-_SCHEMES = _schemes_of(websocket_wire) | _schemes_of(grpc_wire)
-
-
 def _session_path(path: str, url: str) -> str:
     """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
 
@@ -140,53 +136,82 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+def _wire_and_address(url: str) -> tuple[ClientWire, wire.SessionAddress]:
+    """The wire ``url`` selects, and the session it addresses on that wire."""
+    split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
+    selected = wires.BY_SCHEME.get(split.scheme)
+    if selected is None:
+        raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+    if not split.hostname:
+        raise ValueError(f'No host in {url!r}')
+    client_wire, scheme = selected
+    address = wire.SessionAddress(
+        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+        host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
+        port=wire.default_port(scheme.secure) if split.port is None else split.port,
+        path=_session_path(split.path, url),
+        # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
+        # wrote the URL knows whether `true` means the bool or the string.
+        query=split.query,
+        secure=scheme.secure,
+    )
+    return client_wire, address
+
+
 class InferenceClient:
-    """The wire connection to one inference server, addressed by one URL.
+    """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
-    The URL is ``host``, ``host:port`` or ``scheme://host[:port][/api/v1/session[/<model_id>]]``, each with
-    an optional ``?query``. ``https``/``wss``/``grpcs`` enable TLS; the other schemes do not. The port
-    defaults to 443 with TLS and to 80 without. The model id and the query reach the server as written,
-    and every session opened here carries them. ``grpc://`` opens the session on the server's gRPC port;
-    ``grpcs://`` reaches that port through a TLS edge. That port carries sessions alone: ``list_models``
-    needs the HTTP URL.
-
-    ``headers`` carry the credentials; the URL carries none. ``open_timeout`` bounds one TCP/TLS handshake,
-    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
-    round trip.
+    ``from_url`` reads the wire and the address off one URL. ``headers`` carry the credentials; the address
+    carries none. ``open_timeout`` bounds one TCP/TLS handshake, ``connect_deadline`` the retries until a
+    cold backend answers, and ``infer_timeout`` one inference round trip.
     """
 
     def __init__(
         self,
-        url: str,
+        client_wire: ClientWire,
+        address: wire.SessionAddress,
         *,
         headers: dict[str, str] | None = None,
-        open_timeout: float = 10.0,
-        connect_deadline: float = 900.0,
+        open_timeout: float = DEFAULT_OPEN_TIMEOUT,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        selected = _SCHEMES.get(split.scheme)
-        if selected is None:
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
-        self._wire, scheme = selected
-        self._address = wire.SessionAddress(
-            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-            host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
-            port=wire.default_port(scheme.secure) if split.port is None else split.port,
-            path=_session_path(split.path, url),
-            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
-            # wrote the URL knows whether `true` means the bool or the string.
-            query=split.query,
-            secure=scheme.secure,
-        )
-        self.session_url = self._wire.session_url(self._address)
-        self.api_url = self._wire.api_url(self._address)
+        self._wire = client_wire
+        self._address = address
+        self.session_url = client_wire.session_url(address)
+        self.api_url = client_wire.api_url(address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        open_timeout: float = DEFAULT_OPEN_TIMEOUT,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+    ) -> Self:
+        """The client one URL names.
+
+        The URL is ``host``, ``host:port`` or ``scheme://host[:port][/api/v1/session[/<model_id>]]``, each
+        with an optional ``?query``. The scheme selects the wire and whether the session runs over TLS
+        (``wires.BY_SCHEME`` lists them); a URL with no scheme takes the wire that lists the empty scheme,
+        without TLS. The port defaults to 443 with TLS and to 80 without. The model id and the query reach
+        the server as written, and every session opened here carries them.
+        """
+        client_wire, address = _wire_and_address(url)
+        return cls(
+            client_wire,
+            address,
+            headers=headers,
+            open_timeout=open_timeout,
+            connect_deadline=connect_deadline,
+            infer_timeout=infer_timeout,
+        )
 
     def _connect(self) -> wire.ClientConnection:
         """One session's connection, over the wire the URL names."""
@@ -196,7 +221,7 @@ class InferenceClient:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
         A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
-        transport handler, and a gRPC connection holds a reader thread until it is closed.
+        transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._connect()
         try:
@@ -234,7 +259,7 @@ class InferenceClient:
     def list_models(self) -> list[str]:
         """List available models from the server."""
         if self.api_url is None:
-            raise ValueError(f'{self.session_url} names the gRPC session port; list the models over HTTP')
+            raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
         response = httpx.get(f'{self.api_url}/models', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']

@@ -52,7 +52,7 @@ refuses a `grpc://` URL.
 `PERMISSION_DENIED` on the gRPC wire. `serve` — the entry point every vendor CLI exposes — takes that
 token from the `AUTH_TOKEN` environment variable, so
 a secret never lands in the process arguments. No token serves open, which is the usual shape on a
-trusted LAN; an empty one is a broken secret and refuses to start. `InferenceClient(headers=...)`
+trusted LAN; an empty one is a broken secret and refuses to start. `InferenceClient.from_url(headers=...)`
 carries the header, and `positronic.cfg.policy.authed_remote` fills it in from the same variable.
 
 ### Endpoints
@@ -262,14 +262,14 @@ from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 server = PolicyServer(pipeline)
-server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
+server.serve([WebsocketWire('0.0.0.0', 8000)])
 ```
 
 `serve` takes the wires that sessions arrive on. Each wire binds its own port, reads its own route for
 the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)`
-to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model catalogue,
-and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
-names it in `wire.endpoint`.
+to the list to serve gRPC beside the WebSocket. The server hands every wire its API router when the
+wire starts; a wire that carries HTTP answers the model catalogue on the port it carries sessions on. A
+wire asked for port 0 binds any free one and names it in `wire.endpoint`.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
@@ -277,20 +277,21 @@ names it in `wire.endpoint`.
 The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
 
 ### `client.InferenceClient`
-A Python client for connecting to an inference server. One URL addresses it, in the same forms
+A Python client for connecting to an inference server. `from_url` reads it off one URL, in the same forms
 `RemotePolicy` accepts: an omitted port is the scheme's own, 443 for a TLS scheme and 80 otherwise. The URL
-fixes the wire, the model and the session params, so serving another model means another client.
+fixes the wire, the model and the session params, so serving another model means another client. The
+constructor takes the wire and the session address as values; `wires.CLIENT_WIRES` lists every wire.
 
 ```python
 from positronic.offboard.client import InferenceClient
 
 # The server's pinned checkpoint, with no session params
-client = InferenceClient('localhost:8000')
+client = InferenceClient.from_url('localhost:8000')
 # A named model, tuned for every session this client opens
-# client = InferenceClient('localhost:8000/api/v1/session/model_a?codec.fps=10')
+# client = InferenceClient.from_url('localhost:8000/api/v1/session/model_a?codec.fps=10')
 # The same session on the gRPC wire, on a LAN and behind a TLS edge
-# client = InferenceClient('grpc://localhost:9000/api/v1/session/model_a')
-# client = InferenceClient('grpcs://gpu-host:443/api/v1/session/model_a')
+# client = InferenceClient.from_url('grpc://localhost:9000/api/v1/session/model_a')
+# client = InferenceClient.from_url('grpcs://gpu-host:443/api/v1/session/model_a')
 
 session = client.new_session()
 meta = session.metadata

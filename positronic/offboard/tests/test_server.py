@@ -13,6 +13,7 @@ from unittest.mock import ANY, MagicMock, patch
 import configuronic as cfn
 import httpx
 import pytest
+from fastapi import APIRouter
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
@@ -69,7 +70,7 @@ class _FailingWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         return wire.Endpoint('localhost', 0)
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
         pass
 
     async def serve(self) -> None:
@@ -87,7 +88,7 @@ class _UnbindableWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         raise AssertionError('it never bound')
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized, api: APIRouter) -> None:
         raise OSError('that port is taken')
 
     async def serve(self) -> None:
@@ -116,7 +117,7 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
+    bound = websocket_wire.WebsocketWire('localhost', 0)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener holds the port, and a fresh bind to it raises.
@@ -137,7 +138,7 @@ def test_an_idle_server_stops_itself(make_mock_policy):
     server = PolicyServer(
         ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
     )
-    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
+    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0)],))
     serving.start()
     serving.join(timeout=_A_MOMENT_IDLE * 20)
     assert not serving.is_alive(), 'the idle watchdog left the server running'
@@ -152,7 +153,7 @@ def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer,
 
 def test_full_inference_cycle(stub_server):
     host, port, _server, policy = stub_server
-    client = InferenceClient(f'{host}:{port}')
+    client = InferenceClient.from_url(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
@@ -170,7 +171,7 @@ def test_full_inference_cycle(stub_server):
 
 def test_no_codec(stub_server):
     host, port, _server, _policy = stub_server
-    client = InferenceClient(f'{host}:{port}')
+    client = InferenceClient.from_url(f'{host}:{port}')
     session = client.new_session()
     try:
         result = session.infer({'obs': 'data'})
@@ -195,7 +196,7 @@ def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     # ``safe='/'`` keeps a path-shaped id's separators as path segments, and encodes the characters that
     # would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
     quoted = urllib.parse.quote(checkpoint_id, safe='/')
-    client = InferenceClient(f'{host}:{port}/api/v1/session/{quoted}')
+    client = InferenceClient.from_url(f'{host}:{port}/api/v1/session/{quoted}')
     session = client.new_session()
     try:
         assert session.metadata['checkpoint_id'] == checkpoint_id
@@ -226,7 +227,7 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy
     host, port, *_ = start_server(ChunkedSchedule() | remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
-    client = InferenceClient(f'{host}:{port}')
+    client = InferenceClient.from_url(f'{host}:{port}')
     # ...but a default session still serves the checkpoint pinned at startup.
     session = client.new_session()
     try:
@@ -234,7 +235,7 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy
     finally:
         session.close()
     # Explicit requests still load the named checkpoint.
-    session = InferenceClient(f'{host}:{port}/api/v1/session/200').new_session()
+    session = InferenceClient.from_url(f'{host}:{port}/api/v1/session/200').new_session()
     try:
         assert session.metadata['checkpoint_id'] == '200'
     finally:
@@ -287,7 +288,7 @@ def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
 
 def test_codec_wrapping(codec_server):
     host, port, _policy = codec_server
-    client = InferenceClient(f'{host}:{port}')
+    client = InferenceClient.from_url(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['codec'] == 'identity'
@@ -321,7 +322,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
     host, port, *_ = start_server(pipeline)
-    client = InferenceClient(f'{host}:{port}')
+    client = InferenceClient.from_url(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
@@ -548,7 +549,7 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     url, token = authed_endpoint
     header = make_header(token)
-    client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})
+    client = InferenceClient.from_url(url, headers=None if header is None else {AUTH_HEADER: header})
     with pytest.raises(wire.ConnectRefused) as refused:
         client.new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
@@ -573,7 +574,8 @@ def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal
         patch('positronic.offboard.websocket_wire.connect', side_effect=refused_upgrade),
         pytest.raises(wire.ConnectRefused) as refused,
     ):
-        websocket_wire.dial(wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False), None, 1.0)
+        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+        websocket_wire.WebsocketClientWire().dial(address, None, 1.0)
     assert refused.value.refusal is refusal
     assert refused.value.__cause__ is refused_upgrade
 
@@ -581,7 +583,7 @@ def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal
 @pytest.mark.endpoint
 def test_auth_accepts_the_token(authed_endpoint):
     url, token = authed_endpoint
-    client = InferenceClient(url, headers={AUTH_HEADER: bearer(token)})
+    client = InferenceClient.from_url(url, headers={AUTH_HEADER: bearer(token)})
     assert client.list_models()
     session = client.new_session()
     try:
@@ -602,7 +604,7 @@ _IDLE_WINDOW_SEC = 120.0
 @pytest.mark.skipif(not _LIVE_ENDPOINT, reason=f'no ingress to idle against; set {ENDPOINT_URL_ENV}')
 def test_session_outlives_an_idle_ingress_window(authed_endpoint):
     url, token = authed_endpoint
-    session = InferenceClient(url, headers={AUTH_HEADER: bearer(token)}).new_session()
+    session = InferenceClient.from_url(url, headers={AUTH_HEADER: bearer(token)}).new_session()
     try:
         time.sleep(_IDLE_WINDOW_SEC)
         conn = session._conn
@@ -614,7 +616,7 @@ def test_session_outlives_an_idle_ingress_window(authed_endpoint):
 
 def test_server_without_a_token_serves_open(stub_server):
     host, port, _server, _policy = stub_server
-    assert InferenceClient(f'{host}:{port}').list_models() == ['stub']
+    assert InferenceClient.from_url(f'{host}:{port}').list_models() == ['stub']
 
 
 @pytest.mark.parametrize(

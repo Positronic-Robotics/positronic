@@ -102,7 +102,7 @@ def main(
     policy_ref = '.authed_remote' if token else '.remote'
 
     print(f'Connecting to {url}...')
-    client = InferenceClient(url, headers=bearer_headers.instantiate() if token else None)
+    client = InferenceClient.from_url(url, headers=bearer_headers.instantiate() if token else None)
     try:
         models = client.list_models()
     except Exception as e:
