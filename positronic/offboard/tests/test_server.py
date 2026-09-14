@@ -300,6 +300,35 @@ def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_
     assert protocol.TIMING_MODEL not in stopped
 
 
+class _FailingCodec(Codec):
+    """A codec that fails on the model's answer, so the failure lands after the model has run."""
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data):
+        raise RuntimeError('decode failed')
+
+
+def test_an_inference_that_raises_leaves_no_model_time_behind(start_server, make_mock_policy):
+    """A call that fails after the model ran leaves no figure for a later call to report as its own."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    stack = ChunkedSchedule() | remote | StopOnFault() | _FailingCodec()
+    host, port, _server = start_server(stack | _StubSource(policy))
+
+    session = InferenceClient(f'{host}:{port}').new_session()
+    try:
+        with pytest.raises(RuntimeError, match='decode failed'):
+            session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.AVAILABLE)})
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.ERROR)})
+        stopped = session.served_timing
+    finally:
+        session.close()
+
+    assert protocol.TIMING_MODEL not in stopped
+
+
 def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {})
     obs = {'obs': 'zeros'}

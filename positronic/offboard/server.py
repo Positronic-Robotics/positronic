@@ -207,10 +207,9 @@ class _ServedTiming:
         finally:
             self.record(name, (time.perf_counter() - started) * 1000.0)
 
-    def record(self, name: str, ms: float | None) -> None:
-        """Take one phase from whoever timed it. ``None`` is a phase nobody timed, and the report omits it."""
-        if ms is not None:
-            self._phases[name] = ms
+    def record(self, name: str, ms: float) -> None:
+        """Take one phase from whoever timed it."""
+        self._phases[name] = ms
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
@@ -218,19 +217,21 @@ class _ServedTiming:
 
 
 class _TimeTheModel(Layer):
-    """Time the model's own call and hold what it took, until the caller takes it.
+    """Time the model's own call and record it on the report of the call that asked for it.
 
     It goes innermost, so the figure holds the model alone and the codecs and layers around it fall
     outside. A model that reaches its weights over a further hop spends that hop inside it.
+
+    It keeps no figure of its own. A served call that never reaches the model writes nothing, and one
+    that raises writes onto its own report, which goes with it, so no later call can read either.
     """
 
     def __init__(self) -> None:
-        self._ms: float | None = None
+        self._report: _ServedTiming | None = None
 
-    def take(self) -> float | None:
-        """What the model's call took, and ``None`` where no call landed since the last take."""
-        ms, self._ms = self._ms, None
-        return ms
+    def reports_to(self, timing: _ServedTiming) -> None:
+        """Take the report of the call about to be served. Before the first, the model reports nowhere."""
+        self._report = timing
 
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, timed: '_TimeTheModel') -> None:
@@ -242,7 +243,8 @@ class _TimeTheModel(Layer):
             try:
                 return self._inner(obs, time_ns)
             finally:
-                self._timed._ms = (time.perf_counter() - started) * 1000.0
+                if (report := self._timed._report) is not None:
+                    report.record(protocol.TIMING_MODEL, (time.perf_counter() - started) * 1000.0)
 
     def make_session(self, inner: Session) -> Session:
         return _TimeTheModel._Session(inner, self)
@@ -423,6 +425,7 @@ class PolicyServer:
                     self._last_activity = time.monotonic()
                     try:
                         timing = _ServedTiming()
+                        time_the_model.reports_to(timing)
                         with timing.phase(protocol.TIMING_DECODE):
                             raw_obs = deserialise(message)
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
@@ -435,7 +438,6 @@ class PolicyServer:
                                 actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         finally:
                             self._infer_lock.release()
-                        timing.record(protocol.TIMING_MODEL, time_the_model.take())
                         answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:
