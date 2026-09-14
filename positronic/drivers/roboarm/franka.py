@@ -15,7 +15,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -102,6 +102,9 @@ def _revolute_joint_names(urdf_xml):
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
+
+# Recovery this long into an unclearing error answers a waiting caller instead of holding it.
+_RECOVERY_GRACE_S = 2.0
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
@@ -235,6 +238,10 @@ class _Arm(DriverRun[command.CommandType]):
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
+        # A sync move that arrived while the arm errors, held until the error clears or the grace runs out.
+        self._deferred: pimm.calls.Call[command.CommandType, None] | None = None
+        self._error_started = 0.0
+        self._q_at_error = np.zeros(len(_PARK_JOINTS))
 
     def __enter__(self) -> '_Arm':
         return self
@@ -250,6 +257,61 @@ class _Arm(DriverRun[command.CommandType]):
         faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
+
+    @property
+    def awaiting_recovery(self) -> bool:
+        """A sync move waits on the arm to come out of an error."""
+        return self._deferred is not None
+
+    def note_error_entered(self, st: pf.State) -> None:
+        """Mark where and when the arm entered its current error, for the recovery that follows."""
+        self._error_started, self._q_at_error = self.clock.now(), st.q
+
+    def recover_and_serve(
+        self, st: pf.State, in_error: bool, entered: bool, brakes: '_Brakes'
+    ) -> Generator[pimm.Command, None, bool]:
+        """Drive one recovery tick, and return whether it handled the tick.
+
+        While the arm errors it recovers, drains a jog it cannot move on, and holds one waiting sync move.
+        It answers the held move with ``MoveRefused`` once the error outlasts ``_RECOVERY_GRACE_S``, and
+        serves it once the error clears.
+        """
+        if in_error:
+            cleared = self.robot.recover_from_errors()
+            if entered:
+                logger.info(f'Recovering the arm; recover_from_errors returned {cleared}')
+            self.moves.drain_async()
+            if self._deferred is None:
+                asked = self.moves.next_request()
+                self._deferred = asked if isinstance(asked, pimm.calls.Call) else None
+            if not cleared:
+                self._refuse_if_stuck(st)
+                return True
+            logger.info(f'The arm error cleared after {self.clock.now() - self._error_started:.1f}s')
+        if self._deferred is not None:
+            held, self._deferred = self._deferred, None
+            with brakes.opened():
+                yield from self.sync_move(held)
+            return True
+        return False
+
+    def _refuse_if_stuck(self, st: pf.State) -> None:
+        """Answer a held move with ``MoveRefused`` once recovery has run past the grace without clearing."""
+        if self._deferred is None or self.clock.now() - self._error_started < _RECOVERY_GRACE_S:
+            return
+        moved = float(np.max(np.abs(st.q - self._q_at_error)))
+        logger.warning(
+            f'The arm error persists after {_RECOVERY_GRACE_S}s; refusing the waiting move: '
+            f'{st.error_message}, moved {moved:.3f} rad'
+        )
+        self._deferred.set_exception(MoveRefused(st.error_message, moved))
+        self._deferred = None
+
+    def abandon_deferred(self) -> None:
+        """Answer a held move the world stopped before it could be served."""
+        if self._deferred is not None:
+            self._deferred.set_exception(MoveAbandoned())
+            self._deferred = None
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -632,9 +694,11 @@ class Robot(pimm.ControlSystem):
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
                     logger.warning(f'Robot error: {st.error_message}')
+                    arm.note_error_entered(st)
 
-                if in_error:
-                    robot.recover_from_errors()
+                if (in_error or arm.awaiting_recovery) and (
+                    yield from arm.recover_and_serve(st, in_error, entered_error, brakes)
+                ):
                     yield arm.limiter.wait()
                     continue
 
@@ -649,6 +713,8 @@ class Robot(pimm.ControlSystem):
                     brakes.close_if_idle(goal)
 
                 yield arm.limiter.wait()
+
+            arm.abandon_deferred()  # the world stopped with a move still held
 
             with brakes.opened():
                 yield from arm.park(at_teardown=True)

@@ -32,6 +32,23 @@ class MoveAbandoned(RuntimeError):
         super().__init__(message)
 
 
+class MoveRefused(RuntimeError):
+    """A move the arm would not take: it holds an error the driver could not clear in time.
+
+    ``reasons`` is the arm's own error message. ``moved_rad`` is the largest joint motion the arm made
+    while the driver tried to recover; a caller reads it to judge whether the path is blocked.
+    """
+
+    def __init__(self, reasons: str, moved_rad: float):
+        self.reasons = reasons
+        self.moved_rad = moved_rad
+        super().__init__(f'the arm refused the move: {reasons}; moved {moved_rad:.3f} rad while recovering')
+
+    # An exception crosses the process boundary rebuilt from this call, so both fields survive it.
+    def __reduce__(self):
+        return (MoveRefused, (self.reasons, self.moved_rad))
+
+
 class Moves(Generic[T]):
     """Both ways a device is asked to move, and the move it has in flight.
 
@@ -90,6 +107,10 @@ class Moves(Generic[T]):
         if (call := next(self._sync_move.incoming(), None)) is not None:
             return call
         return pimm.value_updated(self._async_move)
+
+    def drain_async(self) -> None:
+        """Discard any streamed setpoint waiting. A jog the device cannot move on is dropped, not applied later."""
+        pimm.value_updated(self._async_move)
 
     def accept(
         self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
