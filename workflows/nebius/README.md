@@ -219,8 +219,8 @@ the contact address. The server listens on port 8000 for the WebSocket wire, and
 the gRPC one, so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one, and
 `NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
 survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
-gets new ones. Supported vendors: `lerobot_0_3_3`,
-`lerobot`, `openpi`, `gr00t`.
+gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
+`molmoact2`, the set `serve.sh` accepts.
 
 Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
 below for loading it and for why the check lives in the server rather than at the Nebius ingress.
