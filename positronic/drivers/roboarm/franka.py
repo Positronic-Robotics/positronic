@@ -622,13 +622,13 @@ class Robot(pimm.ControlSystem):
 
     @staticmethod
     def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
-        """Run the arm's error recovery once, and answer every console that asked for it on this tick.
+        """Run the arm's error recovery once, and answer every caller that asked for it on this tick.
 
-        A throw reaches the consoles that asked; one nobody asked for reaches no caller, so it ends the run.
+        A throw reaches the callers that asked; one nobody asked for reaches no caller, so it ends the run.
         """
         try:
             cleared = robot.recover_from_errors()
-        # rules-allow: swallowed-error — the throw is handed to every console that asked
+        # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
             if not asked:
                 raise

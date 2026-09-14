@@ -1140,7 +1140,7 @@ def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_
     clock = MockClock()
     loop = driver.run(StopFlag(), clock)
 
-    for _ in range(3):  # init + the opening move, both of which recover on their own
+    for _ in range(3):  # init + the opening move
         next(loop)
     arm.error = 1
     arm.recover_raises = RuntimeError('libfranka: control command rejected')
