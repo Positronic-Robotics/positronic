@@ -20,7 +20,7 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import Layer
+from positronic.policy.base import DelegatingSession, Layer, Session
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
@@ -205,11 +205,41 @@ class _ServedTiming:
         try:
             yield
         finally:
-            self._phases[name] = (time.perf_counter() - started) * 1000.0
+            self.record(name, (time.perf_counter() - started) * 1000.0)
+
+    def record(self, name: str, ms: float) -> None:
+        """Take one phase from whoever timed it."""
+        self._phases[name] = ms
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
+
+
+class _TimeTheModel(Layer):
+    """Time the model's own call and hold what it took.
+
+    It goes innermost, so ``last_call_ms`` holds the model alone and the codecs and layers around it
+    fall outside. A model that reaches its weights over a further hop spends that hop inside it.
+    """
+
+    def __init__(self) -> None:
+        self.last_call_ms = 0.0
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, timed: '_TimeTheModel') -> None:
+            super().__init__(inner)
+            self._timed = timed
+
+        def __call__(self, obs, time_ns):
+            started = time.perf_counter()
+            try:
+                return self._inner(obs, time_ns)
+            finally:
+                self._timed.last_call_ms = (time.perf_counter() - started) * 1000.0
+
+    def make_session(self, inner: Session) -> Session:
+        return _TimeTheModel._Session(inner, self)
 
 
 class PolicyServer:
@@ -350,7 +380,8 @@ class PolicyServer:
             policy = await self._manager.get_policy(rid, websocket)
             # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
             # above it sees one call per answer rather than one per call the answer took.
-            answered = blocking(policy)
+            time_the_model = _TimeTheModel()
+            answered = time_the_model.wrap(blocking(policy))
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
@@ -398,6 +429,7 @@ class PolicyServer:
                                 actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         finally:
                             self._infer_lock.release()
+                        timing.record(protocol.TIMING_MODEL, time_the_model.last_call_ms)
                         answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:

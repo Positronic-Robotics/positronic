@@ -224,6 +224,63 @@ def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
         session.close()
 
 
+# What a stub spends, so a phase that holds it reads well clear of the clock's own noise.
+_SLOW_MS = 40.0
+
+
+class _SlowCodec(Codec):
+    """A codec that spends ``_SLOW_MS`` on the model's answer, which is a cost around the model."""
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data):
+        time.sleep(_SLOW_MS / 1000.0)
+        return data
+
+
+def _slow_model(*_args):
+    time.sleep(_SLOW_MS / 1000.0)
+    return [{'action': [1, 2, 3]}]
+
+
+def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_policy):
+    """``model_ms`` holds the model's own call, inside the ``infer_ms`` that brackets the pipeline."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+
+    session = InferenceClient(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+        timing = session.served_timing
+    finally:
+        session.close()
+
+    assert timing[protocol.TIMING_MODEL] >= _SLOW_MS
+    assert timing[protocol.TIMING_MODEL] <= timing[protocol.TIMING_INFER] <= timing[protocol.TIMING_SERVED]
+
+
+def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
+    """The phase holds the model alone, so a codec's cost lands in ``infer_ms`` and not in ``model_ms``.
+
+    A phase opened around the served pipeline instead of around the model passes the test above and
+    fails this one: it would charge the codec to the model.
+    """
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
+
+    session = InferenceClient(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+        timing = session.served_timing
+    finally:
+        session.close()
+
+    assert timing[protocol.TIMING_MODEL] < _SLOW_MS
+    assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _SLOW_MS
+
+
 def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {})
     obs = {'obs': 'zeros'}

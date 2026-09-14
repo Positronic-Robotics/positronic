@@ -28,13 +28,16 @@ ERROR = 'error'
 # milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
 TIMING = 'timing'
 
-# The phases ``TIMING`` reports. `SERVED` brackets the other three: it opens on the observation
+# The phases ``TIMING`` reports. `SERVED` brackets the others: it opens on the observation
 # arriving and closes before the answer is encoded.
 TIMING_SERVED = 'served_ms'
 TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
 # Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
+# Time the model itself took, inside `INFER`. `INFER` brackets the whole served pipeline, so the
+# difference between the two is what the codecs and layers around the model cost.
+TIMING_MODEL = 'model_ms'
 
 
 class ServerStatus(StrEnum):
