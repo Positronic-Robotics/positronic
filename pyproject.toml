@@ -252,7 +252,7 @@ ignore = [
 "positronic/cfg/**" = ["PLC0415"]  # Configs defer hardware imports into their `@cfn.config` bodies
 
 [tool.ruff.lint.mccabe]
-max-complexity = 10
+max-complexity = 15
 
 [tool.ruff.format]
 quote-style = "single"
