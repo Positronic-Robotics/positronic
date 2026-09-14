@@ -98,11 +98,11 @@ From Python, `PlatformClient` takes and answers the models in `platform_client.e
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
 definition.
 
-`evals.run` files the same plan for the lab rig, and has no command yet: `PlatformClient.run_eval`
-files it, `.get_plan` and `.list_plans` read it back by the `PlanId` it answers with. A plan carries
-its own status words (`PlanStatus`) and its own counts: `PlanView` holds the episodes the plan asked
-for and has landed, one `RunSummary` per launch that served it, the prefix the episodes land under,
-and the `error` a `blocked` or `errored` plan stopped on.
+`evals.run` files the same plan for the lab rig, and is reached from Python rather than a command:
+`PlatformClient.run_eval` files it, `.get_plan` and `.list_plans` read it back by the `PlanId` it
+answers with. A plan carries its own status words (`PlanStatus`) and its own counts: `PlanView`
+holds the episodes the plan asked for and has landed, one `RunSummary` per launch that served it,
+the prefix the episodes land under, and the `error` a `blocked` or `errored` plan stopped on.
 
 ## From the command line
 

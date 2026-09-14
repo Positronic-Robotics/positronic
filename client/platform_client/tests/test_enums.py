@@ -135,7 +135,7 @@ def test_the_status_sets_partition_the_decided_from_the_undecided():
 
 
 def test_the_plan_sets_name_the_statuses_they_claim():
-    # `errored` is the one status that both carries an error and ends the plan.
+    # Both sets hold `errored`: it carries an error, and it ends the plan.
     assert PLAN_ERROR_STATUSES & PLAN_TERMINAL_STATUSES == {PlanStatus.errored}
     assert PLAN_TERMINAL_STATUSES < set(PlanStatus) - {PlanStatus.INVALID}
     assert PlanStatus.received not in PLAN_TERMINAL_STATUSES | PLAN_ERROR_STATUSES
