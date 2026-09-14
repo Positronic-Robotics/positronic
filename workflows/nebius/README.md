@@ -24,19 +24,22 @@ The token's account must have access to the gated `nvidia/Cosmos-Reason2-2B` bac
   (Public datasets like `sim_stack_cubes` are read anonymously — no credentials needed for
   the read side)
 - AWS access key + secret for that bucket
+- For GR00T: export `HF_TOKEN` with a Hugging Face read token whose account has access to
+  `nvidia/Cosmos-Reason2-2B` before creating the secret below.
 - _Optional:_ a Weights & Biases API key for live training metrics. To skip wandb, omit the
   wandb secret below and run training jobs with `WANDB_SECRET= bash workflows/nebius/train.sh ...`.
 
 ## One-time setup
 
-Create up to five MysteryBox secrets that the jobs will reference by name. AWS keys are read
+Create up to six MysteryBox secrets that the jobs will reference by name. AWS keys are read
 from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three
 are single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed
 by `--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The fifth is the bearer token every served
 endpoint is gated on — `serve.sh` injects it as the container's `AUTH_TOKEN`, and the payload
-key must be `AUTH_TOKEN` too. The wandb secret is optional — skip it if you don't use
-Weights & Biases.
+key must be `AUTH_TOKEN` too. The sixth supplies the Hugging Face read token to GR00T training
+and serving through `--env-secret`, with payload key `HF_TOKEN`. Skip it if you don't use
+GR00T. The wandb secret is optional — skip it if you don't use Weights & Biases.
 
 ```bash
 PARENT_ID=project-e00f38wexevrr52b8j  # adjust to your own project
@@ -81,6 +84,14 @@ nebius mysterybox secret create \
   --description "Bearer token gating served inference endpoints" \
   --secret-version-payload "$(jq -nc \
     --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+
+nebius mysterybox secret create \
+  --parent-id "$PARENT_ID" \
+  --name "${NEBIUS_HF_TOKEN_SECRET:-huggingface-read-token}" \
+  --description "Hugging Face read token for GR00T checkpoints and gated backbone" \
+  --secret-version-payload "$(jq -nc \
+    --arg v "${HF_TOKEN:?Set HF_TOKEN to your Hugging Face read token}" \
+    '[{key:"HF_TOKEN",string_value:$v}]')"
 ```
 
 The names matter — `convert.sh`, `train.sh`, `serve.sh`, and `eval.sh` reference the secrets by
@@ -482,6 +493,7 @@ project — **external users must override them** with their own project + subne
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
 | `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` and `eval.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) injected as the container's `AUTH_TOKEN`. There is no open-endpoint mode. See [Authenticated inference](#authenticated-inference). |
+| `NEBIUS_HF_TOKEN_SECRET` | `huggingface-read-token` | GR00T training and serving only. MysteryBox secret name with payload key `HF_TOKEN`. |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |

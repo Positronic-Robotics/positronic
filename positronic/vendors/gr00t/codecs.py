@@ -1,7 +1,6 @@
 """DROID observations and joint-position actions for GR00T."""
 
 from functools import partial
-from operator import itemgetter
 
 import configuronic as cfn
 import numpy as np
@@ -12,7 +11,7 @@ from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
 from positronic.policy.codec import (
     GR00T_MODALITY,
@@ -123,7 +122,7 @@ class DroidCodec(Codec):
             meta=meta,
             **{
                 **state_encoders,
-                keys.TASK: itemgetter(keys.TASK),
+                keys.TASK: Get(keys.TASK, ''),
                 gr00t.ACTION: lambda episode: tf.concat(
                     *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
                 ),

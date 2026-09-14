@@ -49,6 +49,17 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
     np.testing.assert_allclose(training['action'][0][0], expected_action)
 
 
+@pytest.mark.parametrize('task', [None, 'Pick up the cup'])
+def test_training_episode_materializes_without_requiring_a_recorded_task(observation, task):
+    observation.pop(keys.TASK)
+    fields = {name: DummySignal([0, 1], [value, value]) for name, value in observation.items()}
+    if task is not None:
+        fields[keys.TASK] = task
+    training = droid().training_encoder(EpisodeContainer(fields))
+    frame = training.time[np.array([0], dtype=np.int64)]
+    assert frame[keys.TASK] == (task or '')
+
+
 def test_three_camera_configuration_uses_a_distinct_second_external_image(observation):
     encoded = droid_three_cameras().encode(observation)
     assert len(encoded[gr00t.VIDEO]) == 3
