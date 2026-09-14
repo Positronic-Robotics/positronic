@@ -41,13 +41,6 @@ _PING_TOLERATED_EVERY_MS = 10_000
 # How long ``close`` waits for the server to end the stream and release the session.
 _CLOSE_TIMEOUT_SEC = 5.0
 
-# A path no handler serves: a probe of it opens no session on a server that is up.
-_PROBE_PATH = f'/{SERVICE}/ChannelProbe'
-
-# The largest share of one connect attempt's budget the refusal probe may spend. Both waits fit inside
-# the caller's ``open_timeout``: a target that drops every connect answers neither.
-_REFUSAL_PROBE_SEC = 1.0
-
 # Status details that blame the TLS edge's own configuration. No client can use such an edge.
 _UNUSABLE_EDGE_DETAILS = ('CERTIFICATE_VERIFY_FAILED', 'missing selected ALPN property')
 
@@ -72,64 +65,6 @@ def _refusal(status: grpc.RpcError) -> wire.Refusal:
     if code is grpc.StatusCode.PERMISSION_DENIED:
         return wire.Refusal.FORBIDDEN
     return wire.Refusal.COLD if code in _COLD_CODES else wire.Refusal.FINAL
-
-
-def _client_options() -> list[tuple[str, int]]:
-    return [
-        *_MESSAGE_SIZE_OPTIONS,
-        ('grpc.keepalive_time_ms', _PING_EVERY_MS),
-        ('grpc.keepalive_timeout_ms', _PING_ANSWER_TIMEOUT_MS),
-        # The gRPC default sends two pings without data, five minutes apart.
-        ('grpc.http2.max_pings_without_data', 0),
-        ('grpc.http2.min_time_between_pings_ms', _PING_EVERY_MS),
-    ]
-
-
-def _channel(target: str, secure: bool) -> grpc.Channel:
-    options = _client_options()
-    if secure:
-        # No roots named: the channel verifies the edge against the system's own roots.
-        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
-    return grpc.insecure_channel(target, options=options)
-
-
-def _probe_share(open_timeout: float) -> float:
-    """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
-
-    Half at most: an ``open_timeout`` under ``_REFUSAL_PROBE_SEC`` still waits for a healthy server.
-    """
-    return min(_REFUSAL_PROBE_SEC, open_timeout / 2)
-
-
-def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
-    """What gRPC says stopped the channel. The readiness future says only that the channel is not ready."""
-    probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
-    try:
-        next(probe(iter(()), timeout=timeout))
-    except grpc.RpcError as e:
-        return e
-    except StopIteration:
-        return None
-    return None
-
-
-def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
-    """A channel to ``target`` that is ready. Raises ``wire.ConnectRefused`` when it is not within ``open_timeout``."""
-    channel = _channel(target, secure)
-    deadline = time.monotonic() + open_timeout
-    try:
-        grpc.channel_ready_future(channel).result(timeout=open_timeout - _probe_share(open_timeout))
-    except grpc.FutureTimeoutError as not_ready:
-        refusal = _connect_refusal(channel, timeout=max(0.0, deadline - time.monotonic()))
-        # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
-        if refusal is not None and refusal.code() is grpc.StatusCode.UNIMPLEMENTED:
-            return channel
-        channel.close()
-        if refusal is None:
-            message = f'gRPC channel to {target} is not ready within {open_timeout}s'
-            raise wire.ConnectRefused(wire.Refusal.COLD, message) from not_ready
-        raise wire.ConnectRefused(_refusal(refusal), str(refusal)) from refusal
-    return channel
 
 
 class GrpcClientConnection:
@@ -213,6 +148,72 @@ class GrpcClientConnection:
             f'peer had ended the stream {self._ended}, '
             f'server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
         )
+
+
+# A path no handler serves: a probe of it opens no session on a server that is up.
+_PROBE_PATH = f'/{SERVICE}/ChannelProbe'
+
+# The largest share of one connect attempt's budget the refusal probe may spend. Both waits fit inside
+# the caller's ``open_timeout``: a target that drops every connect answers neither.
+_REFUSAL_PROBE_SEC = 1.0
+
+
+def _client_options() -> list[tuple[str, int]]:
+    return [
+        *_MESSAGE_SIZE_OPTIONS,
+        ('grpc.keepalive_time_ms', _PING_EVERY_MS),
+        ('grpc.keepalive_timeout_ms', _PING_ANSWER_TIMEOUT_MS),
+        # The gRPC default sends two pings without data, five minutes apart.
+        ('grpc.http2.max_pings_without_data', 0),
+        ('grpc.http2.min_time_between_pings_ms', _PING_EVERY_MS),
+    ]
+
+
+def _channel(target: str, secure: bool) -> grpc.Channel:
+    options = _client_options()
+    if secure:
+        # No roots named: the channel verifies the edge against the system's own roots.
+        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
+    return grpc.insecure_channel(target, options=options)
+
+
+def _probe_share(open_timeout: float) -> float:
+    """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
+
+    Half at most: an ``open_timeout`` under ``_REFUSAL_PROBE_SEC`` still waits for a healthy server.
+    """
+    return min(_REFUSAL_PROBE_SEC, open_timeout / 2)
+
+
+def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
+    """What gRPC says stopped the channel. The readiness future says only that the channel is not ready."""
+    probe = channel.stream_stream(_PROBE_PATH, request_serializer=None, response_deserializer=None)
+    try:
+        next(probe(iter(()), timeout=timeout))
+    except grpc.RpcError as e:
+        return e
+    except StopIteration:
+        return None
+    return None
+
+
+def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
+    """A channel to ``target`` that is ready. Raises ``wire.ConnectRefused`` when it is not within ``open_timeout``."""
+    channel = _channel(target, secure)
+    deadline = time.monotonic() + open_timeout
+    try:
+        grpc.channel_ready_future(channel).result(timeout=open_timeout - _probe_share(open_timeout))
+    except grpc.FutureTimeoutError as not_ready:
+        refusal = _connect_refusal(channel, timeout=max(0.0, deadline - time.monotonic()))
+        # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
+        if refusal is not None and refusal.code() is grpc.StatusCode.UNIMPLEMENTED:
+            return channel
+        channel.close()
+        if refusal is None:
+            message = f'gRPC channel to {target} is not ready within {open_timeout}s'
+            raise wire.ConnectRefused(wire.Refusal.COLD, message) from not_ready
+        raise wire.ConnectRefused(_refusal(refusal), str(refusal)) from refusal
+    return channel
 
 
 class GrpcClientWire:

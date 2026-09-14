@@ -430,13 +430,20 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
     thread until it is closed."""
     client = InferenceClient.from_url(grpc_url(both_wires[0], f'{wire.SESSION_PATH}/unknown-model'))
     opened = []
-    connect = client._connect
+    client_wire = client._wire
 
-    def record():
-        opened.append(connect())
-        return opened[-1]
+    class _Recording:
+        """The client's wire, recording every connection it dials."""
 
-    client._connect = record
+        schemes = client_wire.schemes
+        session_url = client_wire.session_url
+        api_url = client_wire.api_url
+
+        def dial(self, address, headers, open_timeout):
+            opened.append(client_wire.dial(address, headers, open_timeout))
+            return opened[-1]
+
+    client._wire = _Recording()
     with pytest.raises(RuntimeError):
         client.new_session()
     assert opened, 'the session never opened a connection'

@@ -214,17 +214,13 @@ class InferenceClient:
             infer_timeout=infer_timeout,
         )
 
-    def _connect(self) -> wire.ClientConnection:
-        """One session's connection, over the wire the URL names."""
-        return self._wire.dial(self._address, self.headers, self.open_timeout)
-
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
         A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
-        conn = self._connect()
+        conn = self._wire.dial(self._address, self.headers, self.open_timeout)
         try:
             return InferenceSession(conn, infer_timeout=self.infer_timeout)
         except BaseException:
