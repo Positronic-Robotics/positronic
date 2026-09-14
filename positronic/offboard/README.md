@@ -9,7 +9,7 @@ The protocol connects any hardware to any model. All Positronic inference server
 ### Wires
 
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
-the same order; everything below holds on each.
+the same order.
 
 | Wire | URL | Port |
 |---|---|---|
