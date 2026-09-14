@@ -614,8 +614,7 @@ def test_a_limit_below_one_is_refused():
 
 
 def test_a_plan_view_carries_an_error_only_on_a_stopped_status():
-    # An error on a running plan is a gateway that reported the status and the error apart, and a
-    # reader renders a stall that is not there.
+    # A reader renders a stall that is not there when the status and the error disagree.
     stopped = PlanView(plan_id=PLAN, status=PlanStatus.errored, episodes=EpisodeCounts(), error='the policy faulted')
     assert stopped.error == 'the policy faulted'
     with pytest.raises(ValidationError):
