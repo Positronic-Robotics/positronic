@@ -77,9 +77,9 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
+        self.served_timing = {}
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        self.served_timing = {}
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}

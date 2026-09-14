@@ -204,13 +204,21 @@ def test_codec_wrapping(codec_server):
 def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
     """The timing block belongs to the answer it arrived with; a failed round trip has none."""
     host, port, _server, policy = stub_server
-    policy._mock_session.side_effect = [[{'action': [1, 2, 3]}], RuntimeError('shape mismatch')]
+    policy._mock_session.side_effect = [
+        [{'action': [1, 2, 3]}],
+        RuntimeError('shape mismatch'),
+        [{'action': [1, 2, 3]}],
+    ]
     session = InferenceClient(f'{host}:{port}').new_session()
     try:
         session.infer({'image': 'test'})
         assert protocol.TIMING_SERVED in session.served_timing
         with pytest.raises(RuntimeError, match='shape mismatch'):
             session.infer({'image': 'test'})
+        assert session.served_timing == {}
+        session.infer({'image': 'test'})
+        with pytest.raises(TypeError):
+            session.infer({'image': object()})
         assert session.served_timing == {}
     finally:
         session.close()
