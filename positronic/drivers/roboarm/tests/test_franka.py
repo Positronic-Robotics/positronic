@@ -217,6 +217,13 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
     return caller
 
 
+def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, bool]:
+    """A caller on ``driver.recover``, the same way ``_mover`` calls a move."""
+    caller = pimm.calls.ControlSystemCaller[None, bool](driver)
+    wire_call(world, caller, driver.recover)
+    return caller
+
+
 def test_park_drives_the_arm_to_the_park_pose():
     arm = FakeArm(JOGGED)
 
@@ -1080,61 +1087,56 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
 
 
-def test_a_console_recover_ask_runs_recovery_and_reports_the_result(desk):
-    """A console asks the arm to clear a latched fault, and the driver runs the recovery and reports it."""
+def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
+    """A console calls the arm to clear a latched fault: the driver runs the recovery and the answer to
+    THAT call carries what it returned."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
-    ask = ManualCommandReceiver()
-    driver.recover._bind(ask)
-    results = RecordingEmitter()
-    driver.recovery_result._bind(results)
     clock = MockClock()
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
         next(loop)
     before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
-    ask.push(True)
+    answer = _recoverer(world, driver)(None)
     next(loop)
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
-    assert results.emitted[-1][1] is True  # a clear arm reports the recovery cleared
+    assert answer.result() is True  # a clear arm came out of error
 
 
-def test_a_console_recover_ask_reports_a_fault_that_does_not_clear(desk):
-    """The recovery a console asks for reaches a fault libfranka will not clear, and the driver says so."""
+def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, world):
+    """The recovery a console calls for reaches a fault libfranka will not clear, and the answer says so."""
     arm = FakeArm(PARK)
     arm.error = 1  # a fault recover_from_errors does not clear
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
-    ask = ManualCommandReceiver()
-    driver.recover._bind(ask)
-    results = RecordingEmitter()
-    driver.recovery_result._bind(results)
     clock = MockClock()
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
         next(loop)
-    ask.push(True)
+    answer = _recoverer(world, driver)(None)
     next(loop)
 
-    assert results.emitted[-1][1] is False
+    assert answer.result() is False
 
 
-def test_the_driver_reports_no_recovery_result_without_an_ask(desk):
-    """The result is the answer to an ask, so an untouched arm reports none."""
+def test_an_arm_nobody_called_runs_no_recovery(desk, world):
+    """The boundary of the two above: the recovery is the answer to a call, so a loop nobody called
+    never runs one."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
-    driver.recover._bind(ManualCommandReceiver())
-    results = RecordingEmitter()
-    driver.recovery_result._bind(results)
+    _recoverer(world, driver)
     clock = MockClock()
     loop = driver.run(StopFlag(), clock)
 
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
     for _ in range(5):
         next(loop)
 
-    assert results.emitted == []
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
