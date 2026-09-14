@@ -499,8 +499,7 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
-        # A console calls here to clear a latched fault the automatic path never reaches: the arm can sit
-        # in libfranka mode Reflex while ``state().error`` reads 0, so nothing else fires recovery. The
+        # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0. The
         # reply is whether the arm came out of error.
         self.recover = pimm.calls.ControlSystemHandler[None, bool](self)
         self._load = load
