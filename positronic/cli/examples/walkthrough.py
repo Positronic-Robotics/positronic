@@ -73,12 +73,6 @@ def print_quota(client: PlatformClient) -> None:
         print(f'   {limit.key} ({limit.window}): {remaining:g} of {allowed:g} {limit.unit} left')
 
 
-def print_boards(boards: list[BoardSummary]) -> None:
-    """Each public board, and the eval it ranks."""
-    for board in boards:
-        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
-
-
 def print_standings(client: PlatformClient, eval_ref: EvalRef) -> None:
     """Every public board that ranks `eval_ref`, row by row."""
     boards = [board for board in client.list_boards().boards if board.eval == eval_ref]
@@ -126,6 +120,12 @@ def walkthrough(
 
     print('5. board')
     print_standings(client, eval_ref)
+
+
+def print_boards(boards: list[BoardSummary]) -> None:
+    """Each public board, and the eval it ranks."""
+    for board in boards:
+        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
 
 
 def main() -> None:

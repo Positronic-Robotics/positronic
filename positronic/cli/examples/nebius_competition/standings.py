@@ -21,8 +21,6 @@ from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
 from platform_client.responses import BoardSummary, RankingRow, RankingsResponse
 
-NO_SCORE = '-'
-
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
     """The header and the rows as aligned columns; the last column is not padded."""
@@ -42,7 +40,7 @@ def board_lines(boards: list[BoardSummary]) -> list[str]:
 
 
 def _row(row: RankingRow) -> list[str]:
-    score = NO_SCORE if row.scores.primary is None else f'{row.scores.primary:.3f}'
+    score = '-' if row.scores.primary is None else f'{row.scores.primary:.3f}'
     return [str(row.rank), f'{row.display_name}#{row.tag}', score, str(row.submission_id)]
 
 
