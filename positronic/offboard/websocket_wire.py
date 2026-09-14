@@ -126,18 +126,33 @@ class WebsocketServerConnection(wire.ServerConnection):
         await self._websocket.close(code=1008, reason=reason[:100])
 
 
-def _listening_socket(host: str, port: int) -> socket.socket:
-    """A listening socket bound on ``host``, where a ``port`` of 0 takes any free one."""
-    family, kind, proto, _canonical, address = socket.getaddrinfo(
-        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
-    )[0]
-    sock = socket.socket(family, kind, proto)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(address)
-    # The port answers from the moment ``start`` returns: the kernel queues a connect that arrives before
-    # the serving loop runs.
-    sock.listen()
-    return sock
+def _listening_sockets(host: str, port: int) -> list[socket.socket]:
+    """A listening socket for every address ``host`` resolves to, all on one port.
+
+    A ``port`` of 0 takes the port the first socket bound, so the whole set still answers on one port.
+    """
+    sockets: list[socket.socket] = []
+    bound_port = port
+    try:
+        for family, kind, proto, _canonical, address in socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+        ):
+            sock = socket.socket(family, kind, proto)
+            sockets.append(sock)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family is socket.AF_INET6:
+                # Each family gets its own socket here, so the IPv6 one must leave the IPv4 address alone.
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind((address[0], bound_port, *address[2:]) if bound_port else address)
+            # The port answers from the moment ``start`` returns: the kernel queues a connect that arrives
+            # before the serving loop runs.
+            sock.listen()
+            bound_port = sock.getsockname()[1]
+    except OSError:
+        for sock in sockets:
+            sock.close()
+        raise
+    return sockets
 
 
 class WebsocketWire(wire.Wire):
@@ -151,7 +166,7 @@ class WebsocketWire(wire.Wire):
         self._host = host
         self._port = port
         self._api = api
-        self._socket: socket.socket | None = None
+        self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
         self._endpoint: wire.Endpoint | None = None
         self._served = False
@@ -163,8 +178,8 @@ class WebsocketWire(wire.Wire):
 
     async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         self._served = False
-        self._socket = _listening_socket(self._host, self._port)
-        self._endpoint = wire.Endpoint(self._host, self._socket.getsockname()[1])
+        self._sockets = _listening_sockets(self._host, self._port)
+        self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
         app = FastAPI()
         app.include_router(self._api)
         self._route_sessions(app, session, authorized)
@@ -201,14 +216,15 @@ class WebsocketWire(wire.Wire):
         app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_named_model)
 
     async def serve(self) -> None:
-        assert self._server is not None and self._socket is not None, 'The websocket wire has not started'
+        assert self._server is not None and self._sockets, 'The websocket wire has not started'
         self._served = True
-        await self._server.serve(sockets=[self._socket])
+        await self._server.serve(sockets=self._sockets)
 
     async def stop(self) -> None:
         if self._server is not None:
             self._server.should_exit = True
-        # uvicorn releases the socket when it shuts down. A wire that bound but never served has no
-        # uvicorn to release it.
-        if self._socket is not None and not self._served:
-            self._socket.close()
+        # uvicorn releases the sockets when it shuts down. A wire that bound but never served has no
+        # uvicorn to release them.
+        if not self._served:
+            for sock in self._sockets:
+                sock.close()

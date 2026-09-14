@@ -113,6 +113,12 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
+def _rebind_and_release(host: str, port: int) -> None:
+    """Bind ``host`` on ``port`` and let it go again. It raises while anything else holds the port."""
+    for sock in websocket_wire._listening_sockets(host, port):
+        sock.close()
+
+
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
@@ -120,7 +126,7 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_po
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener holds the port, and a fresh bind to it raises.
-    websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
+    _rebind_and_release('localhost', bound.endpoint.port)
 
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_policy):
@@ -135,7 +141,38 @@ def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollbac
     assert not serving.is_alive(), 'the first serve did not end'
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
-    websocket_wire._listening_socket('localhost', bound.endpoint.port).close()
+    _rebind_and_release('localhost', bound.endpoint.port)
+
+
+def test_a_host_with_two_addresses_binds_each_of_them_on_one_port(monkeypatch):
+    """A dual-stack host answers on both families, so a client reaches it at either address."""
+
+    def both_loopbacks(host, port, *_args, **_kwargs):
+        return [
+            (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('::1', port, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port)),
+        ]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', both_loopbacks)
+    sockets = websocket_wire._listening_sockets('dual-stack.test', 0)
+    try:
+        assert [sock.getsockname()[0] for sock in sockets] == ['::1', '127.0.0.1']
+        assert len({sock.getsockname()[1] for sock in sockets}) == 1, 'the two addresses took different ports'
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
+def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_policy):
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
+    bound = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
+    asyncio.run(bound.start(MagicMock(), lambda _headers: True))
+    try:
+        assert len(bound._sockets) == 1
+        assert bound.endpoint.port == bound._sockets[0].getsockname()[1] != 0
+    finally:
+        asyncio.run(bound.stop())
+    _rebind_and_release('127.0.0.1', bound.endpoint.port)
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
