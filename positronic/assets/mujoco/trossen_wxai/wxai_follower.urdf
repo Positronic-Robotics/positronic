@@ -1,0 +1,405 @@
+<?xml version="1.0"?>
+<robot name="wxai">
+  <material name="trossen_black">
+    <texture filename="package://trossen_arm_description/meshes/trossen_black.png"/>
+  </material>
+  <link name="base_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.00014175 -0.00005228 0.03175177"/>
+      <mass value="0.45969858"/>
+      <inertia ixx="0.00041660" ixy="0.00000011" ixz="-0.00000454" iyy="0.00044896" iyz="-0.00000078" izz="0.00021403"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/base_link.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/base_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="link_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.00011075 0.00171176 0.02044592"/>
+      <mass value="0.15270428"/>
+      <inertia ixx="0.00018509" ixy="-0.00000191" ixz="-0.00001436" iyy="0.00008358" iyz="-0.00000130" izz="0.00019219"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_1.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_1.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_0" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.05725"/>
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27.0" lower="-3.0543261909900767" upper="3.0543261909900767" velocity="3.375"/>
+  </joint>
+  <link name="link_2">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.13121451 -0.00292583 0.00021345"/>
+      <mass value="1.15316319"/>
+      <inertia ixx="0.00102632" ixy="-0.00000319" ixz="-0.00002679" iyy="0.01736118" iyz="-0.00000193" izz="0.01794489"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_2.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_2.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_1" type="revolute">
+    <origin rpy="0 0 0" xyz="0.02 0 0.04625"/>
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="27.0" lower="0.0" upper="3.141592653589793" velocity="3.375"/>
+  </joint>
+  <link name="link_3">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.18083602 -0.00094090 0.05554937"/>
+      <mass value="0.68666638"/>
+      <inertia ixx="0.00064876" ixy="0.00009128" ixz="-0.00052002" iyy="0.00547407" iyz="0.00001159" izz="0.00561509"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_3.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_3.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_2" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.264 0 0"/>
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="27.0" lower="0.0" upper="2.356194490192345" velocity="3.375"/>
+  </joint>
+  <link name="link_4">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.05797842 0.00027145 0.05884447"/>
+      <mass value="0.45789905"/>
+      <inertia ixx="0.00053839" ixy="0.00000690" ixz="-0.00018164" iyy="0.00066138" iyz="0.00000724" izz="0.00042116"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_4.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_4.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_3" type="revolute">
+    <origin rpy="0 0 0" xyz="0.245 0 0.06"/>
+    <parent link="link_3"/>
+    <child link="link_4"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="7.0" lower="-1.5707963267948966" upper="1.5707963267948966" velocity="7.0"/>
+  </joint>
+  <link name="link_5">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.00412447 -0.00001138 -0.04283184"/>
+      <mass value="0.36693910"/>
+      <inertia ixx="0.00018912" ixy="-0.00000045" ixz="0.00000090" iyy="0.00032062" iyz="0.00000003" izz="0.00026750"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_5.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_5.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_4" type="revolute">
+    <origin rpy="0 0 0" xyz="0.06775 0 0.0455"/>
+    <parent link="link_4"/>
+    <child link="link_5"/>
+    <axis xyz="0 0 -1"/>
+    <limit effort="7.0" lower="-1.5707963267948966" upper="1.5707963267948966" velocity="7.0"/>
+  </joint>
+  <link name="link_6">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.04572768 -0.00000726 0.00001402"/>
+      <mass value="0.55469347"/>
+      <inertia ixx="0.00082429" ixy="-0.00000051" ixz="0.00000010" iyy="0.00048759" iyz="0.00000004" izz="0.00108600"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_6.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/link_6.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint_5" type="revolute">
+    <origin rpy="0 0 0" xyz="0.02895 0 -0.0455"/>
+    <parent link="link_5"/>
+    <child link="link_6"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="7.0" lower="-3.141592653589793" upper="3.141592653589793" velocity="7.0"/>
+  </joint>
+  <link name="carriage_right">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.00889602 0.00403514 0.00457901"/>
+      <mass value="0.05036313"/>
+      <inertia ixx="0.00001736" ixy="-0.00000165" ixz="-0.00000104" iyy="0.00000591" iyz="-0.00000172" izz="0.00001378"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/carriage_right.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/carriage_right.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_carriage_joint" type="prismatic">
+    <origin rpy="0 0 0" xyz="0.0865 -0.023 0"/>
+    <parent link="link_6"/>
+    <child link="carriage_right"/>
+    <mimic joint="left_carriage_joint"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="400.0" lower="0.0" upper="0.044" velocity="0.0875"/>
+  </joint>
+  <link name="carriage_left">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.00889602 -0.00403515 -0.00457908"/>
+      <mass value="0.05036313"/>
+      <inertia ixx="0.00001736" ixy="-0.00000165" ixz="-0.00000104" iyy="0.00000591" iyz="-0.00000172" izz="0.00001378"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/carriage_left.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/carriage_left.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_carriage_joint" type="prismatic">
+    <origin rpy="0 0 0" xyz="0.0865 0.023 0"/>
+    <parent link="link_6"/>
+    <child link="carriage_left"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="400.0" lower="0.0" upper="0.044" velocity="0.0875"/>
+  </joint>
+  <link name="camera_mount_d405">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.03023383 0.00679835 0.05006687"/>
+      <mass value="0.04518012"/>
+      <inertia ixx="0.00003426" ixy="-0.00000027" ixz="-0.00000309" iyy="0.00001980" iyz="-0.00000319" izz="0.00002470"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/camera_mount_d405.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/camera_mount_d405.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="camera_mount_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.012 0 0"/>
+    <parent link="link_6"/>
+    <child link="camera_mount_d405"/>
+  </joint>
+  <joint name="camera_joint" type="fixed">
+    <origin rpy="0 0.3490658503988659 0" xyz="0.02927207801 0 0.03824951197"/>
+    <parent link="camera_mount_d405"/>
+    <child link="camera_bottom_screw_frame"/>
+  </joint>
+  <link name="camera_bottom_screw_frame"/>
+  <joint name="camera_link_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.01085 0.009 0.021"/>
+    <parent link="camera_bottom_screw_frame"/>
+    <child link="camera_link"/>
+  </joint>
+  <link name="camera_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0038 -0.009 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/peripherals/d405.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="aluminum">
+        <color rgba="0.5 0.5 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.0078 -0.009 0"/>
+      <geometry>
+        <box size="0.023 0.042 0.042"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.072"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.00002117" ixy="0.0" ixz="0.0" iyy="0.000013758" iyz="0.0" izz="0.000013758"/>
+    </inertial>
+  </link>
+  <joint name="camera_depth_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="camera_link"/>
+    <child link="camera_depth_frame"/>
+  </joint>
+  <link name="camera_depth_frame"/>
+  <joint name="camera_depth_optical_joint" type="fixed">
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+    <parent link="camera_depth_frame"/>
+    <child link="camera_depth_optical_frame"/>
+  </joint>
+  <link name="camera_depth_optical_frame"/>
+  <joint name="camera_infra1_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0.0 0"/>
+    <parent link="camera_link"/>
+    <child link="camera_infra1_frame"/>
+  </joint>
+  <link name="camera_infra1_frame"/>
+  <joint name="camera_infra1_optical_joint" type="fixed">
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+    <parent link="camera_infra1_frame"/>
+    <child link="camera_infra1_optical_frame"/>
+  </joint>
+  <link name="camera_infra1_optical_frame"/>
+  <joint name="camera_infra2_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 -0.018 0"/>
+    <parent link="camera_link"/>
+    <child link="camera_infra2_frame"/>
+  </joint>
+  <link name="camera_infra2_frame"/>
+  <joint name="camera_infra2_optical_joint" type="fixed">
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+    <parent link="camera_infra2_frame"/>
+    <child link="camera_infra2_optical_frame"/>
+  </joint>
+  <link name="camera_infra2_optical_frame"/>
+  <joint name="camera_color_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0.0 0"/>
+    <parent link="camera_link"/>
+    <child link="camera_color_frame"/>
+  </joint>
+  <link name="camera_color_frame"/>
+  <joint name="camera_color_optical_joint" type="fixed">
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+    <parent link="camera_color_frame"/>
+    <child link="camera_color_optical_frame"/>
+  </joint>
+  <link name="camera_color_optical_frame"/>
+  <link name="gripper_left">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.01893993 -0.00901223 -0.00215453"/>
+      <mass value="0.03090787"/>
+      <inertia ixx="0.00000769" ixy="0.00000321" ixz="0.00000029" iyy="0.00001487" iyz="-0.00000020" izz="0.00001184"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/gripper_left.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/gripper_left.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="carriage_left"/>
+    <child link="gripper_left"/>
+  </joint>
+  <link name="gripper_right">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.01893989 0.00901216 -0.00215461"/>
+      <mass value="0.03090786"/>
+      <inertia ixx="0.00000769" ixy="-0.00000321" ixz="0.00000029" iyy="0.00001487" iyz="0.00000020" izz="0.00001184"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/gripper_right.stl"/>
+      </geometry>
+      <material name="trossen_black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://trossen_arm_description/meshes/wxai/gripper_right.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="carriage_right"/>
+    <child link="gripper_right"/>
+  </joint>
+  <joint name="ee_gripper" type="fixed">
+    <origin rpy="0 0 0" xyz="0.156062 0 0"/>
+    <parent link="link_6"/>
+    <child link="ee_gripper_link"/>
+  </joint>
+  <link name="ee_gripper_link"/>
+</robot>
