@@ -468,6 +468,28 @@ class RecoveryOutcome(Enum):
     NOT_CLEARED = auto()
 
 
+def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
+    """Run the arm's error recovery once, and answer every console that asked for it on this tick.
+
+    A console that asked hears what the recovery returned, the vendor's throw included. A recovery nobody
+    asked for has no one to hear it, so its throw ends the run.
+    """
+    try:
+        cleared = robot.recover_from_errors()
+    except Exception as exc:
+        if not asked:
+            raise
+        logger.exception('The recovery a console asked for failed')
+        for call in asked:
+            call.set_exception(exc)  # the consoles that asked hold the failure, so the run carries on
+        return
+    if asked:
+        logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
+    outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+    for call in asked:
+        call.set_result(outcome)
+
+
 class Robot(pimm.ControlSystem):
     def __init__(
         self,
@@ -639,19 +661,14 @@ class Robot(pimm.ControlSystem):
                 goal = robot.goal()
                 arm.note_refusals(goal)
 
-                for asked_to_recover in self.recover.incoming():
-                    with pimm.calls.raise_to(asked_to_recover):
-                        cleared = robot.recover_from_errors()
-                        logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
-                        outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
-                        asked_to_recover.set_result(outcome)
-
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
                     logger.warning(f'Robot error: {st.error_message}')
 
-                if in_error:
-                    robot.recover_from_errors()
+                asked_to_recover = list(self.recover.incoming())
+                if asked_to_recover or in_error:
+                    _recover(robot, asked_to_recover)
+                    # What the recovery left behind is what the next tick reads, so this one commands nothing.
                     yield arm.limiter.wait()
                     continue
 
