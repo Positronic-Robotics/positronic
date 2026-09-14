@@ -9,6 +9,7 @@ from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm import trossen
 from positronic.drivers.roboarm.ik import (
     DLSIKSolver,
     DLSIKSolverWithLimits,
@@ -180,6 +181,38 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
 def test_bundled_model_declares_the_frame_it_reports_in(model):
     assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
     frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+
+
+def test_the_trossen_model_declares_the_frame_it_reports_in():
+    model = trossen._robot_meta()
+    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+    frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+
+
+def test_the_trossen_urdf_and_its_mjcf_put_the_control_frame_in_the_same_place():
+    """The driver solves against the MJCF and the codecs against the URDF. Two models of one arm that
+    disagree put every recorded pose in a frame nothing else can read."""
+    spec = _prepare_spec(trossen._robot_meta()[roboarm_keys.URDF], DEFAULT_FRAME)
+    urdf_model = spec.compile()
+    urdf_data = mj.MjData(urdf_model)
+    site = mj.mj_name2id(urdf_model, mj.mjtObj.mjOBJ_SITE, DEFAULT_FRAME)
+    kin = trossen._Kinematics()
+
+    rng = np.random.default_rng(0)
+    for _ in range(8):
+        q = rng.uniform([-3.0, 0.1, 0.1, -1.5, -1.5, -3.0], [3.0, 3.0, 2.3, 1.5, 1.5, 3.0])
+        urdf_data.qpos[:] = 0.0
+        urdf_data.qpos[: len(q)] = q
+        mj.mj_forward(urdf_model, urdf_data)
+        from_urdf = geom.Transform3D(
+            urdf_data.site_xpos[site].copy(),
+            geom.Rotation.from_rotation_matrix(urdf_data.site_xmat[site].reshape(3, 3)),
+        )
+        from_mjcf = kin.fk(q)
+        np.testing.assert_allclose(from_urdf.translation, from_mjcf.translation, atol=1e-4)
+        np.testing.assert_allclose(
+            from_urdf.rotation.as_rotation_matrix, from_mjcf.rotation.as_rotation_matrix, atol=1e-4
+        )
 
 
 def test_declared_droid_frame_matches_the_model_geometry():
