@@ -450,11 +450,8 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
     class _Recording(wire.ClientWire):
         """The client's wire, recording every connection it dials."""
 
-        def schemes(self):
-            return client_wire.schemes()
-
-        def session_url(self, address):
-            return client_wire.session_url(address)
+        SCHEME = client_wire.SCHEME
+        SECURE_SCHEME = client_wire.SECURE_SCHEME
 
         def api_url(self, address):
             return client_wire.api_url(address)

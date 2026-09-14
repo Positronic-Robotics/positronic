@@ -58,18 +58,10 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 class WebsocketClientWire(wire.ClientWire):
     """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
 
-    def schemes(self) -> tuple[wire.Scheme, ...]:
-        # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
-        return (
-            wire.Scheme('', secure=False),
-            wire.Scheme('http', secure=False),
-            wire.Scheme('ws', secure=False),
-            wire.Scheme('https', secure=True),
-            wire.Scheme('wss', secure=True),
-        )
-
-    def session_url(self, address: wire.SessionAddress) -> str:
-        return address.url('wss' if address.secure else 'ws')
+    SCHEME = 'ws'
+    SECURE_SCHEME = 'wss'
+    # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
+    ALIASES = (wire.Scheme('', secure=False), wire.Scheme('http', secure=False), wire.Scheme('https', secure=True))
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'

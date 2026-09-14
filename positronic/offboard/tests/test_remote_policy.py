@@ -27,15 +27,12 @@ CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 class _FakeWire(wire.ClientWire):
     """A client wire that answers each dial from ``outcomes``: a connection to return, or a refusal to raise."""
 
+    SCHEME = 'fake'
+    SECURE_SCHEME = 'fakes'
+
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
-
-    def schemes(self) -> tuple[wire.Scheme, ...]:
-        return (wire.Scheme('fake', secure=False),)
-
-    def session_url(self, address: wire.SessionAddress) -> str:
-        return address.url('fake')
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'http://{address.netloc}{wire.API_PATH}'

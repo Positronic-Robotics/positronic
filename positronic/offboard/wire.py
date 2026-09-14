@@ -6,7 +6,7 @@ A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
 import abc
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
 
 from starlette.datastructures import QueryParams
 
@@ -85,13 +85,19 @@ class Scheme(NamedTuple):
 class ClientWire(abc.ABC):
     """The client side of one wire: the schemes that select it, how it spells a session, and how it dials one."""
 
-    @abc.abstractmethod
-    def schemes(self) -> tuple[Scheme, ...]:
-        """The URL schemes that select this wire."""
+    # The URL scheme that selects this wire, and the one that selects it over TLS.
+    SCHEME: ClassVar[str]
+    SECURE_SCHEME: ClassVar[str]
+    # Other schemes that select this wire. Each one names whether it carries TLS.
+    ALIASES: ClassVar[tuple[Scheme, ...]] = ()
 
-    @abc.abstractmethod
+    def schemes(self) -> tuple[Scheme, ...]:
+        """Every URL scheme that selects this wire."""
+        return (Scheme(self.SCHEME, secure=False), Scheme(self.SECURE_SCHEME, secure=True), *self.ALIASES)
+
     def session_url(self, address: SessionAddress) -> str:
         """``address`` as this wire spells it."""
+        return address.url(self.SECURE_SCHEME if address.secure else self.SCHEME)
 
     @abc.abstractmethod
     def api_url(self, address: SessionAddress) -> str | None:

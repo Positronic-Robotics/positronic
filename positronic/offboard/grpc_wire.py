@@ -224,11 +224,8 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
 class GrpcClientWire(wire.ClientWire):
     """The client side of the gRPC wire, whose port carries sessions alone."""
 
-    def schemes(self) -> tuple[wire.Scheme, ...]:
-        return (wire.Scheme('grpc', secure=False), wire.Scheme('grpcs', secure=True))
-
-    def session_url(self, address: wire.SessionAddress) -> str:
-        return address.url('grpcs' if address.secure else 'grpc')
+    SCHEME = 'grpc'
+    SECURE_SCHEME = 'grpcs'
 
     def api_url(self, address: wire.SessionAddress) -> None:
         """None: the HTTP API answers on the server's own port."""
