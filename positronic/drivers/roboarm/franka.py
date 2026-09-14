@@ -468,27 +468,6 @@ class RecoveryOutcome(Enum):
     NOT_CLEARED = auto()
 
 
-def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
-    """Run the arm's error recovery once, and answer every console that asked for it on this tick.
-
-    A throw reaches the consoles that asked; one nobody asked for reaches no caller, so it ends the run.
-    """
-    try:
-        cleared = robot.recover_from_errors()
-    except Exception as exc:
-        if not asked:
-            raise
-        logger.exception('The recovery a console asked for failed')
-        for call in asked:
-            call.set_exception(exc)  # the consoles that asked hold the failure, so the run carries on
-        return
-    if asked:
-        logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
-    outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
-    for call in asked:
-        call.set_result(outcome)
-
-
 class Robot(pimm.ControlSystem):
     def __init__(
         self,
@@ -641,6 +620,28 @@ class Robot(pimm.ControlSystem):
             safe_inputs,
         )
 
+    @staticmethod
+    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
+        """Run the arm's error recovery once, and answer every console that asked for it on this tick.
+
+        A throw reaches the consoles that asked; one nobody asked for reaches no caller, so it ends the run.
+        """
+        try:
+            cleared = robot.recover_from_errors()
+        # rules-allow: swallowed-error — the throw is not dropped but handed to every console that asked
+        except Exception as exc:
+            if not asked:
+                raise
+            logger.exception('The recovery a console asked for failed')
+            for call in asked:
+                call.set_exception(exc)
+            return
+        if asked:
+            logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
+        outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+        for call in asked:
+            call.set_result(outcome)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
         with self._desk_session() as desk, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
@@ -666,7 +667,7 @@ class Robot(pimm.ControlSystem):
 
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
-                    _recover(robot, asked_to_recover)
+                    self._recover(robot, asked_to_recover)
                     # This tick commands nothing; the next one reads the arm the recovery left behind.
                     yield arm.limiter.wait()
                     continue
