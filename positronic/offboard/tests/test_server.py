@@ -13,6 +13,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
@@ -23,7 +24,7 @@ from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
 
@@ -228,17 +229,6 @@ def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
 _SLOW_MS = 40.0
 
 
-class _SlowCodec(Codec):
-    """A codec that spends ``_SLOW_MS`` on the model's answer, which is a cost around the model."""
-
-    def encode(self, data):
-        return data
-
-    def _decode_single(self, data):
-        time.sleep(_SLOW_MS / 1000.0)
-        return data
-
-
 def _slow_model(*_args):
     time.sleep(_SLOW_MS / 1000.0)
     return [{'action': [1, 2, 3]}]
@@ -261,12 +251,19 @@ def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_p
     assert timing[protocol.TIMING_MODEL] <= timing[protocol.TIMING_INFER] <= timing[protocol.TIMING_SERVED]
 
 
-def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
-    """The phase holds the model alone, so a codec's cost lands in ``infer_ms`` and not in ``model_ms``.
+class _SlowCodec(Codec):
+    """A codec that spends ``_SLOW_MS`` on the model's answer, which is a cost around the model."""
 
-    A phase opened around the served pipeline instead of around the model passes the test above and
-    fails this one: it would charge the codec to the model.
-    """
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data):
+        time.sleep(_SLOW_MS / 1000.0)
+        return data
+
+
+def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
+    """The phase holds the model alone, so a codec's cost lands in ``infer_ms`` and not in ``model_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
 
@@ -279,6 +276,28 @@ def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, mak
 
     assert timing[protocol.TIMING_MODEL] < _SLOW_MS
     assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _SLOW_MS
+
+
+def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_mock_policy):
+    """``model_ms`` is absent where the model did not run, rather than holding what an earlier call took.
+
+    ``StopOnFault`` answers a faulted arm itself, so the served pipeline returns without reaching the model.
+    """
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    host, port, _server = start_server(ChunkedSchedule() | remote | StopOnFault() | _StubSource(policy))
+
+    session = InferenceClient(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.AVAILABLE)})
+        ran = session.served_timing
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.ERROR)})
+        stopped = session.served_timing
+    finally:
+        session.close()
+
+    assert ran[protocol.TIMING_MODEL] >= _SLOW_MS
+    assert protocol.TIMING_MODEL not in stopped
 
 
 def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):

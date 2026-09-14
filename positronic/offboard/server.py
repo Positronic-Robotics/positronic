@@ -207,9 +207,10 @@ class _ServedTiming:
         finally:
             self.record(name, (time.perf_counter() - started) * 1000.0)
 
-    def record(self, name: str, ms: float) -> None:
-        """Take one phase from whoever timed it."""
-        self._phases[name] = ms
+    def record(self, name: str, ms: float | None) -> None:
+        """Take one phase from whoever timed it. ``None`` is a phase nobody timed, and the report omits it."""
+        if ms is not None:
+            self._phases[name] = ms
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
@@ -217,14 +218,19 @@ class _ServedTiming:
 
 
 class _TimeTheModel(Layer):
-    """Time the model's own call and hold what it took.
+    """Time the model's own call and hold what it took, until the caller takes it.
 
-    It goes innermost, so ``last_call_ms`` holds the model alone and the codecs and layers around it
-    fall outside. A model that reaches its weights over a further hop spends that hop inside it.
+    It goes innermost, so the figure holds the model alone and the codecs and layers around it fall
+    outside. A model that reaches its weights over a further hop spends that hop inside it.
     """
 
     def __init__(self) -> None:
-        self.last_call_ms = 0.0
+        self._ms: float | None = None
+
+    def take(self) -> float | None:
+        """What the model's call took, and ``None`` where no call landed since the last take."""
+        ms, self._ms = self._ms, None
+        return ms
 
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, timed: '_TimeTheModel') -> None:
@@ -236,7 +242,7 @@ class _TimeTheModel(Layer):
             try:
                 return self._inner(obs, time_ns)
             finally:
-                self._timed.last_call_ms = (time.perf_counter() - started) * 1000.0
+                self._timed._ms = (time.perf_counter() - started) * 1000.0
 
     def make_session(self, inner: Session) -> Session:
         return _TimeTheModel._Session(inner, self)
@@ -429,7 +435,7 @@ class PolicyServer:
                                 actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         finally:
                             self._infer_lock.release()
-                        timing.record(protocol.TIMING_MODEL, time_the_model.last_call_ms)
+                        timing.record(protocol.TIMING_MODEL, time_the_model.take())
                         answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:
