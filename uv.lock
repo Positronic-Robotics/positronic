@@ -5057,7 +5057,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'molmoact2'" },
     { name = "torchvision", marker = "extra == 'molmoact2'" },
     { name = "transformers", marker = "extra == 'molmoact2'", specifier = ">=5.3,<6" },
-    { name = "uvicorn", extras = ["standard"] },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35" },
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
