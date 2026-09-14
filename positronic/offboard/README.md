@@ -225,7 +225,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server droid \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/exp_v1
+  --pipeline.source.model_source=~/checkpoints/groot/exp_v1
 
 # Client connects the same way
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -266,7 +266,7 @@ names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. `from_url` reads it off one URL, in the same forms
