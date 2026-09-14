@@ -177,9 +177,9 @@ def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_i
             'pack_ms': pack_ms,
             'round_trip_ms': round_trip_ms,
             **served,
-            # What the round trip spends outside the server's own span: the socket both ways, and the
-            # websocket receive the server pays before ``served_ms`` opens.
-            'transfer_ms': round_trip_ms - pack_ms - served.get(protocol.TIMING_SERVED, 0.0),
+            # What the round trip spends outside the server's own span: the socket both ways, the server's
+            # receive and encode around it, and this client's decode.
+            'outside_served_ms': round_trip_ms - pack_ms - served.get(protocol.TIMING_SERVED, 0.0),
         })
     return rows
 
@@ -222,6 +222,8 @@ def main(
     compress_images: bool,
     out: str | None,
 ):
+    # configuronic hands the CLI token through as a string.
+    out_path = Path(out) if out is not None else None
     model = InstantChunk(chunk_rows, 1.0 / rate_hz)
     stack = rig_stack(cameras, frames, rate_hz, width, height)
 
@@ -249,9 +251,9 @@ def main(
         f'compress_images={compress_images}, no model behind the server\n'
     )
     print(report(rows))
-    if out is not None:
-        Path(out).write_text(json.dumps(rows, indent=1))
-        print(f'\nper-request rows -> {out}')
+    if out_path is not None:
+        out_path.write_text(json.dumps(rows, indent=1))
+        print(f'\nper-request rows -> {out_path}')
 
 
 @pos3.with_mirror()
