@@ -147,7 +147,6 @@ UNSCORED = 'Unscored'
 DERIVED_MODEL = 'model'
 DERIVED_OUTCOME = 'outcome'
 DERIVED_STAGE = 'stage'
-DERIVED_STAGE_RANK = 'stage_rank'
 DERIVED_ITEMS = 'items'
 DERIVED_STARTED = 'started'
 
@@ -178,6 +177,11 @@ class ProgressStage(Enum):
         return list(type(self)).index(self)
 
 
+# The cell for an episode that recorded no progress. Its rank is below every rung, so it sorts under
+# them from either end; `ProgressStage.rank` counts from 0.
+NO_STAGE = (-1, '-')
+
+
 ROLLOUT_OUTCOME_BADGE = RendererConfig(
     type='badge',
     options={
@@ -200,27 +204,16 @@ def rollout_outcome(ep: Episode) -> str:
     return ep[OUTCOME] if OUTCOME in ep else UNSCORED
 
 
-def rollout_stage(ep: Episode) -> ProgressStage | None:
-    """The highest rung the arm reached, or None on an episode that recorded no progress."""
-    if PROGRESS_STATE not in ep:
-        return None
-    reached = {value for value, _ in ep[PROGRESS_STATE]}
-    return max((stage for stage in ProgressStage if stage.value in reached), key=lambda s: s.rank, default=None)
-
-
-def rollout_stage_cell(ep: Episode) -> tuple[int, str] | None:
-    """The rung as `(rank, label)`, which the page sorts by the rank and shows as the label.
+def rollout_stage_cell(ep: Episode) -> tuple[int, str]:
+    """The highest rung the arm reached, as `(rank, label)`: the page sorts by the rank and shows the label.
 
     FOOTGUN: a bare label sorts alphabetically, which is not the ladder — `at the target` would lead and
-    `reaching` would trail. A pair also spells itself into a filter dropdown, so the column offers none.
+    `reaching` would trail. Every episode gets a pair, `NO_STAGE` included, because the page compares
+    whatever the cell holds and a string against these numbers is not an ordering.
     """
-    stage = rollout_stage(ep)
-    return None if stage is None else (stage.rank, stage.label)
-
-
-def rollout_stage_rank(ep: Episode) -> int | None:
-    stage = rollout_stage(ep)
-    return None if stage is None else stage.rank
+    reached = {value for value, _ in ep[PROGRESS_STATE]} if PROGRESS_STATE in ep else set()
+    stage = max((s for s in ProgressStage if s.value in reached), key=lambda s: s.rank, default=None)
+    return NO_STAGE if stage is None else (stage.rank, stage.label)
 
 
 def rollout_items(ep: Episode) -> str | None:
@@ -239,7 +232,6 @@ rollouts_ds = ds.transform.override(
                     DERIVED_MODEL: rollout_model,
                     DERIVED_OUTCOME: rollout_outcome,
                     DERIVED_STAGE: rollout_stage_cell,
-                    DERIVED_STAGE_RANK: rollout_stage_rank,
                     DERIVED_ITEMS: rollout_items,
                     DERIVED_STARTED: analysis_cfg.started,
                 }),
@@ -258,7 +250,7 @@ def rollouts_episodes_table():
         keys.TASK: C(label='Task', filter=True),
         DERIVED_MODEL: C(label='Model', filter=True),
         DERIVED_OUTCOME: C(label='Outcome', renderer=ROLLOUT_OUTCOME_BADGE, align='center'),
-        DERIVED_STAGE: C(label='Stage', default='-'),
+        DERIVED_STAGE: C(label='Stage'),
         DERIVED_ITEMS: C(label='Items', default='-'),
         DERIVED_STARTED: C(label='Started', format='%Y-%m-%d %H:%M:%S'),
     }
@@ -273,7 +265,7 @@ def rollouts_by_model():
             'count': len(episodes),
             'successes': successes,
             'success_rate': 100 * successes / len(episodes),
-            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE_RANK] == ProgressStage.AT_TARGET.rank),
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE][0] == ProgressStage.AT_TARGET.rank),
         }
 
     format_table = {
