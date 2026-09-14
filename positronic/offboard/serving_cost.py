@@ -105,6 +105,10 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
 # meshes, every recorded command — and none of that crosses the wire.
 STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
 
+# uvicorn's default ``ws_max_size``, which ``PolicyServer`` keeps: a larger message closes the socket with
+# code 1009 before the server reads it, and a raw 25-frame stack at 1024x288 is about 42 MiB.
+WS_MAX_BYTES = 16 * 1024 * 1024
+
 
 def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[dict[str, Any]]:
     """The episode as the harness hands it to the stack: one observation per control tick."""
@@ -166,6 +170,11 @@ def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_i
         encoded = time.perf_counter()
         # The same pack ``infer`` does next, timed on its own so the round trip below divides.
         message = protocol.serialise(prepared)
+        if len(message) > WS_MAX_BYTES:
+            raise ValueError(
+                f"a {len(message) / 2**20:.1f} MiB payload exceeds the server's {WS_MAX_BYTES // 2**20} MiB message "
+                f'limit; lower --frames, --width or --height, or keep --compress_images'
+            )
         packed = time.perf_counter()
         session.infer(prepared)
         answered = time.perf_counter()

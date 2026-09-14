@@ -1,4 +1,7 @@
+from unittest.mock import MagicMock
+
 import numpy as np
+import pytest
 
 from positronic import keys
 from positronic.offboard import protocol
@@ -52,3 +55,12 @@ def test_a_captured_payload_carries_one_stack_per_stacked_key():
         assert sent[camera].shape == (3, 48, 64, 3)
     assert sent[keys.EE_POSE].shape == (3, 7)
     assert sent[keys.GRIP].shape == (3,)
+
+
+def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
+    """A raw stack the server would close the socket on stops the probe with the flags that shrink it."""
+    session = MagicMock()
+    oversized = {'cam': np.zeros((1, 3000, 3000, 3), dtype=np.uint8)}
+    with pytest.raises(ValueError, match='message limit'):
+        replay(session, [oversized], compress_images=False)
+    session.infer.assert_not_called()
