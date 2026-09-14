@@ -89,9 +89,12 @@ class GrpcClientConnection(wire.ClientConnection):
         self._channel = channel
         self._outbox: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._inbox: queue.SimpleQueue[bytes | BaseException] = queue.SimpleQueue()
+        # One receipt per frame gRPC writes, and a last ``False`` once the call can write no more.
+        self._written: queue.SimpleQueue[bool] = queue.SimpleQueue()
         self._closed = False
         self._ended = False
         self._received = False
+        self._stopped_by: BaseException | None = None
         call = self._channel.stream_stream(METHOD_PATH, request_serializer=None, response_deserializer=None)
         self._responses = call(self._requests(), metadata=metadata)
         self._reader = threading.Thread(target=self._read, name='grpc-session-reader', daemon=True)
@@ -101,24 +104,31 @@ class GrpcClientConnection(wire.ClientConnection):
         """The outbound frames. ``None`` ends the stream, which half-closes the session."""
         while (message := self._outbox.get()) is not None:
             yield message
+            # gRPC asks for the next frame only once it has written this one, so the resume is the receipt.
+            self._written.put(True)
 
     def _read(self) -> None:
         """Drain the response stream into the inbox, and end the inbox with what stopped the stream."""
         try:
             for message in self._responses:
                 self._inbox.put(message)
-            self._inbox.put(wire.PeerDisconnected(f'{self._target} ended the session'))
+            self._stopped_by = wire.PeerDisconnected(f'{self._target} ended the session')
+            self._inbox.put(self._stopped_by)
         except Exception as e:
+            self._stopped_by = e
             self._inbox.put(e)
         finally:
             self._responses.cancel()
+            # The call is over, so no further frame leaves the iterator. Release a send waiting on one.
+            self._written.put(False)
 
     def send(self, message: bytes) -> None:
-        # gRPC stops reading the request iterator once the stream ends, and a write then sits in the outbox
-        # until ``recv`` times out.
         if self._closed or self._ended:
             raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)
+        # The call's end releases this wait, so a dead connection raises here instead of blocking.
+        if not self._written.get():
+            raise wire.PeerDisconnected(f'{self._target} ended the session: {self._stopped_by}') from self._stopped_by
 
     def recv(self, timeout: float | None = None) -> bytes:
         # A reply that arrived during ``close`` sits in the inbox, and would pair one observation's actions

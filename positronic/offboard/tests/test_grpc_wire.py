@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
+from typing import cast
 from unittest.mock import ANY, MagicMock
 
 import configuronic as cfn
@@ -587,6 +588,95 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
         conn.close()
 
 
+class _ManualChannel:
+    """A channel whose request consumer advances as gRPC's own does: it takes the next frame only once
+    the test has written the one before it."""
+
+    def __init__(self):
+        self._taken: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._writes: queue.SimpleQueue[bool] = queue.SimpleQueue()
+        self._responses: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
+
+    def stream_stream(self, path, request_serializer=None, response_deserializer=None):
+        def call(requests, metadata=None) -> '_ManualChannel':
+            threading.Thread(target=self._consume, args=(requests,), daemon=True).start()
+            return self
+
+        return call
+
+    def _consume(self, requests) -> None:
+        for message in requests:
+            self._taken.put(message)
+            self._writes.get()
+        # The client half-closed, so the server ends the stream and the response iterator finishes.
+        self._responses.put(None)
+
+    def __iter__(self):
+        while (message := self._responses.get()) is not None:
+            yield message
+
+    def cancel(self) -> None: ...
+
+    def close(self) -> None:
+        self._responses.put(None)
+
+    def taken(self, timeout: float) -> bytes:
+        """The frame gRPC has taken from the iterator and not yet written."""
+        return self._taken.get(timeout=timeout)
+
+    def write(self) -> None:
+        """Finish the write gRPC is on, which is what lets it ask for the next frame."""
+        self._writes.put(True)
+
+    def end(self) -> None:
+        """End the call, as a dropped connection does."""
+        self._responses.put(None)
+
+
+class _Sender:
+    """One ``send`` on a thread of its own, and what it did."""
+
+    def __init__(self, conn: grpc_wire.GrpcClientConnection):
+        self.outcome: Exception | None = None
+        self.returned = threading.Event()
+        threading.Thread(target=self._send, args=(conn,), daemon=True).start()
+
+    def _send(self, conn: grpc_wire.GrpcClientConnection) -> None:
+        try:
+            conn.send(b'frame')
+        except Exception as e:
+            self.outcome = e
+        finally:
+            self.returned.set()
+
+
+def _manual_connection() -> tuple[_ManualChannel, grpc_wire.GrpcClientConnection]:
+    """A connection whose channel the test drives by hand; the fake serves the members the connection uses."""
+    channel = _ManualChannel()
+    return channel, grpc_wire.GrpcClientConnection(cast(grpc.Channel, channel), 'manual', ())
+
+
+def test_a_send_returns_only_once_grpc_has_written_the_frame():
+    channel, conn = _manual_connection()
+    sender = _Sender(conn)
+    assert channel.taken(timeout=5.0) == b'frame'
+    assert not sender.returned.wait(0.3), 'the send returned while the frame was still unwritten'
+    channel.write()
+    assert sender.returned.wait(5.0), 'the send never returned'
+    assert sender.outcome is None
+    conn.close()
+
+
+def test_a_send_on_a_call_that_ends_mid_write_raises_a_lost_peer():
+    """Nothing bounds the wait but the call itself, so its end has to release the send."""
+    channel, conn = _manual_connection()
+    sender = _Sender(conn)
+    assert channel.taken(timeout=5.0) == b'frame'
+    channel.end()
+    assert sender.returned.wait(5.0), 'the send waited on a write the ended call can never make'
+    assert isinstance(sender.outcome, wire.PeerDisconnected)
+
+
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires
@@ -596,8 +686,10 @@ def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires
         conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):
             conn.recv(timeout=10.0)
+        refused = time.monotonic()
         with pytest.raises(wire.PeerDisconnected):
             conn.send(b'an observation the stream can no longer carry')
+        assert time.monotonic() - refused < 1.0, 'the refused send waited for a write instead of raising'
         # The close report says the peer ended the stream.
         assert 'peer had ended the stream True' in conn.close()
     finally:
