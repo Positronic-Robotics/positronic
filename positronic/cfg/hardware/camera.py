@@ -36,9 +36,8 @@ zed_2i = zed.override(serial_number=39567055)
 # Serial 13785037 is a ZED-M, so the name and the hardware disagree (Positronic-Robotics/internal#1297).
 zed_2i_second = zed.override(serial_number=13785037)
 
-# The station's two sideviews, by side. UNVERIFIED against the rig: correct these two lines and
-# every sided config below follows them. A right-side view differs optically from a left-side one:
-# the two sideviews are different camera models.
+# The station's two sideviews, by side, UNVERIFIED against the rig: correct these two lines and every
+# sided config follows. The two vantages differ optically: the cameras are different models.
 sideview_left = zed_2i
 sideview_right = zed_2i_second
 
