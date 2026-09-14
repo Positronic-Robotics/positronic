@@ -24,7 +24,7 @@ from positronic.policy.spec import PolicySource, remote
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
-class _FakeWire:
+class _FakeWire(wire.ClientWire):
     """A client wire that answers each dial from ``outcomes``: a connection to return, or a refusal to raise."""
 
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):

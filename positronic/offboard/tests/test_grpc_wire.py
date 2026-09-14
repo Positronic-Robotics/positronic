@@ -447,12 +447,17 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
     opened = []
     client_wire = client._wire
 
-    class _Recording:
+    class _Recording(wire.ClientWire):
         """The client's wire, recording every connection it dials."""
 
-        schemes = client_wire.schemes
-        session_url = client_wire.session_url
-        api_url = client_wire.api_url
+        def schemes(self):
+            return client_wire.schemes()
+
+        def session_url(self, address):
+            return client_wire.session_url(address)
+
+        def api_url(self, address):
+            return client_wire.api_url(address)
 
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))

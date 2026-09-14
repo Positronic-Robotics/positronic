@@ -72,7 +72,7 @@ def _refusal(status: grpc.RpcError) -> wire.Refusal:
     return wire.Refusal.COLD if code in _COLD_CODES else wire.Refusal.FINAL
 
 
-class GrpcClientConnection:
+class GrpcClientConnection(wire.ClientConnection):
     """A client's end of one gRPC session, over a ready ``channel``.
 
     A reader thread drains the response stream into a queue: the stream has no per-message timeout, and
@@ -221,7 +221,7 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
     return channel
 
 
-class GrpcClientWire:
+class GrpcClientWire(wire.ClientWire):
     """The client side of the gRPC wire, whose port carries sessions alone."""
 
     def schemes(self) -> tuple[wire.Scheme, ...]:

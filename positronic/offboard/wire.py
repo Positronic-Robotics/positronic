@@ -6,7 +6,7 @@ A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
 import abc
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
-from typing import NamedTuple, Protocol
+from typing import NamedTuple
 
 from starlette.datastructures import QueryParams
 
@@ -82,48 +82,49 @@ class Scheme(NamedTuple):
     secure: bool
 
 
-class ClientWire(Protocol):
+class ClientWire(abc.ABC):
     """The client side of one wire: the schemes that select it, how it spells a session, and how it dials one."""
 
-    def schemes(self) -> tuple['Scheme', ...]:
+    @abc.abstractmethod
+    def schemes(self) -> tuple[Scheme, ...]:
         """The URL schemes that select this wire."""
-        ...
 
-    def session_url(self, address: 'SessionAddress') -> str:
+    @abc.abstractmethod
+    def session_url(self, address: SessionAddress) -> str:
         """``address`` as this wire spells it."""
-        ...
 
-    def api_url(self, address: 'SessionAddress') -> str | None:
+    @abc.abstractmethod
+    def api_url(self, address: SessionAddress) -> str | None:
         """The server's HTTP API beside this wire, or ``None`` where the wire's port carries sessions alone."""
-        ...
 
+    @abc.abstractmethod
     def dial(
-        self, address: 'SessionAddress', headers: Mapping[str, str] | None, open_timeout: float
+        self, address: SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> 'ClientConnection':
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
-        ...
 
 
-class ClientConnection(Protocol):
+class ClientConnection(abc.ABC):
     """A client's end of one open session."""
 
+    @abc.abstractmethod
     def send(self, message: bytes) -> None: ...
 
+    @abc.abstractmethod
     def recv(self, timeout: float | None = None) -> bytes:
         """The next message.
 
         Raises ``TimeoutError`` when none arrives in time, ``PeerDisconnected`` once the server ends the
         session, and ``ConnectRefused`` when the server refuses the session before its first message.
         """
-        ...
 
+    @abc.abstractmethod
     def close(self) -> str:
         """Close this end, and report what the wire saw, for the log.
 
         The report says whether the peer answered the close, in the wire's own terms. A server that still
         holds a session strands the next session's handshake, and only the wire can see that.
         """
-        ...
 
 
 class ServerConnection(abc.ABC):

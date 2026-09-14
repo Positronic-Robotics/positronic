@@ -19,7 +19,7 @@ from . import wire
 WS_IMPL = 'websockets-sansio'
 
 
-class WebsocketClientConnection:
+class WebsocketClientConnection(wire.ClientConnection):
     """A client's end of one websocket session."""
 
     def __init__(self, websocket: Connection):
@@ -55,7 +55,7 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
-class WebsocketClientWire:
+class WebsocketClientWire(wire.ClientWire):
     """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
 
     def schemes(self) -> tuple[wire.Scheme, ...]:
