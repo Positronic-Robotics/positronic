@@ -107,7 +107,7 @@ yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
 telemetry = [
-    # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
+    # Recording telemetry only: the OTel SDK + exporter that write the span sidecars, and the
     # machine-load sampler's probes.
     "nvidia-ml-py",
     "opentelemetry-exporter-otlp-json-file>=0.65b0",
