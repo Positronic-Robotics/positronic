@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import NamedTuple
 
 import configuronic as cfn
 import pos3
@@ -177,9 +178,20 @@ class ProgressStage(Enum):
         return list(type(self)).index(self)
 
 
+class StageCell(NamedTuple):
+    """A rung as the page reads a cell: it sorts on the first item and shows the second.
+
+    A NamedTuple IS a tuple, so this serializes to the `[raw, formatted]` pair `app.js` documents while
+    every reader in this process addresses `rank` and `label` by name.
+    """
+
+    rank: int
+    label: str
+
+
 # The cell for an episode that recorded no progress. Its rank is below every rung, so it sorts under
 # them from either end; `ProgressStage.rank` counts from 0.
-NO_STAGE = (-1, '-')
+NO_STAGE = StageCell(-1, '-')
 
 
 ROLLOUT_OUTCOME_BADGE = RendererConfig(
@@ -204,8 +216,8 @@ def rollout_outcome(ep: Episode) -> str:
     return ep[OUTCOME] if OUTCOME in ep else UNSCORED
 
 
-def rollout_stage_cell(ep: Episode) -> tuple[int, str]:
-    """The highest rung the arm reached, as `(rank, label)`: the page sorts by the rank and shows the label.
+def highest_rollout_stage(ep: Episode) -> StageCell:
+    """The highest rung the arm reached.
 
     FOOTGUN: a bare label sorts alphabetically, which is not the ladder — `at the target` would lead and
     `reaching` would trail. Every episode gets a pair, `NO_STAGE` included, because the page compares
@@ -213,7 +225,7 @@ def rollout_stage_cell(ep: Episode) -> tuple[int, str]:
     """
     reached = {value for value, _ in ep[PROGRESS_STATE]} if PROGRESS_STATE in ep else set()
     stage = max((s for s in ProgressStage if s.value in reached), key=lambda s: s.rank, default=None)
-    return NO_STAGE if stage is None else (stage.rank, stage.label)
+    return NO_STAGE if stage is None else StageCell(stage.rank, stage.label)
 
 
 def rollout_items(ep: Episode) -> str | None:
@@ -231,7 +243,7 @@ rollouts_ds = ds.transform.override(
                 Derive(**{
                     DERIVED_MODEL: rollout_model,
                     DERIVED_OUTCOME: rollout_outcome,
-                    DERIVED_STAGE: rollout_stage_cell,
+                    DERIVED_STAGE: highest_rollout_stage,
                     DERIVED_ITEMS: rollout_items,
                     DERIVED_STARTED: analysis_cfg.started,
                 }),
@@ -265,7 +277,7 @@ def rollouts_by_model():
             'count': len(episodes),
             'successes': successes,
             'success_rate': 100 * successes / len(episodes),
-            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE][0] == ProgressStage.AT_TARGET.rank),
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank == ProgressStage.AT_TARGET.rank),
         }
 
     format_table = {
