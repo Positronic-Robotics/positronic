@@ -37,6 +37,7 @@ from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
+from positronic.policy import codec as policy_codec
 from positronic.policy.codec import LEROBOT_FEATURES
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 
@@ -91,7 +92,7 @@ def build_env_config_from_codec(codec: Codec) -> PositronicEnvConfig:
         dtype = meta.get('dtype', 'float32')
 
         match key, dtype:
-            case 'action', _:
+            case policy_codec.ACTION, _:
                 features[key] = PolicyFeature(type=FeatureType.ACTION, shape=meta['shape'])
                 features_map[key] = ACTION
             case _, 'video':

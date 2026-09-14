@@ -7,13 +7,14 @@ import pytest
 import zmq
 
 from positronic.offboard.server import PolicyServer
+from positronic.policy.codec import ACTION
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
 
 
 def _source(monkeypatch, checkpoints: list[str]) -> gr00t_server.Gr00tSource:
     monkeypatch.setattr(gr00t_server, 'list_checkpoints', lambda _dir, prefix='': checkpoints)
-    return gr00t_server.droid.override_data(**{'source.checkpoints_dir': 's3://bucket/exp'})().source
+    return gr00t_server.droid.override_data(**{'source.model_source': 's3://bucket/exp'})().source
 
 
 def test_zero_padded_checkpoints_are_served_under_the_id_they_advertise(monkeypatch):
@@ -66,11 +67,13 @@ def test_camera_mismatch_stops_the_backend_before_warmup(monkeypatch, config, ch
     backend.client.call_endpoint.return_value = {
         gr00t.VIDEO: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: cameras},
         gr00t.STATE: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: list(gr00t.STATE_DIMS)},
+        ACTION: {gr00t.DELTA_INDICES: list(range(40)), gr00t.MODALITY_KEYS: list(gr00t.STATE_DIMS)},
+        gr00t.LANGUAGE: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: [gr00t.TASK]},
     }
     monkeypatch.setattr(gr00t_server, 'Gr00tSubprocess', Mock(return_value=backend))
     warmup = Mock()
     monkeypatch.setattr(gr00t_server, 'warmup', warmup)
-    if len(source.video_keys) != checkpoint_cameras:
+    if len(source.modality[gr00t.VIDEO]) != checkpoint_cameras:
         with pytest.raises(ValueError, match='Checkpoint video keys'):
             source.load(gr00t.BASE_MODEL)
         warmup.assert_not_called()
@@ -82,6 +85,26 @@ def test_camera_mismatch_stops_the_backend_before_warmup(monkeypatch, config, ch
             backend.stop.assert_not_called()
         finally:
             policy.close()
+
+
+@pytest.mark.parametrize('modality', [gr00t.STATE, ACTION, gr00t.LANGUAGE])
+def test_same_camera_checkpoint_with_incompatible_modalities_stops_before_warmup(monkeypatch, modality):
+    source = gr00t_server.droid().source
+    modalities = {
+        name: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: list(source.modality[name])}
+        for name in (gr00t.VIDEO, gr00t.STATE, ACTION)
+    }
+    modalities[gr00t.LANGUAGE] = {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: [gr00t.TASK]}
+    modalities[modality][gr00t.MODALITY_KEYS] = ['incompatible_field']
+    backend = Mock()
+    backend.client.call_endpoint.return_value = modalities
+    monkeypatch.setattr(gr00t_server, 'Gr00tSubprocess', Mock(return_value=backend))
+    warmup = Mock()
+    monkeypatch.setattr(gr00t_server, 'warmup', warmup)
+    with pytest.raises(ValueError, match='Checkpoint .* key'):
+        source.load(gr00t.BASE_MODEL)
+    warmup.assert_not_called()
+    backend.stop.assert_called_once()
 
 
 def test_session_timing_overrides_preserve_source_equality():

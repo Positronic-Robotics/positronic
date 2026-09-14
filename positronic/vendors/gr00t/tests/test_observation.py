@@ -10,7 +10,7 @@ from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import models
-from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.spec import split
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server
@@ -46,7 +46,7 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
         assert frames.shape == (1, 1, 180, 320, 3)
         np.testing.assert_array_equal(training[name][0][0], frames[0, 0])
     expected_action = np.concatenate([encoded[gr00t.STATE][name][0, 0] for name in gr00t.STATE_DIMS])
-    np.testing.assert_allclose(training['action'][0][0], expected_action)
+    np.testing.assert_allclose(training[ACTION][0][0], expected_action)
 
 
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
@@ -79,8 +79,8 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
     })
     encoder = codec.training_encoder
     encoded = encoder(episode)
-    action = encoded[gr00t.ACTION][0][0]
-    for name, bounds in encoder.meta[GR00T_MODALITY][gr00t.ACTION].items():
+    action = encoded[ACTION][0][0]
+    for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
         np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
 
 

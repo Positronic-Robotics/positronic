@@ -16,6 +16,7 @@ from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Runtime
+from positronic.policy.codec import ACTION
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -77,7 +78,7 @@ def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[d
 
     action = policy.predict_action_chunk(obs_int)
     action = action.squeeze(0).cpu().numpy()
-    return [{'action': a} for a in action]
+    return [{ACTION: a} for a in action]
 
 
 class LerobotPolicy(Policy):

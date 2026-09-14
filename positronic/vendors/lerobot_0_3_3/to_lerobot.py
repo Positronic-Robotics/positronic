@@ -31,7 +31,7 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.policy.codec import GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
+from positronic.policy.codec import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -99,7 +99,7 @@ def append_data_to_dataset(
     )
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc='Processing episodes')):
-        num_frames = len(ep_dict['action'])
+        num_frames = len(ep_dict[ACTION])
         total_length_sec += num_frames * 1 / lr_dataset.fps
 
         for i in range(num_frames):

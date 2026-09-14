@@ -13,9 +13,11 @@ from positronic.vendors import gr00t
 
 def cleanup_old_optimizers(output_dir: Path, keep_last_n: int = 2):
     """Delete optimizer.pt from all but the last N checkpoints to save space."""
-    checkpoints = sorted(output_dir.glob('checkpoint-*'), key=lambda p: int(p.name.split('-')[1]))
+    checkpoints = sorted(
+        output_dir.glob(f'{gr00t.CHECKPOINT_PREFIX}*'), key=lambda p: int(p.name.removeprefix(gr00t.CHECKPOINT_PREFIX))
+    )
     for ckpt in checkpoints[:-keep_last_n] if keep_last_n > 0 else checkpoints:
-        opt_file = ckpt / 'optimizer.pt'
+        opt_file = ckpt / gr00t.OPTIMIZER_FILENAME
         if opt_file.exists():
             opt_file.unlink()
             print(f'Deleted {opt_file}')

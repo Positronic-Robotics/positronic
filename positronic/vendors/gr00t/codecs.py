@@ -14,6 +14,7 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
 from positronic.policy.codec import (
+    ACTION,
     GR00T_MODALITY,
     LEROBOT_FEATURES,
     ActionHorizon,
@@ -106,7 +107,7 @@ class DroidCodec(Codec):
         meta = {
             GR00T_MODALITY: {
                 gr00t.STATE: state_meta,
-                gr00t.ACTION: action_meta,
+                ACTION: action_meta,
                 gr00t.VIDEO: {name: {gr00t.ORIGINAL_KEY: name} for name in self.image_mappings},
                 gr00t.ANNOTATION: {
                     gr00t.TASK.removeprefix(gr00t.ANNOTATION + '.'): {gr00t.ORIGINAL_KEY: gr00t.TASK_INDEX}
@@ -115,7 +116,7 @@ class DroidCodec(Codec):
             LEROBOT_FEATURES: {
                 **{name: lerobot_state(gr00t.STATE_DIMS[name]) for name in state_encoders},
                 **{name: lerobot_image(*gr00t.IMAGE_SIZE) for name in self.image_mappings},
-                gr00t.ACTION: lerobot_action(start),
+                ACTION: lerobot_action(start),
             },
         }
         return Derive(
@@ -123,7 +124,7 @@ class DroidCodec(Codec):
             **{
                 **state_encoders,
                 keys.TASK: Get(keys.TASK, ''),
-                gr00t.ACTION: lambda episode: tf.concat(
+                ACTION: lambda episode: tf.concat(
                     *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
                 ),
                 **{name: partial(self._derive_image, source) for name, source in self.image_mappings.items()},

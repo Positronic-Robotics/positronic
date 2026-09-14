@@ -19,7 +19,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -127,8 +127,8 @@ class PolicyClient:
 class Gr00tSubprocess:
     """Manages the gr00t ZMQ server subprocess."""
 
-    def __init__(self, checkpoint_dir: str, groot_venv_path: Path, zmq_port: int = 5555, ready_timeout: float = 120.0):
-        self.checkpoint_dir = checkpoint_dir
+    def __init__(self, model_path: str, groot_venv_path: Path, zmq_port: int = 5555, ready_timeout: float = 120.0):
+        self.model_path = model_path
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
@@ -140,7 +140,7 @@ class Gr00tSubprocess:
         python_bin = str(self.groot_venv_path / 'bin' / 'python')
 
         command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
-        command.extend(['--model_path', str(self.checkpoint_dir)])
+        command.extend(['--model_path', str(self.model_path)])
         command.extend(['--embodiment-tag', gr00t.EMBODIMENT])
         command.extend(['--host', '127.0.0.1'])
         command.extend(['--port', str(self.zmq_port)])
@@ -229,15 +229,15 @@ class Gr00tSource(ModelSource):
 
     def __init__(
         self,
-        video_keys: tuple[str, ...],
-        checkpoints_dir: str = 'hf://' + gr00t.BASE_MODEL,
+        modality: dict[str, dict],
+        model_source: str = 'hf://' + gr00t.BASE_MODEL,
         checkpoint: str | None = None,
         groot_venv_path: str = gr00t.VENV,
         zmq_port: int = 5555,
         ready_timeout: float = 600.0,
     ):
-        self.video_keys = tuple(video_keys)
-        self.checkpoints_dir = checkpoints_dir.rstrip('/')
+        self.modality = modality
+        self.model_source = model_source.rstrip('/')
         if self._is_hub_model and checkpoint is not None:
             raise ValueError('checkpoint step selection applies only to fine-tuned checkpoint directories')
         self.checkpoint = checkpoint
@@ -246,7 +246,10 @@ class Gr00tSource(ModelSource):
         self.ready_timeout = ready_timeout
 
     def _raw_ids(self) -> list[str]:
-        return [cp.removeprefix('checkpoint-') for cp in list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')]
+        return [
+            cp.removeprefix(gr00t.CHECKPOINT_PREFIX)
+            for cp in list_checkpoints(self.model_source, prefix=gr00t.CHECKPOINT_PREFIX)
+        ]
 
     def _raw_for(self, model_id: str) -> str:
         """The directory's own suffix for ``model_id``, which may be zero-padded where the advertised id is not."""
@@ -257,7 +260,7 @@ class Gr00tSource(ModelSource):
 
     @property
     def _is_hub_model(self) -> bool:
-        return self.checkpoints_dir.startswith('hf://')
+        return self.model_source.startswith('hf://')
 
     @staticmethod
     def _step_id(raw: str) -> str:
@@ -266,7 +269,7 @@ class Gr00tSource(ModelSource):
 
     def get_models(self) -> list[str]:
         if self._is_hub_model:
-            return [self.checkpoints_dir.removeprefix('hf://')]
+            return [self.model_source.removeprefix('hf://')]
         return [self._step_id(r) for r in self._raw_ids()]
 
     def resolve(self, model_id: str | None) -> str:
@@ -287,15 +290,20 @@ class Gr00tSource(ModelSource):
         return self._step_id(self._raw_for(model_id))
 
     def _warm_observation(self, modalities: dict) -> dict[str, Any]:
-        """Validate codec cameras and build a current-frame observation for the checkpoint."""
+        """Validate checkpoint modalities against the codec before building a warmup observation."""
         for name in (gr00t.VIDEO, gr00t.STATE):
             if modalities[name][gr00t.DELTA_INDICES] != [0]:
                 raise ValueError(f'DROID adapter requires current-frame {name}, got {modalities[name]}')
-        expected = set(modalities[gr00t.VIDEO][gr00t.MODALITY_KEYS])
-        if set(self.video_keys) != expected:
-            raise ValueError(
-                f'Checkpoint video keys {sorted(expected)} do not match codec keys {sorted(self.video_keys)}'
-            )
+        for name in (gr00t.VIDEO, gr00t.STATE, ACTION):
+            expected = set(modalities[name][gr00t.MODALITY_KEYS])
+            supplied = set(self.modality[name])
+            if supplied != expected:
+                raise ValueError(
+                    f'Checkpoint {name} keys {sorted(expected)} do not match codec keys {sorted(supplied)}'
+                )
+        language_key = modalities[gr00t.LANGUAGE][gr00t.MODALITY_KEYS][0]
+        if language_key != gr00t.TASK:
+            raise ValueError(f'Checkpoint instruction key {language_key} does not match codec key {gr00t.TASK}')
         width, height = gr00t.IMAGE_SIZE
         state = {
             name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32)
@@ -303,7 +311,9 @@ class Gr00tSource(ModelSource):
         }
         state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
         return {
-            gr00t.VIDEO: {name: np.zeros((1, 1, height, width, 3), dtype=np.uint8) for name in self.video_keys},
+            gr00t.VIDEO: {
+                name: np.zeros((1, 1, height, width, 3), dtype=np.uint8) for name in self.modality[gr00t.VIDEO]
+            },
             gr00t.STATE: state,
             gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
         }
@@ -311,23 +321,23 @@ class Gr00tSource(ModelSource):
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         if self._is_hub_model:
             self.resolve(model_id)
-            checkpoint_dir = self.checkpoints_dir
+            model_path = self.model_source
         else:
-            checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{self._raw_for(model_id)}'
-            checkpoint_dir = run_with_progress(
-                lambda: pos3.download(checkpoint_path, exclude=['optimizer.pt']),
-                f'Downloading checkpoint checkpoint-{model_id}',
+            checkpoint_path = f'{self.model_source}/{gr00t.CHECKPOINT_PREFIX}{self._raw_for(model_id)}'
+            model_path = run_with_progress(
+                lambda: pos3.download(checkpoint_path, exclude=[gr00t.OPTIMIZER_FILENAME]),
+                f'Downloading checkpoint {gr00t.CHECKPOINT_PREFIX}{model_id}',
                 on_progress,
             )
         groot = Gr00tSubprocess(
-            checkpoint_dir=str(checkpoint_dir),
+            model_path=str(model_path),
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
         )
         try:
             groot.start(on_progress)
-            policy = Gr00tPolicy(groot, str(checkpoint_dir))
+            policy = Gr00tPolicy(groot, str(model_path))
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
             modalities = groot.client.call_endpoint(gr00t.GET_MODALITY_CONFIG)
             warmup(policy, self._warm_observation(modalities), on_progress)
@@ -340,7 +350,7 @@ class Gr00tSource(ModelSource):
         return {
             policy_keys.TYPE: 'groot',
             'embodiment': gr00t.EMBODIMENT,
-            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
+            policy_keys.EXPERIMENT_NAME: self.model_source.split('/')[-1] or '',
         }
 
 
@@ -350,7 +360,7 @@ gr00t_source = cfn.Config(Gr00tSource)
 @cfn.config(codec=codecs.droid, source=gr00t_source)
 def pipeline(codec: Codec, source: cfn.Config):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
-    model_source = source(video_keys=tuple(codec.training_encoder.meta[GR00T_MODALITY][gr00t.VIDEO]))
+    model_source = source(modality=codec.training_encoder.meta[GR00T_MODALITY])
     return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | model_source
 
 

@@ -35,6 +35,7 @@ _QUAT = geom.Rotation.Representation.QUAT
 GR00T_MODALITY_PATH = Path('meta/modality.json')
 GR00T_MODALITY = 'gr00t_modality'
 LEROBOT_FEATURES = 'lerobot_features'
+ACTION = 'action'
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:

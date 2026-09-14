@@ -1,7 +1,6 @@
 """GR00T DROID model and wire vocabulary."""
 
 VIDEO = 'video'
-ACTION = 'action'
 ANNOTATION = 'annotation'
 ORIGINAL_KEY = 'original_key'
 START = 'start'
@@ -32,6 +31,8 @@ TASK = 'annotation.language.language_instruction'
 EMBODIMENT = 'oxe_droid_relative_eef_relative_joint'
 BASE_MODEL = 'nvidia/GR00T-N1.7-DROID'
 VENV = '/opt/gr00t-venv'
+CHECKPOINT_PREFIX = 'checkpoint-'
+OPTIMIZER_FILENAME = 'optimizer.pt'
 
 # Width, height at the DROID robot-client boundary; the checkpoint processor owns subsequent resizing/cropping.
 IMAGE_SIZE = (320, 180)

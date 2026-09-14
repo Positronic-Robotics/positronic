@@ -21,7 +21,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Layer, Policy, Session
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codec import ACTION, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.serialization import deserialize, serialize
@@ -268,8 +268,8 @@ class _DreamZeroSession(Session):
 
         # Response is (N, 8) — 7 joints + 1 gripper
         if action_array.ndim == 1:
-            return [{'action': action_array}]
-        return [{'action': action_array[i]} for i in range(action_array.shape[0])]
+            return [{ACTION: action_array}]
+        return [{ACTION: action_array[i]} for i in range(action_array.shape[0])]
 
     def close(self):
         try:

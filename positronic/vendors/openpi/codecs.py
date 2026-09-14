@@ -29,7 +29,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 from positronic.vendors import openpi
 
@@ -194,7 +194,7 @@ class PoseDeltaAction(Codec):
     OUTPUT_MAX = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
 
     def _decode_single(self, data):
-        action = np.asarray(data['action']).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
+        action = np.asarray(data[ACTION]).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
         physical = action[:6] * self.OUTPUT_MAX
         delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))
         grip = (float(action[6]) + 1.0) / 2.0
