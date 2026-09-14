@@ -245,16 +245,6 @@ class GrpcClientConnection:
         )
 
 
-def model_id_of(session_path: str) -> str | None:
-    """The model a session path names, or ``None`` for the model the server pinned."""
-    prefix = f'{wire.SESSION_PATH}/'
-    if session_path == wire.SESSION_PATH:
-        return None
-    if not session_path.startswith(prefix):
-        raise ValueError(f'Unexpected session path {session_path!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    return urllib.parse.unquote(session_path[len(prefix) :])
-
-
 class GrpcServerConnection(wire.ServerConnection):
     """A server's end of one gRPC session."""
 
@@ -317,6 +307,16 @@ def _server_options() -> list[tuple[str, int]]:
         ('grpc.http2.min_ping_interval_without_data_ms', _PING_TOLERATED_EVERY_MS),
         ('grpc.http2.max_ping_strikes', 0),
     ]
+
+
+def model_id_of(session_path: str) -> str | None:
+    """The model a session path names, or ``None`` for the model the server pinned."""
+    prefix = f'{wire.SESSION_PATH}/'
+    if session_path == wire.SESSION_PATH:
+        return None
+    if not session_path.startswith(prefix):
+        raise ValueError(f'Unexpected session path {session_path!r}; expected {wire.SESSION_PATH}[/<model_id>]')
+    return urllib.parse.unquote(session_path[len(prefix) :])
 
 
 class GrpcWire(wire.Wire):

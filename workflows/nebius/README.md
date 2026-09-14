@@ -303,8 +303,10 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 ## Authenticated inference
 
-The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on the inference
-WebSocket, rejecting before the session opens. `serve.sh` injects the token from the
+The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
+wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
+of the printed `grpcs://` URL sends the same token, which `.authed_remote` carries as gRPC
+metadata. `serve.sh` injects the token from the
 `positronic-serverless-inference-token` secret as the container's `AUTH_TOKEN`; export the same
 value locally and `.authed_remote` sends it (it raises immediately if the variable is unset).
 
