@@ -6,6 +6,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -460,6 +461,13 @@ class _Brakes:
         self._closed = True
 
 
+class RecoveryOutcome(Enum):
+    """Whether the arm came out of error."""
+
+    CLEARED = auto()
+    NOT_CLEARED = auto()
+
+
 class Robot(pimm.ControlSystem):
     def __init__(
         self,
@@ -499,9 +507,8 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
-        # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0. The
-        # reply is whether the arm came out of error.
-        self.recover = pimm.calls.ControlSystemHandler[None, bool](self)
+        # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0.
+        self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         self._load = load
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
@@ -633,9 +640,11 @@ class Robot(pimm.ControlSystem):
                 arm.note_refusals(goal)
 
                 for asked_to_recover in self.recover.incoming():
-                    cleared = robot.recover_from_errors()
-                    logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
-                    asked_to_recover.set_result(cleared)
+                    with pimm.calls.raise_to(asked_to_recover):
+                        cleared = robot.recover_from_errors()
+                        logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
+                        outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+                        asked_to_recover.set_result(outcome)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
