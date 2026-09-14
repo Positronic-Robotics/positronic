@@ -10,6 +10,8 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from typing import Any, final, overload
@@ -438,6 +440,16 @@ class FlipGrip(Codec):
         return {'name': self.WIRE_NAME}
 
 
+def _usable_cpus() -> int:
+    """CPUs this process may run on — its affinity mask where the platform publishes one, else the
+    host's count. FOOTGUN: neither reads a cgroup CPU quota, so a container limited by `--cpus` and
+    not by a mask still reads the host's cores.
+    """
+    if hasattr(os, 'sched_getaffinity'):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
     h, w = image.shape[:2]
     scale = min(1.0, width / w, height / h)
@@ -461,6 +473,10 @@ class RestrictImageSize(Codec):
 
     WIRE_NAME = 'restrict_image_size'
 
+    # Below this a stack scales quicker in one thread than a pool costs to raise.
+    _PARALLEL_FROM = 4
+    _MAX_WORKERS = 8
+
     def __init__(self, width: int = 640, height: int = 640):
         self._width = width
         self._height = height
@@ -473,13 +489,30 @@ class RestrictImageSize(Codec):
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
             # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
             if value.ndim == 4:
-                return np.stack([_scaled(frame, self._width, self._height) for frame in value])
+                return np.stack(self._scaled_frames(value))
             return _scaled(value, self._width, self._height)
         if isinstance(value, cabc.Mapping):
             return {k: self._restrict(k, v) for k, v in value.items()}
         if isinstance(value, list | tuple):
             return type(value)(self._restrict(key, v) for v in value)
         return value
+
+    def _workers(self, frames: int) -> int:
+        """Threads to scale ``frames`` on. One means the serial path: a pool wins nothing on a single
+        usable CPU, and below ``_PARALLEL_FROM`` it costs more to raise than the frames take."""
+        if frames < self._PARALLEL_FROM:
+            return 1
+        return max(1, min(frames, self._MAX_WORKERS, _usable_cpus()))
+
+    def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
+        """Every frame of one stack, scaled. Pillow drops the GIL for a resize and the frames are
+        independent, so more than one may run at a time."""
+        scale = partial(_scaled, width=self._width, height=self._height)
+        workers = self._workers(len(stack))
+        if workers == 1:
+            return [scale(frame) for frame in stack]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(scale, stack))
 
     def decode(self, data):
         return data
