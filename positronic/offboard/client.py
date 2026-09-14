@@ -2,8 +2,10 @@ import logging
 import ssl
 import time
 import urllib.parse
+from collections.abc import Mapping
 from enum import Enum
 from http import HTTPStatus
+from types import MappingProxyType
 from typing import Any
 
 import httpx
@@ -25,12 +27,14 @@ DEFAULT_INFER_TIMEOUT = 180.0
 
 
 class InferenceSession:
+    # The timing block of the last decoded inference response; empty when the server sent none, and
+    # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
+    # still carries it.
+    served_timing: Mapping[str, float] = MappingProxyType({})
+
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
-        # What the server reported spending on the last inference, for the caller that times the round
-        # trip. Empty against a server that reports nothing, which leaves that round trip undivided.
-        self.served_timing: dict[str, float] = {}
         self._metadata = self._handshake()
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
@@ -75,6 +79,7 @@ class InferenceSession:
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+        self.served_timing = {}
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}

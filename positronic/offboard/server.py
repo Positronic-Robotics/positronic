@@ -184,7 +184,8 @@ class _ServedTiming:
     """What one inference cost the server, in milliseconds on the server's own clock.
 
     Every figure is a duration. ``served_ms`` opens when the observation arrives and brackets the
-    phases inside it.
+    phases inside it. The answer's serialisation and send fall outside every figure: the report rides
+    in that answer.
     """
 
     def __init__(self) -> None:
@@ -200,8 +201,7 @@ class _ServedTiming:
             self._phases[name] = (time.perf_counter() - started) * 1000.0
 
     def report(self) -> dict[str, float]:
-        """The phases closed so far, under the span bracketing them. FOOTGUN: read while encoding, so
-        it carries no encode of its own — the answer's serialisation is outside every figure here."""
+        """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
 
 
@@ -391,8 +391,7 @@ class PolicyServer:
                                 actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         finally:
                             self._infer_lock.release()
-                        with timing.phase(protocol.TIMING_ENCODE):
-                            answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                        answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

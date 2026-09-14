@@ -29,12 +29,12 @@ ERROR = 'error'
 TIMING = 'timing'
 
 # The phases ``TIMING`` reports. `SERVED` brackets the other three: it opens on the observation
-# arriving and closes as the answer goes back, so a client's round trip minus `SERVED` is network.
+# arriving and closes before the answer is encoded, so a client's round trip minus `SERVED` is the
+# answer's encode and send plus the network.
 TIMING_SERVED = 'served_ms'
 TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
-TIMING_ENCODE = 'encode_ms'
-# Time the observation waited for the inference slot, inside `SERVED` — a queue rather than compute.
+# Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
 
 

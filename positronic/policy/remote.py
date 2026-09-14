@@ -56,7 +56,7 @@ def round_trip(
     try:
         return ws_session.infer(prepared)
     finally:
-        # Stamped on the span that timed the round trip, which is what a reduce subtracts them from.
+        # The server's timing fields ride on the round-trip span under the ``served.`` prefix.
         served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in ws_session.served_timing.items()}
         telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns(), **served)
 
