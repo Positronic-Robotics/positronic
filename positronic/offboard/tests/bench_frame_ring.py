@@ -33,7 +33,7 @@ HD720 = (720, 1280, 3)
 
 
 class _ReadEveryPixel(Session):
-    """A session that reads each frame once and answers, so both arms pay the same read."""
+    """A session that reads each frame once and answers."""
 
     def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]]:
         for value in obs.values():
