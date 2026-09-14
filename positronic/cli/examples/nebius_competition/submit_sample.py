@@ -27,28 +27,18 @@ import time
 from platform_client.client import API_KEY_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode
 from platform_client.errors import PlatformError
-from platform_client.eval_plan import plan_of_image
+from platform_client.eval_plan import EvalPlan, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
 
 
-def submit(
-    client: PlatformClient,
-    *,
-    eval_ref: EvalRef,
-    policy_image: PolicyImage,
-    alias: str | None,
-    transaction_key: TransactionKey | None,
-) -> SubmissionCreateResponse:
+def submit(client: PlatformClient, plan: EvalPlan) -> SubmissionCreateResponse:
     """Create the submission, and report the exact image it was pinned to."""
-    # The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
-    submission = client.create_submission(
-        plan_of_image(policy_image, eval_ref, alias=alias, transaction_key=transaction_key)
-    )
+    submission = client.create_submission(plan)
     print(f'submission {submission.submission_id} — {submission.status.name}')
-    print(f'pinned image {submission.policy_image_digest} against eval {eval_ref}')
+    print(f'pinned image {submission.policy_image_digest} against eval {plan.eval}')
     return submission
 
 
@@ -74,24 +64,26 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--transaction-key', default=None, help='reuse it to retry without a second charge')
     parser.add_argument('--timeout', type=float, default=3600.0, help='seconds to wait for a terminal status')
     args = parser.parse_args(argv)
-    try:
-        eval_ref = EvalRef(args.eval)
-        policy_image = PolicyImage(args.policy_image)
-        transaction_key = TransactionKey(args.transaction_key) if args.transaction_key else None
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-
     key = os.environ.get(API_KEY_ENV)
     if not key:
         # `positronic account register` saves the key in its record, which this script does not read.
         # `platform-register` prints the export line, so it is the one that helps here.
         raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
+    # Every value the wire types refuse — a name, a reference, a transaction key, a platform URL — is
+    # refused here, before any request. A pydantic `ValidationError` is a `ValueError`.
+    try:
+        transaction_key = TransactionKey(args.transaction_key) if args.transaction_key is not None else None
+        # The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
+        plan = plan_of_image(
+            PolicyImage(args.policy_image), EvalRef(args.eval), alias=args.alias, transaction_key=transaction_key
+        )
+        client = PlatformClient(args.platform_url, api_key=ApiKey(key))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
-    with PlatformClient(args.platform_url, api_key=ApiKey(key)) as client:
+    with client:
         try:
-            submission = submit(
-                client, eval_ref=eval_ref, policy_image=policy_image, alias=args.alias, transaction_key=transaction_key
-            )
+            submission = submit(client, plan)
             if submission.status in NO_RESULT_STATUSES:
                 reason = submission.reason_code.name if submission.reason_code else submission.status.name
                 if submission.reason_code is ReasonCode.image_unpullable:

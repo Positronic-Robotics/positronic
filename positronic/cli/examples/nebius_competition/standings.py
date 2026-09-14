@@ -20,7 +20,6 @@ from platform_client.boards import BoardRef
 from platform_client.client import PlatformClient
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
-from platform_client.responses import BoardSummary, RankingRow, RankingsResponse
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -32,41 +31,34 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
     ]
 
 
-def board_lines(boards: list[BoardSummary]) -> list[str]:
-    """One line per board: its slug, the eval it ranks, the metric it sorts on, and its title."""
-    if not boards:
-        return ['no boards']
-    rows = [[board.board, board.eval, board.primary_metric, board.title] for board in boards]
-    return _table(['board', 'eval', 'primary metric', 'title'], rows)
-
-
-def _row(row: RankingRow) -> list[str]:
-    score = '-' if row.scores.primary is None else f'{row.scores.primary:.3f}'
-    return [str(row.rank), f'{row.display_name}#{row.tag}', score, str(row.submission_id)]
-
-
-def standings_lines(response: RankingsResponse) -> list[str]:
-    """A header naming the board, then one line per row."""
-    lines = [f'{response.board}: ranks {response.eval} by {response.primary_metric}']
-    if not response.rankings:
-        return [*lines, 'no entries']
-    return [
-        *lines,
-        *_table(['rank', 'name#tag', response.primary_metric, 'submission'], list(map(_row, response.rankings))),
-    ]
-
-
 def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
     """The lines to print: the boards on offer, or the standings on `board`."""
     if board is None:
-        return board_lines(client.list_boards().boards)
+        boards = client.list_boards().boards
+        if not boards:
+            return ['no boards']
+        rows = [[b.board, b.eval, b.primary_metric, b.title] for b in boards]
+        return _table(['board', 'eval', 'primary metric', 'title'], rows)
     try:
-        return standings_lines(client.rankings(board=board))
+        response = client.rankings(board=board)
     except PlatformError as exc:
         if exc.code is not ErrorCode.not_found:
             raise
         offered = ', '.join(summary.board for summary in client.list_boards().boards)
         raise SystemExit(f'{exc.message}: {board}\nboards on offer: {offered}') from exc
+    header = f'{response.board}: ranks {response.eval} by {response.primary_metric}'
+    if not response.rankings:
+        return [header, 'no entries']
+    rows = [
+        [
+            str(row.rank),
+            f'{row.display_name}#{row.tag}',
+            '-' if row.scores.primary is None else f'{row.scores.primary:.3f}',
+            str(row.submission_id),
+        ]
+        for row in response.rankings
+    ]
+    return [header, *_table(['rank', 'name#tag', response.primary_metric, 'submission'], rows)]
 
 
 def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
@@ -81,12 +73,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--board', default=None, help='the slug of one board; the listing prints the slugs')
     args = parser.parse_args(argv)
+    # Every value the wire types refuse — a slug, a platform URL — is refused here, before any request.
     try:
         board = BoardRef(args.board) if args.board is not None else None
+        client = anonymous_client(args.platform_url)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    with anonymous_client(args.platform_url) as client:
+    with client:
         try:
             lines = run(client, board)
         except PlatformError as exc:

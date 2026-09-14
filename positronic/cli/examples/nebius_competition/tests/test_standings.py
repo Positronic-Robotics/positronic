@@ -142,3 +142,9 @@ def test_the_client_sends_no_key_even_when_the_environment_holds_one(standings: 
     with standings['anonymous_client'](client=httpx.Client(base_url=BASE, transport=transport)) as client:
         standings['run'](client, None)
     assert AUTH_HEADER not in platform.requests[0].headers
+
+
+def test_an_empty_platform_url_is_a_cli_error_before_any_request(standings: dict[str, Any]):
+    with pytest.raises(SystemExit) as exit_info:
+        standings['main'](['--platform-url='])
+    assert 'base_url is empty' in str(exit_info.value)

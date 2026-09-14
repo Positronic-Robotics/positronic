@@ -85,24 +85,6 @@ def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | 
     return anonymous
 
 
-def print_board_choices(public: PlatformClient) -> None:
-    """Each public board, and the eval it ranks: what `--eval` may name."""
-    print('pass --eval=<name>; the public boards rank these evals:')
-    for board in public.list_boards().boards:
-        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
-
-
-def print_standings(public: PlatformClient, eval_ref: EvalRef) -> None:
-    """Every public board that ranks `eval_ref`, row by row."""
-    boards = [board for board in public.list_boards().boards if board.eval == eval_ref]
-    if not boards:
-        print(f'   no public board ranks {eval_ref}')
-    for board in boards:
-        print(f'   {board.board}')
-        for row in public.rankings(board=board.board).rankings:
-            print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
-
-
 def walkthrough(
     client: PlatformClient,
     *,
@@ -144,10 +126,16 @@ def walkthrough(
 
     print('5. board')
     with anonymous_client(client.base_url) as public:
-        print_standings(public, eval_ref)
+        boards = [board for board in public.list_boards().boards if board.eval == eval_ref]
+        if not boards:
+            print(f'   no public board ranks {eval_ref}')
+        for board in boards:
+            print(f'   {board.board}')
+            for row in public.rankings(board=board.board).rankings:
+                print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--alias', default='demo', help='the name a board displays you by')
@@ -158,21 +146,26 @@ def main() -> None:
         '--policy-image', default=None, help='the image the platform pulls and runs; needed with --eval'
     )
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if (args.eval is None) != (args.policy_image is None):
         parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
+    # Every value the wire types refuse — a name, a reference, a platform URL — is refused here,
+    # before any request.
     try:
         eval_ref = EvalRef(args.eval) if args.eval is not None else None
         policy_image = PolicyImage(args.policy_image) if args.policy_image is not None else None
+        client = anonymous_client(args.platform_url) if eval_ref is None else PlatformClient(args.platform_url)
     except ValueError as exc:
         parser.error(str(exc))
 
     if eval_ref is None or policy_image is None:
-        with anonymous_client(args.platform_url) as public:
-            print_board_choices(public)
+        with client as public:
+            print('pass --eval=<name>; the public boards rank these evals:')
+            for board in public.list_boards().boards:
+                print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
         return
 
-    with PlatformClient(args.platform_url) as client:
+    with client:
         try:
             walkthrough(
                 client,

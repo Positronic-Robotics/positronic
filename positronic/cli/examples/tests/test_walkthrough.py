@@ -44,17 +44,18 @@ class Platform:
         return httpx.Response(200, json=BOARDS)
 
 
-def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(
-    walkthrough: dict[str, Any], monkeypatch, capsys
-):
+def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(walkthrough: dict[str, Any], monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
     platform = Platform()
     transport = httpx.MockTransport(platform)
     with walkthrough['anonymous_client'](client=httpx.Client(base_url=BASE, transport=transport)) as public:
-        walkthrough['print_board_choices'](public)
+        public.list_boards()
 
     assert AUTH_HEADER not in platform.requests[0].headers
-    assert capsys.readouterr().out.splitlines() == [
-        'pass --eval=<name>; the public boards rank these evals:',
-        '   a.board: ranks a.eval by success_rate',
-    ]
+
+
+def test_an_empty_platform_url_is_a_cli_error_before_any_request(walkthrough: dict[str, Any], capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        walkthrough['main'](['--platform-url='])
+    assert exit_info.value.code == 2
+    assert 'base_url is empty' in capsys.readouterr().err
