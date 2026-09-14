@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import uvicorn
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import WS_IMPL, PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
@@ -31,7 +31,9 @@ def start_server() -> Generator[StartServer, None, None]:
 
     def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
         server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
-        uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
+        uv_server = uvicorn.Server(
+            uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning', ws=WS_IMPL)
+        )
 
         async def _run():
             await server._startup()
