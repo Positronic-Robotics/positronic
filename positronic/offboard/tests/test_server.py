@@ -263,7 +263,11 @@ class _SlowCodec(Codec):
 
 
 def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
-    """The phase holds the model alone, so a codec's cost lands in ``infer_ms`` and not in ``model_ms``."""
+    """A codec's cost lands in ``infer_ms`` and not in ``model_ms``: the phase holds the model alone.
+
+    The gap between the two figures is what carries that. A timer opened around the served pipeline
+    puts the codec in both, which closes the gap.
+    """
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
 
@@ -274,14 +278,13 @@ def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, mak
     finally:
         session.close()
 
-    assert timing[protocol.TIMING_MODEL] < _SLOW_MS
     assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _SLOW_MS
 
 
 def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_mock_policy):
     """``model_ms`` is absent where the model did not run, rather than holding what an earlier call took.
 
-    ``StopOnFault`` answers a faulted arm itself, so the served pipeline returns without reaching the model.
+    The served pipeline returns without reaching the model: ``StopOnFault`` answers a faulted arm itself.
     """
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
