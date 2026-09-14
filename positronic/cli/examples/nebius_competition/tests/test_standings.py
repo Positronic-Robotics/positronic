@@ -137,5 +137,8 @@ def test_an_empty_board_slug_is_refused_before_any_request(standings: dict[str, 
 
 def test_the_client_sends_no_key_even_when_the_environment_holds_one(standings: dict[str, Any], monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
-    with standings['anonymous_client'](BASE) as client:
-        assert client.api_key is None
+    platform = Platform({routes.RANKINGS_LIST: (BOARDS, 200)})
+    transport = httpx.MockTransport(platform)
+    with standings['anonymous_client'](client=httpx.Client(base_url=BASE, transport=transport)) as client:
+        standings['run'](client, None)
+    assert AUTH_HEADER not in platform.requests[0].headers

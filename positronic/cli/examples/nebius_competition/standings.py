@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+import httpx
 from platform_client.boards import BoardRef
 from platform_client.client import PlatformClient
 from platform_client.enums import ErrorCode
@@ -68,11 +69,11 @@ def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
         raise SystemExit(f'{exc.message}: {board}\nboards on offer: {offered}') from exc
 
 
-def anonymous_client(platform_url: str | None) -> PlatformClient:
-    """A client that sends no key: a public board is readable by anyone, whatever the environment holds."""
-    client = PlatformClient(platform_url)
-    client.api_key = None
-    return client
+def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
+    """A client that sends no key, whatever the environment holds: a public board is readable by anyone."""
+    anonymous = PlatformClient(platform_url, client=client)
+    anonymous.api_key = None
+    return anonymous
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -25,6 +25,7 @@ import argparse
 import os
 import time
 
+import httpx
 from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
@@ -77,14 +78,28 @@ def print_quota(client: PlatformClient) -> None:
         print(f'   {limit.key} ({limit.window}): {remaining:g} of {allowed:g} {limit.unit} left')
 
 
-def print_standings(client: PlatformClient, eval_ref: EvalRef) -> None:
+def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
+    """A client that sends no key, whatever the environment holds: a public board is readable by anyone."""
+    anonymous = PlatformClient(platform_url, client=client)
+    anonymous.api_key = None
+    return anonymous
+
+
+def print_board_choices(public: PlatformClient) -> None:
+    """Each public board, and the eval it ranks: what `--eval` may name."""
+    print('pass --eval=<name>; the public boards rank these evals:')
+    for board in public.list_boards().boards:
+        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
+
+
+def print_standings(public: PlatformClient, eval_ref: EvalRef) -> None:
     """Every public board that ranks `eval_ref`, row by row."""
-    boards = [board for board in client.list_boards().boards if board.eval == eval_ref]
+    boards = [board for board in public.list_boards().boards if board.eval == eval_ref]
     if not boards:
         print(f'   no public board ranks {eval_ref}')
     for board in boards:
         print(f'   {board.board}')
-        for row in client.rankings(board=board.board).rankings:
+        for row in public.rankings(board=board.board).rankings:
             print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
 
 
@@ -128,7 +143,8 @@ def walkthrough(
     print(f'   result  {view.artifacts.result}')
 
     print('5. board')
-    print_standings(client, eval_ref)
+    with anonymous_client(client.base_url) as public:
+        print_standings(public, eval_ref)
 
 
 def main() -> None:
@@ -151,13 +167,12 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
+    if eval_ref is None or policy_image is None:
+        with anonymous_client(args.platform_url) as public:
+            print_board_choices(public)
+        return
+
     with PlatformClient(args.platform_url) as client:
-        # The boards are public, so the list needs no credential and comes before the check for one.
-        if eval_ref is None or policy_image is None:
-            print('pass --eval=<name>; the public boards rank these evals:')
-            for board in client.list_boards().boards:
-                print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
-            return
         try:
             walkthrough(
                 client,
