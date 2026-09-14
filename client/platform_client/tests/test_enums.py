@@ -135,8 +135,8 @@ def test_the_status_sets_partition_the_decided_from_the_undecided():
 
 
 def test_the_plan_sets_name_the_statuses_they_claim():
-    # Stopped spans the two kinds: `blocked` waits on its error, `errored` ended on one. Terminal
-    # is the decided set, so the two overlap on `errored` alone.
+    # `blocked` waits on its error and `errored` ended on one, so the stopped set spans both.
+    # Terminal is the decided set, so the two overlap on `errored` alone.
     assert PLAN_STOPPED_STATUSES & PLAN_TERMINAL_STATUSES == {PlanStatus.errored}
     assert PLAN_TERMINAL_STATUSES < set(PlanStatus) - {PlanStatus.INVALID}
     assert PlanStatus.received not in PLAN_TERMINAL_STATUSES | PLAN_STOPPED_STATUSES
