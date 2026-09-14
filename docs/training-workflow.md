@@ -172,7 +172,7 @@ WandB logging is enabled by default if `WANDB_API_KEY` is set in `docker/.env.wa
 
 ## Step 3: Serve Inference
 
-Start an inference server that exposes a unified WebSocket API. All vendors implement the same Protocol v1 (see [Offboard README](../positronic/offboard/README.md) for details), enabling a single `.remote` policy client that works across all models.
+Start an inference server that exposes a unified API over a WebSocket or a gRPC wire. All vendors implement the same Protocol v1 (see [Offboard README](../positronic/offboard/README.md) for details), enabling a single `.remote` policy client that works across all models.
 
 ### Starting Servers
 
