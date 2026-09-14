@@ -270,7 +270,7 @@ server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)`
 to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model catalogue,
 and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
-names it in `wire.endpoint`.
+names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire took.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
