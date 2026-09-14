@@ -29,8 +29,7 @@ ERROR = 'error'
 TIMING = 'timing'
 
 # The phases ``TIMING`` reports. `SERVED` brackets the other three: it opens on the observation
-# arriving and closes before the answer is encoded, so a client's round trip minus `SERVED` is the
-# answer's encode and send plus the network.
+# arriving and closes before the answer is encoded.
 TIMING_SERVED = 'served_ms'
 TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
