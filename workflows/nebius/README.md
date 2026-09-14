@@ -331,7 +331,9 @@ confirmed it on ticket U22281505; gRPC shares the proxy, so it is no escape hatc
 Two behaviours here are observed, not promised: Nebius documents no WebSocket or connection-lifetime
 contract at all, and the ingress closes a connection it has read nothing from after ~90 s — shorter than a
 cold checkpoint's first inference, so the client holds sessions open with pings (`ping_interval` in
-`positronic/offboard/websocket_wire.py`, and the gRPC keepalive options in `positronic/offboard/grpc_wire.py`). `pytest -m endpoint` is what catches either changing.
+`positronic/offboard/websocket_wire.py`, and the gRPC keepalive options in
+`positronic/offboard/grpc_wire.py`). `pytest -m endpoint` dials the websocket URL that the banner prints,
+so it catches a change on that wire alone. No endpoint-marked test dials the gRPC URL.
 
 ### Letting the config read the secret
 
