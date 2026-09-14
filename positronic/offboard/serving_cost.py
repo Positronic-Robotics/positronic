@@ -90,7 +90,7 @@ class CapturingWire(DelegatingPolicy):
 
 
 def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, height: int) -> Layer:
-    """The rig-side half a DROID endpoint declares, with the stack depth and image bound the caller names."""
+    """The rig-side stack the client builds, with the depth and the image bound the caller names."""
     offsets = tuple(-(frames - 1 - step) / rate_hz for step in range(frames))
     stacked = (*cameras, keys.EE_POSE, keys.GRIP)
     return (
