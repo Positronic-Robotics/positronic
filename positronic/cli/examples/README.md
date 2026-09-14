@@ -14,9 +14,8 @@ checkout, so nothing has to be installed first — `uv run` builds the environme
 The same flow, with no Python of your own:
 
 ```bash
-export POSITRONIC_PLATFORM_CREDENTIAL=<the identity to register with>
-uv run positronic account register --alias=<display name>
-export POSITRONIC_PLATFORM_API_KEY=<the key printed above>
+platform-register --alias=<display name>            # in a checkout: uv run platform-register
+export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
 uv run positronic eval status --id=<hex id>
@@ -47,12 +46,15 @@ a name the platform does not offer answers with every eval on offer, with a boar
 ## From Python
 
 ```bash
-POSITRONIC_PLATFORM_CREDENTIAL=<token> uv run positronic/cli/examples/walkthrough.py --eval=<name>
+uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
 ```
 
 `--eval` takes one of the evals `standings.py` prints; with no `--eval`, the walkthrough prints them
-and stops. Every script talks to `https://platform.positronic.ro` unless `--platform-url` says
-otherwise.
+and stops. `--policy-image` names an image the platform can pull; there is no public one to default
+to. The key comes from `POSITRONIC_PLATFORM_API_KEY`, which `platform-register` prints. A caller who
+holds a GitHub token the platform's OAuth app minted sets `POSITRONIC_PLATFORM_CREDENTIAL` instead,
+and the walkthrough registers with it. Every script talks to `https://platform.positronic.ro` unless
+`--platform-url` says otherwise.
 
 Engagement-specific material lives in its own subdirectory, and
 `positronic/cli/tests/test_vocabulary.py` holds everything outside it to that.

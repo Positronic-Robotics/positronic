@@ -1,6 +1,6 @@
 """Drive one submission from registration to a board, against any platform.
 
-    POSITRONIC_PLATFORM_CREDENTIAL=<token> uv run positronic/cli/examples/walkthrough.py
+    uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
 
 `uv run` builds the environment this needs from the checkout, so nothing has to be installed first.
 The credential is read from the environment rather than taken as an argument: a command line is
@@ -9,6 +9,10 @@ readable by every process on the box and lands in shell history.
 `--eval` names the eval to run. The platform owns the list: with no `--eval`, the script prints the
 public boards and the eval each one ranks, and stops. A name the platform does not offer is refused,
 and the refusal names the evals on offer.
+
+The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. With no key, the
+script registers with the GitHub token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's own
+OAuth app must have minted.
 
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
 same flow from the command line is `positronic account register`, `positronic eval run` and
@@ -21,7 +25,7 @@ import argparse
 import os
 import time
 
-from platform_client.client import CREDENTIAL_ENV, PlatformClient
+from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
@@ -87,14 +91,19 @@ def print_standings(client: PlatformClient, eval_ref: EvalRef) -> None:
 def walkthrough(
     client: PlatformClient,
     *,
-    credential: str,
+    credential: str | None,
     alias: str,
     eval_ref: EvalRef,
     policy_image: PolicyImage,
     timeout_s: float,
 ) -> None:
     print('1. register')
-    authenticate(client, credential=credential, alias=alias)
+    if client.api_key is not None:
+        print(f'   key from {API_KEY_ENV}; nothing to register')
+    elif credential is not None:
+        authenticate(client, credential=credential, alias=alias)
+    else:
+        raise SystemExit(f'   set {API_KEY_ENV} to the key `platform-register` prints')
 
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
@@ -135,7 +144,7 @@ def main() -> None:
     parser.add_argument(
         '--eval', default=None, help='the eval to run; with none, the public boards name the ones on offer'
     )
-    parser.add_argument('--policy-image', default='org/policy:v1', help='the image the platform pulls and runs')
+    parser.add_argument('--policy-image', required=True, help='the image the platform pulls and runs')
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args()
 
@@ -145,13 +154,10 @@ def main() -> None:
             print('pass --eval=<name>; the public boards rank these evals:')
             print_boards(client.list_boards().boards)
             raise SystemExit(2)
-        credential = os.environ.get(CREDENTIAL_ENV)
-        if not credential:
-            raise SystemExit(f'set {CREDENTIAL_ENV} to the token the platform verifies you by')
         try:
             walkthrough(
                 client,
-                credential=credential,
+                credential=os.environ.get(CREDENTIAL_ENV) or None,
                 alias=args.alias,
                 eval_ref=EvalRef(args.eval),
                 policy_image=PolicyImage(args.policy_image),
