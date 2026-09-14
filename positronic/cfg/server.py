@@ -137,6 +137,9 @@ OUTCOME = 'eval.outcome'
 SUCCESSFUL_ITEMS = 'eval.successful_items'
 TOTAL_ITEMS = 'eval.total_items'
 SUCCESS = 'Success'
+FAIL = 'Fail'
+SAFETY = 'Safety'
+RAN_OUT_OF_TIME = 'Ran out of time'
 UNSCORED = 'Unscored'
 
 # What this preset DERIVES onto each episode. The tables below address these again, so each one is
@@ -179,9 +182,9 @@ ROLLOUT_OUTCOME_BADGE = RendererConfig(
     type='badge',
     options={
         SUCCESS: {'label': SUCCESS, 'variant': 'success'},
-        'Fail': {'label': 'Fail', 'variant': 'danger'},
-        'Safety': {'label': 'Safety', 'variant': 'warning'},
-        'Ran out of time': {'label': 'Ran out of time', 'variant': 'default'},
+        FAIL: {'label': FAIL, 'variant': 'danger'},
+        SAFETY: {'label': SAFETY, 'variant': 'warning'},
+        RAN_OUT_OF_TIME: {'label': RAN_OUT_OF_TIME, 'variant': 'default'},
         UNSCORED: {'label': UNSCORED, 'variant': 'default'},
     },
 )

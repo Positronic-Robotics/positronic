@@ -26,14 +26,16 @@ def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
 
 
 def test_the_stage_cell_shows_the_operators_word_for_the_rung():
-    assert cfg_server.rollout_stage_cell(_with_stages('at-target')) == (4, 'at the target')
+    top = cfg_server.ProgressStage.AT_TARGET
+
+    assert cfg_server.rollout_stage_cell(_with_stages(top.value)) == (top.rank, top.label)
 
 
 def test_the_highest_rung_reached_is_the_one_shown():
     """A rollout records every rung it passes, so the cell is the maximum and not the last written."""
     cell = cfg_server.rollout_stage_cell(_with_stages('at-target', 'reaching', 'contact'))
 
-    assert cell is not None and cell[1] == 'at the target'
+    assert cell is not None and cell[1] == cfg_server.ProgressStage.AT_TARGET.label
 
 
 def test_an_episode_that_recorded_no_progress_has_no_stage():
@@ -82,5 +84,6 @@ def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
     rank the sort needs."""
     cell = cfg_server.rollout_stage_cell(_with_stages('at-target'))
 
-    assert filter_spelling(cell) == "(4, 'at the target')"
+    top = cfg_server.ProgressStage.AT_TARGET
+    assert filter_spelling(cell) == str((top.rank, top.label))
     assert cfg_server.rollouts_episodes_table.instantiate()[cfg_server.DERIVED_STAGE].filter is False
