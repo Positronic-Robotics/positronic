@@ -1,5 +1,7 @@
 import asyncio
+import os
 import socket
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping
@@ -21,41 +23,90 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+RunningServers = list[tuple[uvicorn.Server, threading.Thread]]
+
 StartServer = Callable[..., tuple[str, int, PolicyServer]]
+
+StartUnixServer = Callable[..., PolicyServer]
 
 
 @pytest.fixture
-def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown."""
-    running: list[tuple[uvicorn.Server, threading.Thread]] = []
-
-    def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
-        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
-        uv_server = uvicorn.Server(
-            uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning', ws=WS_IMPL)
-        )
-
-        async def _run():
-            await server._startup()
-            await uv_server.serve()
-
-        thread = threading.Thread(target=asyncio.run, args=(_run(),), daemon=True)
-        thread.start()
-        running.append((uv_server, thread))
-
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            try:
-                with socket.create_connection((server.host, server.port), timeout=0.1):
-                    return server.host, server.port, server
-            except (ConnectionRefusedError, OSError):
-                time.sleep(0.05)
-        raise RuntimeError('Server failed to start')
-
-    yield start
+def running_servers() -> Generator[RunningServers, None, None]:
+    """Every server a test started, stopped and joined at teardown."""
+    running: RunningServers = []
+    yield running
     for uv_server, thread in running:
         uv_server.should_exit = True
         thread.join(timeout=5.0)
+
+
+def _serve_in_background(server: PolicyServer, config: uvicorn.Config, running: RunningServers) -> None:
+    uv_server = uvicorn.Server(config)
+
+    async def _run():
+        await server._startup()
+        await uv_server.serve()
+
+    thread = threading.Thread(target=asyncio.run, args=(_run(),), daemon=True)
+    thread.start()
+    running.append((uv_server, thread))
+
+
+def _wait_until_it_accepts(dial: Callable[[], None]) -> None:
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            dial()
+            return
+        except OSError:
+            time.sleep(0.05)
+    raise RuntimeError('Server failed to start')
+
+
+@pytest.fixture
+def socket_path() -> Generator[str, None, None]:
+    """A path for a Unix socket, short enough for the 104-byte limit that ``tmp_path`` can pass."""
+    with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+        yield os.path.join(directory, 's.sock')
+
+
+@pytest.fixture
+def start_server(running_servers: RunningServers) -> StartServer:
+    """Factory serving pipelines on daemon threads."""
+
+    def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
+        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
+        config = uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning', ws=WS_IMPL)
+        _serve_in_background(server, config, running_servers)
+        _wait_until_it_accepts(lambda: socket.create_connection((server.host, server.port), timeout=0.1).close())
+        return server.host, server.port, server
+
+    return start
+
+
+def _dial_unix(path: str) -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.1)
+        sock.connect(path)
+
+
+@pytest.fixture
+def start_unix_server(running_servers: RunningServers) -> Generator[StartUnixServer, None, None]:
+    """Factory serving pipelines on a Unix socket, as ``PolicyServer.serve`` claims one."""
+    claimed: list[socket.socket] = []
+
+    def start(pipeline, uds: str, **server_kwargs) -> PolicyServer:
+        server = PolicyServer(pipeline, uds=uds, **server_kwargs)
+        sock = PolicyServer.claim_socket_path(uds)
+        claimed.append(sock)
+        config = uvicorn.Config(server.app, fd=sock.fileno(), log_level='warning', ws=WS_IMPL)
+        _serve_in_background(server, config, running_servers)
+        _wait_until_it_accepts(lambda: _dial_unix(uds))
+        return server
+
+    yield start
+    for sock in claimed:
+        sock.close()
 
 
 @pytest.fixture
