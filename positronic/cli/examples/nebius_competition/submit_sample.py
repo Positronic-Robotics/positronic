@@ -1,7 +1,11 @@
-"""Submit a sample policy to the competition's eval and print what it scored.
+"""Submit a sample policy to one eval and print what it scored.
 
     uv run positronic/cli/examples/nebius_competition/submit_sample.py \
-        --policy-image=<registry>/<you>/policy@sha256:...
+        --eval=<name> --policy-image=<registry>/<you>/policy@sha256:...
+
+The platform owns the list of evals. `standings.py` prints the public leaderboards and the eval
+each one ranks; a submission with a name the platform does not offer is refused, and the refusal
+names the evals on offer.
 
 `uv run` builds the environment this needs from the checkout, so nothing has to be installed first.
 The key comes from POSITRONIC_PLATFORM_API_KEY: a secret passed as an argument lands in your shell
@@ -10,8 +14,8 @@ history and in every process listing on the box.
 Assumes a key you already hold; `../walkthrough.py` covers registration. Re-running with the same
 `--transaction-key` returns the original submission rather than spending quota twice.
 
-The command-line equivalent is `positronic eval run --eval=robolab.public_subset
---policy-image=...`, then `positronic eval status --id=...`.
+The command-line equivalent is `positronic eval run --eval=<name> --policy-image=...`, then
+`positronic eval status --id=...`.
 """
 
 from __future__ import annotations
@@ -29,19 +33,22 @@ from platform_client.ids import ApiKey, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
 
-# The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
-EVAL = EvalRef('robolab.public_subset')
-
 
 def submit(
-    client: PlatformClient, *, policy_image: PolicyImage, alias: str | None, transaction_key: TransactionKey | None
+    client: PlatformClient,
+    *,
+    eval_ref: EvalRef,
+    policy_image: PolicyImage,
+    alias: str | None,
+    transaction_key: TransactionKey | None,
 ) -> SubmissionCreateResponse:
     """Create the submission, and report the exact image it was pinned to."""
+    # The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
     submission = client.create_submission(
-        plan_of_image(policy_image, EVAL, alias=alias, transaction_key=transaction_key)
+        plan_of_image(policy_image, eval_ref, alias=alias, transaction_key=transaction_key)
     )
     print(f'submission {submission.submission_id} — {submission.status.name}')
-    print(f'pinned image {submission.policy_image_digest} against eval {EVAL}')
+    print(f'pinned image {submission.policy_image_digest} against eval {eval_ref}')
     return submission
 
 
@@ -61,6 +68,7 @@ def poll_until_terminal(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
+    parser.add_argument('--eval', required=True, help='the eval to run; `standings.py` lists the ones with a board')
     parser.add_argument('--policy-image', required=True, help='a digest-pinned reference the platform can pull')
     parser.add_argument('--alias', default=None, help='a per-submission label; the board shows your user alias')
     parser.add_argument('--transaction-key', default=None, help='reuse it to retry without a second charge')
@@ -77,6 +85,7 @@ def main() -> None:
         try:
             submission = submit(
                 client,
+                eval_ref=EvalRef(args.eval),
                 policy_image=PolicyImage(args.policy_image),
                 alias=args.alias,
                 transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,

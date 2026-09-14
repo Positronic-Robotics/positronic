@@ -202,13 +202,16 @@ DOCUMENTED_COMMANDS = {
     'eval-list': ['uv', 'run', 'positronic', 'eval', 'list'],
     'eval-cancel': ['uv', 'run', 'positronic', 'eval', 'cancel', f'--id={SUBMISSION}'],
     'eval-catalog': ['uv', 'run', 'positronic', 'eval', 'catalog'],
-    'walkthrough': ['uv', 'run', 'positronic/cli/examples/walkthrough.py'],
+    'walkthrough': ['uv', 'run', 'positronic/cli/examples/walkthrough.py', '--eval=fake.smoke'],
     'submit-sample': [
         'uv',
         'run',
         'positronic/cli/examples/nebius_competition/submit_sample.py',
+        '--eval=fake.smoke',
         '--policy-image=org/policy@sha256:abc',
     ],
+    'standings-list': ['uv', 'run', 'positronic/cli/examples/nebius_competition/standings.py'],
+    'standings-board': ['uv', 'run', 'positronic/cli/examples/nebius_competition/standings.py', '--board=fake.smoke'],
 }
 
 

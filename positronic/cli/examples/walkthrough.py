@@ -6,6 +6,10 @@
 The credential is read from the environment rather than taken as an argument: a command line is
 readable by every process on the box and lands in shell history.
 
+`--eval` names the eval to run. The platform owns the list: with no `--eval`, the script prints the
+public boards and the eval each one ranks, and stops. A name the platform does not offer is refused,
+and the refusal names the evals on offer.
+
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
 same flow from the command line is `positronic account register`, `positronic eval run` and
 `positronic eval status`.
@@ -25,7 +29,7 @@ from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
-from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
+from platform_client.responses import BoardSummary, ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
@@ -69,6 +73,23 @@ def print_quota(client: PlatformClient) -> None:
         print(f'   {limit.key} ({limit.window}): {remaining:g} of {allowed:g} {limit.unit} left')
 
 
+def print_boards(boards: list[BoardSummary]) -> None:
+    """Each public board, and the eval it ranks."""
+    for board in boards:
+        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
+
+
+def print_standings(client: PlatformClient, eval_ref: EvalRef) -> None:
+    """Every public board that ranks `eval_ref`, row by row."""
+    boards = [board for board in client.list_boards().boards if board.eval == eval_ref]
+    if not boards:
+        print(f'   no public board ranks {eval_ref}')
+    for board in boards:
+        print(f'   {board.board}')
+        for row in client.rankings(board=board.board).rankings:
+            print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
+
+
 def walkthrough(
     client: PlatformClient,
     *,
@@ -103,21 +124,30 @@ def walkthrough(
     print(f'   primary {view.scores.primary}')
     print(f'   result  {view.artifacts.result}')
 
+    print('5. board')
+    print_standings(client, eval_ref)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--alias', default='demo', help='the name a board displays you by')
-    parser.add_argument('--eval', default='fake.smoke', help='the eval to run; the platform lists the ones it offers')
+    parser.add_argument(
+        '--eval', default=None, help='the eval to run; with none, the public boards name the ones on offer'
+    )
     parser.add_argument('--policy-image', default='org/policy:v1', help='the image the platform pulls and runs')
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args()
 
-    credential = os.environ.get(CREDENTIAL_ENV)
-    if not credential:
-        raise SystemExit(f'set {CREDENTIAL_ENV} to the token the platform verifies you by')
-
     with PlatformClient(args.platform_url) as client:
+        # The boards are public, so the list needs no credential and comes before the check for one.
+        if args.eval is None:
+            print('pass --eval=<name>; the public boards rank these evals:')
+            print_boards(client.list_boards().boards)
+            raise SystemExit(2)
+        credential = os.environ.get(CREDENTIAL_ENV)
+        if not credential:
+            raise SystemExit(f'set {CREDENTIAL_ENV} to the token the platform verifies you by')
         try:
             walkthrough(
                 client,
