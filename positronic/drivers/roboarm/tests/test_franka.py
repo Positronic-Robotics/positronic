@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -17,6 +18,9 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+# What the control box answers for a safe input, in its own words.
+CLEAR = 'Not triggered (Motion permitted)'
+STOPPED = 'Triggered (Motion prohibited)'
 
 
 class Call(StrEnum):
@@ -39,6 +43,12 @@ class Call(StrEnum):
 class _Goal:
     status: franka.pf.GoalStatus
     reason: str | None
+
+
+# A goal the arm would not take, and one it did.
+REFUSED = _Goal(franka.pf.GoalStatus.ABORTED, 'scripted')
+ACCEPTED = _Goal(franka.pf.GoalStatus.IN_FLIGHT, None)
+ARRIVED = _Goal(franka.pf.GoalStatus.REACHED, None)
 
 
 @dataclass
@@ -127,13 +137,14 @@ class FakeArm:
 
 
 class FakeDesk:
-    """In-memory ``Desk``: records that the session prepared the robot and released control, and every brake
-    operation the driver asked for."""
+    """In-memory ``Desk``: records that the session prepared the robot and released control, records every
+    brake operation the driver asked for, and reports whatever ``safe_inputs`` holds."""
 
     def __init__(self):
         self.prepared = False
         self.released = False
         self.calls: list[Call] = []
+        self.safe_inputs = dict.fromkeys(('x31', 'x32', 'x33', 'x4'), CLEAR)
 
     def __enter__(self) -> 'FakeDesk':
         return self
@@ -150,6 +161,12 @@ class FakeDesk:
 
     def close_brakes(self) -> None:
         self.calls.append(Call.CLOSE_BRAKES)
+
+    def _authenticate(self) -> None:
+        pass
+
+    def safety_status(self) -> dict[str, Any]:
+        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs)}
 
 
 @pytest.fixture
@@ -175,10 +192,20 @@ def _drive(loop, clock: MockClock | None = None) -> None:
             clock.advance(wait.seconds)
 
 
+def _safe_inputs(driver: franka.Robot) -> franka._SafeInputs:
+    """The watch the driver builds for itself, from the Desk credentials its configuration reaches."""
+    return franka._SafeInputs(driver._ip, driver._desk_credentials)
+
+
+def _arm(driver: franka.Robot, clock: MockClock) -> franka._Arm:
+    """The driver's arm, watching the safe inputs its own configuration reaches."""
+    return driver._arm(StopFlag(), clock, _safe_inputs(driver))
+
+
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
     """Park ``arm`` under a clock that moves only by the waits the park itself asks for."""
     clock = MockClock()
-    _drive(driver._arm(StopFlag(), clock).park(), clock)
+    _drive(_arm(driver, clock).park(), clock)
     return clock
 
 
@@ -202,7 +229,7 @@ def test_the_park_waits_by_yielding_rather_than_blocking():
     """A driver's waits are the world's to honour, teardown included: the park asks for them, never sleeps."""
     arm = FakeArm(JOGGED, polls_to_reach=3)
 
-    commands = list(_driver(arm, manage_desk=False)._arm(StopFlag(), MockClock()).park())
+    commands = list(_arm(_driver(arm, manage_desk=False), MockClock()).park())
 
     assert commands and all(isinstance(command, pimm.Sleep | pimm.Yield) for command in commands)
 
@@ -219,7 +246,7 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
     clock = MockClock()
-    parking = _driver(arm, manage_desk=False)._arm(StopFlag(), clock)
+    parking = _arm(_driver(arm, manage_desk=False), clock)
     budget = parking._travel_s(JOGGED, PARK)
 
     _drive(parking.park(), clock)
@@ -692,7 +719,7 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
     driver = _driver(arm, manage_desk=False)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    travel = driver._arm(StopFlag(), clock).move_to(JOGGED, None)
+    travel = _arm(driver, clock).move_to(JOGGED, None)
 
     next(travel)  # the first poll: the goal is in flight
     clock.advance(60.0)  # the deadline expires
@@ -711,7 +738,7 @@ def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available()
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
-    travel = driver._arm(StopFlag(), MockClock()).move_to(JOGGED, None)
+    travel = _arm(driver, MockClock()).move_to(JOGGED, None)
 
     arm.error = 1
     with pytest.raises(StopIteration) as done:
@@ -749,6 +776,258 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
     # Published before the asker heard: a caller that starts recovering must not read the arm as available
     assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+
+def _refusals(caplog) -> list[str]:
+    """The lines the refusal log wrote."""
+    return [record.message for record in caplog.records if record.message.startswith('The arm refused a move')]
+
+
+def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
+    """A phrase the driver does not recognise reads as triggered, never as clear."""
+    assert not franka._SafeInputs._triggered(CLEAR)
+    assert franka._SafeInputs._triggered(STOPPED)
+    assert franka._SafeInputs._triggered('a phrase this control box has never sent')
+
+
+def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
+    """A safe input that goes triggered logs a prohibition, and one that clears logs a permission."""
+    caplog.set_level(logging.INFO)
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+
+    watch.sample()
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    desk.safe_inputs['x31'] = CLEAR
+    watch.sample()
+
+    assert "safe inputs ['x31'] are triggered" in caplog.text
+    assert 'permits motion' in caplog.text
+
+
+def test_entering_the_watch_leaves_a_reading_in_hand(desk):
+    """The watch samples before it returns, so it never reports a clear box it has not read."""
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+    desk.safe_inputs['x31'] = STOPPED
+
+    with watch:
+        assert watch.triggered == ['x31']
+
+
+def test_the_refusal_the_arm_logs_names_the_safe_input_that_prohibits_motion(desk, caplog):
+    """libfranka's own words name no cause, so the refused move carries the input the control box reports."""
+    driver = _driver(FakeArm(PARK))
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+
+    driver._arm(StopFlag(), MockClock(), watch).note_refusals(REFUSED)
+
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+
+
+def test_a_refusal_names_no_safe_input_where_nothing_reads_them(desk, caplog):
+    """Without a reading there is nothing to attribute the refusal to, and the line says only what the arm said."""
+    driver = _driver(FakeArm(PARK), manage_desk=False)
+
+    _arm(driver, MockClock()).note_refusals(REFUSED)
+
+    assert _refusals(caplog) == ['The arm refused a move: scripted']
+
+
+def test_a_refusal_names_no_safe_input_the_control_box_has_stopped_confirming(desk, caplog):
+    """A trip nobody can confirm still standing is not evidence about the move the arm refuses now."""
+    driver = _driver(FakeArm(PARK))
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()  # a trip is on the record, and then the control box goes quiet
+
+    def unreachable() -> dict[str, Any]:
+        raise ConnectionError('the control box stopped answering')
+
+    desk.safety_status = unreachable
+    watch.sample()
+    driver._arm(StopFlag(), MockClock(), watch).note_refusals(REFUSED)
+
+    assert _refusals(caplog) == ['The arm refused a move: scripted']
+
+
+def test_the_driver_logs_one_line_for_a_wall_of_refusals(desk, caplog):
+    """The wall is hundreds of lines libfranka prints itself, so a line per refusal buries the one that names why."""
+    driver = _driver(FakeArm(PARK))
+    watching = _arm(driver, MockClock())
+
+    watching.note_refusals(REFUSED)
+    watching.note_refusals(REFUSED)
+
+    assert _refusals(caplog) == ['The arm refused a move: scripted'], 'the wall of refusals was logged in full'
+
+
+def test_a_second_move_the_arm_refuses_is_counted_with_the_first(desk, caplog):
+    """The count is the diagnosis, so refusals spanning two moves must not read as one."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    watching = _arm(driver, clock)
+
+    watching.note_refusals(REFUSED)  # the arm refuses one move
+    watching.command_target(PARK, None)  # the next is dispatched
+    watching.note_refusals(REFUSED)  # and refused in its turn
+    clock.advance(franka._Arm._REFUSAL_QUIET_S)
+    watching.note_refusals(ACCEPTED)  # then the arm takes a goal again
+
+    assert 'The arm refused 2 moves in a row' in caplog.text
+
+
+def test_a_refusal_that_never_lets_up_is_not_reported_as_recovered(desk, caplog):
+    """The summary says the arm accepts moves again, so a goal it has accepted is what earns it."""
+    driver = _driver(FakeArm(PARK))
+    clock = MockClock()
+    watching = _arm(driver, clock)
+
+    watching.note_refusals(REFUSED)
+    watching.command_target(PARK, None)
+    watching.note_refusals(REFUSED)  # and every goal after it stays refused
+    clock.advance(franka._Arm._REFUSAL_QUIET_S * 3)
+    watching.note_refusals(REFUSED)
+
+    assert 'accepts them again' not in caplog.text
+
+
+def test_a_move_a_safe_input_stopped_fails_rather_than_going_again(desk):
+    """The driver cannot tell a bouncing contact from a person's hand, so a trip ends the move every time."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    desk.safe_inputs['x31'] = STOPPED
+    travel = _arm(driver, clock).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _drive(travel, clock)
+
+    assert clock.now() == 0.0, 'the move waited on the safe input rather than failing'
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'the arm was sent to the target a second time'
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a triggered safe input was answered with a recovery'
+
+
+def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
+    """The move that fails logs the refusal itself."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    move = _mover(world, driver)
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    driving = driver._arm(StopFlag(), clock, watch)
+    answer = move(command.JointPosition(JOGGED))
+    asked = driving.moves.next_request()
+    assert isinstance(asked, pimm.calls.Call)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED  # the arm refuses only once the move is under way
+
+    _drive(driving.sync_move(asked), clock)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        answer.result()
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+
+
+def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
+    """The park swallows its own failure, so the refusal has to be recorded before it does."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+
+    _drive(driver._arm(StopFlag(), clock, watch).park(at_teardown=True), clock)
+
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+
+
+def test_a_move_the_arm_refused_as_its_deadline_expired_is_still_logged(desk, caplog):
+    """The hold target the deadline sets replaces the goal, so nothing after this reading can name the refusal."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(60.0)  # the deadline expires
+    arm.goal_status = franka.pf.GoalStatus.ABORTED  # and the arm refuses in the same moment
+
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(travel)
+
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+
+
+def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
+    """The count is of refusals, and a goal still in flight at the deadline has refused nothing."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(60.0)  # the deadline expires, and the goal is still in flight
+
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(travel)
+
+    assert _refusals(caplog) == []
+
+
+def test_a_move_the_arm_reached_ends_the_refusal_streak(desk, caplog):
+    """The count says the refusals ran in a row, so a goal the arm reached has to end it."""
+    driver = _driver(FakeArm(PARK))
+    clock = MockClock()
+    watching = _arm(driver, clock)
+
+    watching.note_refusals(REFUSED)
+    watching.note_refusals(ARRIVED)  # the arm reaches a goal, inside the quiet time
+    watching.command_target(PARK, None)
+    watching.note_refusals(REFUSED)  # and refuses a later one, which starts its own streak
+    clock.advance(franka._Arm._REFUSAL_QUIET_S)
+    watching.note_refusals(ARRIVED)
+
+    assert 'moves in a row' not in caplog.text
+    assert len(_refusals(caplog)) == 2, 'the two refusals were counted as one streak'
+
+
+def test_a_run_whose_move_the_arm_refuses_fails_the_asker_and_logs_the_refusal(desk, world, caplog):
+    """End to end: the move fails the caller, and the refusal is logged as it fails."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    move = _mover(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # into the move, which the arm refuses
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        answer.result()
+    assert _refusals(caplog) == ['The arm refused a move: scripted']
+
+    next(loop)  # and the loop carries on rather than raising
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 2, 'the refused move was made again'
 
 
 def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):

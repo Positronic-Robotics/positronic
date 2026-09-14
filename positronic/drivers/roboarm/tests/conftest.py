@@ -47,6 +47,7 @@ def _install_vendor_stub() -> None:
     vendor = types.ModuleType(VENDOR)
     vendor.__dict__.update(
         GoalStatus=GoalStatus,
+        Goal=object,
         State=object,
         Robot=object,
         RealtimeConfig=types.SimpleNamespace(Ignore=object()),

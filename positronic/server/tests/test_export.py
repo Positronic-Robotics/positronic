@@ -333,6 +333,35 @@ def test_the_asset_list_holds_the_viewer_of_the_release_the_pages_load():
     assert all(file.is_file() for _, file in listed)
 
 
+def test_the_assets_of_an_export_that_names_no_directory_sit_at_the_asset_route(dataset, tmp_path):
+    out = tmp_path / 'out'
+    written = an_export(dataset, out, assets=True)
+
+    assert sorted(str(file.path) for file in written if file.kind is FileKind.ASSET) == sorted(
+        str(path) for path, _ in asset_files()
+    )
+    assert 'href="/static/styles.css"' in (out / 'index.html').read_text()
+    assert f'/static/{VIEWER_DIR}/{rr.__version__}/index.html' in (out / 'episode/0/index.html').read_text()
+
+
+def test_an_export_writes_its_assets_under_the_directory_it_is_given_and_its_pages_read_them_there(dataset, tmp_path):
+    out, directory = tmp_path / 'out', PurePosixPath('static/a1b2c3d4e5f6a7b8')
+    written = an_export(dataset, out, assets=True, asset_dir=directory)
+
+    at_directory = sorted(str(file.path) for file in written if file.kind is FileKind.ASSET)
+    assert at_directory == sorted(str(path) for path, _ in asset_files(directory))
+    assert all(path.startswith(f'{directory}/') for path in at_directory)
+    assert f'{directory}/{VIEWER_DIR}/{rr.__version__}/index.html' in at_directory
+    assert f'href="/{directory}/styles.css"' in (out / 'index.html').read_text()
+    assert f'/{directory}/{VIEWER_DIR}/{rr.__version__}/index.html' in (out / 'episode/0/index.html').read_text()
+
+
+@pytest.mark.parametrize('directory', ['assets', '/static/rooted', 'static/../etc', 'static/a b'])
+def test_an_asset_directory_outside_the_asset_route_or_past_one_segment_each_is_refused(directory, dataset, tmp_path):
+    with pytest.raises(ValueError, match='asset directory'):
+        an_export(dataset, tmp_path / 'out', asset_dir=PurePosixPath(directory))
+
+
 def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
     episodes = [{'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 

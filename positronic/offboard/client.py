@@ -6,6 +6,8 @@ from typing import Any, Self
 
 import httpx
 
+from positronic import telemetry, telemetry_keys
+
 from . import protocol, wire, wires
 from .protocol import deserialise, serialise, typed_commands
 from .wire import ClientWire
@@ -71,10 +73,14 @@ class InferenceSession:
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-
-        self._conn.send(serialised)
+        # The pair reads as the uplink and then the wait the server's own time sits inside: each span
+        # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
+        wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
+            self._conn.send(serialised)
         try:
-            response = deserialise(self._conn.recv(timeout=self._infer_timeout))
+            with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
+                received = self._conn.recv(timeout=self._infer_timeout)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -83,6 +89,7 @@ class InferenceSession:
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
+        response = deserialise(received)
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:

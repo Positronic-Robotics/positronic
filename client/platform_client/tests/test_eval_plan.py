@@ -240,13 +240,21 @@ def test_an_endpoint_says_whether_it_names_a_locator():
     assert Endpoint(name='baseline', url='wss://x/ws').names_a_locator is True
 
 
-def test_a_plan_names_each_task_and_each_endpoint_once():
-    with pytest.raises(ValidationError, match='more than once'):
-        a_plan(tasks=[SPOONS, SPOONS])
+def test_a_plan_names_each_endpoint_once():
     with pytest.raises(ValidationError, match='more than once'):
         a_plan(endpoints=[BASELINE, BASELINE])
     with pytest.raises(ValidationError, match='more than once'):
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': [{'name': 'e'}, {'name': 'e'}]})
+
+
+def test_a_plan_may_name_one_task_twice():
+    """Two nodes of one task, each with its own scene, is a plan the platform runs. The list keeps
+    them apart and in order; the id cannot."""
+    plan = a_plan(tasks=[SPOONS, {'task_id': SPOONS, 'episodes_per_endpoint': 2}])
+
+    assert [task.task_id for task in plan.tasks] == [SPOONS, SPOONS]
+    assert [task.episodes_per_endpoint for task in plan.tasks] == [None, 2]
+    assert plan.resolved_episodes_total == 24
 
 
 def test_a_task_endpoint_naming_no_locator_names_one_the_plan_defines():

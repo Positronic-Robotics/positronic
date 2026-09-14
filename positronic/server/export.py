@@ -35,6 +35,7 @@ from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
     API_ROUTE,
     ASSET_ROUTE,
+    DEFAULT_ASSET_DIR,
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
@@ -59,6 +60,7 @@ from positronic.server.positronic_server import (
     group_link,
     install_dataset,
     normalized_base_href,
+    validated_asset_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -369,11 +371,12 @@ def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, 
     ]
 
 
-def asset_files() -> list[tuple[PurePosixPath, Path]]:
-    """The app's own scripts, styles and viewer, each as its path under `static/` and the file to copy from."""
+def asset_files(asset_dir: PurePosixPath = DEFAULT_ASSET_DIR) -> list[tuple[PurePosixPath, Path]]:
+    """The app's own scripts, styles and viewer, each as its path under `asset_dir` and the file to copy from."""
+    directory = validated_asset_dir(asset_dir)
     static_dir = Path(__file__).resolve().parent / ASSET_ROUTE
     files = sorted(p for p in static_dir.rglob('*') if p.is_file())
-    return [(PurePosixPath(ASSET_ROUTE) / file.relative_to(static_dir).as_posix(), file) for file in files]
+    return [(directory / file.relative_to(static_dir).as_posix(), file) for file in files]
 
 
 def _whole_api_routes() -> list[str]:
@@ -489,6 +492,7 @@ def export_static(
     build_id: str = '',
     full_dataset: Dataset | None = None,
     assets: bool = True,
+    asset_dir: PurePosixPath = DEFAULT_ASSET_DIR,
     scratch_dir: Path | None = None,
     workers: int = DEFAULT_WORKERS,
 ) -> list[ExportedFile]:
@@ -499,10 +503,11 @@ def export_static(
     episode's robot model out of its static values. The recordings are built `workers` at a time in a
     directory of this export's own under `scratch_dir`, the system's temporary directory when None,
     copied in from there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
-    and viewer under `static/`, which the pages request at the host root, so it goes with the root
-    base href only; an export under a prefix shares the host's copy. An export holds the app's state
-    for its duration, so a second export in the process waits for it; one into the same directory is
-    then refused, as the directory holds the first.
+    and viewer under `asset_dir`, a directory under `static/` the pages request at the host root, so it goes
+    with the root base href only; an export under a prefix shares the host's copy. A host that serves several
+    exports names a directory per set of assets, so an export never overwrites the assets another export's
+    pages read. An export holds the app's state for its duration, so a second export in the process waits for
+    it; one into the same directory is then refused, as the directory holds the first.
     """
     out = _Output(Path(out_dir), normalized_base_href(base_href).removeprefix('/'))
     if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):
@@ -512,6 +517,7 @@ def export_static(
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
+    validated_asset_dir(asset_dir)
     shown = CachedDataset(dataset)
     sets_by_group = _filter_sets_by_group(shown, group_tables)
     full = _full_checked_against(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
@@ -529,7 +535,9 @@ def export_static(
             max_resolution=max_resolution,
             max_hz=max_hz,
         )
-        configure_pages(base_href=base_href, title=title, show_paths=show_paths, static_export=True)
+        configure_pages(
+            base_href=base_href, title=title, show_paths=show_paths, static_export=True, asset_dir=asset_dir
+        )
         client = TestClient(app)
         # Past `configure_tables`, every group name is one segment the route builders spell.
         plans = [
@@ -543,7 +551,7 @@ def export_static(
             ),
             *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
         ]
-        assets_to_copy = asset_files() if assets else []
+        assets_to_copy = asset_files(asset_dir) if assets else []
         out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in assets_to_copy)))
         _build_recordings(full, workers)
         _write_serving(out, plans)
@@ -567,6 +575,7 @@ def main(
     show_paths: bool = False,
     build_id: str = '',
     assets: bool = True,
+    asset_dir: str = ASSET_ROUTE,
     workers: int = DEFAULT_WORKERS,
 ):
     """Write the viewer for a Dataset as static files, for any static host.
@@ -583,7 +592,8 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         build_id: Names one build; the recordings and the downloads are written under `build/<build_id>/`
-        assets: Whether to write the app's own assets under `static/`; with the root base href only
+        assets: Whether to write the app's own assets under `asset_dir`; with the root base href only
+        asset_dir: Directory under `static/` the assets sit in, so a host holds one per set of assets
         workers: Recordings built at once; half the machine's cores by default
     """
     written = export_static(
@@ -599,6 +609,7 @@ def main(
         show_paths=show_paths,
         build_id=build_id,
         assets=assets,
+        asset_dir=PurePosixPath(asset_dir),
         workers=workers,
     )
     logging.info(f'{len(written)} files, {sum(file.size for file in written) / 1e6:.1f} MB, under {out_dir}')

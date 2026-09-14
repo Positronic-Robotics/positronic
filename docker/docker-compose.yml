@@ -3,7 +3,6 @@ services:
     image: positro/positronic:${IMAGE_TAG:-latest}
     pull_policy: always
 
-    # Enable interactive terminal
     stdin_open: true
     tty: true
 
@@ -16,7 +15,6 @@ services:
               count: all
               capabilities: [compute, graphics, utility]
 
-    # Volume mounts
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
@@ -35,7 +33,6 @@ services:
   positronic: &openpi-common
     image: positro/openpi:${IMAGE_TAG:-latest}
 
-    # Enable interactive terminal
     stdin_open: true
     tty: true
 
@@ -48,7 +45,6 @@ services:
               count: all
               capabilities: [compute, graphics, utility]
 
-    # Volume mounts
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
@@ -164,7 +160,6 @@ services:
   positronic-groot: &groot-common
     image: positro/gr00t:${IMAGE_TAG:-latest}
 
-    # Enable interactive terminal
     stdin_open: true
     tty: true
 
@@ -177,7 +172,6 @@ services:
               count: all
               capabilities: [compute, graphics, utility]
 
-    # Volume mounts
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
@@ -200,7 +194,7 @@ services:
     <<: *groot-common
     container_name: groot-train
     shm_size: 8g
-    ipc: host  # Enable shared memory access for training
+    ipc: host
     entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
@@ -213,11 +207,9 @@ services:
   positronic-dreamzero: &dreamzero-common
     image: positro/dreamzero:${IMAGE_TAG:-latest}
 
-    # Enable interactive terminal
     stdin_open: true
     tty: true
 
-    # GPU support
     deploy:
       resources:
         reservations:
@@ -226,7 +218,6 @@ services:
               count: all
               capabilities: [compute, graphics, utility]
 
-    # Volume mounts
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
@@ -256,6 +247,25 @@ services:
     shm_size: 16g
     ipc: host
     entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.train"]
+
+  # Galaxea model use is restricted to internal, non-commercial evaluation; see vendors/galaxea/NOTICE.
+  galaxea-server:
+    image: positro/galaxea:${IMAGE_TAG:-latest}
+    init: true
+    shm_size: 8g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility]
+    volumes:
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.cache/galaxea/checkpoints:/galaxea/checkpoints
+    ports:
+      - "127.0.0.1:8000:8000"
 
   robolab-eval:
     image: positro/robolab:${IMAGE_TAG:-latest}

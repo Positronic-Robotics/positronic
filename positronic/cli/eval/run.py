@@ -300,7 +300,7 @@ def run(
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
-    eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
+    eval of that NAME on the embodiment the eval names — a name the platform offers, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
     in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
@@ -348,7 +348,9 @@ def run(
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file, **rig_only}, 'platform')
         if not isinstance(eval, str):
-            raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
+            raise SystemExit(
+                'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
+            )
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
     if source is not None or any(given(value) for value in rig_only.values()):

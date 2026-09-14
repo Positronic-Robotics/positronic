@@ -10,6 +10,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import codec as codec_module
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Layer, Policy, Session
@@ -635,6 +636,29 @@ class TestRestrictImageSize:
     def test_stacked_frames_are_bounded_per_frame(self):
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
         assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
+
+    def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
+        """A stack over the parallel bar scales to the same pixels as the frames taken one at a time."""
+        rng = np.random.default_rng(0)
+        stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        codec = RestrictImageSize(64, 48)
+        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
+        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
+
+    def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
+        """A pool wins nothing on a single core, and costs threads to raise."""
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 1)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._PARALLEL_FROM + 4) == 1
+
+    def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 2)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._MAX_WORKERS * 4) == 2
+
+    def test_a_stack_under_the_parallel_bar_still_scales(self):
+        stack = np.zeros((RestrictImageSize._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
+        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
 
     def test_nested_images_are_reached(self):
         result = RestrictImageSize(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})

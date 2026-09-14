@@ -1,0 +1,18 @@
+# Internal, non-commercial evaluation only; see NOTICE and LICENSE-G0.5.
+# Versions are constrained by the pinned Galaxea checkout's exported uv.lock.
+accelerate
+einops
+flash-attn-4
+flash-linear-attention
+gitpython
+huggingface-hub
+hydra-core
+msgpack
+numpy
+rich
+rootutils
+safetensors
+torch
+torchvision
+transformers
+websockets
