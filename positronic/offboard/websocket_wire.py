@@ -14,6 +14,10 @@ from websockets.sync.connection import Connection
 
 from . import wire
 
+# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
+# (measured by positronic/offboard/serving_cost.py).
+WS_IMPL = 'websockets-sansio'
+
 
 class WebsocketClientConnection:
     """A client's end of one websocket session."""
@@ -176,6 +180,7 @@ class WebsocketWire(wire.Wire):
             host=self._host,
             port=self._endpoint.port,
             log_level='info',
+            ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
