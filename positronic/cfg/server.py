@@ -139,6 +139,15 @@ TOTAL_ITEMS = 'eval.total_items'
 SUCCESS = 'Success'
 UNSCORED = 'Unscored'
 
+# What this preset DERIVES onto each episode. The tables below address these again, so each one is
+# spelled once and the producer and every consumer read the same name.
+DERIVED_MODEL = 'model'
+DERIVED_OUTCOME = 'outcome'
+DERIVED_STAGE = 'stage'
+DERIVED_STAGE_RANK = 'stage_rank'
+DERIVED_ITEMS = 'items'
+DERIVED_STARTED = 'started'
+
 
 class ProgressStage(Enum):
     """A rung of the operator's progress ladder, declared lowest first.
@@ -196,9 +205,14 @@ def rollout_stage(ep: Episode) -> ProgressStage | None:
     return max((stage for stage in ProgressStage if stage.value in reached), key=lambda s: s.rank, default=None)
 
 
-def rollout_stage_label(ep: Episode) -> str | None:
+def rollout_stage_cell(ep: Episode) -> tuple[int, str] | None:
+    """The rung as `(rank, label)`, which the page sorts by the rank and shows as the label.
+
+    FOOTGUN: a bare label sorts alphabetically, which is not the ladder — `at the target` would lead and
+    `reaching` would trail. A pair also spells itself into a filter dropdown, so the column offers none.
+    """
     stage = rollout_stage(ep)
-    return None if stage is None else stage.label
+    return None if stage is None else (stage.rank, stage.label)
 
 
 def rollout_stage_rank(ep: Episode) -> int | None:
@@ -218,14 +232,14 @@ rollouts_ds = ds.transform.override(
         ds.group.override(
             transforms=[
                 Identity(),
-                Derive(
-                    model=rollout_model,
-                    outcome=rollout_outcome,
-                    stage=rollout_stage_label,
-                    stage_rank=rollout_stage_rank,
-                    items=rollout_items,
-                    started=analysis_cfg.started,
-                ),
+                Derive(**{
+                    DERIVED_MODEL: rollout_model,
+                    DERIVED_OUTCOME: rollout_outcome,
+                    DERIVED_STAGE: rollout_stage_cell,
+                    DERIVED_STAGE_RANK: rollout_stage_rank,
+                    DERIVED_ITEMS: rollout_items,
+                    DERIVED_STARTED: analysis_cfg.started,
+                }),
             ]
         ),
         internal.REAL_ROBOT_TRANSFORM,
@@ -239,28 +253,28 @@ def rollouts_episodes_table():
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.0f sec'),
         keys.TASK: C(label='Task', filter=True),
-        'model': C(label='Model', filter=True),
-        'outcome': C(label='Outcome', renderer=ROLLOUT_OUTCOME_BADGE, align='center'),
-        'stage': C(label='Stage', filter=True, default='-'),
-        'items': C(label='Items', default='-'),
-        'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
+        DERIVED_MODEL: C(label='Model', filter=True),
+        DERIVED_OUTCOME: C(label='Outcome', renderer=ROLLOUT_OUTCOME_BADGE, align='center'),
+        DERIVED_STAGE: C(label='Stage', default='-'),
+        DERIVED_ITEMS: C(label='Items', default='-'),
+        DERIVED_STARTED: C(label='Started', format='%Y-%m-%d %H:%M:%S'),
     }
 
 
 @cfn.config()
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
-        successes = sum(1 for ep in episodes if ep['outcome'] == SUCCESS)
+        successes = sum(1 for ep in episodes if ep[DERIVED_OUTCOME] == SUCCESS)
         return {
-            'model': episodes[0]['model'],
+            DERIVED_MODEL: episodes[0][DERIVED_MODEL],
             'count': len(episodes),
             'successes': successes,
             'success_rate': 100 * successes / len(episodes),
-            'at_target': sum(1 for ep in episodes if ep['stage_rank'] == ProgressStage.AT_TARGET.rank),
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE_RANK] == ProgressStage.AT_TARGET.rank),
         }
 
     format_table = {
-        'model': C(label='Model'),
+        DERIVED_MODEL: C(label='Model'),
         'count': C(label='Episodes'),
         'successes': C(label='Successes'),
         'success_rate': C(label='Success rate', format='%.0f%%'),
@@ -268,7 +282,7 @@ def rollouts_by_model():
     }
 
     return GroupTableConfig(
-        group_keys='model',
+        group_keys=DERIVED_MODEL,
         group_fn=group_fn,
         format_table=format_table,
         group_filter_keys={keys.TASK: 'Task'},
