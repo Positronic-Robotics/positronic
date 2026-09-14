@@ -33,6 +33,10 @@ AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 AUTH_HEADER = 'Authorization'
 
+# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
+# (measured by positronic/offboard/serving_cost.py).
+WS_IMPL = 'websockets-sansio'
+
 
 def bearer(token: str) -> str:
     """The ``AUTH_HEADER`` value carrying ``token``."""
@@ -445,7 +449,7 @@ class PolicyServer:
     def serve(self):
         async def _run():
             await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info', ws=WS_IMPL)
             server = uvicorn.Server(config)
             self._last_activity = time.monotonic()
             watchdog = None
