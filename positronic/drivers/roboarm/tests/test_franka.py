@@ -1124,8 +1124,7 @@ def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, w
 
 
 def test_an_arm_nobody_called_runs_no_recovery(desk, world):
-    """The boundary of the two above: the recovery is the answer to a call, so a loop nobody called
-    never runs one."""
+    """The recovery is the answer to a call, so a loop nobody called never runs one."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
