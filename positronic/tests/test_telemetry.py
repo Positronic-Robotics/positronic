@@ -466,7 +466,7 @@ def _env_sidecars(tmp_path):
 
 
 def test_bind_from_env_mints_a_run_id_when_none_is_given(tmp_path, monkeypatch):
-    """A run id left unset is minted per process, so two runs cannot land in one file under one name."""
+    """A run id left unset is minted, so every record stamps one for the reduce to group by."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
     monkeypatch.delenv(ENV_RUN_ID, raising=False)
     with telemetry.bind_from_env(HARNESS_PROCESS):

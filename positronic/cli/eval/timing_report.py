@@ -456,7 +456,7 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[_WindowKey, tuple[int, int
     """One wall window per run whose ``eval.pass`` span never closed, from that run's first episode start to
     its last episode end.
 
-    Grouping by run and parent keeps two runs appended to one directory apart: each contributes its own
+    Grouping by run and parent keeps two runs appended to one file apart: each contributes its own
     window, so the dead wall between them falls outside both, exactly as the gap between two pass spans does.
     """
     by_window: dict[_WindowKey, list[SpanRec]] = defaultdict(list)
