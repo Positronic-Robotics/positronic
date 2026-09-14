@@ -65,8 +65,9 @@ class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises, and ``ik_raises`` what only the solver raises; ``error`` is
-    the vendor fault flag every state carries.
+    set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
+    ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
+    state carries, and ``recover_clears`` whether a recovery puts it back to 0.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
@@ -78,6 +79,8 @@ class FakeArm:
         self.raises: Exception | None = None
         self.raises_once: Exception | None = None
         self.ik_raises: Exception | None = None
+        self.recover_raises: Exception | None = None
+        self.recover_clears = False
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
@@ -110,8 +113,13 @@ class FakeArm:
         self.targets.append(np.asarray(target, dtype=np.float64))
         self._polls = 0
 
-    def recover_from_errors(self) -> None:
+    def recover_from_errors(self) -> bool:
         self._record(Call.RECOVER_FROM_ERRORS)
+        if self.recover_raises is not None:
+            raise self.recover_raises
+        if self.recover_clears:
+            self.error = 0
+        return self.error == 0
 
     def stop(self) -> None:
         self.calls.append(Call.STOP)
@@ -213,6 +221,13 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
     """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
     wire_call(world, caller, driver.sync_move)
+    return caller
+
+
+def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, franka.RecoveryOutcome]:
+    """A caller on ``driver.recover``, for a test that pumps its generator rather than running a World."""
+    caller = pimm.calls.ControlSystemCaller[None, franka.RecoveryOutcome](driver)
+    wire_call(world, caller, driver.recover)
     return caller
 
 
@@ -1077,3 +1092,146 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     _drive(loop, clock)
 
     assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
+
+
+def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
+    """A console calls the arm to clear a latched fault: the driver runs the recovery and the answer to
+    that call carries what it returned."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
+    assert answer.result() is franka.RecoveryOutcome.CLEARED
+
+
+def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, world):
+    """The recovery a console calls for reaches a fault libfranka will not clear, and the answer says so."""
+    arm = FakeArm(PARK)
+    arm.error = 1  # a fault recover_from_errors does not clear
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+
+    assert answer.result() is franka.RecoveryOutcome.NOT_CLEARED
+
+
+def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_run(desk, world):
+    """libfranka throws mid-recovery on an arm the tick also reads in error. One recovery serves the
+    console and the fault, so the throw reaches the caller and the run goes on."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    recover = _recoverer(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    arm.recover_raises = RuntimeError('libfranka: control command rejected')
+    answer = recover(None)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the tick ran the recovery twice'
+    assert answer.done()
+    with pytest.raises(RuntimeError, match='control command rejected'):
+        answer.result()
+
+    arm.recover_raises, arm.error = None, 0
+    answer = recover(None)
+    next(loop)
+    assert answer.result() is franka.RecoveryOutcome.CLEARED, 'the run ended on the failed recovery'
+
+
+def test_a_recovery_that_clears_the_fault_leaves_the_tick_no_second_one(desk, world):
+    """The console's recovery clears the fault this tick read, so nothing is left for the automatic retry:
+    it would run on a reading one call out of date."""
+    arm = FakeArm(PARK)
+    arm.recover_clears = True
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    recover = _recoverer(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = recover(None)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the tick ran the recovery twice'
+    assert answer.result() is franka.RecoveryOutcome.CLEARED
+    assert arm.error == 0
+
+
+def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
+    """The driver clears a fault it reads itself, whether or not a console asked."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    _recoverer(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
+
+
+def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk, world):
+    """A throw from the recovery the driver runs for itself has no caller to hand it to, so it ends the
+    run rather than going unreported."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    _recoverer(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    arm.recover_raises = RuntimeError('libfranka: control command rejected')
+
+    with pytest.raises(RuntimeError, match='control command rejected'):
+        next(loop)
+
+
+def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
+    """An arm carrying no fault gives the driver nothing to recover from, so only a call runs a recovery."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    _recoverer(world, driver)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    for _ in range(5):
+        next(loop)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
