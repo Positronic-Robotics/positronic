@@ -1691,6 +1691,145 @@ def test_harness_clears_trajectory_on_run(world):
     assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on a new episode failed'
 
 
+class _FrozenClock(pimm.Clock):
+    """A clock stopped at an exact nanosecond, so a waypoint scheduled on a whole millisecond is not moved off
+    it by a float."""
+
+    def __init__(self, now_ns: int):
+        self._now_ns = now_ns
+
+    def now(self) -> float:
+        return self._now_ns / 1e9
+
+    def now_ns(self) -> int:
+        return self._now_ns
+
+
+def _schedule_key(channel: str, field: str) -> str:
+    """One field of one channel's schedule account, keyed as the episode's statics carry it."""
+    return f'{eval_keys.SCHEDULE}.{channel}.{field}'
+
+
+def _schedule_account(harness: Harness, channel: str) -> dict[str, Any]:
+    """What the harness would stamp for ``channel``, without ending an episode to read it."""
+    return harness._fidelity[channel].meta(f'{eval_keys.SCHEDULE}.{channel}')
+
+
+def _play_round(harness: Harness, due_ms: list[int], now_ms: int, channel: str = keys.ROBOT_COMMAND) -> None:
+    """Schedule a waypoint on ``channel`` for each of ``due_ms``, then run one round of the loop at ``now_ms``."""
+    harness._schedules[channel].extend((ms * 1_000_000, f'waypoint@{ms}ms') for ms in due_ms)
+    harness._fidelity[channel].count_scheduled(len(due_ms))
+    harness._issue_due_commands(_FrozenClock(now_ms * 1_000_000))
+
+
+def _harness_recording_commands() -> tuple[Harness, RecordingEmitter]:
+    harness = Harness(make_embodiment())
+    recorder = RecordingEmitter()
+    harness.commands[keys.ROBOT_COMMAND]._bind(recorder)
+    return harness, recorder
+
+
+@pytest.mark.timeout(3.0)
+def test_a_round_that_overtakes_waypoints_counts_them_dropped():
+    """A round late enough to find three waypoints due sends the newest and counts the two it overtook."""
+    harness, recorder = _harness_recording_commands()
+
+    _play_round(harness, due_ms=[0, 10, 20], now_ms=25)
+
+    assert _emitted_commands(recorder) == ['waypoint@20ms']
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.SCHEDULED)] == 3
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.EMITTED)] == 1
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.DROPPED)] == 2
+
+
+@pytest.mark.timeout(3.0)
+def test_a_round_that_finds_one_waypoint_due_counts_no_drop():
+    """A round that keeps up overtakes nothing: the two waypoints still ahead of it are not dropped."""
+    harness, recorder = _harness_recording_commands()
+
+    _play_round(harness, due_ms=[0, 10, 20], now_ms=5)
+
+    assert _emitted_commands(recorder) == ['waypoint@0ms']
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.EMITTED)] == 1
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.DROPPED)] == 0
+
+
+@pytest.mark.timeout(3.0)
+def test_a_fresh_chunk_counts_the_waypoints_it_replaced_after_their_time():
+    """A chunk landing on a late round replaces waypoints that had already come due. They go out on no
+    round, so they are drops; the ones still ahead of the round are not."""
+    harness, recorder = _harness_recording_commands()
+    channel = keys.ROBOT_COMMAND
+    harness._schedules[channel].extend((ms * 1_000_000, f'waypoint@{ms}ms') for ms in (0, 10, 20, 30))
+    harness._fidelity[channel].count_scheduled(4)
+
+    harness._reschedule([{keys.ACTION_TIMESTAMP: 0.03, channel: 'fresh'}], _FrozenClock(25 * 1_000_000))
+
+    account = _schedule_account(harness, channel)
+    assert account[_schedule_key(channel, eval_keys.DROPPED)] == 3  # 0, 10 and 20 ms; the 30 ms one was early
+    assert account[_schedule_key(channel, eval_keys.SCHEDULED)] == 5
+    assert not _emitted_commands(recorder)
+
+
+@pytest.mark.timeout(3.0)
+def test_lateness_is_measured_against_the_waypoint_that_went_out():
+    """The waypoint sent at 25 ms was due at 20, so it is 5 ms late. A round measured against the oldest
+    waypoint it overtook would read 25."""
+    harness, _ = _harness_recording_commands()
+
+    _play_round(harness, due_ms=[0, 10, 20], now_ms=25)
+
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_MAX_MS)] == pytest.approx(5.0)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P50_MS)] == pytest.approx(5.0)
+
+
+@pytest.mark.timeout(3.0)
+def test_the_lateness_percentiles_read_the_spread_of_the_rounds():
+    """Ten rounds, one waypoint each, 0 to 9 ms late: the percentiles rank them rather than report the worst."""
+    harness, _ = _harness_recording_commands()
+
+    for late_ms in range(10):
+        _play_round(harness, due_ms=[100 * late_ms], now_ms=100 * late_ms + late_ms)
+
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P50_MS)] == pytest.approx(4.0)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P90_MS)] == pytest.approx(8.0)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_MAX_MS)] == pytest.approx(9.0)
+
+
+@pytest.mark.timeout(3.0)
+def test_the_schedule_account_reaches_the_episode_meta(world):
+    """A finished episode's statics say, per command channel, what its loop scheduled, sent and dropped."""
+    policy = ChunkPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        (partial(p['perform_task'], Task(instruction_source='test', timeout_sec=None)), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.05),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.0),
+        (None, 0.02),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
+    for channel in (keys.ROBOT_COMMAND, keys.TARGET_GRIP):
+        scheduled = meta[_schedule_key(channel, eval_keys.SCHEDULED)]
+        emitted = meta[_schedule_key(channel, eval_keys.EMITTED)]
+        assert emitted > 0, f'{channel} played no waypoint'
+        assert emitted + meta[_schedule_key(channel, eval_keys.DROPPED)] <= scheduled
+        assert meta[_schedule_key(channel, eval_keys.LATE_MAX_MS)] >= 0.0
+        assert meta[_schedule_key(channel, eval_keys.LATE_P90_MS)] >= 0.0
+
+
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('unavailable', [RobotStatus.BUSY, RobotStatus.ERROR])
 def test_the_stack_keeps_the_model_away_from_an_unavailable_arm(world, unavailable):
@@ -2570,3 +2709,42 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
     assert not _emitted_commands(cmd_recorder)
+
+
+@pytest.mark.timeout(5.0)
+def test_the_episode_span_carries_the_same_waypoint_account_as_the_meta(world, tmp_path):
+    """Under ``telemetry.bind`` the episode span carries the waypoint totals over every command channel, and
+    they are the episode statics' own per-channel figures added up."""
+    policy = ChunkPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['perform_task'], Task(instruction_source='t', timeout_sec=None)), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.05),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.0),
+        (None, 0.02),
+    ])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-waypoints'), _eval_pass('run-waypoints'):
+        drive_scheduler(world.start([harness, driver]), steps=200)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    attrs = episodes[0].attrs
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_EMITTED] > 0, 'the episode played no waypoint'
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_LATE_SUM_MS] >= 0.0
+    assert attrs[telemetry_keys.ATTR_WAYPOINTS_LATE_MAX_MS] >= 0.0
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
+    channels = (keys.ROBOT_COMMAND, keys.TARGET_GRIP)
+    for attr, field in (
+        (telemetry_keys.ATTR_WAYPOINTS_SCHEDULED, eval_keys.SCHEDULED),
+        (telemetry_keys.ATTR_WAYPOINTS_EMITTED, eval_keys.EMITTED),
+        (telemetry_keys.ATTR_WAYPOINTS_DROPPED, eval_keys.DROPPED),
+    ):
+        assert attrs[attr] == sum(meta[_schedule_key(channel, field)] for channel in channels)
