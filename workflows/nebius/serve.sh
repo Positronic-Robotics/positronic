@@ -3,8 +3,9 @@
 #
 # Usage
 #   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
-#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server ee --num_gpus=8
-#   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only          # the websocket wire alone
+#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --pipeline.source.num_gpus=8
+#   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only ee \
+#     --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
 #
 # The endpoint gets no public IP: Nebius fronts every HTTP container port with a
 # managed https:// URL, which is what this polls for and prints. The container
