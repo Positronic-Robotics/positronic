@@ -393,7 +393,7 @@ class PolicyServer:
     def _raise_first_wire_failure(started: Sequence[wire.Wire], outcomes: Sequence[Any]):
         """Raise the first wire that ended on an error, and log every other one."""
         failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
-        # Only one failure can raise; the rest are logged here or nowhere.
+        # Only one failure can raise; this logs the rest, and nothing else does.
         for w, error in failed[1:]:
             logger.error(f'{type(w).__name__} also failed: {error}', exc_info=error)
         if failed:
@@ -412,7 +412,7 @@ class PolicyServer:
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
-            # A wire binds when it starts, and a started wire is stopped even when a later one cannot bind.
+            # A wire binds when it starts; the ``finally`` stops every started one, even when a later one cannot bind.
             started: list[wire.Wire] = []
             serving: list[asyncio.Task] = []
             ending: list[asyncio.Task] = []

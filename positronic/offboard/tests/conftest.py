@@ -27,7 +27,7 @@ StartServer = Callable[..., Served]
 
 @pytest.fixture
 def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown.
+    """Factory serving pipelines on daemon threads; teardown stops and joins every started server.
 
     Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
     serves the gRPC wire beside the websocket one.

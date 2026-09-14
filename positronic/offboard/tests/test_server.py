@@ -124,7 +124,7 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_po
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
-    """No wire ends in silence: one failure raises out of ``serve``, and every other one is logged."""
+    """No wire ends in silence: one failure raises out of ``serve``, and ``serve`` logs every other one."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
     with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
         with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):

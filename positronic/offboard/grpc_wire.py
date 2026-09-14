@@ -204,7 +204,7 @@ class GrpcClientConnection:
             self._ended = True
             if isinstance(answer, grpc.RpcError):
                 # A status before any message crossed is the server refusing the call. A status after one is a
-                # lost peer, which is what the other wire reports and what the connect retry reads as cold.
+                # lost peer: the websocket wire reports the same, and the connect retry reads it as cold.
                 if not self._received:
                     raise wire.ConnectRefused(_refusal(answer), str(answer)) from answer
                 raise wire.PeerDisconnected(f'{self._target} ended the session: {answer}') from answer

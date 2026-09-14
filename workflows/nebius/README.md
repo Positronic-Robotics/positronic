@@ -215,7 +215,7 @@ flow to your account directly via the API key — they aren't synced to S3.
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
 Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
-the contact address. The server listens on two — port 8000 for the websocket wire and port 9000 for
+the contact address. The server listens on two — port 8000 for the WebSocket wire and port 9000 for
 the gRPC one — so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one. Both
 survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
 gets new ones. Supported vendors: `lerobot_0_3_3`,
@@ -258,8 +258,8 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
 of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
-the `https://` URL for the websocket, and for gRPC the port-9000 host dialled as `grpcs://<host>:443`,
-which the banner prints ready to paste. The container takes
+the `https://` URL for the WebSocket, or the port-9000 host dialled as `grpcs://<host>:443` for gRPC.
+The banner prints the gRPC URL ready to paste. The container takes
 another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
 server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
 in [Authenticated inference](#authenticated-inference)):
@@ -292,9 +292,9 @@ stop <id>` instead: it releases the compute too, and `start` resumes on the same
 ### A managed URL is assigned, not chosen
 
 Each belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
-`https://port<container-port>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. The port prefix is
-what tells the two wires apart. No flag sets a URL and nothing derives one, which is why `serve.sh` polls
-`status.public_endpoints` to learn them.
+`https://port<container-port>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. The port prefix
+tells the two wires apart. `serve.sh` polls `status.public_endpoints` to learn the URLs: no flag sets
+one and nothing derives one.
 
 A URL that outlives the endpoint needs a tunnel of your own (`nebius tunnel create`) with its agent in the
 container, which also names the host (`services.name`, up to 20 lowercase alphanumerics — `phail` rather

@@ -25,7 +25,7 @@ metadata, and `Authorization` crosses as the `authorization` metadata.
 Python's WebSocket stack spends about 30 ms per 846 KiB observation on framing and reassembly; gRPC
 spends about 1 ms. Take the gRPC wire wherever it reaches.
 
-It reaches through a managed HTTPS front, which is how an authenticated endpoint is served. The front
+It reaches through a managed HTTPS front, and an authenticated endpoint stands behind one. The front
 terminates TLS, and the HTTP/2 connection runs end to end; the server binds a plaintext port and holds
 no certificate. The front must select HTTP/2 over ALPN. Check a new front with
 `openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint, declare the gRPC
@@ -265,11 +265,11 @@ server = PolicyServer(pipeline)
 server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`serve` takes the wires sessions arrive on. Each wire binds its own port, reads its own route for the
-model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)` to
-the list to serve gRPC beside the websocket. A wire that speaks HTTP takes `server.api`, the model
-catalogue, and answers it on the port it carries sessions on. A wire asked for port 0 binds any free
-one and names it in `wire.endpoint`.
+`serve` takes the wires that sessions arrive on. Each wire binds its own port, reads its own route for
+the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)`
+to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model catalogue,
+and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
+names it in `wire.endpoint`.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
@@ -300,7 +300,7 @@ action = session.infer(observation)
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
-exception of the websocket or gRPC library.
+exception of the WebSocket or gRPC library.
 
 ## Vendor Implementations
 

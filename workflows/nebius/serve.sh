@@ -10,13 +10,14 @@
 # itself takes ~10-15 min more to finish uv sync and load the model into GPU
 # memory after the URL appears.
 #
-# Both wires are served: the websocket on 8000, and gRPC on the port `--grpc_port`
-# names. The gRPC port is declared as an ordinary HTTP port; a `/tcp` port gets a
-# front gRPC refuses. The offboard README says what each front does to a session.
+# The endpoint serves both wires: the websocket on 8000, and gRPC on the port
+# `--grpc_port` names. The create declares the gRPC port as an ordinary HTTP port;
+# a `/tcp` port gets a front gRPC refuses. The offboard README says what each
+# front does to a session.
 #
 # The managed URL is assigned, never chosen, and a delete plus re-create of the
 # same name gets a new one; `stop.sh` deletes, `nebius ai endpoint stop`/`start`
-# keeps the URL. See the README's "The managed URL is assigned, not chosen".
+# keeps the URL. See the README's "A managed URL is assigned, not chosen".
 #
 # The server is gated on a bearer token (AUTH_TOKEN, from MysteryBox). Auth stays
 # in-process: `nebius ai endpoint create --auth token` strips the WebSocket

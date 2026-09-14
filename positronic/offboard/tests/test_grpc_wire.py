@@ -218,8 +218,8 @@ async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         while chunk := await reader.read(65536):
             writer.write(chunk)
             await writer.drain()
-    # The end that closes first leaves the other half of the pair writing into a dead socket, which is how
-    # a session ends. Any other error is the edge's own, and fails the test.
+    # A session ends with one end closing first, and the other half of the pair then writes into a dead
+    # socket. Any other error is the edge's own, and fails the test.
     except (ConnectionResetError, BrokenPipeError):
         pass
     finally:
@@ -228,7 +228,7 @@ async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
 
 @pytest.fixture
 def tls_edge() -> Generator[Callable[[str, int], tuple[int, bytes]], None, None]:
-    """Starts a TLS front over a plaintext gRPC port, as an authenticated endpoint is served.
+    """Starts a TLS front over a plaintext gRPC port; an authenticated endpoint stands behind one.
 
     The front terminates TLS, selects HTTP/2 over ALPN and copies the bytes on. It answers its own port
     and the root to verify it against. ``alpn=False`` selects no protocol, as a front over a raw TCP
