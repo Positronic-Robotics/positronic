@@ -86,7 +86,7 @@ in-process inside the world and needs no shim.)
 | Foreign component | Runs as | Shim into our API |
 |---|---|---|
 | Foreign simulator (LIBERO, Isaac Lab / RoboLab) | env server in its own interpreter, behind the `env_server` wire | client-side `EnvAdapter` mapping the canonical embodiment contract ↔ the sim's raw payloads |
-| Model stack (LeRobot, GR00T, OpenPI) | inference server behind the WebSocket wire | vendor `Codec` translating raw observations ↔ model I/O |
+| Model stack (LeRobot, GR00T, OpenPI) | inference server behind the session protocol, on a WebSocket or a gRPC wire | vendor `Codec` translating raw observations ↔ model I/O |
 | Scenes / task batteries | instantiated inside the env server | reset tokens (suite, task, seed) carried through the `EnvAdapter` |
 | Scoring / success criteria | computed where the ground truth lives (usually the env server) | reported alongside observations and recorded into the dataset; aggregation happens on the Positronic side |
 | Hardware embodiment | pimm drivers inside the world | the same canonical embodiment contract the sims speak |
