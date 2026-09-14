@@ -33,7 +33,7 @@ from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
-from platform_client.responses import BoardSummary, ErroredSubmissionView, FinishedSubmissionView, SubmissionView
+from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
@@ -131,12 +131,6 @@ def walkthrough(
     print_standings(client, eval_ref)
 
 
-def print_boards(boards: list[BoardSummary]) -> None:
-    """Each public board, and the eval it ranks."""
-    for board in boards:
-        print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
@@ -144,16 +138,21 @@ def main() -> None:
     parser.add_argument(
         '--eval', default=None, help='the eval to run; with none, the public boards name the ones on offer'
     )
-    parser.add_argument('--policy-image', required=True, help='the image the platform pulls and runs')
+    parser.add_argument(
+        '--policy-image', default=None, help='the image the platform pulls and runs; needed with --eval'
+    )
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args()
+    if args.eval is not None and args.policy_image is None:
+        parser.error('--policy-image is required with --eval')
 
     with PlatformClient(args.platform_url) as client:
         # The boards are public, so the list needs no credential and comes before the check for one.
         if args.eval is None:
             print('pass --eval=<name>; the public boards rank these evals:')
-            print_boards(client.list_boards().boards)
-            raise SystemExit(2)
+            for board in client.list_boards().boards:
+                print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
+            return
         try:
             walkthrough(
                 client,

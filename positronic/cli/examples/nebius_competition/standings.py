@@ -68,15 +68,19 @@ def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
         raise SystemExit(f'{exc.message}: {board}\nboards on offer: {offered}') from exc
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--board', default=None, help='the slug of one board; the listing prints the slugs')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        board = BoardRef(args.board) if args.board is not None else None
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     with PlatformClient(args.platform_url) as client:
         try:
-            lines = run(client, BoardRef(args.board) if args.board else None)
+            lines = run(client, board)
         except PlatformError as exc:
             raise SystemExit(f'{exc.code.name}: {exc.message}') from exc
     sys.stdout.write('\n'.join(lines) + '\n')
