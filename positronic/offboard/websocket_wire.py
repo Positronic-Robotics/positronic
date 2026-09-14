@@ -18,8 +18,12 @@ from . import wire
 SESSION_SCHEMES: Mapping[str, bool] = {'': False, 'http': False, 'ws': False, 'https': True, 'wss': True}
 
 
-def session_scheme(secure: bool) -> str:
-    return 'wss' if secure else 'ws'
+def session_url(address: wire.SessionAddress) -> str:
+    return address.url('wss' if address.secure else 'ws')
+
+
+def api_url(address: wire.SessionAddress) -> str:
+    return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
 
 
 class WebsocketClientConnection:
@@ -58,13 +62,15 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
-def dial(url: str, headers: Mapping[str, str] | None, open_timeout: float) -> WebsocketClientConnection:
-    """A client's end of one session on ``url``. Raises ``wire.ConnectRefused`` when the upgrade does not open."""
+def dial(
+    address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+) -> WebsocketClientConnection:
+    """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the upgrade does not open."""
     try:
         # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
         # nothing until it answers. The pings keep it open.
         websocket = connect(
-            url,
+            session_url(address),
             open_timeout=open_timeout,
             additional_headers=headers,
             ping_interval=20.0,

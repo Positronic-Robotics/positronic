@@ -177,23 +177,19 @@ class InferenceClient:
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        session_scheme = scheme.wire.session_scheme(scheme.secure)
-        http_scheme = 'https' if scheme.secure else 'http'
-        default_port = 443 if scheme.secure else 80
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
-        port = default_port if split.port is None else split.port
-        netloc = host if port == default_port else f'{host}:{port}'
-        # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever wrote
-        # the URL knows whether `true` means the bool or the string.
-        query = f'?{split.query}' if split.query else ''
-        self._session_path = _session_path(split.path, url)
-        self._query = split.query
         self._wire = scheme.wire
-        self._secure = scheme.secure
-        self._target = f'{host}:{port}'
-        self.session_url = f'{session_scheme}://{netloc}{self._session_path}{query}'
-        self.api_url = None if self._wire is grpc_wire else f'{http_scheme}://{netloc}/api/v1'
+        self._address = wire.SessionAddress(
+            # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+            host=f'[{split.hostname}]' if ':' in split.hostname else split.hostname,
+            port=wire.default_port(scheme.secure) if split.port is None else split.port,
+            path=_session_path(split.path, url),
+            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
+            # wrote the URL knows whether `true` means the bool or the string.
+            query=split.query,
+            secure=scheme.secure,
+        )
+        self.session_url = scheme.wire.session_url(self._address)
+        self.api_url = scheme.wire.api_url(self._address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -201,11 +197,7 @@ class InferenceClient:
 
     def _connect(self) -> wire.ClientConnection:
         """One session's connection, over the wire the URL names."""
-        if self._wire is grpc_wire:
-            return grpc_wire.dial(
-                self._target, self._session_path, self._query, self.headers, self.open_timeout, secure=self._secure
-            )
-        return websocket_wire.dial(self.session_url, self.headers, self.open_timeout)
+        return self._wire.dial(self._address, self.headers, self.open_timeout)
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.

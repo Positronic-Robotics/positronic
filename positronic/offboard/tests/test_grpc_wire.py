@@ -373,7 +373,7 @@ def test_a_grpc_url_names_the_session_port_alone(url):
 )
 def test_the_scheme_fixes_the_port_and_the_tls(url, target, secure):
     client = InferenceClient(url)
-    assert (client._target, client._secure) == (target, secure)
+    assert (f'{client._address.host}:{client._address.port}', client._address.secure) == (target, secure)
 
 
 @pytest.mark.parametrize(
@@ -517,8 +517,8 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
 def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
     """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires
-    target = f'{served.host}:{served.grpc_port}'
-    conn = grpc_wire.dial(target, f'{wire.SESSION_PATH}/unknown-model', '', None, 10.0, secure=False)
+    address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
+    conn = grpc_wire.dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.
@@ -532,8 +532,8 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires
-    target = f'{served.host}:{served.grpc_port}'
-    conn = grpc_wire.dial(target, f'{wire.SESSION_PATH}/unknown-model', '', None, 10.0, secure=False)
+    address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
+    conn = grpc_wire.dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):

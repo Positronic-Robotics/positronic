@@ -11,8 +11,36 @@ from typing import NamedTuple, Protocol
 
 from starlette.datastructures import QueryParams
 
-# The route a session opens on: in the URL on the websocket wire, in the session metadata on the gRPC wire.
-SESSION_PATH = '/api/v1/session'
+# The server's HTTP API, and the route a session opens on under it: in the URL on the websocket wire,
+# in the session metadata on the gRPC wire.
+API_PATH = '/api/v1'
+SESSION_PATH = f'{API_PATH}/session'
+
+
+def default_port(secure: bool) -> int:
+    """The port a URL naming none opens on."""
+    return 443 if secure else 80
+
+
+class SessionAddress(NamedTuple):
+    """Where one session opens."""
+
+    host: str
+    port: int
+    path: str
+    query: str
+    secure: bool
+
+    @property
+    def netloc(self) -> str:
+        """``host:port``, less the port a URL at this TLS setting defaults to."""
+        return self.host if self.port == default_port(self.secure) else f'{self.host}:{self.port}'
+
+    def url(self, scheme: str) -> str:
+        """This session as a URL on ``scheme``."""
+        query = f'?{self.query}' if self.query else ''
+        return f'{scheme}://{self.netloc}{self.path}{query}'
+
 
 # The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
 # the gRPC default of 4 MiB refuses one.
@@ -52,8 +80,18 @@ class ClientWire(Protocol):
     # The URL schemes that select this wire, and whether each one is TLS.
     SESSION_SCHEMES: Mapping[str, bool]
 
-    def session_scheme(self, secure: bool) -> str:
-        """The URL scheme a session on this wire carries."""
+    def session_url(self, address: 'SessionAddress') -> str:
+        """``address`` as this wire spells it, for the log and for the error a failed connect raises."""
+        ...
+
+    def api_url(self, address: 'SessionAddress') -> str | None:
+        """The server's HTTP API beside this wire, or ``None`` where the wire's port carries sessions alone."""
+        ...
+
+    def dial(
+        self, address: 'SessionAddress', headers: Mapping[str, str] | None, open_timeout: float
+    ) -> 'ClientConnection':
+        """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
         ...
 
 

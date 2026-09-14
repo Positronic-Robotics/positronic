@@ -573,7 +573,7 @@ def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal
         patch('positronic.offboard.websocket_wire.connect', side_effect=refused_upgrade),
         pytest.raises(wire.ConnectRefused) as refused,
     ):
-        websocket_wire.dial('ws://localhost:8000/api/v1/session', None, 1.0)
+        websocket_wire.dial(wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False), None, 1.0)
     assert refused.value.refusal is refusal
     assert refused.value.__cause__ is refused_upgrade
 

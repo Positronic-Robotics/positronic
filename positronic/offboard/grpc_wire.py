@@ -23,8 +23,13 @@ logger = logging.getLogger(__name__)
 SESSION_SCHEMES: Mapping[str, bool] = {'grpc': False, 'grpcs': True}
 
 
-def session_scheme(secure: bool) -> str:
-    return 'grpcs' if secure else 'grpc'
+def session_url(address: wire.SessionAddress) -> str:
+    return address.url('grpcs' if address.secure else 'grpc')
+
+
+def api_url(address: wire.SessionAddress) -> str | None:
+    """None: this wire's port carries sessions alone, and the HTTP API answers on the server's own."""
+    return None
 
 
 # The one method every session runs on. gRPC routes by this path alone.
@@ -141,17 +146,18 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
 
 
 def dial(
-    target: str, session_path: str, query: str, headers: Mapping[str, str] | None, open_timeout: float, secure: bool
+    address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
 ) -> 'GrpcClientConnection':
-    """A client's end of one session on ``target``. Raises ``wire.ConnectRefused`` when the channel does not open.
+    """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the channel does not open.
 
-    ``secure`` dials over TLS, to a TLS edge in front of the server's plaintext port.
+    A TLS address dials a TLS edge in front of the server's plaintext port.
     """
-    channel = _ready_channel(target, secure, open_timeout)
+    target = f'{address.host}:{address.port}'
+    channel = _ready_channel(target, address.secure, open_timeout)
     # gRPC metadata keys are lower case; the header names are the websocket wire's.
     metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
-        (SESSION_PATH_HEADER, session_path),
-        (SESSION_QUERY_HEADER, query),
+        (SESSION_PATH_HEADER, address.path),
+        (SESSION_QUERY_HEADER, address.query),
     )
     return GrpcClientConnection(channel, target, metadata)
 
