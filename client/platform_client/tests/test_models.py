@@ -613,10 +613,9 @@ def test_a_limit_below_one_is_refused():
         SubmissionListQuery(limit=0)
 
 
-def test_a_plan_view_carries_an_error_only_on_a_stopped_status():
-    # A reader renders a stall that is not there when the status and the error disagree.
-    stopped = PlanView(plan_id=PLAN, status=PlanStatus.errored, episodes=EpisodeCounts(), error='the policy faulted')
-    assert stopped.error == 'the policy faulted'
+def test_a_plan_view_carries_an_error_only_on_a_status_that_takes_one():
+    errored = PlanView(plan_id=PLAN, status=PlanStatus.errored, episodes=EpisodeCounts(), error='the policy faulted')
+    assert errored.error == 'the policy faulted'
     with pytest.raises(ValidationError):
         PlanView(plan_id=PLAN, status=PlanStatus.running, episodes=EpisodeCounts(), error='the policy faulted')
 

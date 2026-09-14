@@ -11,7 +11,7 @@ from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
 from platform_client.enums import (
-    PLAN_STOPPED_STATUSES,
+    PLAN_ERROR_STATUSES,
     BoardVisibility,
     KeyStatus,
     OnExhausted,
@@ -374,8 +374,8 @@ class PlanView(BaseModel):
     error: str | None = None
 
     @model_validator(mode='after')
-    def _an_error_travels_with_a_stopped_status(self) -> Self:
-        if self.error is not None and self.status not in PLAN_STOPPED_STATUSES:
+    def _the_error_and_the_status_agree(self) -> Self:
+        if self.error is not None and self.status not in PLAN_ERROR_STATUSES:
             raise ValueError(f'an error on a {self.status.name} plan')
         return self
 

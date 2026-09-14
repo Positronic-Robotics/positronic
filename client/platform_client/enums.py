@@ -161,8 +161,8 @@ class PlanStatus(IntEnum):
 # A plan the coordinator reports no later status for.
 PLAN_TERMINAL_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.done, PlanStatus.cancelled, PlanStatus.errored})
 
-# A plan that stopped for a reason `error` carries: one that waits on it, and one that ended on it.
-PLAN_STOPPED_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.blocked, PlanStatus.errored})
+# `blocked` waits on its error, `errored` ended on one. A plan on any other status carries none.
+PLAN_ERROR_STATUSES: frozenset[PlanStatus] = frozenset({PlanStatus.blocked, PlanStatus.errored})
 
 
 @unique
