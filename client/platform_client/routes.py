@@ -14,8 +14,7 @@ SUBMISSIONS_CREATE = f'{API_PREFIX}/submissions.create'
 SUBMISSIONS_LIST = f'{API_PREFIX}/submissions.list'
 SUBMISSIONS_GET = f'{API_PREFIX}/submissions.get'
 SUBMISSIONS_CANCEL = f'{API_PREFIX}/submissions.cancel'
-# A plan a caller composes, filed and read back. These routes reach the lab rig; `submissions.*`
-# reach the platform's own runners.
+# A plan a caller composes for the lab rig, filed and read back.
 EVALS_RUN = f'{API_PREFIX}/evals.run'
 EVALS_GET = f'{API_PREFIX}/evals.get'
 EVALS_LIST = f'{API_PREFIX}/evals.list'

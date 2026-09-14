@@ -362,8 +362,7 @@ class PlanFiled(BaseModel):
 class PlanView(BaseModel):
     """`evals.get`, and one row of `evals.list`.
 
-    `artifacts` is the prefix the episodes land under, once one exists. `error` says why a `blocked`
-    plan waits, or why an `errored` one stopped.
+    `artifacts` is the prefix the episodes land under, once one exists.
     """
 
     plan_id: PlanId
