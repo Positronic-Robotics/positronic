@@ -36,6 +36,7 @@ class Wire(InferenceSession):
         self._log = log
         self._action = action
         self._hold = hold
+        self.served_timing: dict[str, float] = {}
         log.append(('open', name))
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
