@@ -35,6 +35,16 @@ _NDIM = b'ndim'
 _JPEG_QUALITY = 90
 
 
+# The dtype kinds the wire refuses: object and void hold bytes that mean something only in the process
+# that wrote them, and complex has no msgpack form.
+_UNSUPPORTED_KINDS = ('V', 'O', 'c')
+
+
+def is_unsupported_dtype(dtype: np.dtype) -> bool:
+    """True for a dtype the wire refuses to carry."""
+    return dtype.kind in _UNSUPPORTED_KINDS
+
+
 def is_image(value: Any) -> bool:
     """True for a value the wire treats as an image: an ``(H, W, 3)`` frame or a ``(T, H, W, 3)`` stack."""
     return isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
@@ -64,7 +74,7 @@ def pack(obj):
     """msgpack's ``default`` hook: one value in its wire form, or unchanged when msgpack handles it."""
     if isinstance(obj, cabc.Mapping):
         return dict(obj)
-    if isinstance(obj, np.ndarray | np.generic) and obj.dtype.kind in ('V', 'O', 'c'):
+    if isinstance(obj, np.ndarray | np.generic) and is_unsupported_dtype(obj.dtype):
         raise ValueError(f'Unsupported dtype: {obj.dtype}')
     if isinstance(obj, np.ndarray):
         return {_NDARRAY: True, _DATA: obj.tobytes(), _DTYPE: obj.dtype.str, _SHAPE: obj.shape}

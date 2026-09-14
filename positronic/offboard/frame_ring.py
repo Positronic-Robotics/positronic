@@ -69,10 +69,21 @@ def _aligned(nbytes: int) -> int:
 # The seal numbers from ``linux/fcntl.h``: a Python built against other headers exports none of them.
 # ``F_SEAL_FUTURE_WRITE`` (Linux 5.1) spares the writer's own mapping, which ``F_SEAL_WRITE`` cannot.
 _F_ADD_SEALS = 1033
+_F_GET_SEALS = 1034
 _F_SEAL_SHRINK = 0x0002
 _F_SEAL_GROW = 0x0004
 _F_SEAL_FUTURE_WRITE = 0x0010
 _SEALS = _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_FUTURE_WRITE
+
+
+def _is_sealed(fd: int) -> bool:
+    """Whether ``fd`` carries every seal the server's mapping needs, and is therefore a memfd."""
+    try:
+        seals = fcntl.fcntl(fd, _F_GET_SEALS)
+    except OSError:
+        # An ordinary file answers EINVAL, and a mapping over one shrinks under the reader.
+        return False
+    return (seals & _SEALS) == _SEALS
 
 
 def _ring_is_supported() -> bool:
@@ -82,12 +93,12 @@ def _ring_is_supported() -> bool:
     try:
         fd = os.memfd_create('positronic-frames-probe', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     except OSError as refused:
-        logger.warning('No frame ring: this host refuses memfd_create (%s)', refused)
+        logger.error('No frame ring: this host refuses memfd_create (%s). Images stay in the message.', refused)
         return False
     try:
         fcntl.fcntl(fd, _F_ADD_SEALS, _SEALS)
     except OSError as refused:
-        logger.warning('No frame ring: this host refuses the memfd seals (%s)', refused)
+        logger.error('No frame ring: this host refuses the memfd seals (%s). Images stay in the message.', refused)
         return False
     finally:
         os.close(fd)
@@ -149,7 +160,7 @@ class FrameRing:
 
 def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]]) -> Any:
     """``value`` with an empty reference in place of every image, each paired with its array in ``found``."""
-    if serialization.is_image(value):
+    if serialization.is_image(value) and not serialization.is_unsupported_dtype(value.dtype):
         reference: dict[bytes, Any] = {}
         found.append((reference, value))
         return reference
@@ -225,6 +236,10 @@ class MappedRing:
     """
 
     def __init__(self, fd: int, slots: int, slot_bytes: int):
+        # Without the seals the peer can shrink the ring under this mapping. A read of a dropped page
+        # then raises SIGBUS, which kills this process.
+        if not _is_sealed(fd):
+            raise ValueError('A frame ring descriptor arrived without the seals that hold its pages in place')
         self._slots = slots
         self._slot_bytes = slot_bytes
         self._stride = _HEADER_BYTES + _aligned(slot_bytes)
@@ -234,6 +249,10 @@ class MappedRing:
         """A read-only view of the image ``reference`` names, over the ring's own pages."""
         slot, seq, offset = reference[_SLOT], reference[_SEQ], reference[_OFFSET]
         dtype = np.dtype(reference[_DTYPE])
+        # The peer names the dtype. An object dtype reads the ring's bytes as pointers into this
+        # process, and a read of one kills it. The ring carries what the wire carries, and no more.
+        if serialization.is_unsupported_dtype(dtype):
+            raise ValueError(f'A frame reference names dtype {dtype}, which the wire does not carry')
         shape = tuple(reference[_SHAPE])
         nbytes = dtype.itemsize * int(np.prod(shape))
         if not 0 <= slot < self._slots or offset < 0 or offset + nbytes > self._slot_bytes:
