@@ -81,7 +81,7 @@ class ClientWire(Protocol):
     SESSION_SCHEMES: Mapping[str, bool]
 
     def session_url(self, address: 'SessionAddress') -> str:
-        """``address`` as this wire spells it, for the log and for the error a failed connect raises."""
+        """``address`` as this wire spells it."""
         ...
 
     def api_url(self, address: 'SessionAddress') -> str | None:
