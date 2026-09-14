@@ -138,21 +138,22 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
-def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str]:
-    """The socket path a ``unix://`` URL names, decoded, and the URL path left over for the server.
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str, str]:
+    """The socket path a ``unix://`` URL names — decoded to dial, as written to name — and the URL
+    path left over for the server.
 
     The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
     Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
     socket path cannot hold a directory whose own name carries a slash. Only the socket path is
     decoded, because it names a file; the URL path reaches the server as written, so a model id
-    carries its own escapes.
+    carries its own escapes. The path as written stays for ``session_url``: a decoded ``?`` or ``#``
+    would read there as a delimiter, so that URL would name a different socket.
     """
     if split.netloc or not split.path.startswith('/'):
         raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
     marker = re.search(r'/api/v1(?=/|$)', split.path)
-    if marker is None:
-        return urllib.parse.unquote(split.path), ''
-    return urllib.parse.unquote(split.path[: marker.start()]), split.path[marker.start() :]
+    written = split.path if marker is None else split.path[: marker.start()]
+    return urllib.parse.unquote(written), written, ('' if marker is None else split.path[marker.start() :])
 
 
 class _ConnectOutcome(Enum):
@@ -215,9 +216,9 @@ class InferenceClient:
     ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
     out of the URL, which is meant to be safe to hand around.
 
-    The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
-    handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and
-    ``infer_timeout`` one inference round trip.
+    The timeouts describe this connection, not any one session: ``open_timeout`` bounds bringing one
+    connection up — the connect and the WebSocket handshake, on either carrier — ``connect_deadline`` how
+    long a cold backend may take to answer across retries, and ``infer_timeout`` one inference round trip.
     """
 
     def __init__(
@@ -234,12 +235,12 @@ class InferenceClient:
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         secure = split.scheme in ('https', 'wss')
         if split.scheme == 'unix':
-            uds, path = _socket_and_path(split, url)
+            uds, written_uds, path = _socket_and_path(split, url)
             # A socket path is not a host. The server reads the path and the query alone, so the
             # handshake asks for them under a host that stands in for the socket.
             netloc = 'localhost'
         else:
-            uds = None
+            uds = written_uds = None
             if not split.hostname:
                 raise ValueError(f'No host in {url!r}')
             path = split.path
@@ -258,7 +259,7 @@ class InferenceClient:
         # The URL the websocket handshake asks for, and the TCP address to dial when there is no socket.
         self._ws_uri = f'{ws_scheme}://{netloc}{session_path}{query}'
         # What an error names. Over a socket the stand-in host would not say which socket failed.
-        self.session_url = self._ws_uri if uds is None else f'unix://{uds}{session_path}{query}'
+        self.session_url = self._ws_uri if uds is None else f'unix://{written_uds}{session_path}{query}'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
