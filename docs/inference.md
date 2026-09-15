@@ -94,6 +94,12 @@ Run the model server beside the robot or simulator, then connect with
 the address configuration above. The same model and processor APIs apply whether
 the server is local or on another machine.
 
+## Public VLM / LLM APIs
+
+The [LLM policy](../positronic/vendors/llm/README.md) calls OpenAI, Anthropic, Google, or an OpenAI-compatible endpoint directly from the rig. It needs no Positronic inference server. Install `uv sync --extra llm` and select `--policy=@positronic.vendors.llm.policy.llm` with a model name and provider credentials.
+
+The model sees measured hand state and camera images, then requests one bounded absolute hand move at a time. The existing robot driver performs inverse kinematics. Each episode has its own conversation and transcript.
+
 ## Who Decides Episode Boundaries
 
 Something has to say when an episode starts and when it finishes. There are two answers, one command each:
