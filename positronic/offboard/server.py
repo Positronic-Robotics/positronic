@@ -197,7 +197,7 @@ class _ServedTiming:
     """
 
     def __init__(self) -> None:
-        # The wall clock, which stamps every ``PhaseSink`` call: one report, one clock.
+        # The wall clock: every ``PhaseSink`` call is stamped on it, and one report must not mix clocks.
         self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
 
