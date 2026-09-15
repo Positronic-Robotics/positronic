@@ -1494,8 +1494,10 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
     p['perform_task'].wait_for_functions()
 
     assert watcher.seen, 'the function never saw the rewrite'
+    called_on = np.full((2, 2, 3), 1, dtype=np.uint8)
     entry, exit_ = watcher.seen[0]
-    np.testing.assert_array_equal(entry, exit_, 'the observation was rewritten while the function was in flight')
+    np.testing.assert_array_equal(entry, called_on, 'the function was handed a frame the call was not made on')
+    np.testing.assert_array_equal(exit_, called_on, 'the observation was rewritten while the function was in flight')
 
 
 class _AbandonedCallPolicy(ServedPolicy):
