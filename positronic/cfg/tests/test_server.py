@@ -95,8 +95,7 @@ def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
 
 
 def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
-    """The rank lives in the cell and nowhere else, so this reads it there rather than from a second
-    derived field that would have to be kept equal to it."""
+    """The rank lives in the cell and nowhere else, so this reads it there."""
     group = cfg_server.rollouts_by_model.instantiate()
     top = Stage.AT_TARGET
     at_target = _row(Outcome.SUCCESS, StageCell(LADDER.index(top), STAGE_LABELS[top]))

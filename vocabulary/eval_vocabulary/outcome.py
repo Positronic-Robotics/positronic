@@ -1,7 +1,7 @@
 """The outcome an operator gives an episode, recorded as `eval.outcome`.
 
-A console writes these values and a viewer, a report and a coordinator read them back. An episode on
-disk carries the value it was scored with, so a member is append-only and a value never changes.
+An episode on disk carries the value it was scored with, so a member is append-only and a value
+never changes.
 """
 
 from __future__ import annotations

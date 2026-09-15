@@ -17,9 +17,6 @@ outcome = episode.get(OUTCOME, ABSENT)
 scored = is_scored(outcome)
 ```
 
-A member is append-only and its value never changes: episodes on disk carry the value they were
-written with, so a rename orphans a round nobody can re-score.
-
 A reader is tolerant and a writer is strict. A program that writes a verdict constructs `Outcome`,
 so a word outside this vocabulary raises where it is written. A program that reads one takes the
 string as it finds it, because a recording may predate a word this copy knows.
