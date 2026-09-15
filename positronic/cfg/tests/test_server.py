@@ -24,11 +24,8 @@ def _row(outcome, stage=NO_STAGE, model='pi05'):
 
 
 def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
-    """The page sorts the cell it shows, so a bare label would order the column alphabetically.
-
-    `at the target` is the top rung and sorts FIRST alphabetically, so the two orders disagree at the
-    one place an operator reads: a round's best episodes would sit at the bottom of an ascending sort.
-    """
+    """The two orders disagree at the one place an operator reads: a round's best episodes would sit
+    at the bottom of an ascending sort."""
     cells = [cfg_server.highest_rollout_stage(_with_stages(stage.value)) for stage in LADDER]
     ranks = [cell.rank for cell in cells]
     labels = [cell.label for cell in cells]
@@ -64,11 +61,8 @@ def test_a_rung_the_ladder_does_not_carry_is_not_a_stage():
 
 
 def test_every_column_of_the_episode_table_is_a_key_the_preset_derives():
-    """The producer and the consumers are 40 lines apart, so this is what holds them equal.
-
-    `Derive` writes the keys, the table addresses them again, and a name that drifts in one place
-    renders an empty column rather than failing.
-    """
+    """A derived name that drifts renders an empty column rather than failing, so this is what
+    catches it."""
     derived = {
         cfg_server.DERIVED_MODEL,
         cfg_server.DERIVED_OUTCOME,
@@ -92,9 +86,8 @@ def test_the_model_group_table_groups_on_the_key_the_preset_derives():
 
 
 def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
-    """Why the Stage column offers no filter: the filter path spells a static with `str`, and a named
-    pair spells itself as its own repr, class name and field names included. This is what the rank the
-    sort needs costs, recorded here rather than discovered by whoever adds the dropdown back."""
+    """Why the Stage column offers no filter, recorded here rather than discovered by whoever adds
+    the dropdown back."""
     top = Stage.AT_TARGET
     cell = cfg_server.highest_rollout_stage(_with_stages(top))
 
@@ -124,8 +117,7 @@ def test_an_episode_nobody_scored_reads_as_unscored():
 
 
 def test_a_word_this_vocabulary_does_not_carry_reaches_the_page_as_itself():
-    """A console one word ahead of this install still renders: the page draws an unlisted word on a
-    neutral badge, where constructing the enum here would take the whole table down."""
+    """Constructing the enum here would take the whole table down over one such recording."""
     assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: 'Rescored by hand'})) == 'Rescored by hand'
 
 
