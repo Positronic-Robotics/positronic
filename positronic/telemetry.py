@@ -20,12 +20,17 @@ Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<proce
 machine-load sample per line). The env server writes its own set; nothing rides over the wire.
 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
-The span helpers no-op while unbound (a normal eval binds nothing), so a call site carries no ``None`` check.
-The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
+The span helpers no-op while unbound (an eval recording nowhere binds nothing), so a call site carries no
+``None`` check. The pass-level report is an offline reduce over the raw files
+(``positronic.cli.eval.timing_report``).
+
+A recording run binds the harness's sidecar from ``POSITRONIC_ENV_TELEMETRY_DIR``, which
+``positronic.cli.eval.run.prepare_output_dir`` sets to the directory the run uploads from. ``--timing`` adds
+the pass span and the machine-load stream on top.
 
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
-``telemetry`` extra adds the OTel SDK and pynvml, imported by ``bind`` and ``StatsSampler``, the two entry
-points ``--timing`` reaches.
+``telemetry`` extra adds the OTel SDK and pynvml. ``bind`` and ``StatsSampler`` raise without it; a run that
+asked for neither and merely records loses its spans to a warning.
 """
 
 import functools
