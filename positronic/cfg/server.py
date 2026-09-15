@@ -150,11 +150,7 @@ def rollout_model(ep: Episode) -> str:
 
 
 def rollout_outcome(ep: Episode) -> str:
-    """What the operator scored, or that she has not scored it yet.
-
-    The word as the recording holds it: a console one word ahead of this vocabulary still reads,
-    because `app.js` draws an unlisted word as itself on a neutral badge.
-    """
+    """The word the recording holds, or `ABSENT` where it holds none."""
     return ep[OUTCOME] if OUTCOME in ep else ABSENT
 
 
