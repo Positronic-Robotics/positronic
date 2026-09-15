@@ -6,14 +6,20 @@ reports. The default stack is the one the rig's client builds: 25 frames of two 
 arm's pose, bounded to 1024x288, JPEG-encoded per frame and re-queried every 24 rows. A vendor's
 served pipeline may sample fewer frames at a smaller bound; the flags below set any other load.
 
+The server binds every wire at once and the same payloads go over each in turn, so one run prices
+the wires against each other. ``outside_served_ms`` is what a round trip spends outside the span the
+server reports, which is the wire's own cost.
+
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
         --dataset.path=<episode root> --requests=20
     ... --compress_images=False           # send raw stacks instead of per-frame JPEG
+    ... --wires="('ws','uds')"            # a subset of ws, uds and grpc, in the order reported
     ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
 """
 
 import json
+import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -29,7 +35,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.offboard import protocol, websocket_wire, wire
+from positronic.offboard import grpc_wire, protocol, websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
@@ -128,16 +134,29 @@ def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, reques
     return wire.sent
 
 
-def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
-    """Serve ``pipeline`` on a free loopback port, and hand back what stops it."""
+# The wires the probe replays over, in the order it reports them. ``uds`` and ``ws`` carry the same
+# framing and differ only in the transport under it, so the pair prices the transport; ``grpc`` against
+# ``ws`` prices the framing.
+WIRES = ('ws', 'uds', 'grpc')
+
+
+def serve(pipeline, socket_path: Path) -> tuple[PolicyServer, threading.Thread, dict[str, str]]:
+    """Serve ``pipeline`` on every wire at once, and hand back a session URL for each."""
     server = PolicyServer(pipeline)
     ws = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
+    uds = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api, uds=socket_path)
+    rpc = grpc_wire.GrpcWire('127.0.0.1', 0)
     ready = threading.Event()
-    thread = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
+    thread = threading.Thread(target=server.serve, args=([ws, uds, rpc], ready.set), daemon=True)
     thread.start()
     if not ready.wait(timeout=30.0):
         raise RuntimeError('the probe server never came up')
-    return server, thread, ws.endpoint.port
+    urls = {
+        'ws': f'ws://127.0.0.1:{ws.endpoint.port}',
+        'uds': f'unix://{uds.endpoint.uds}',
+        'grpc': f'grpc://127.0.0.1:{rpc.endpoint.port}',
+    }
+    return server, thread, urls
 
 
 def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_images: bool) -> list[dict[str, float]]:
@@ -186,6 +205,18 @@ def report(rows: list[dict[str, float]]) -> str:
     return '\n'.join(lines)
 
 
+def compare(by_wire: dict[str, list[dict[str, float]]]) -> str:
+    """What each wire costs outside the server's own span, against the first wire reported."""
+    if not by_wire:
+        return ''
+    medians = {name: float(np.median([row['outside_served_ms'] for row in rows])) for name, rows in by_wire.items()}
+    baseline_name, baseline = next(iter(medians.items()))
+    lines = [f'outside the served span, median ms, against {baseline_name}']
+    for name, value in medians.items():
+        lines.append(f'  {name:<6}  {value:8.1f}  {value - baseline:+8.1f}')
+    return '\n'.join(lines)
+
+
 @cfn.config(
     dataset=positronic.cfg.ds.local,
     episode=0,
@@ -197,6 +228,7 @@ def report(rows: list[dict[str, float]]) -> str:
     cameras=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     chunk_rows=24,
     compress_images=True,
+    wires=WIRES,
     out=None,
 )
 def main(
@@ -210,6 +242,7 @@ def main(
     cameras: Sequence[str],
     chunk_rows: int,
     compress_images: bool,
+    wires: Sequence[str],
     out: str | None,
 ):
     # configuronic hands the CLI token through as a string.
@@ -224,25 +257,35 @@ def main(
         raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
     print(f'captured {len(payloads)} payload(s) off episode {episode}')
 
-    server, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
-    try:
-        session = InferenceClient.from_url(f'ws://127.0.0.1:{port}').new_session()
+    by_wire: dict[str, list[dict[str, float]]] = {}
+    with tempfile.TemporaryDirectory() as socket_dir:
+        served = stack | remote(compress_images=compress_images) | PolicySource(model)
+        server, thread, urls = serve(served, Path(socket_dir) / 'probe.sock')
         try:
-            replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed
-            rows = replay(session, payloads, compress_images)
+            for name in wires:
+                if name not in urls:
+                    raise ValueError(f'{name!r} is no wire of this probe; it serves {", ".join(urls)}')
+                session = InferenceClient.from_url(urls[name]).new_session()
+                try:
+                    replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed
+                    by_wire[name] = replay(session, payloads, compress_images)
+                finally:
+                    session.close()
         finally:
-            session.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=10.0)
+            server.shutdown()
+            thread.join(timeout=10.0)
 
     print(
-        f'\n{len(rows)} requests, {frames} frames x {len(cameras)} cameras, bound {width}x{height}, '
+        f'\n{len(payloads)} requests, {frames} frames x {len(cameras)} cameras, bound {width}x{height}, '
         f'compress_images={compress_images}, no model behind the server\n'
     )
-    print(report(rows))
+    for name, rows in by_wire.items():
+        print(f'--- {name} ({urls[name]})')
+        print(report(rows))
+        print()
+    print(compare(by_wire))
     if out_path is not None:
-        out_path.write_text(json.dumps(rows, indent=1))
+        out_path.write_text(json.dumps(by_wire, indent=1))
         print(f'\nper-request rows -> {out_path}')
 
 
