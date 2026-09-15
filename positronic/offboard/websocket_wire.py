@@ -273,6 +273,10 @@ class WebsocketWire(wire.Wire):
     STOP_GRACE_SEC = 2
 
     def __init__(self, host: str, port: int, api: APIRouter, uds: str | None = None):
+        # The client refuses a relative socket path, because no ``unix://`` URL can name one. A server
+        # that bound one would serve a path its own working directory decided and publish it unreachable.
+        if uds is not None and not uds.startswith('/'):
+            raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
         self._host = host
         self._port = port
         self._uds = uds
