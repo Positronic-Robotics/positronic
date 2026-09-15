@@ -360,11 +360,24 @@ class Harness(pimm.ControlSystem):
             return pimm.Sleep(POLL_PERIOD_SEC)
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
-    def _episode_waypoints(self) -> _ScheduleFidelity:
-        """Every command channel's account for this episode, in one."""
+    @staticmethod
+    def _due_count(schedule: deque[tuple[int, Any]], now_ns: int) -> int:
+        """How many of a schedule's waypoints have come due. A schedule ascends, so they are its leading run."""
+        for index, (due_ns, _) in enumerate(schedule):
+            if due_ns > now_ns:
+                return index
+        return len(schedule)
+
+    def _close_waypoint_account(self, clock: pimm.Clock) -> _ScheduleFidelity:
+        """Close every command channel's account and merge them into one. The episode plays no further round,
+        so a waypoint already due goes out on none and counts as dropped. Closing and reading are one call, so
+        no path reports an account it did not close."""
+        now_ns = clock.now_ns()
         total = _ScheduleFidelity()
-        for fidelity in self._fidelity.values():
-            total.merge(fidelity)
+        for name, schedule in self._schedules.items():
+            self._fidelity[name].count_dropped(self._due_count(schedule, now_ns))
+            schedule.clear()  # devices hold their last commanded position
+            total.merge(self._fidelity[name])
         return total
 
     def _finalize_recording(
@@ -373,11 +386,7 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
-        now_ns = clock.now_ns()
-        for name, schedule in self._schedules.items():
-            # The episode ends on this round, so a waypoint already due goes out on none.
-            self._fidelity[name].count_dropped(self._due_count(schedule, now_ns))
-            schedule.clear()  # devices hold their last commanded position
+        waypoints = self._close_waypoint_account(clock)
         # Stamped before the inference is retired: the meta overlays what its session reports.
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         self._inference = None
@@ -387,7 +396,7 @@ class Harness(pimm.ControlSystem):
         # The episode span must still be open while the recorder writes the STOP, so that write is timed
         # inside the episode. The other control systems run in that round as well, and the episode is timed
         # with their work too. The error is not more than one control period.
-        self._telemetry.end(virtual_now, self._episode_waypoints().span_attrs())
+        self._telemetry.end(virtual_now, waypoints.span_attrs())
 
     def _set_deadline(self, deadline_ns: int | None) -> None:
         """Arm the live episode's deadline and publish it, so the enforced one and the published one agree."""
@@ -478,14 +487,6 @@ class Harness(pimm.ControlSystem):
                 f'rig-side stack is not anchoring chunks to the harness clock'
             )
 
-    @staticmethod
-    def _due_count(schedule: deque[tuple[int, Any]], now_ns: int) -> int:
-        """How many of a schedule's waypoints have come due. A schedule ascends, so they are its leading run."""
-        for index, (due_ns, _) in enumerate(schedule):
-            if due_ns > now_ns:
-                return index
-        return len(schedule)
-
     def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
@@ -531,7 +532,7 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
-            self._telemetry.seal(clock.now(), self._episode_waypoints().span_attrs())
+            self._telemetry.seal(clock.now(), self._close_waypoint_account(clock).span_attrs())
             if self._call is not None:
                 self._call.set_exception(exc)
                 self._call = None

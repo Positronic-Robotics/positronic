@@ -1,5 +1,6 @@
 import threading
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -2833,3 +2834,52 @@ def test_the_episode_span_carries_the_same_waypoint_account_as_the_meta(world, t
         (telemetry_keys.ATTR_WAYPOINTS_DROPPED, eval_keys.DROPPED),
     ):
         assert attrs[attr] == sum(meta[_schedule_key(channel, field)] for channel in channels)
+
+
+@pytest.mark.timeout(5.0)
+def test_a_failing_episode_seals_its_span_counting_the_waypoints_it_held(world, tmp_path):
+    """A failure seals the episode span through the same account close as a clean end. Waypoints due when it
+    failed go out on no round, so the sealed span counts them dropped rather than losing them with the
+    failure."""
+    policy = StubPolicy()
+    harness = Harness(make_embodiment())
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    _ask(world, harness, policy, Task(instruction_source='stack', timeout_sec=10.0))
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+    channels = (keys.ROBOT_COMMAND, keys.TARGET_GRIP)
+    dropped_key = eval_keys.DROPPED
+    before: list[int] = []
+
+    with pytest.raises(RuntimeError, match='loop boom'):
+        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-seal'), _eval_pass('run-seal'):
+            gen = cast(
+                Generator[pimm.Command, None, None],
+                harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)),
+            )
+            for _ in range(20):
+                next(gen)
+                if any(d.type == DsWriterCommandType.START_EPISODE for _, d in ds_recorder.emitted):
+                    break
+            else:
+                pytest.fail('the trial never started')
+
+            # A channel the trajectory has not named yet carries no account, and so no drops.
+            before.append(
+                sum(
+                    _schedule_account(harness, channel).get(_schedule_key(channel, dropped_key), 0)
+                    for channel in channels
+                )
+            )
+            schedule = harness._schedules[keys.ROBOT_COMMAND]
+            schedule.clear()
+            # Long past on this clock, so the seal finds them due however many ticks it takes to get there.
+            schedule.extend((step * 1_000_000, f'held@{step}') for step in range(3))
+            harness._fidelity[keys.ROBOT_COMMAND].count_scheduled(len(schedule))
+            gen.throw(RuntimeError('loop boom'))
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1  # sealed and exported, not lost with the failure
+    assert episodes[0].attrs[telemetry_keys.ATTR_WAYPOINTS_DROPPED] == before[0] + 3
