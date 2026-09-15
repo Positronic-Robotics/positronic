@@ -77,8 +77,7 @@ class DroidCodec(Codec):
         return result
 
 
-# Galaxea's own server re-observes every `action_steps` (`scripts/serve_policy.py`, default 16), and the
-# model predicts a displacement from the last observed state, so a longer loop extrapolates further.
+# Galaxea's own server re-observes every `action_steps` (`scripts/serve_policy.py`, default 16).
 STEPS_PER_OBSERVATION = 16
 
 

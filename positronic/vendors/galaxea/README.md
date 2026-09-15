@@ -13,9 +13,8 @@ Pretrained DROID/Franka inference through Positronic's standard remote policy AP
 The backend calls Galaxea's `PolicyInferencer` and returns the **entire predicted
 chunk in one response**. It does not use the upstream step cache, and it neither
 repeats nor reorders steps. The checkpoint determines the prediction length. The
-`droid` pipeline then plays the first 16 steps and takes a fresh observation. That
-is the cadence Galaxea's own server serves per inference, through its
-`action_steps` setting (`scripts/serve_policy.py`, default 16). GPU and real-robot
+`droid` pipeline then plays the first 16 steps and takes a fresh observation, which
+is the cadence Galaxea's own server serves per inference. GPU and real-robot
 evaluation are required to establish performance on a particular rig.
 
 The server-side [codec](codecs.py) handles all embodiment conversion:
