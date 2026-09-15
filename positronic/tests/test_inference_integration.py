@@ -236,6 +236,32 @@ def test_every_trial_records_from_its_own_reset(tmp_path):
 
 
 @pytest.mark.timeout(30.0)
+def test_an_untimed_sweep_writes_the_harness_sidecar_under_the_output_dir(tmp_path):
+    """[harness + recorder + sim] with no ``--timing``: a run that records episodes records its spans too,
+    under the directory `pos3.sync` mirrors. Nothing on the box asked for it — `prepare_output_dir` points
+    the sidecar at the run, so every binary that resolves its output dir there uploads the spans with the
+    episodes. ``--timing`` adds the pass span and the machine-load stream on top."""
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
+    task = next(iter(ev.tasks()))
+    with pos3.mirror():
+        main(
+            policy=ChunkedSchedule().wrap(
+                RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
+            ),
+            evals=[replace(ev, tasks=partial(iter, number_trials([(task, {})])))],
+            output_dir=str(tmp_path),
+        )
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    names = {rec.name for rec in spans}
+    assert telemetry_keys.SPAN_EPISODE in names
+    assert telemetry_keys.SPAN_POLICY_INFER in names
+    # The pass span and the machine-load stream stay `--timing`'s: this is the harness sidecar alone.
+    assert telemetry_keys.SPAN_EVAL_PASS not in names
+    assert not telemetry.stats_path(tmp_path, telemetry_keys.HARNESS_PROCESS).exists()
+
+
+@pytest.mark.timeout(30.0)
 def test_timing_writes_telemetry_sidecars(tmp_path):
     """[harness + recorder + sim] under ``--timing``: the sweep writes the harness telemetry sidecars, the
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
@@ -254,10 +280,10 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
             timing=True,
         )
 
-    # The env handed to a launched env server is restored after the run, so a later run in this process
-    # inherits nothing from this one.
-    assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
+    # The run id a launched env server joins by is restored after the run, so a later run in this process
+    # inherits none of it; the directory names THIS run, and the next one's `prepare_output_dir` names its own.
     assert env_telemetry.ENV_RUN_ID not in os.environ
+    assert os.environ[env_telemetry.ENV_TELEMETRY_DIR] == str(tmp_path / telemetry.TELEMETRY_SUBDIR)
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert {rec.process for rec in spans} == {telemetry_keys.HARNESS_PROCESS}
