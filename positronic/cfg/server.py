@@ -207,6 +207,10 @@ def rollouts_by_model():
         # counted and stays out of the rate.
         scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
         successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
+        # `>=`, not `==`: the ladder is ordered and a rung is the highest one marked, so an episode
+        # that reached a rung ABOVE the target passed through it. The vocabulary floats and is
+        # append-only, so an install can carry a ladder longer than the one this release was written
+        # against, and equality would drop exactly the best episodes out of the count.
         at_target = LADDER.index(Stage.AT_TARGET)
         return {
             DERIVED_MODEL: episodes[0][DERIVED_MODEL],
@@ -214,7 +218,7 @@ def rollouts_by_model():
             'scored': len(scored),
             'successes': successes,
             'success_rate': rate_cell(successes, len(scored)),
-            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank == at_target),
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank >= at_target),
         }
 
     format_table = {
