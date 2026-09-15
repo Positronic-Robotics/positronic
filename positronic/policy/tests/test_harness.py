@@ -212,7 +212,7 @@ class _HeldInferenceSession(_FakeInferenceSession):
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         self.entered.set()
-        # The tests that hold a function time out at 10 s, so this bound expires first and the failure
+        # This bound expires inside the 10 s timeout of the tests that hold a function, so the failure
         # names the release that never came.
         if not self._released.wait(timeout=5.0):
             raise AssertionError('the function was never released')
