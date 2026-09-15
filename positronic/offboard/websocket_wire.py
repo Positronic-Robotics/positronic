@@ -72,6 +72,13 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
+def _spell(uds: str) -> str:
+    """``uds`` as a URL names it: the route marker escaped, so only the route this URL appends is one."""
+    # The parser ends the socket path at the first ``/api/v1``, so a socket under a directory of that
+    # name would otherwise read back as a shorter path and a longer route — a different socket.
+    return quote(uds, safe='/').replace(wire.API_PATH, f'%2F{wire.API_PATH.lstrip("/")}')
+
+
 class WebsocketClientWire(wire.ClientWire):
     """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
 
@@ -92,7 +99,7 @@ class WebsocketClientWire(wire.ClientWire):
         # FOOTGUN: spell the path as the URL wrote it. A decoded ``?`` or ``#`` reads as a delimiter,
         # so re-encoding a round trip through this URL would name a different socket.
         query = f'?{address.query}' if address.query else ''
-        return f'{wire.UNIX_SCHEME}://{address.uds_as_written or quote(address.uds)}{address.path}{query}'
+        return f'{wire.UNIX_SCHEME}://{address.uds_as_written or _spell(address.uds)}{address.path}{query}'
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'

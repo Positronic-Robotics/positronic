@@ -263,11 +263,14 @@ server = PolicyServer(pipeline)
 server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`serve` takes the wires that sessions arrive on. Each wire binds its own port, reads its own route for
-the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)`
-to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model catalogue,
-and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
-names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire took.
+`serve` takes the wires that sessions arrive on. Each wire binds its own address, reads its own route
+for the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host,
+port)` to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model
+catalogue, and answers it wherever it carries sessions.
+
+A wire names what it bound in its `endpoint` property. A port-backed wire asked for port 0 binds any
+free one, so `ws.endpoint.port` is the port it took; a WebSocket wire on `uds` carries the socket as
+`ws.endpoint.uds` and leaves `endpoint.port` at 0, since it bound none.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
