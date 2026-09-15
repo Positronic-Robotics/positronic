@@ -528,7 +528,8 @@ def serve(
     ``--pipeline.source.model_source=...``; LeRobot and OpenPI use ``--pipeline.source.checkpoints_dir=...``.
 
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``uds`` binds
-    the websocket wire to that Unix socket path and leaves ``host`` and ``port`` unused.
+    the websocket wire to that Unix socket path instead of ``host`` and ``port``; the gRPC wire still
+    binds ``host``, so a socket-served websocket beside a gRPC port is still reachable over the network.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
