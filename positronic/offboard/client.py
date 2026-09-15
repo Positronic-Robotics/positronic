@@ -21,8 +21,7 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
-# Opening one session — the socket or TCP/TLS connect and the WebSocket handshake on it — and the
-# retries until a cold backend answers.
+# Opening one session: the connect on either transport, and the handshake on it.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 

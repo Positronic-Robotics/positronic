@@ -257,8 +257,7 @@ WS_IMPL = 'websockets-sansio'
 class WebsocketWire(wire.Wire):
     """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port.
 
-    ``uds`` binds a Unix socket path in place of ``host:port``, which serves a client on the same machine
-    over no network. A client reaches it with a ``unix://`` URL. The socket file stays after ``stop``: a
+    ``uds`` binds a Unix socket path in place of ``host:port``. The socket file stays after ``stop``: a
     successor reads it as stale, where an unlink here could take a path that successor has claimed.
     """
 
