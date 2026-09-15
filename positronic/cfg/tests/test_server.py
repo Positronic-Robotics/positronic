@@ -120,8 +120,7 @@ def test_a_word_this_vocabulary_does_not_carry_reaches_the_page_as_itself():
 
 
 def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
-    """A discarded attempt measured nothing, so counting it as a failure understates the endpoint.
-    The report drops it from the same round, and these two must not disagree about one number."""
+    """A discarded attempt measured nothing, so counting it as a failure understates the endpoint."""
     group = cfg_server.rollouts_by_model.instantiate()
 
     row = group.group_fn([_row(Outcome.SUCCESS), _row(Outcome.DISCARDED), _row(Outcome.UNSCORED)])
