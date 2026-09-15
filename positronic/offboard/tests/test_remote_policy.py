@@ -268,6 +268,13 @@ class TestInferenceClientUrl:
                 uds_as_written='/run/b.sock',
             )
 
+    def test_an_address_refuses_a_relative_socket_path(self):
+        """A relative path reads back as the URL's authority, so no URL could name that socket."""
+        with pytest.raises(ValueError, match='relative socket path'):
+            wire.SessionAddress(
+                host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds='policy.sock'
+            )
+
     def test_a_socket_path_ends_at_the_api_segment(self):
         client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')
         assert client.uds == '/run/policy.sock'
