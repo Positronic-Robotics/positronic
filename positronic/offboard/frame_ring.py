@@ -5,7 +5,6 @@ session socket. Each inference writes the images into a slot and sends a referen
 the server reads through a mapping the seals let it neither write nor resize.
 """
 
-import contextlib
 import fcntl
 import logging
 import mmap
@@ -263,6 +262,11 @@ class MappedRing:
         return np.ndarray(shape, dtype=dtype, buffer=self._map, offset=slot * self._stride + _HEADER_BYTES + offset)
 
 
+# How long ``accept`` blocks before the thread re-reads whether the channel is closing. A knock on the
+# socket ends the wait sooner, and it cannot reach a thread whose socket node is already unlinked.
+_ACCEPT_POLL_SEC = 0.2
+
+
 class FrameChannel:
     """The socket that carries ring descriptors to this server, and the rings each session holds.
 
@@ -280,6 +284,7 @@ class FrameChannel:
 
     def start(self, sock: socket.socket) -> None:
         """Serve handovers on ``sock``, which the caller already bound to ``path`` and listened on."""
+        sock.settimeout(_ACCEPT_POLL_SEC)
         self._socket = sock
         self._thread = threading.Thread(target=self._accept_forever, name='frame-channel', daemon=True)
         self._thread.start()
@@ -315,6 +320,8 @@ class FrameChannel:
         while not self._closing:
             try:
                 connection, _address = self._socket.accept()
+            except TimeoutError:
+                continue
             except OSError:
                 if not self._closing:
                     logger.exception('The frame ring channel stopped accepting')
@@ -352,11 +359,6 @@ class FrameChannel:
     def close(self) -> None:
         self._closing = True
         if self._socket is not None:
-            # Closing a socket another thread waits in ``accept`` on does not wake that thread, so
-            # knock first. A refused knock means it is not waiting, which is the state this wants.
-            with contextlib.suppress(OSError), socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as knock:
-                knock.settimeout(HANDOVER_TIMEOUT_SEC)
-                knock.connect(str(self.path))
             self._socket.close()
             self._socket = None
         if self._thread is not None:
