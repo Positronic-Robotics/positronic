@@ -1690,6 +1690,16 @@ def test_harness_clears_trajectory_on_run(world):
     assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on a new episode failed'
 
 
+def _schedule_key(channel: str, field: str) -> str:
+    """One field of one channel's schedule account, keyed as the episode's statics carry it."""
+    return f'{eval_keys.SCHEDULE}.{channel}.{field}'
+
+
+def _schedule_account(harness: Harness, channel: str) -> dict[str, Any]:
+    """What the harness would stamp for ``channel``, without ending an episode to read it."""
+    return harness._fidelity[channel].meta(f'{eval_keys.SCHEDULE}.{channel}')
+
+
 class _FrozenClock(pimm.Clock):
     """A clock stopped at an exact nanosecond, so a waypoint scheduled on a whole millisecond is not moved off
     it by a float."""
@@ -1702,16 +1712,6 @@ class _FrozenClock(pimm.Clock):
 
     def now_ns(self) -> int:
         return self._now_ns
-
-
-def _schedule_key(channel: str, field: str) -> str:
-    """One field of one channel's schedule account, keyed as the episode's statics carry it."""
-    return f'{eval_keys.SCHEDULE}.{channel}.{field}'
-
-
-def _schedule_account(harness: Harness, channel: str) -> dict[str, Any]:
-    """What the harness would stamp for ``channel``, without ending an episode to read it."""
-    return harness._fidelity[channel].meta(f'{eval_keys.SCHEDULE}.{channel}')
 
 
 def _play_round(harness: Harness, due_ms: list[int], now_ms: int, channel: str = keys.ROBOT_COMMAND) -> None:
@@ -1753,6 +1753,56 @@ def test_a_round_that_finds_one_waypoint_due_counts_no_drop():
     account = _schedule_account(harness, keys.ROBOT_COMMAND)
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.EMITTED)] == 1
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.DROPPED)] == 0
+
+
+def _dropped_over_an_episode_ending_on_held_waypoints(world, offset_ms: int) -> tuple[int, int]:
+    """Run an episode that the operator ends with three robot-command waypoints on the schedule, each due
+    ``offset_ms`` from that moment. Answer the channel's drops just before the end and as the statics report
+    them."""
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, ChunkPolicy())
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    dropped_key = _schedule_key(keys.ROBOT_COMMAND, eval_keys.DROPPED)
+    before: list[int] = []
+
+    def hold_then_end() -> None:
+        schedule = harness._schedules[keys.ROBOT_COMMAND]
+        schedule.clear()
+        due_ns = world.clock.now_ns() + offset_ms * 1_000_000
+        schedule.extend((due_ns + step * 10_000_000, f'held@{step}') for step in range(3))
+        harness._fidelity[keys.ROBOT_COMMAND].count_scheduled(len(schedule))
+        before.append(_schedule_account(harness, keys.ROBOT_COMMAND)[dropped_key])
+        # In the same round as the schedule it holds, so no round of the loop issues them first.
+        p['done_em'].emit(OPERATOR_DONE)
+
+    driver = ManualDriver([
+        (partial(p['perform_task'], Task(instruction_source='t', timeout_sec=None)), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.05),
+        (hold_then_end, 0.0),
+        (None, 0.02),
+    ])
+    drive_scheduler(world.start([harness, driver]), steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    return before[0], stops[0].static_data[dropped_key]
+
+
+@pytest.mark.timeout(5.0)
+def test_an_episode_ending_on_due_waypoints_counts_them_dropped(world):
+    """Ending an episode clears the schedule, so a waypoint already due goes out on no round at all."""
+    before, reported = _dropped_over_an_episode_ending_on_held_waypoints(world, offset_ms=-30)
+
+    assert reported == before + 3
+
+
+@pytest.mark.timeout(5.0)
+def test_an_episode_ending_on_waypoints_still_ahead_counts_no_drop(world):
+    """A waypoint the episode ends before is not one the loop overtook, so the end counts no drop for it."""
+    before, reported = _dropped_over_an_episode_ending_on_held_waypoints(world, offset_ms=10_000)
+
+    assert reported == before
 
 
 @pytest.mark.timeout(3.0)
