@@ -131,8 +131,8 @@ def finetune_group_by_task():
     return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
-# The endpoint that served an episode. What an attended rollout records beside it — the verdict, the
-# item counts and the progress ladder — is `eval_vocabulary`'s, which the console writes and this reads.
+# The endpoint that served an episode. `eval_vocabulary` owns the rest an attended rollout records —
+# the verdict, the item counts and the progress ladder — which the console writes and this reads.
 POLICY_LABEL = f'{policy_keys.POLICY_META}.label'
 
 # What this preset DERIVES onto each episode. The tables below address these again, so each one is

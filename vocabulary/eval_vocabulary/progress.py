@@ -1,7 +1,7 @@
 """The ladder an operator marks as the arm works, recorded as the `progress.state` signal.
 
-Each mark appends the code of a state the arm has reached. The codes are ordered, so the rung that
-matters is the highest one marked rather than the last.
+Each mark appends the code of a state the arm has reached. The codes are ordered, and an operator
+can mark a lower state after a higher one, so the rung reached is the highest code marked.
 """
 
 from __future__ import annotations
@@ -40,8 +40,7 @@ STAGE_LABELS: dict[Stage, str] = {
 def highest_stage(codes: Iterable[str]) -> Stage | None:
     """The highest stage in `LADDER` among `codes`, or None where none is a stage.
 
-    The highest, not the last: an operator can mark a lower stage after a higher one. A code that is
-    not a stage is ignored, so a recording made against a longer ladder still reads.
+    A code that is not a stage is ignored, so a recording made against a longer ladder still reads.
     """
     reached = [Stage(code) for code in codes if code in LADDER]
     return max(reached, key=LADDER.index) if reached else None
