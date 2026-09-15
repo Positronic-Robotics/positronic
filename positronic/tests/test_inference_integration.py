@@ -280,8 +280,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
             timing=True,
         )
 
-    # The run id a launched env server joins by is restored after the run, so a later run in this process
-    # inherits none of it; the directory names THIS run, and the next one's `prepare_output_dir` names its own.
+    # `timed_pass` owns the run id and restores it; `prepare_output_dir` owns the directory and leaves it set.
     assert env_telemetry.ENV_RUN_ID not in os.environ
     assert os.environ[env_telemetry.ENV_TELEMETRY_DIR] == str(tmp_path / telemetry.TELEMETRY_SUBDIR)
 
