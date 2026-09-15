@@ -24,6 +24,27 @@ MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
 ERROR = 'error'
+# What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
+# milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
+TIMING = 'timing'
+
+# The phases ``TIMING`` reports. `SERVED` brackets the others: it opens on the observation
+# arriving and closes before the answer is encoded.
+TIMING_SERVED = 'served_ms'
+TIMING_DECODE = 'decode_ms'
+TIMING_INFER = 'infer_ms'
+# Time the observation waited for the inference slot, inside `SERVED`.
+TIMING_QUEUED = 'queued_ms'
+
+
+def timing_key(name: str) -> str:
+    return f'{name}_ms'
+
+
+# What a blocking session's call is timed as: the heavy work it waits out.
+MODEL_CALL = 'model'
+# Time the model's own call took, inside `INFER`.
+TIMING_MODEL = timing_key(MODEL_CALL)
 
 
 class ServerStatus(StrEnum):

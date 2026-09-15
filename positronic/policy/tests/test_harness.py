@@ -29,6 +29,7 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
+from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.tests.testing_coutils import EpisodeCaller, ManualDriver, RecordingEmitter, drive_scheduler, drive_until
 
 POLL_PERIOD_NS = round(POLL_PERIOD_SEC * 1e9)
@@ -339,14 +340,8 @@ def _last_grip(p):
     return msg.data
 
 
-def _emitted_commands(recorder):
-    """Every robot command a recorder saw, in emission order."""
-    return [cmd for _ts, cmd in recorder.emitted]
-
-
-def _emitted_grips(recorder):
-    """Every grip target a recorder saw, in emission order."""
-    return [grip for _ts, grip in recorder.emitted]
+def _emitted_values(recorder):
+    return [value for _ts, value in recorder.emitted]
 
 
 @pytest.mark.timeout(3.0)
@@ -399,14 +394,14 @@ def test_harness_emits_cartesian_move(world):
         keys.DESCRIPTOR,
     }
 
-    cmds = _emitted_commands(cmd_recorder)
+    cmds = _emitted_values(cmd_recorder)
     assert cmds, 'no robot command emitted'
     cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
     np.testing.assert_allclose(cmd.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert grips and grips[-1] == pytest.approx(0.33)
 
 
@@ -538,7 +533,7 @@ def test_harness_waits_for_complete_inputs(world):
 
     def assert_no_inference():
         assert policy.last_obs is None
-        assert not _emitted_commands(cmd_recorder)
+        assert not _emitted_values(cmd_recorder)
 
     driver = ManualDriver([
         (partial(perform_task, Task(instruction_source='dummy-task', timeout_sec=None)), 0.01),
@@ -554,13 +549,13 @@ def test_harness_waits_for_complete_inputs(world):
 
     assert policy.last_obs is not None
 
-    cmds = _emitted_commands(cmd_recorder)
+    cmds = _emitted_values(cmd_recorder)
     assert cmds, 'no robot command emitted'
     cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert grips and grips[-1] == pytest.approx(0.33)
 
 
@@ -710,12 +705,15 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
 
     rollout = Rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy(), None)
     inference = _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)
+    stop = threading.Timer(0.02, world.request_stop)
     try:
-        inference({})  # starts the function, which never answers
-        world.request_stop()
-        inference.wait(world.should_stop_reader())
+        stop.start()
+        assert inference({}, world.should_stop_reader()) is None
+        assert world.should_stop_reader().value
     finally:
+        stop.cancel()
         never_answers.set()
+        rollout.close()
 
 
 @pytest.mark.timeout(3.0)
@@ -1367,8 +1365,8 @@ def test_timeout_during_inference_drops_the_chunk(world):
     assert len(stops) == 1
     assert stops[0].static_data[eval_keys.TERMINATED] is False
     # A trial that times out mid-call plays nothing: the chunk it was waiting on is dropped.
-    assert not _emitted_commands(cmd_recorder)
-    assert not _emitted_grips(grip_recorder)
+    assert not _emitted_values(cmd_recorder)
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(3.0)
@@ -1632,8 +1630,8 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=200)
 
-    assert not _emitted_commands(cmd_recorder)  # an empty trajectory schedules nothing
-    assert not _emitted_grips(grip_recorder)
+    assert not _emitted_values(cmd_recorder)  # an empty trajectory schedules nothing
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(3.0)
@@ -1938,6 +1936,37 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
 
 
 @pytest.mark.timeout(3.0)
+def test_seal_exports_when_the_harness_owns_the_provider(world, tmp_path, monkeypatch):
+    """The seal runs while the provider it writes to is still bound, so the sealed span is exported."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'run-crash')
+
+    policy = StubPolicy()
+    scene = pimm.calls.ControlSystemHandler[Any, None](Passive())
+    harness = Harness(make_embodiment(prepare_handlers={eval_keys.SCENE: scene}))
+    wire_call(world, harness.prepare[eval_keys.SCENE], scene)
+    harness.ds_command._bind(RecordingEmitter())
+    task = Task(
+        instruction_source='stack',
+        timeout_sec=10.0,
+        prepare_args={eval_keys.SCENE: {}},
+        meta={eval_keys.TRIAL_INDEX: 0},
+    )
+    _ask(world, harness, policy, task)
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with pytest.raises(RuntimeError, match='reset boom'):
+        for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
+            for call in scene.incoming():
+                call.set_exception(RuntimeError('reset boom'))
+
+    path = telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)
+    episodes = [s for s in telemetry.read_spans(path) if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    assert episodes[0].attrs.get(telemetry_keys.ATTR_EPISODE_PARTIAL) is True
+
+
 def test_failed_pass_seals_open_episode_span(world, tmp_path):
     """A ``reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
@@ -2122,6 +2151,22 @@ def test_an_uncharged_call_pauses_the_world(world):
 
     assert played, 'no command was played'
     assert played[0][0] < 0.05, f'the world paid for the function: first command at {played[0][0]}s'
+
+
+@pytest.mark.timeout(20.0)
+@pytest.mark.parametrize('wall_sec', [0.0, 0.01])
+def test_uncharged_chunks_have_no_extra_control_tick(world, wall_sec):
+    chunk = [*slow_chunk(0.1, 4), {keys.ACTION_TIMESTAMP: 0.1}]
+    played = _run_episode(
+        world,
+        RemoteStubPolicy(wall_sec=wall_sec, chunk=chunk),
+        ChunkedSchedule(),
+        charge_inference_time=False,
+        run_sec=0.4,
+    )
+
+    assert len(played) >= 12
+    np.testing.assert_allclose(np.diff([t for t, _ in played])[3::4], 0.025, atol=1e-7)
 
 
 @pytest.mark.timeout(20.0)
@@ -2484,7 +2529,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     ])
     drive_scheduler(world.start([harness, driver]), steps=1000)
 
-    grips = _emitted_grips(grip_recorder)
+    grips = _emitted_values(grip_recorder)
     assert set(grips) == {0.5}, f'the second chunk kept the gripper playing: {grips}'
 
 
@@ -2504,8 +2549,8 @@ def test_manual_commands_are_emitted_as_plain_values(world):
     driver = ManualDriver([(partial(manual_em.emit, {keys.ROBOT_COMMAND: manual}), 0.01), (None, 0.02)])
     drive_scheduler(world.start([harness, driver]), steps=50)
 
-    assert _emitted_commands(cmd_recorder) == [manual]
-    assert not _emitted_grips(grip_recorder)
+    assert _emitted_values(cmd_recorder) == [manual]
+    assert not _emitted_values(grip_recorder)
 
 
 @pytest.mark.timeout(20.0)
@@ -2535,4 +2580,41 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     ])
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
-    assert not _emitted_commands(cmd_recorder)
+    assert not _emitted_values(cmd_recorder)
+
+
+def test_a_layer_the_rig_runs_lands_in_the_sidecar_as_its_own_span(world, tmp_path):
+    """The harness binds every timed layer to the telemetry sidecar, one span per layer per call."""
+
+    class _Answering(Policy):
+        class _Session(Session):
+            def __call__(self, obs, time_ns):
+                return []
+
+        def new_session(self, context=None, rt=None):
+            return _Answering._Session()
+
+    class _Marker(Layer):
+        WIRE_NAME = 'marker'
+
+        def make_session(self, inner: Session) -> Session:
+            return inner
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-layers'):
+        rollout = Rollout(
+            Task(instruction_source='t', timeout_sec=None), (_Marker() | StopOnFault()).wrap(_Answering()), None
+        )
+        try:
+            _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)(
+                {keys.ROBOT_STATUS: RobotStatus.AVAILABLE}, world.should_stop_reader()
+            )
+        finally:
+            rollout.close()
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    by_name = {span.name: span for span in spans}
+    named = {_Marker.WIRE_NAME, StopOnFault.WIRE_NAME, telemetry_keys.SPAN_POLICY_CALL}
+    assert named <= by_name.keys()
+    call = by_name[telemetry_keys.SPAN_POLICY_CALL]
+    marker, inner = by_name[_Marker.WIRE_NAME], by_name[StopOnFault.WIRE_NAME]
+    assert call.start_ns <= marker.start_ns <= inner.start_ns <= inner.end_ns <= marker.end_ns <= call.end_ns

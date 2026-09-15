@@ -126,6 +126,26 @@ button {
   color: var(--text-secondary);
 }
 
+.attribution {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.attribution a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.attribution a:hover {
+  color: var(--accent);
+}
+
+.page-kicker .attribution {
+  margin-left: 0.75rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 /* Cards  */
 
 .card {

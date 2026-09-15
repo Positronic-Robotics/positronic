@@ -1,13 +1,11 @@
-# GR00T on desktop (RTX 3060 12GB — GR00T uses ~4.6GB)
+# GR00T N1.6 on desktop (RTX 3060 12GB — GR00T uses ~4.6GB)
 #
+# Set GR00T_N16_IMAGE to a pinned N1.6 image.
 # docker --context desktop compose -f docker-compose.phail.desktop.yml up
 services:
   phail-groot-server:
     extends:
-      file: docker-compose.yml
-      service: groot-server
-    container_name: phail-groot-server
-    pull_policy: always
-    command: ["phail"]
+      file: docker-compose.phail.yml
+      service: phail-groot-server
     ports: !override
       - "8000:8000"

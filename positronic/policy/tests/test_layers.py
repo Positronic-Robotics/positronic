@@ -1,5 +1,6 @@
 """Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
+import time
 from typing import Any
 
 import numpy as np
@@ -10,9 +11,11 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import base as base_module
+from positronic.policy import codec as codec_module
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import Layer, Policy, Session
+from positronic.policy.base import DelegatingSession, Layer, Policy, Session, timings_to
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -187,6 +190,13 @@ class TestChunkedSchedule:
         session(_obs(1.0), int(1e9))
         result = session(_obs(1.01), int(1.01e9))
         assert result is not None
+
+    def test_chunk_expiry_rounds_to_the_clock_nanosecond(self):
+        session = ChunkedSchedule().make_session(_ConstSession([{keys.ACTION_TIMESTAMP: 0.1}]))
+        session(_obs(0.2), 200_000_000)
+
+        assert session({keys.OBS_TIME_NS: 299_999_999}, 299_999_999) is None
+        assert session({keys.OBS_TIME_NS: 300_000_000}, 300_000_000) is not None
 
     def test_expiry_is_judged_at_the_observation_instant(self):
         """Whether the trajectory has run out is a question about the observation, not about the call's time."""
@@ -636,6 +646,29 @@ class TestRestrictImageSize:
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
         assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
+    def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
+        """A stack over the parallel bar scales to the same pixels as the frames taken one at a time."""
+        rng = np.random.default_rng(0)
+        stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        codec = RestrictImageSize(64, 48)
+        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
+        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
+
+    def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
+        """A pool wins nothing on a single core, and costs threads to raise."""
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 1)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._PARALLEL_FROM + 4) == 1
+
+    def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
+        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 2)
+        codec = RestrictImageSize(64, 48)
+        assert codec._workers(codec._MAX_WORKERS * 4) == 2
+
+    def test_a_stack_under_the_parallel_bar_still_scales(self):
+        stack = np.zeros((RestrictImageSize._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
+        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
+
     def test_nested_images_are_reached(self):
         result = RestrictImageSize(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
         assert result['video']['cam'].shape == (48, 64, 3)
@@ -660,3 +693,88 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
+
+
+class _Marker(Layer):
+    """A layer that changes nothing, so a stack of them tests the seam alone."""
+
+    def make_session(self, inner: Session) -> Session:
+        return inner
+
+
+class _Named(_Marker):
+    WIRE_NAME = 'named'
+
+
+class _SlowLayer(Layer):
+    """Spends ``sleep_s`` above the inner call, so the figure under it reads smaller than its own."""
+
+    def __init__(self, sleep_s: float):
+        self._sleep_s = sleep_s
+
+    def make_session(self, inner: Session) -> Session:
+        sleep_s = self._sleep_s
+
+        class _Session(DelegatingSession):
+            def __call__(self, obs, time_ns):
+                time.sleep(sleep_s)
+                return self._inner(obs, time_ns)
+
+        return _Session(inner)
+
+
+class TestTimedLayers:
+    """Every layer in a stack sends its call to the bound ``TimingSink``, named for the layer."""
+
+    @staticmethod
+    def _timings(pipeline: Layer) -> list[tuple[str, int, int]]:
+        taken: list[tuple[str, int, int]] = []
+        session = pipeline.wrap(_ConstPolicy([{'v': 1}])).new_session()
+        with timings_to(lambda name, start_ns, end_ns: taken.append((name, start_ns, end_ns))):
+            session(_obs(), 0)
+        return taken
+
+    def test_each_layer_in_a_stack_reports_under_its_own_name(self):
+        timings = self._timings(StopOnFault() | _Named() | _Marker())
+        assert [name for name, _, _ in timings] == ['marker', 'named', 'stop_on_fault']
+
+    def test_a_repeated_layer_takes_an_ordinal_counted_from_the_inside(self):
+        timings = self._timings(_Marker() | _Named() | _Marker() | _Marker())
+        assert [name for name, _, _ in timings] == ['marker', 'marker_2', 'named', 'marker_3']
+
+    def test_the_durations_nest_outer_around_inner(self):
+        timings = self._timings(_SlowLayer(0.01) | _SlowLayer(0.01))
+        (inner, inner_start, inner_end), (outer, outer_start, outer_end) = timings
+        assert (inner, outer) == ('slow_layer', 'slow_layer_2')
+        assert outer_start <= inner_start <= inner_end <= outer_end
+        assert outer_end - outer_start >= inner_end - inner_start + 10_000_000
+
+    def test_a_call_that_raises_is_still_reported(self):
+        class _Raising(Layer):
+            def make_session(self, inner: Session) -> Session:
+                class _Session(DelegatingSession):
+                    def __call__(self, obs, time_ns):
+                        raise RuntimeError('boom')
+
+                return _Session(inner)
+
+        taken: list[str] = []
+        session = (_Marker() | _Raising()).wrap(_ConstPolicy([])).new_session()
+        with timings_to(lambda name, *_: taken.append(name)), pytest.raises(RuntimeError, match='boom'):
+            session(_obs(), 0)
+        assert taken == ['raising', 'marker']
+
+    def test_an_unbound_sink_leaves_no_figure_and_no_reading_of_the_clock(self, monkeypatch):
+        policy = _ConstPolicy([{'v': 1}])
+        session = (_Marker() | _Named()).wrap(policy).new_session()
+        monkeypatch.setattr(base_module.time, 'time_ns', lambda: pytest.fail('the clock was read with no sink bound'))
+        assert session(_obs(), 0) == [{'v': 1}]
+        assert policy._session is not None and policy._session.call_count == 1
+
+    def test_the_sink_is_bound_for_the_block_and_no_longer(self):
+        taken: list[str] = []
+        session = _Marker().wrap(_ConstPolicy([])).new_session()
+        with timings_to(lambda name, *_: taken.append(name)):
+            session(_obs(), 0)
+        session(_obs(), 0)
+        assert taken == ['marker']

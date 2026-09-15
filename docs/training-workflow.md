@@ -69,7 +69,7 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 |-------|---------------|
 | **SmolVLA / LeRobot 0.4.x** | `ee`, `joints` (512x512 images) |
 | **LeRobot ACT (0.3.3)** | `ee`, `joints`, `ee_traj`, `joints_traj` |
-| **GR00T** | `ee_rot6d_joints`, `ee_quat`, `ee_quat_joints` |
+| **GR00T N1.7** | `droid`, `droid_three_cameras` |
 | **OpenPI** | `ee`, `ee_joints`, `droid` |
 
 ### S3 Support
@@ -124,14 +124,13 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
 ### GR00T Training
 
 ```bash
-cd docker && docker compose run --rm groot-train \
-  --input_path=~/datasets/groot/stack_cubes \
-  --output_path=~/checkpoints/groot \
-  --exp_name=experiment_v1 \
-  --modality_config=ee_rot6d_q
+cd docker && docker compose run --rm -v "$PWD/groot-data:/data" groot-train \
+  --input_path=/data/datasets/stack_cubes \
+  --output_path=/data/checkpoints \
+  --exp_name=experiment_v1
 ```
 
-**Modality config must match codec** (see [GR00T README](../positronic/vendors/gr00t/README.md#1-prepare-data)).
+The checkpoint supplies the model and action configuration. Camera names come from the converted dataset (see [GR00T README](../positronic/vendors/gr00t/README.md)).
 
 ### OpenPI Training
 
@@ -172,7 +171,7 @@ WandB logging is enabled by default if `WANDB_API_KEY` is set in `docker/.env.wa
 
 ## Step 3: Serve Inference
 
-Start an inference server that exposes a unified WebSocket API. All vendors implement the same Protocol v1 (see [Offboard README](../positronic/offboard/README.md) for details), enabling a single `.remote` policy client that works across all models.
+Start an inference server that exposes a unified API over a WebSocket or a gRPC wire. All vendors implement the same Protocol v1 (see [Offboard README](../positronic/offboard/README.md) for details), enabling a single `.remote` policy client that works across all models.
 
 ### Starting Servers
 
@@ -197,8 +196,8 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 **GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
+cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
+  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
 ```
 
 **OpenPI Server:**
@@ -215,6 +214,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 |-----------|-------------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
 | `--pipeline.source.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
+| `--pipeline.source.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
 | `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
 | `--pipeline.ee_frame` | OpenPI only: the EE frame the checkpoint speaks, relative to the rig's `default` | `None` |
 | `--port` | Server port | `8000` (default) |
@@ -287,7 +287,7 @@ cd docker && docker compose run --rm lerobot-convert convert \
 # ACT, GR00T, OpenPI — use lerobot-0_3_3-convert
 cd docker && for pair in \
   "lerobot_0_3_3.codecs.ee ~/datasets/lerobot_act/my_task" \
-  "gr00t.codecs.ee_rot6d_joints ~/datasets/groot/my_task" \
+  "gr00t.codecs.droid ~/datasets/groot/my_task" \
   "openpi.codecs.ee ~/datasets/openpi/my_task"; do
   set -- $pair
   docker compose run --rm lerobot-0_3_3-convert convert \

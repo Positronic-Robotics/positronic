@@ -25,6 +25,7 @@ from positronic.server.positronic_server import (
     GROUP_FILTERS,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
+    Attribution,
     ColumnConfig,
     GroupFile,
     GroupTableConfig,
@@ -326,6 +327,30 @@ def test_the_header_falls_back_to_the_dataset_root(viewer):
     assert '/datasets/run-7' in viewer.get('/').text
 
 
+@pytest.mark.parametrize('page', _PAGES)
+def test_an_attribution_names_the_publisher_and_links_their_address(viewer, monkeypatch, page):
+    publisher = Attribution(label='Positronic Robotics', url='https://positronic.ro/')
+    monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, PageConfig(attribution=publisher))
+
+    body = viewer.get(page).text
+
+    assert 'by <a href="https://positronic.ro/" target="_blank" rel="noopener">Positronic Robotics</a>' in body
+
+
+def test_the_run_list_names_the_publisher_beside_its_kicker(viewer, monkeypatch):
+    publisher = Attribution(label='Positronic Robotics', url='https://positronic.ro/')
+    monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, PageConfig(attribution=publisher))
+
+    body = viewer.get('/').text
+
+    assert '<div class="page-kicker">Run explorer <span class="attribution">by <a href=' in body
+
+
+@pytest.mark.parametrize('page', _PAGES)
+def test_a_page_with_no_attribution_names_nobody(viewer, page):
+    assert 'attribution' not in viewer.get(page).text
+
+
 def test_an_episode_page_hides_where_the_episode_lives(viewer, monkeypatch):
     monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, PageConfig(show_paths=False))
 
@@ -604,10 +629,11 @@ def test_a_base_href_whose_segment_only_contains_dots_stands():
 def test_configure_pages_checks_what_it_is_given_and_fills_the_state(monkeypatch):
     monkeypatch.setitem(app_state, _PAGE_CONFIG_KEY, app_state[_PAGE_CONFIG_KEY])
 
-    configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True)
+    publisher = Attribution(label='Positronic Robotics', url='https://positronic.ro/')
+    configure_pages(base_href='/v/tok', title='A run', show_paths=False, static_export=True, attribution=publisher)
 
     assert app_state[_PAGE_CONFIG_KEY] == PageConfig(
-        base_href='/v/tok/', title='A run', show_paths=False, static_export=True
+        base_href='/v/tok/', title='A run', show_paths=False, static_export=True, attribution=publisher
     )
     with pytest.raises(ValueError, match='server root'):
         configure_pages(base_href='v/tok')

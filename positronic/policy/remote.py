@@ -26,7 +26,7 @@ INFER = 'infer'
 def _prepare_value(value: Any) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-        # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
+        # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value)
     if isinstance(value, cabc.Mapping):
         return {k: _prepare_value(v) for k, v in value.items()}
@@ -35,14 +35,14 @@ def _prepare_value(value: Any) -> Any:
     return value
 
 
-def _prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
+def prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
     if not compress_images:
         return dict(obs)
     return {key: _prepare_value(value) for key, value in obs.items()}
 
 
 def round_trip(
-    ws_session: InferenceSession, obs: cabc.Mapping[str, Any], compress_images: bool
+    session: InferenceSession, obs: cabc.Mapping[str, Any], compress_images: bool
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
@@ -50,12 +50,15 @@ def round_trip(
     stack must not run on the thread that calls the session. The span starts after it, because that
     encode is not inference.
     """
-    prepared = _prepare_obs(obs, compress_images)
+    with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
+        prepared = prepare_obs(obs, compress_images)
     infer_start_ns = time.time_ns()
     try:
-        return ws_session.infer(prepared)
+        return session.infer(prepared)
     finally:
-        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
+        # The server's timing fields ride on the round-trip span under the ``served.`` prefix.
+        served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns(), **served)
 
 
 class RemoteSession(Session):
@@ -68,8 +71,8 @@ class RemoteSession(Session):
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
 
-    def __init__(self, ws_session: InferenceSession, rt: Runtime, compress_images: bool = False):
-        self._session = ws_session
+    def __init__(self, session: InferenceSession, rt: Runtime, compress_images: bool = False):
+        self._session = session
         self._rt = rt
         self._compress_images = compress_images
         self._answer: Answer | None = None
@@ -109,7 +112,7 @@ class RemoteSession(Session):
         in_flight = self._answer is not None and not self._answer.done()
         logger.info('RemoteSession.close: answer_in_flight=%s', in_flight)
         assert not in_flight, (
-            'close the runtime serving this session first: the round trip in flight uses the websocket that this closes'
+            'close the runtime serving this session first: the round trip in flight uses the connection this closes'
         )
         self._session.close()
         logger.info('RemoteSession.close: session closed')
@@ -122,32 +125,29 @@ class _Endpoint(Policy):
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
-        self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
+        self._client = InferenceClient.from_url(url, headers=headers, infer_timeout=infer_timeout)
         # Filled on first contact, through a session opened for it alone.
         self._server_meta: dict[str, Any] | None = None
 
     def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session()
+            session = self._client.new_session()
             try:
-                self._server_meta = dict(ws_session.metadata)
+                self._server_meta = dict(session.metadata)
             finally:
-                ws_session.close()
+                session.close()
         return self._server_meta
 
     def new_session(self, context=None, rt=None) -> RemoteSession:
         if rt is None:
             raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
         compress = bool(self.server_meta().get(offboard_keys.COMPRESS_IMAGES))
-        ws_session = self._client.new_session()
-        return RemoteSession(ws_session, rt, compress_images=compress)
+        session = self._client.new_session()
+        return RemoteSession(session, rt, compress_images=compress)
 
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return {INFER: round_trip}
-
-    def close(self):
-        self._client = None
 
 
 class RemotePolicy(Policy):

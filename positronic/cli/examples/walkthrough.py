@@ -1,10 +1,18 @@
 """Drive one submission from registration to a board, against any platform.
 
-    POSITRONIC_PLATFORM_CREDENTIAL=<token> uv run positronic/cli/examples/walkthrough.py
+    uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
 
 `uv run` builds the environment this needs from the checkout, so nothing has to be installed first.
 The credential is read from the environment rather than taken as an argument: a command line is
 readable by every process on the box and lands in shell history.
+
+`--eval` names the eval to run. The platform owns the list: with no `--eval`, the script prints the
+public boards and the eval each one ranks, and stops. A name the platform does not offer is refused,
+and the refusal names the evals on offer.
+
+The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. With no key, the
+script registers with the GitHub token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's own
+OAuth app must have minted.
 
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
 same flow from the command line is `positronic account register`, `positronic eval run` and
@@ -17,7 +25,8 @@ import argparse
 import os
 import time
 
-from platform_client.client import CREDENTIAL_ENV, PlatformClient
+import httpx
+from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
@@ -69,17 +78,29 @@ def print_quota(client: PlatformClient) -> None:
         print(f'   {limit.key} ({limit.window}): {remaining:g} of {allowed:g} {limit.unit} left')
 
 
+def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
+    """A client that sends no key, whatever the environment holds: a public board is readable by anyone."""
+    anonymous = PlatformClient(platform_url, client=client)
+    anonymous.api_key = None
+    return anonymous
+
+
 def walkthrough(
     client: PlatformClient,
     *,
-    credential: str,
+    credential: str | None,
     alias: str,
     eval_ref: EvalRef,
     policy_image: PolicyImage,
     timeout_s: float,
 ) -> None:
     print('1. register')
-    authenticate(client, credential=credential, alias=alias)
+    if client.api_key is not None:
+        print(f'   key from {API_KEY_ENV}; nothing to register')
+    elif credential is not None:
+        authenticate(client, credential=credential, alias=alias)
+    else:
+        raise SystemExit(f'   set {API_KEY_ENV} to the key `platform-register` prints')
 
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
@@ -103,28 +124,55 @@ def walkthrough(
     print(f'   primary {view.scores.primary}')
     print(f'   result  {view.artifacts.result}')
 
+    print('5. board')
+    with anonymous_client(client.base_url) as public:
+        boards = [board for board in public.list_boards().boards if board.eval == eval_ref]
+        if not boards:
+            print(f'   no public board ranks {eval_ref}')
+        for board in boards:
+            print(f'   {board.board}')
+            for row in public.rankings(board=board.board).rankings:
+                print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
 
-def main() -> None:
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--alias', default='demo', help='the name a board displays you by')
-    parser.add_argument('--eval', default='fake.smoke', help='the eval to run; the platform lists the ones it offers')
-    parser.add_argument('--policy-image', default='org/policy:v1', help='the image the platform pulls and runs')
+    parser.add_argument(
+        '--eval', default=None, help='the eval to run; with none, the public boards name the ones on offer'
+    )
+    parser.add_argument(
+        '--policy-image', default=None, help='the image the platform pulls and runs; needed with --eval'
+    )
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if (args.eval is None) != (args.policy_image is None):
+        parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
+    # Every value the wire types refuse — a name, a reference, a platform URL — is refused here,
+    # before any request.
+    try:
+        eval_ref = EvalRef(args.eval) if args.eval is not None else None
+        policy_image = PolicyImage(args.policy_image) if args.policy_image is not None else None
+        client = anonymous_client(args.platform_url) if eval_ref is None else PlatformClient(args.platform_url)
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    credential = os.environ.get(CREDENTIAL_ENV)
-    if not credential:
-        raise SystemExit(f'set {CREDENTIAL_ENV} to the token the platform verifies you by')
+    if eval_ref is None or policy_image is None:
+        with client as public:
+            print('pass --eval=<name>; the public boards rank these evals:')
+            for board in public.list_boards().boards:
+                print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
+        return
 
-    with PlatformClient(args.platform_url) as client:
+    with client:
         try:
             walkthrough(
                 client,
-                credential=credential,
+                credential=os.environ.get(CREDENTIAL_ENV) or None,
                 alias=args.alias,
-                eval_ref=EvalRef(args.eval),
-                policy_image=PolicyImage(args.policy_image),
+                eval_ref=eval_ref,
+                policy_image=policy_image,
                 timeout_s=args.timeout,
             )
         except PlatformError as exc:

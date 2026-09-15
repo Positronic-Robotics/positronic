@@ -24,8 +24,12 @@ dependencies = [
     "starlette>=1.0.0",
     "jinja2",
     "fire",
+    # The gRPC wire, one of the two transports `positronic.offboard` serves. The rig client and the
+    # server both import it, so it is not an extra.
+    "grpcio",
     "httpx",
     "msgpack",
+    "msgpack-numpy==0.4.8",
     "mujoco",
     "numpy",
     "opencv-python-headless",
@@ -39,7 +43,7 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.7.0",
+    "positronic-platform-client==0.8.1",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -49,7 +53,7 @@ dependencies = [
     "robosuite",
     "ruckig",
     "scipy",
-    "uvicorn[standard]",
+    "uvicorn[standard]>=0.35",
     "websockets>=15.0.1",
     "zmq",  # TODO: move to gr00t vendor optional dep
 ]
@@ -107,7 +111,7 @@ yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
 telemetry = [
-    # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
+    # Recording telemetry only: the OTel SDK + exporter that write the span sidecars, and the
     # machine-load sampler's probes.
     "nvidia-ml-py",
     "opentelemetry-exporter-otlp-json-file>=0.65b0",

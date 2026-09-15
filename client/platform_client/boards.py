@@ -1,4 +1,4 @@
-"""The slug a ranking board is read by: `BoardRef('nebius-2026/robolab.smoke')`.
+"""The slug a ranking board is read by. `rankings.list` names every slug the caller can read.
 
 The platform owns the set, so a board this client has never heard of still reaches the server.
 """

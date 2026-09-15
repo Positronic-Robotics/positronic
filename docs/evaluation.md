@@ -16,7 +16,7 @@ You ship a new checkpoint and want a clean answer to one question: is it actuall
 
 ## How it works
 
-You keep the weights. Your model runs as an inference server behind one WebSocket endpoint; a lightweight client streams observations and executes the returned trajectory — identical for sim and real. See [Connect your model](connect-your-model.md) and [Inference](inference.md).
+You keep the weights. Your model runs as an inference server, reached over a WebSocket or a gRPC endpoint; a lightweight client streams observations and executes the returned trajectory — identical for sim and real. See [Connect your model](connect-your-model.md) and [Inference](inference.md).
 
 ## Try it now
 

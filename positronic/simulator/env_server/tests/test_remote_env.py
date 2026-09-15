@@ -184,11 +184,15 @@ def test_close_gives_up_on_a_peer_that_never_answers():
         assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
 
 
-@pytest.fixture
-def server_without_heartbeat(monkeypatch):
+@contextmanager
+def _serve_without_heartbeat(monkeypatch, answer_after: float | None):
+    """Serve with PING frames dropped, answering each request after ``answer_after`` seconds (``None``: never).
+
+    Yields the address and the list the dropped pings land in.
+    """
     monkeypatch.setattr(
         'positronic.simulator.env_server.client.connect',
-        partial(websocket_connect, ping_interval=0.01, ping_timeout=0.02),
+        partial(websocket_connect, ping_interval=0.01),  # EnvConnection states the ping timeout itself
     )
     ignored_pings = []
     release = threading.Event()
@@ -207,7 +211,7 @@ def server_without_heartbeat(monkeypatch):
             if protocol.Command(protocol.decode(raw)[protocol.CMD]) is protocol.Command.CLOSE:
                 connection.send(protocol.encode({protocol.OK: True}))
                 return
-            if release.wait(timeout=0.2):
+            if release.wait(timeout=answer_after):
                 return
             connection.send(protocol.encode({protocol.FRAME_OBS: {'ready': True}}))
 
@@ -223,6 +227,19 @@ def server_without_heartbeat(monkeypatch):
             thread.join(timeout=2.0)
 
 
+@pytest.fixture
+def server_without_heartbeat(monkeypatch):
+    with _serve_without_heartbeat(monkeypatch, answer_after=0.2) as served:
+        yield served
+
+
+@pytest.fixture
+def mute_server_without_heartbeat(monkeypatch):
+    """A request stays pending until the keepalive closes the connection: no answer can end it first."""
+    with _serve_without_heartbeat(monkeypatch, answer_after=None) as served:
+        yield served
+
+
 @pytest.mark.timeout(10.0)
 def test_scene_reset_survives_delayed_heartbeat_replies(server_without_heartbeat):
     host, port, ignored_pings = server_without_heartbeat
@@ -236,8 +253,8 @@ def test_scene_reset_survives_delayed_heartbeat_replies(server_without_heartbeat
 
 @pytest.mark.timeout(10.0)
 @pytest.mark.parametrize('command', [EnvConnection.tasks, EnvConnection.reset, EnvConnection.step])
-def test_unanswered_heartbeat_closes_pending_requests(server_without_heartbeat, command):
-    host, port, ignored_pings = server_without_heartbeat
+def test_unanswered_heartbeat_closes_pending_requests(mute_server_without_heartbeat, command):
+    host, port, ignored_pings = mute_server_without_heartbeat
     conn = EnvConnection(host, port, ping_timeout=0.02)
     try:
         with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):

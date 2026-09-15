@@ -8,6 +8,7 @@ from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
+from positronic.policy.codec import ACTION
 from positronic.policy.observation import TASK_FIELD
 
 
@@ -62,8 +63,8 @@ class _LerobotSession(Session):
 
         action = action.cpu().numpy().squeeze(0)
         if action.ndim == 1:
-            return [{'action': action}]
-        return [{'action': a} for a in action]
+            return [{ACTION: action}]
+        return [{ACTION: a} for a in action]
 
     @property
     def meta(self) -> dict[str, Any]:

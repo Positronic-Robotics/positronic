@@ -6,6 +6,7 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
+from positronic.policy.codec import ACTION
 from positronic.vendors import molmoact2
 
 # The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
@@ -49,7 +50,7 @@ class _MolmoAct2Session(Session):
             enable_cuda_graph=False,
         )
         actions = out.actions[0].float().cpu().numpy()
-        return [{'action': action} for action in actions]
+        return [{ACTION: action} for action in actions]
 
     @property
     def meta(self) -> dict[str, Any]:

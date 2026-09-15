@@ -7,7 +7,7 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.policy.codec import Codec, lerobot_action
+from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
 
 RotRep = geom.Rotation.Representation
 
@@ -21,13 +21,13 @@ class AbsolutePositionAction(Codec):
         self.tgt_grip_key = tgt_grip_key
 
         ee_dim = self.rot_rep.size + 3
-        self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
+        self._training_meta = {LEROBOT_FEATURES: {ACTION: lerobot_action(ee_dim + 1)}}
 
     def encode(self, data):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
-        action_vector = data['action']
+        action_vector = data[ACTION]
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
         return {keys.ROBOT_COMMAND: command.CartesianPosition(pose=target_pose), keys.TARGET_GRIP: target_grip}
@@ -39,7 +39,7 @@ class AbsolutePositionAction(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
+        return Derive(meta=self._training_meta, **{ACTION: self._encode_episode})
 
     def to_spec(self):
         return {
@@ -60,13 +60,13 @@ class AbsoluteJointsAction(Codec):
         self.tgt_grip_key = tgt_grip_key
         self.num_joints = num_joints
 
-        self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
+        self._training_meta = {LEROBOT_FEATURES: {ACTION: lerobot_action(num_joints + 1)}}
 
     def encode(self, data):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
-        action_vector = data['action']
+        action_vector = data[ACTION]
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
 
@@ -79,7 +79,7 @@ class AbsoluteJointsAction(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
+        return Derive(meta=self._training_meta, **{ACTION: self._encode_episode})
 
     def to_spec(self):
         return {
@@ -156,7 +156,7 @@ class JointDeltaAction(Codec):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
-        action_vector = data['action']
+        action_vector = data[ACTION]
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
 

@@ -12,6 +12,12 @@ running inference from your robot or simulator against the served policy — wor
 reached at a managed `https://` URL and gated on a bearer token: see
 [Authenticated inference](#authenticated-inference).
 
+GR00T training and serving install Positronic's Python 3.12 environment on startup using the shared uv cache.
+The model runs in the base image's separate GR00T environment.
+They inject `HF_TOKEN` from the MysteryBox secret `huggingface-read-token`.
+Override its name with `NEBIUS_HF_TOKEN_SECRET`; the payload key must be `HF_TOKEN`.
+The token's account must have access to the gated `nvidia/Cosmos-Reason2-2B` backbone.
+
 ## Prerequisites
 
 - Nebius CLI v0.12.209 or newer, authenticated to your project
@@ -19,19 +25,22 @@ reached at a managed `https://` URL and gated on a bearer token: see
   (Public datasets like `sim_stack_cubes` are read anonymously — no credentials needed for
   the read side)
 - AWS access key + secret for that bucket
+- For GR00T: export `HF_TOKEN` with a Hugging Face read token whose account has access to
+  `nvidia/Cosmos-Reason2-2B` before creating the secret below.
 - _Optional:_ a Weights & Biases API key for live training metrics. To skip wandb, omit the
   wandb secret below and run training jobs with `WANDB_SECRET= bash workflows/nebius/train.sh ...`.
 
 ## One-time setup
 
-Create up to five MysteryBox secrets that the jobs will reference by name. AWS keys are read
+Create up to six MysteryBox secrets that the jobs will reference by name. AWS keys are read
 from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three
 are single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed
 by `--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The fifth is the bearer token every served
 endpoint is gated on — `serve.sh` injects it as the container's `AUTH_TOKEN`, and the payload
-key must be `AUTH_TOKEN` too. The wandb secret is optional — skip it if you don't use
-Weights & Biases.
+key must be `AUTH_TOKEN` too. The sixth supplies the Hugging Face read token to GR00T training
+and serving through `--env-secret`, with payload key `HF_TOKEN`. Skip it if you don't use
+GR00T. The wandb secret is optional — skip it if you don't use Weights & Biases.
 
 ```bash
 PARENT_ID=project-e00f38wexevrr52b8j  # adjust to your own project
@@ -76,6 +85,14 @@ nebius mysterybox secret create \
   --description "Bearer token gating served inference endpoints" \
   --secret-version-payload "$(jq -nc \
     --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+
+nebius mysterybox secret create \
+  --parent-id "$PARENT_ID" \
+  --name "${NEBIUS_HF_TOKEN_SECRET:-huggingface-read-token}" \
+  --description "Hugging Face read token for GR00T checkpoints and gated backbone" \
+  --secret-version-payload "$(jq -nc \
+    --arg v "${HF_TOKEN:?Set HF_TOKEN to your Hugging Face read token}" \
+    '[{key:"HF_TOKEN",string_value:$v}]')"
 ```
 
 The names matter — `convert.sh`, `train.sh`, `serve.sh`, and `eval.sh` reference the secrets by
@@ -144,7 +161,7 @@ bash workflows/nebius/convert.sh openpi \
 
 bash workflows/nebius/convert.sh gr00t \
   --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 ```
 
@@ -210,14 +227,26 @@ an empty `wandb/` placeholder. SmolVLA matches the same layout; OpenPI and GR00T
 checkpoint shapes (see each vendor's README under `positronic/vendors/`). Live WandB metrics
 flow to your account directly via the API key — they aren't synced to S3.
 
-## Serve a checkpoint as an HTTP endpoint
+## Serve a checkpoint as an endpoint
 
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
-Nebius fronts the container's port 8000 with a managed `https://` URL, which terminates TLS and
-is the contact address. That URL survives endpoint stop/start; deleting an endpoint retires it,
-so a re-created one of the same name gets a new URL. Supported vendors: `lerobot_0_3_3`,
-`lerobot`, `openpi`, `gr00t`.
+Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
+the contact address. The server listens on port 8000 for the WebSocket wire, and on port 9000 for
+the gRPC one, so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one, and
+`NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
+survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
+gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
+`molmoact2`, the set `serve.sh` accepts.
+
+`serve.sh` declares the gRPC port as an ordinary HTTP port, so its front selects HTTP/2 over ALPN
+and terminates TLS; the server binds a plaintext port and holds no certificate. A port declared
+`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
+`Cannot check peer: missing selected ALPN property`. Check a front with
+`openssl s_client -alpn h2 -connect <host>:443`. Through the front an 846 KiB observation
+round-trips in about 6 ms over gRPC and about 60 ms over the WebSocket. The front shapes a session
+that sends faster than about 8 MB/s: a back-to-back loop settles at about 83 ms a round trip after
+some 11 MB, and returns to 6 ms after a minute of quiet.
 
 Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
 below for loading it and for why the check lives in the server rather than at the Nebius ingress.
@@ -238,8 +267,8 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Same shape for the other vendors — replace the vendor token and point `--pipeline.source.checkpoints_dir` at the
-matching checkpoint:
+Use the vendor's source option to select the matching checkpoint (`model_source` for GR00T,
+`checkpoints_dir` for LeRobot and OpenPI):
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
@@ -250,12 +279,14 @@ bash workflows/nebius/serve.sh openpi my-openpi ee \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
   --pipeline.ee_frame=None
 
-bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+bash workflows/nebius/serve.sh gr00t groot-server droid \
+  --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
-`serve.sh` blocks until the managed URL appears (typically <1 min), then prints a banner with
-that URL, the endpoint ID, and the commands to follow logs and tear down. The container takes
+`serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
+of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
+the `https://` URL for the WebSocket, or the port-9000 host dialled as `grpcs://<host>:443` for gRPC.
+The banner prints the gRPC URL ready to paste. The container takes
 another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
 server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
 in [Authenticated inference](#authenticated-inference)):
@@ -281,15 +312,16 @@ When you're done, `stop.sh` deletes the endpoint:
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-Deleting retires the managed URL, and a re-created endpoint of the same name gets a new one — so anything
-holding it, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
+Deleting retires the managed URLs, and a re-created endpoint of the same name gets new ones — so anything
+holding one, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
 stop <id>` instead: it releases the compute too, and `start` resumes on the same URL.
 
-### The managed URL is assigned, not chosen
+### A managed URL is assigned, not chosen
 
-It belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
-`https://port8000-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. No flag sets it and nothing
-derives it, which is why `serve.sh` polls `status.public_endpoints` to learn it.
+Each belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
+`https://port<container-port>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. The port prefix
+tells the two wires apart. `serve.sh` polls `status.public_endpoints` to learn the URLs: no flag sets
+one and nothing derives one.
 
 A URL that outlives the endpoint needs a tunnel of your own (`nebius tunnel create`) with its agent in the
 container, which also names the host (`services.name`, up to 20 lowercase alphanumerics — `phail` rather
@@ -297,8 +329,10 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 ## Authenticated inference
 
-The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on the inference
-WebSocket, rejecting before the session opens. `serve.sh` injects the token from the
+The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
+wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
+of the printed `grpcs://` URL sends the same token, which `.authed_remote` carries as gRPC
+metadata. `serve.sh` injects the token from the
 `positronic-serverless-inference-token` secret as the container's `AUTH_TOKEN`; export the same
 value locally and `.authed_remote` sends it (it raises immediately if the variable is unset).
 
@@ -323,7 +357,14 @@ confirmed it on ticket U22281505; gRPC shares the proxy, so it is no escape hatc
 Two behaviours here are observed, not promised: Nebius documents no WebSocket or connection-lifetime
 contract at all, and the ingress closes a connection it has read nothing from after ~90 s — shorter than a
 cold checkpoint's first inference, so the client holds sessions open with pings (`ping_interval` in
-`positronic/offboard/client.py`). `pytest -m endpoint` is what catches either changing.
+`positronic/offboard/websocket_wire.py`, and the gRPC keepalive options in
+`positronic/offboard/grpc_wire.py`). `pytest -m endpoint` dials the websocket URL that the banner prints,
+so it catches a change on that wire alone. No endpoint-marked test dials the gRPC URL.
+
+A smoke test measured a third behaviour. The managed front passes about 10 MB before its rate limit
+takes effect, and then holds both wires to about 83 Mbit/s. Above that limit, one 846 KiB observation
+goes from 7 ms to 83 ms per call. Calls 500 ms apart stay at 7 ms. A rollout sends about 0.5 MB/s and
+stays under it.
 
 ### Letting the config read the secret
 
@@ -453,6 +494,7 @@ project — **external users must override them** with their own project + subne
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
 | `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` and `eval.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) injected as the container's `AUTH_TOKEN`. There is no open-endpoint mode. See [Authenticated inference](#authenticated-inference). |
+| `NEBIUS_HF_TOKEN_SECRET` | `huggingface-read-token` | GR00T training and serving only. MysteryBox secret name with payload key `HF_TOKEN`. |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |

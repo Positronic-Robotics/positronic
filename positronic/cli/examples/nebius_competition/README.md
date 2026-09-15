@@ -2,8 +2,9 @@
 
 Walkthroughs for the competition's sim qualifier, on top of the same client every other caller uses.
 
-- `submit_sample.py` — submit a policy image to the `robolab.public_subset` eval, wait for it to
-  finish, and report what it scored.
+- `standings.py` — print the public leaderboards, or every row of one of them. No key is needed.
+- `submit_sample.py` — submit a policy image to one eval, wait for it to finish, and report what it
+  scored. `--eval` names the eval; `standings.py` prints the evals the leaderboards rank.
 
 What the generic walkthrough does not cover:
 

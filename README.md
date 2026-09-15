@@ -67,7 +67,7 @@ Try different state representations (joint space vs end-effector space), action 
 
 **Problem solved**: Vendor lock-in and API fragmentation.
 
-The [offboard inference system](positronic/offboard/README.md) provides a single WebSocket protocol (v1) across all vendors. The `RemotePolicy` client works interchangeably with LeRobot, GR00T, and OpenPI servers.
+The [offboard inference system](positronic/offboard/README.md) provides one session protocol (v1) across all vendors, over a WebSocket or a gRPC wire. The `RemotePolicy` client works interchangeably with LeRobot, GR00T, and OpenPI servers.
 
 Built-in status streaming handles long model loads (120-300s) gracefully. Swap models without changing hardware code.
 
@@ -82,7 +82,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 | Model | Capability | Training | Inference | Best For |
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
-| **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
+| **[GR00T N1.7 DROID](positronic/vendors/gr00t/README.md)** | DROID robot policy | CUDA GPU | CUDA GPU | Joint control with 2 or 3 camera views |
 | **[LeRobot SmolVLA](positronic/vendors/lerobot/README.md)** | VLM-based, multi-task | Consumer GPU | Consumer GPU | Multi-task manipulation with language |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
@@ -357,7 +357,7 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 
 - **Delivered**
   - **Policy presets for π₀.₅ and GR00T.** Full support for both architectures.
-  - **Remote inference primitives.** Run policies on different machines via unified WebSocket API.
+  - **Remote inference primitives.** Run policies on different machines over one session protocol, on a WebSocket or a gRPC wire.
   - **Batch evaluation harness.** `utilities/validate_server.py` for automated checkpoint scoring.
 - **Short term**
   - **Richer Positronic Server.** Surface metadata fields, annotation, and filtering flows for rapid triage.

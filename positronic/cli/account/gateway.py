@@ -82,7 +82,10 @@ def credential() -> str:
     """The identity to register with, from the environment."""
     value = os.environ.get(CREDENTIAL_ENV)
     if not value:
-        raise SystemExit(f'no credential: set {CREDENTIAL_ENV} to the identity to register with')
+        raise SystemExit(
+            f"no credential: set {CREDENTIAL_ENV} to a GitHub token the platform's OAuth app minted, "
+            'or run `platform-register`, which mints one itself'
+        )
     return value
 
 

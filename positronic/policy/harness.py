@@ -16,7 +16,7 @@ from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy
+from positronic.policy.base import Policy, timings_to
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
@@ -52,7 +52,7 @@ class Rollout:
     def close(self) -> None:
         """Close the runtime, then the session it was serving.
 
-        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
+        Until ``Executor.close`` returns, the function in flight still holds the session's connection or model.
         """
         logging.info('Rollout.close: closing the runtime')
         self.rt.close()
@@ -84,12 +84,34 @@ class _EpisodeInference:
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def _call_session(self, obs, now_ns):
+        # FOOTGUN: recorded, not entered. Entering it re-parents policy.infer away from the episode.
+        call_start_ns = time.time_ns()
+        trajectory = None
+        try:
+            with timings_to(telemetry.record_span):
+                trajectory = self._rollout.session(obs, now_ns)
+            return trajectory
+        finally:
+            answered = {telemetry_keys.ATTR_POLICY_ANSWERED: trajectory is not None}
+            telemetry.record_span(telemetry_keys.SPAN_POLICY_CALL, call_start_ns, time.time_ns(), **answered)
+
+    def __call__(self, obs: dict[str, Any], should_stop: pimm.SignalReceiver[bool]) -> list[dict[str, Any]] | None:
         now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._rollout.rt.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._rollout.session(frozen_view(self._owned(obs)), now_ns)
+        owned = frozen_view(self._owned(obs))
+        while True:
+            trajectory = self._call_session(owned, now_ns)
+            self.wait(should_stop)
+            if (
+                trajectory is not None
+                or self._charges_wall_time
+                or not self._rollout.rt.owes_an_answer
+                or should_stop.value
+            ):
+                return trajectory
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
@@ -357,9 +379,8 @@ class Harness(pimm.ControlSystem):
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
-        if (trajectory := inference(obs)) is not None:
+        if (trajectory := inference(obs, should_stop)) is not None:
             self._reschedule(trajectory, clock)
-        inference.wait(should_stop)
 
     @staticmethod
     def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:
@@ -405,7 +426,7 @@ class Harness(pimm.ControlSystem):
             return {eval_keys.TERMINATED: False}
         return None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+    def _guarded(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
@@ -421,6 +442,12 @@ class Harness(pimm.ControlSystem):
                 self._call.set_exception(pimm.calls.HandlerStopped())
             for call in self.perform_task.incoming():
                 call.set_exception(pimm.calls.HandlerStopped())
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        # FOOTGUN: outside the handler that seals the episode span — leaving this scope shuts the provider
+        # down, and a span ended after that is dropped. Inert unless the env vars are set.
+        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
+            yield from self._guarded(should_stop, clock)
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
