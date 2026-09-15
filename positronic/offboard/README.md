@@ -16,6 +16,7 @@ the same order.
 | WebSocket | `ws://host:8000/api/v1/session[/<model_id>]` | the server's `port`, beside the HTTP routes |
 | gRPC | `grpc://host:9000/api/v1/session[/<model_id>]` | the server's `grpc_port`, sessions alone |
 | gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
+| WebSocket over a Unix socket | `unix:///run/policy.sock[/api/v1/session[/<model_id>]]` | the server's `uds` path, beside the HTTP routes |
 
 - The WebSocket wire is the default. A server serves gRPC only when `grpc_port` names a port.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
@@ -108,6 +109,11 @@ One string is a complete endpoint description, because the whole session configu
 `--policy=.remote --policy.url='gpu-host:8000?codec.fps=10'` accepts `host`, `host:port`, and full
 `http(s)`/`ws(s)`/`grpc(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
 Credentials are the exception and stay a separate `headers` argument, so the URL itself is safe to hand around.
+
+A `unix://` URL reaches a server on the same machine over a Unix socket, which needs no network: the server
+binds the path with `--uds`, and `unix:///run/policy.sock[/api/v1/session[/<model_id>]][?query]` dials it. The
+socket path runs to the first `/api/v1` segment; everything after it is the URL path the server reads. The
+`unix` scheme selects the WebSocket wire; the gRPC wire does not carry it.
 
 ### Session Flow
 
@@ -266,7 +272,7 @@ names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--uds`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself (`--uds` binds the WebSocket wire to a Unix socket path in place of `--host`/`--port`); everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. `from_url` reads it off one URL, in the same forms
