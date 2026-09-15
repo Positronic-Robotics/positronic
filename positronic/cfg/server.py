@@ -1,11 +1,11 @@
 """Server configurations for positronic-server UI."""
 
 from datetime import datetime
-from enum import Enum
-from typing import NamedTuple
 
 import configuronic as cfn
 import pos3
+from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
+from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -17,6 +17,7 @@ from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
+from positronic.server.rollouts import OUTCOME_BADGE, StageCell, stage_cell
 
 from . import analysis as analysis_cfg
 from . import ds
@@ -130,18 +131,9 @@ def finetune_group_by_task():
     return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
-# What a manual rollout writes into its episodes, spelled here because the writer is the platform repo's
-# rollouts console and the two repositories share no module.
-PROGRESS_STATE = 'progress.state'
+# The endpoint that served an episode. What an attended rollout records beside it — the verdict, the
+# item counts and the progress ladder — is `eval_vocabulary`'s, which the console writes and this reads.
 POLICY_LABEL = f'{policy_keys.POLICY_META}.label'
-OUTCOME = 'eval.outcome'
-SUCCESSFUL_ITEMS = 'eval.successful_items'
-TOTAL_ITEMS = 'eval.total_items'
-SUCCESS = 'Success'
-FAIL = 'Fail'
-SAFETY = 'Safety'
-RAN_OUT_OF_TIME = 'Ran out of time'
-UNSCORED = 'Unscored'
 
 # What this preset DERIVES onto each episode. The tables below address these again, so each one is
 # spelled once and the producer and every consumer read the same name.
@@ -152,80 +144,24 @@ DERIVED_ITEMS = 'items'
 DERIVED_STARTED = 'started'
 
 
-class ProgressStage(Enum):
-    """A rung of the operator's progress ladder, declared lowest first.
-
-    `value` is the code a rollout records in `PROGRESS_STATE`, mirroring the platform repo's
-    `rollouts_contract.progress.Stage`; `label` is what the table shows.
-    """
-
-    label: str
-
-    FLOATING = ('floating', 'moving free')
-    REACHING = ('reaching', 'reaching')
-    CONTACT = ('contact', 'in contact')
-    CONTROL = ('control', 'moving it')
-    AT_TARGET = ('at-target', 'at the target')
-
-    def __new__(cls, code: str, label: str):
-        member = object.__new__(cls)
-        member._value_ = code
-        member.label = label
-        return member
-
-    @property
-    def rank(self) -> int:
-        return list(type(self)).index(self)
-
-
-class StageCell(NamedTuple):
-    """A rung as the page reads a cell: it sorts on the first item and shows the second.
-
-    A NamedTuple IS a tuple, so this serializes to the `[raw, formatted]` pair `app.js` documents while
-    every reader in this process addresses `rank` and `label` by name.
-    """
-
-    rank: int
-    label: str
-
-
-# The cell for an episode that recorded no progress. Its rank is below every rung, so it sorts under
-# them from either end; `ProgressStage.rank` counts from 0.
-NO_STAGE = StageCell(-1, '-')
-
-
-ROLLOUT_OUTCOME_BADGE = RendererConfig(
-    type='badge',
-    options={
-        SUCCESS: {'label': SUCCESS, 'variant': 'success'},
-        FAIL: {'label': FAIL, 'variant': 'danger'},
-        SAFETY: {'label': SAFETY, 'variant': 'warning'},
-        RAN_OUT_OF_TIME: {'label': RAN_OUT_OF_TIME, 'variant': 'default'},
-        UNSCORED: {'label': UNSCORED, 'variant': 'default'},
-    },
-)
-
-
 def rollout_model(ep: Episode) -> str:
     """The endpoint the episode was served by; older recordings name it through their checkpoint path."""
     return ep[POLICY_LABEL] if POLICY_LABEL in ep else analysis_cfg.model(ep)
 
 
 def rollout_outcome(ep: Episode) -> str:
-    """What the operator scored, or that she has not scored it yet."""
-    return ep[OUTCOME] if OUTCOME in ep else UNSCORED
+    """What the operator scored, or that she has not scored it yet.
+
+    The word as the recording holds it: a console one word ahead of this vocabulary still reads,
+    because `app.js` draws an unlisted word as itself on a neutral badge.
+    """
+    return ep[OUTCOME] if OUTCOME in ep else ABSENT
 
 
 def highest_rollout_stage(ep: Episode) -> StageCell:
-    """The highest rung the arm reached.
-
-    FOOTGUN: a bare label sorts alphabetically, which is not the ladder — `at the target` would lead and
-    `reaching` would trail. Every episode gets a pair, `NO_STAGE` included, because the page compares
-    whatever the cell holds and a string against these numbers is not an ordering.
-    """
-    reached = {value for value, _ in ep[PROGRESS_STATE]} if PROGRESS_STATE in ep else set()
-    stage = max((s for s in ProgressStage if s.value in reached), key=lambda s: s.rank, default=None)
-    return NO_STAGE if stage is None else StageCell(stage.rank, stage.label)
+    """The highest rung the arm reached, as the cell `positronic.server.rollouts` defines."""
+    marked = {value for value, _ in ep[STATE_SIGNAL]} if STATE_SIGNAL in ep else set()
+    return stage_cell(marked)
 
 
 def rollout_items(ep: Episode) -> str | None:
@@ -261,7 +197,7 @@ def rollouts_episodes_table():
         '__duration__': C(label='Duration', format='%.0f sec'),
         keys.TASK: C(label='Task', filter=True),
         DERIVED_MODEL: C(label='Model', filter=True),
-        DERIVED_OUTCOME: C(label='Outcome', renderer=ROLLOUT_OUTCOME_BADGE, align='center'),
+        DERIVED_OUTCOME: C(label='Outcome', renderer=OUTCOME_BADGE, filter=True, align='center'),
         DERIVED_STAGE: C(label='Stage'),
         DERIVED_ITEMS: C(label='Items', default='-'),
         DERIVED_STARTED: C(label='Started', format='%Y-%m-%d %H:%M:%S'),
@@ -271,20 +207,26 @@ def rollouts_episodes_table():
 @cfn.config()
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
-        successes = sum(1 for ep in episodes if ep[DERIVED_OUTCOME] == SUCCESS)
+        # An episode the operator discarded or never scored measures nothing, so it is listed and
+        # counted and stays out of the rate. The report reads the same round the same way.
+        scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
+        successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
+        at_target = LADDER.index(Stage.AT_TARGET)
         return {
             DERIVED_MODEL: episodes[0][DERIVED_MODEL],
             'count': len(episodes),
+            'scored': len(scored),
             'successes': successes,
-            'success_rate': 100 * successes / len(episodes),
-            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank == ProgressStage.AT_TARGET.rank),
+            'success_rate': 100 * successes / len(scored) if scored else None,
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank == at_target),
         }
 
     format_table = {
         DERIVED_MODEL: C(label='Model'),
         'count': C(label='Episodes'),
+        'scored': C(label='Scored'),
         'successes': C(label='Successes'),
-        'success_rate': C(label='Success rate', format='%.0f%%'),
+        'success_rate': C(label='Success rate', format='%.0f%%', default='-'),
         'at_target': C(label='Reached target'),
     }
 
