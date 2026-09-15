@@ -6,7 +6,7 @@ from eval_vocabulary.progress import LADDER, STAGE_LABELS, STATE_SIGNAL, Stage
 from positronic.cfg import server as cfg_server
 from positronic.dataset.episode import EpisodeContainer
 from positronic.server.positronic_server import filter_spelling
-from positronic.server.rollouts import NO_STAGE, StageCell
+from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
 
 
 def _with_stages(*codes):
@@ -130,7 +130,7 @@ def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
     assert row['count'] == 3
     assert row['scored'] == 1
     assert row['successes'] == 1
-    assert row['success_rate'] == 100
+    assert row['success_rate'].rate == 100
 
 
 def test_a_model_nobody_scored_has_no_rate_rather_than_a_zero():
@@ -139,5 +139,7 @@ def test_a_model_nobody_scored_has_no_rate_rather_than_a_zero():
 
     row = group.group_fn([_row(Outcome.UNSCORED), _row(Outcome.DISCARDED)])
 
-    assert row['success_rate'] is None
-    assert group.format_table['success_rate'].default == '-'
+    assert row['success_rate'] == NO_RATE
+    # The cell carries its own text, so the column formats nothing and never falls back to a string.
+    assert group.format_table['success_rate'].format is None
+    assert group.format_table['success_rate'].default is None

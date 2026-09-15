@@ -13,6 +13,10 @@ from eval_vocabulary.progress import LADDER, STAGE_LABELS, highest_stage
 
 from positronic.server.positronic_server import RendererConfig
 
+# What a word this release has no colour for draws as. The vocabulary is append-only and floats,
+# so an install can hold a word added after this module was written.
+NEUTRAL = 'default'
+
 # The badge colour each verdict carries. `app.js` accepts these four names and nothing else.
 OUTCOME_VARIANT: dict[Outcome, str] = {
     Outcome.SUCCESS: 'success',
@@ -33,12 +37,36 @@ def outcome_label(outcome: Outcome) -> str:
     return LABEL_OVERRIDES.get(outcome, outcome.value)
 
 
+def outcome_variant(outcome: Outcome) -> str:
+    return OUTCOME_VARIANT.get(outcome, NEUTRAL)
+
+
 # A word this vocabulary does not carry is not listed, and `app.js` then draws it as itself on a
 # neutral badge — a recording from a console one word ahead still reads.
 OUTCOME_BADGE = RendererConfig(
     type='badge',
-    options={outcome: {'label': outcome_label(outcome), 'variant': OUTCOME_VARIANT[outcome]} for outcome in Outcome},
+    options={outcome: {'label': outcome_label(outcome), 'variant': outcome_variant(outcome)} for outcome in Outcome},
 )
+
+
+class RateCell(NamedTuple):
+    """A percentage as the page reads a cell: it sorts on the first item and shows the second."""
+
+    rate: float
+    shown: str
+
+
+# The cell for a model nobody scored. Its rate is below every real one, and a bare string here would
+# leave the column with no ordering: the page compares whatever each cell holds.
+NO_RATE = RateCell(-1.0, '-')
+
+
+def rate_cell(successes: int, scored: int) -> RateCell:
+    """The success rate over the episodes somebody scored, or `NO_RATE` where nobody did."""
+    if not scored:
+        return NO_RATE
+    rate = 100 * successes / scored
+    return RateCell(rate, f'{rate:.0f}%')
 
 
 class StageCell(NamedTuple):

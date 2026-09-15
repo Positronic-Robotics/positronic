@@ -17,7 +17,7 @@ from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
-from positronic.server.rollouts import OUTCOME_BADGE, StageCell, stage_cell
+from positronic.server.rollouts import OUTCOME_BADGE, StageCell, rate_cell, stage_cell
 
 from . import analysis as analysis_cfg
 from . import ds
@@ -213,7 +213,7 @@ def rollouts_by_model():
             'count': len(episodes),
             'scored': len(scored),
             'successes': successes,
-            'success_rate': 100 * successes / len(scored) if scored else None,
+            'success_rate': rate_cell(successes, len(scored)),
             'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank == at_target),
         }
 
@@ -222,7 +222,7 @@ def rollouts_by_model():
         'count': C(label='Episodes'),
         'scored': C(label='Scored'),
         'successes': C(label='Successes'),
-        'success_rate': C(label='Success rate', format='%.0f%%', default='-'),
+        'success_rate': C(label='Success rate'),
         'at_target': C(label='Reached target'),
     }
 
