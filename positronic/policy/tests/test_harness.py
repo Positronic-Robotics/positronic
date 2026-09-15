@@ -1690,16 +1690,6 @@ def test_harness_clears_trajectory_on_run(world):
     assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on a new episode failed'
 
 
-def _schedule_key(channel: str, field: str) -> str:
-    """One field of one channel's schedule account, keyed as the episode's statics carry it."""
-    return f'{eval_keys.SCHEDULE}.{channel}.{field}'
-
-
-def _schedule_account(harness: Harness, channel: str) -> dict[str, Any]:
-    """What the harness would stamp for ``channel``, without ending an episode to read it."""
-    return harness._fidelity[channel].meta(f'{eval_keys.SCHEDULE}.{channel}')
-
-
 class _FrozenClock(pimm.Clock):
     """A clock stopped at an exact nanosecond, so a waypoint scheduled on a whole millisecond is not moved off
     it by a float."""
@@ -1719,6 +1709,16 @@ def _play_round(harness: Harness, due_ms: list[int], now_ms: int, channel: str =
     harness._schedules[channel].extend((ms * 1_000_000, f'waypoint@{ms}ms') for ms in due_ms)
     harness._fidelity[channel].count_scheduled(len(due_ms))
     harness._issue_due_commands(_FrozenClock(now_ms * 1_000_000))
+
+
+def _schedule_key(channel: str, field: str) -> str:
+    """One field of one channel's schedule account, keyed as the episode's statics carry it."""
+    return f'{eval_keys.SCHEDULE}.{channel}.{field}'
+
+
+def _schedule_account(harness: Harness, channel: str) -> dict[str, Any]:
+    """What the harness would stamp for ``channel``, without ending an episode to read it."""
+    return harness._fidelity[channel].meta(f'{eval_keys.SCHEDULE}.{channel}')
 
 
 def _harness_recording_commands() -> tuple[Harness, RecordingEmitter]:
