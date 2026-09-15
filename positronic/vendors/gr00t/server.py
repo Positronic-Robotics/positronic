@@ -47,6 +47,7 @@ class MsgSerializer:
     @staticmethod
     def decode_custom_classes(obj):
         if isinstance(obj, dict):
+            # TODO: Reject object-kind descriptors regardless of the array flag's value.
             if obj.get(NUMPY_ARRAY, obj.get(NUMPY_ARRAY.decode())) and obj.get(
                 NUMPY_KIND, obj.get(NUMPY_KIND.decode())
             ) in (NUMPY_OBJECT_KIND, NUMPY_OBJECT_KIND.decode()):
