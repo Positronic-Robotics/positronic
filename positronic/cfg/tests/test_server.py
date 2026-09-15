@@ -61,8 +61,7 @@ def test_a_rung_the_ladder_does_not_carry_is_not_a_stage():
 
 
 def test_every_column_of_the_episode_table_is_a_key_the_preset_derives():
-    """A derived name that drifts renders an empty column rather than failing, so this is what
-    catches it."""
+    """A derived name that drifts renders an empty column rather than failing, and this catches it."""
     derived = {
         cfg_server.DERIVED_MODEL,
         cfg_server.DERIVED_OUTCOME,

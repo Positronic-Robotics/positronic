@@ -20,7 +20,7 @@ def _variants_app_js_accepts() -> set[str]:
 
 def test_every_word_the_vocabulary_carries_has_a_badge():
     """A word with no option draws as itself on a neutral badge, which reads as unscored to an
-    operator scanning the column. This is what keeps the two sides adding a word together."""
+    operator scanning the column."""
     assert set(rollouts.OUTCOME_BADGE.options) == set(Outcome)
 
 
