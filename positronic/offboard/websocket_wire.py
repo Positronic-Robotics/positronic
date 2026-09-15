@@ -234,9 +234,10 @@ def _is_stale_socket(path: Path) -> bool:
 def claim_socket_path(path: Path) -> socket.socket:
     """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
 
-    The bind is the claim, so two servers starting together cannot both take one path: the loser's bind
-    fails. A probe follows it only to tell a stale file from a live server. Serve the returned socket by
-    its descriptor: a server handed the path instead binds again, and unlinks this claim.
+    The bind is the claim for a live path: it precedes any probe, so the loser fails on ``EADDRINUSE``.
+    A stale file is unlinked and rebound, and two starters racing one stale path can both get through
+    that branch. This flow gives each socket path one starter. Serve the returned socket by its
+    descriptor: a server handed the path instead binds again, and unlinks this claim.
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -275,8 +276,7 @@ class WebsocketWire(wire.Wire):
     STOP_GRACE_SEC = 2
 
     def __init__(self, host: str, port: int, api: APIRouter, uds: str | Path | None = None):
-        # The client refuses a relative socket path, because no ``unix://`` URL can name one. A server
-        # that bound one would serve a path its own working directory decided and publish it unreachable.
+        # A relative path has no ``unix://`` spelling, so this wire could publish no address for it.
         uds = None if uds is None else Path(uds)
         if uds is not None and not uds.is_absolute():
             raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
