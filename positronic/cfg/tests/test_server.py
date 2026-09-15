@@ -85,8 +85,8 @@ def test_the_model_group_table_groups_on_the_key_the_preset_derives():
 
 
 def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
-    """Why the Stage column offers no filter, recorded here rather than discovered by whoever adds
-    the dropdown back."""
+    """`filter_spelling` is `str(value)`, which spells a `StageCell` as its repr — so the Stage
+    column offers no filter."""
     top = Stage.AT_TARGET
     cell = cfg_server.highest_rollout_stage(_with_stages(top))
 

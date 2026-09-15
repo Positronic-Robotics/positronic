@@ -10,17 +10,9 @@ from positronic.server import rollouts
 from positronic.server.positronic_server import ASSET_ROUTE, _pkg_path
 
 
-def _variants_app_js_accepts() -> set[str]:
-    """The variant names the page's own badge renderer allows; anything else draws as `default`."""
-    source = (Path(_pkg_path(ASSET_ROUTE)) / 'app.js').read_text()
-    listed = re.search(r'const VARIANTS = \[([^\]]*)\]', source)
-    assert listed, 'app.js no longer declares the badge variants in one list'
-    return set(re.findall(r"'([^']+)'", listed.group(1)))
-
-
 def test_every_word_this_release_knows_has_a_colour_chosen_for_it():
     """The fallback below keeps a newer vocabulary rendering, and would also swallow a word added
-    here with no colour picked for it. This is what catches that."""
+    here with no colour picked for it. This catches that."""
     assert set(rollouts.OUTCOME_VARIANT) == set(Outcome)
     assert set(rollouts.OUTCOME_BADGE.options) == set(Outcome)
 
@@ -31,6 +23,14 @@ def test_a_word_added_after_this_release_draws_neutral(monkeypatch):
     monkeypatch.delitem(rollouts.OUTCOME_VARIANT, Outcome.DISCARDED)
 
     assert rollouts.outcome_variant(Outcome.DISCARDED) == rollouts.NEUTRAL
+
+
+def _variants_app_js_accepts() -> set[str]:
+    """The variant names the page's own badge renderer allows; anything else draws as `default`."""
+    source = (Path(_pkg_path(ASSET_ROUTE)) / 'app.js').read_text()
+    listed = re.search(r'const VARIANTS = \[([^\]]*)\]', source)
+    assert listed, 'app.js no longer declares the badge variants in one list'
+    return set(re.findall(r"'([^']+)'", listed.group(1)))
 
 
 def test_every_colour_is_one_the_page_accepts():
