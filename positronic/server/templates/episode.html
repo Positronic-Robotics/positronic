@@ -162,6 +162,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             </span>
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
+        {% include "_attribution.html" %}
     </div>
     <div class="episode-info-header">
         {% if (show_paths and episode_path) or episode_size_mb %}

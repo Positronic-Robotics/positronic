@@ -39,6 +39,7 @@ from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
+    Attribution,
     GroupFile,
     GroupTableConfig,
     TableConfig,
@@ -493,6 +494,7 @@ def export_static(
     full_dataset: Dataset | None = None,
     assets: bool = True,
     asset_dir: PurePosixPath = DEFAULT_ASSET_DIR,
+    attribution: Attribution | None = None,
     scratch_dir: Path | None = None,
     workers: int = DEFAULT_WORKERS,
 ) -> list[ExportedFile]:
@@ -536,7 +538,12 @@ def export_static(
             max_hz=max_hz,
         )
         configure_pages(
-            base_href=base_href, title=title, show_paths=show_paths, static_export=True, asset_dir=asset_dir
+            base_href=base_href,
+            title=title,
+            show_paths=show_paths,
+            static_export=True,
+            asset_dir=asset_dir,
+            attribution=attribution,
         )
         client = TestClient(app)
         # Past `configure_tables`, every group name is one segment the route builders spell.

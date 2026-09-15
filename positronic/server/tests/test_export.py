@@ -43,6 +43,7 @@ from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
     MAX_COMPONENT_BYTES,
     VIEWER_DIR,
+    Attribution,
     ColumnConfig,
     GroupTableConfig,
     TableConfig,
@@ -302,6 +303,24 @@ def test_a_prefix_and_a_title_reach_every_page(dataset, tmp_path):
         assert '<base href="/v/tok/" />' in body
         assert 'A run' in body
         assert 'window.STATIC_EXPORT = true;' in body
+
+
+def test_an_attribution_reaches_every_page(dataset, tmp_path):
+    out = tmp_path / 'out'
+    publisher = Attribution(label='Positronic Robotics', url='https://positronic.ro/')
+    an_export(dataset, out, attribution=publisher)
+
+    for page in ('index.html', 'episodes/index.html', 'episode/1/index.html'):
+        body = (out / page).read_text()
+        assert 'by <a href="https://positronic.ro/" target="_blank" rel="noopener">Positronic Robotics</a>' in body
+
+
+def test_an_export_with_no_attribution_names_nobody(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out)
+
+    for page in ('index.html', 'episodes/index.html', 'episode/1/index.html'):
+        assert 'attribution' not in (out / page).read_text()
 
 
 def test_the_assets_are_written_only_when_asked(dataset, tmp_path):
