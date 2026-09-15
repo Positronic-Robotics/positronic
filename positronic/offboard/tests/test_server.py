@@ -18,13 +18,13 @@ from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, _phase_key, bearer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, _wire_key, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.executor import MODEL_PHASE
+from positronic.policy.executor import MODEL_CALL
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
@@ -648,7 +648,7 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     assert status == b'401'
 
 
-def test_every_served_layer_reports_its_own_phase_inside_infer(start_server, make_mock_policy):
+def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, make_mock_policy):
     """Each layer the server wraps ships as ``<name>_ms``, nested from ``infer_ms`` down to ``model_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
@@ -662,10 +662,10 @@ def test_every_served_layer_reports_its_own_phase_inside_infer(start_server, mak
         session.close()
 
     # rules-allow: hardcoded-keys — the seam derives this key from the class name, so reading it back
-    # through _phase_base would assert the naming rule against itself.
+    # through _layer_name would assert the naming rule against itself.
     assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
 
 
-def test_the_model_phase_ships_under_the_wire_key_the_protocol_names():
-    assert _phase_key(MODEL_PHASE) == protocol.TIMING_MODEL
+def test_the_model_call_ships_under_the_wire_key_the_protocol_names():
+    assert _wire_key(MODEL_CALL) == protocol.TIMING_MODEL

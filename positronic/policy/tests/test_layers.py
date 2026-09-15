@@ -15,7 +15,7 @@ from positronic.policy import base as base_module
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import DelegatingSession, Layer, Policy, Session, phases_to
+from positronic.policy.base import DelegatingSession, Layer, Policy, Session, timings_to
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -717,27 +717,27 @@ class _SlowLayer(Layer):
 
 
 class TestTimedLayers:
-    """Every layer in a stack reports its call to the bound ``PhaseSink``, named for the layer."""
+    """Every layer in a stack sends its call to the bound ``TimingSink``, named for the layer."""
 
     @staticmethod
-    def _phases(pipeline: Layer) -> list[tuple[str, int, int]]:
+    def _timings(pipeline: Layer) -> list[tuple[str, int, int]]:
         taken: list[tuple[str, int, int]] = []
         session = pipeline.wrap(_ConstPolicy([{'v': 1}])).new_session()
-        with phases_to(lambda name, start_ns, end_ns: taken.append((name, start_ns, end_ns))):
+        with timings_to(lambda name, start_ns, end_ns: taken.append((name, start_ns, end_ns))):
             session(_obs(), 0)
         return taken
 
     def test_each_layer_in_a_stack_reports_under_its_own_name(self):
-        phases = self._phases(StopOnFault() | _Named() | _Marker())
-        assert [name for name, _, _ in phases] == ['marker', 'named', 'stop_on_fault']
+        timings = self._timings(StopOnFault() | _Named() | _Marker())
+        assert [name for name, _, _ in timings] == ['marker', 'named', 'stop_on_fault']
 
     def test_a_repeated_layer_takes_an_ordinal_counted_from_the_inside(self):
-        phases = self._phases(_Marker() | _Named() | _Marker() | _Marker())
-        assert [name for name, _, _ in phases] == ['marker', 'marker_2', 'named', 'marker_3']
+        timings = self._timings(_Marker() | _Named() | _Marker() | _Marker())
+        assert [name for name, _, _ in timings] == ['marker', 'marker_2', 'named', 'marker_3']
 
     def test_the_durations_nest_outer_around_inner(self):
-        phases = self._phases(_SlowLayer(0.01) | _SlowLayer(0.01))
-        (inner, inner_start, inner_end), (outer, outer_start, outer_end) = phases
+        timings = self._timings(_SlowLayer(0.01) | _SlowLayer(0.01))
+        (inner, inner_start, inner_end), (outer, outer_start, outer_end) = timings
         assert (inner, outer) == ('slow_layer', 'slow_layer_2')
         assert outer_start <= inner_start <= inner_end <= outer_end
         assert outer_end - outer_start >= inner_end - inner_start + 10_000_000
@@ -753,7 +753,7 @@ class TestTimedLayers:
 
         taken: list[str] = []
         session = (_Marker() | _Raising()).wrap(_ConstPolicy([])).new_session()
-        with phases_to(lambda name, *_: taken.append(name)), pytest.raises(RuntimeError, match='boom'):
+        with timings_to(lambda name, *_: taken.append(name)), pytest.raises(RuntimeError, match='boom'):
             session(_obs(), 0)
         assert taken == ['raising', 'marker']
 
@@ -767,7 +767,7 @@ class TestTimedLayers:
     def test_the_sink_is_bound_for_the_block_and_no_longer(self):
         taken: list[str] = []
         session = _Marker().wrap(_ConstPolicy([])).new_session()
-        with phases_to(lambda name, *_: taken.append(name)):
+        with timings_to(lambda name, *_: taken.append(name)):
             session(_obs(), 0)
         session(_obs(), 0)
         assert taken == ['marker']

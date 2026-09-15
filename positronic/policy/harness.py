@@ -16,7 +16,7 @@ from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, phases_to
+from positronic.policy.base import Policy, timings_to
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
@@ -94,7 +94,7 @@ class _EpisodeInference:
         call_start_ns = time.time_ns()
         trajectory = None
         try:
-            with phases_to(telemetry.record_span):
+            with timings_to(telemetry.record_span):
                 trajectory = self._rollout.session(frozen_view(self._owned(obs)), now_ns)
         finally:
             answered = {telemetry_keys.ATTR_POLICY_ANSWERED: trajectory is not None}

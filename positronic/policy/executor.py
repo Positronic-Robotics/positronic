@@ -18,7 +18,7 @@ from positronic.policy.base import (
     Policy,
     Runtime,
     Session,
-    timed,
+    TimedSession,
 )
 
 
@@ -115,8 +115,8 @@ class Executor(Runtime):
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
 
 
-# The phase a blocking session's call reports as: the heavy work it waits out is the model.
-MODEL_PHASE = 'model'
+# A blocking session's call is timed as the model: the heavy work it waits out.
+MODEL_CALL = 'model'
 
 
 class _BlockingPolicy(DelegatingPolicy):
@@ -141,7 +141,7 @@ class _BlockingPolicy(DelegatingPolicy):
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
         try:
-            return timed(_BlockingPolicy._Session(self._inner.new_session(context, own), own), MODEL_PHASE)
+            return TimedSession(_BlockingPolicy._Session(self._inner.new_session(context, own), own), MODEL_CALL)
         except BaseException:
             own.close()
             raise

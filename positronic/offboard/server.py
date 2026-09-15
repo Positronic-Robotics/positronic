@@ -20,7 +20,7 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import Layer, phases_to
+from positronic.policy.base import Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
@@ -196,7 +196,7 @@ class _ServedTiming:
     """
 
     def __init__(self) -> None:
-        # The wall clock: every ``PhaseSink`` call is stamped on it, and one report must not mix clocks.
+        # The wall clock: every ``TimingSink`` call is stamped on it, and one report must not mix clocks.
         self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
 
@@ -205,15 +205,15 @@ class _ServedTiming:
     def opened(cls) -> Iterator['_ServedTiming']:
         """Open the timing of one inference. Every timed session writes to it until the block ends."""
         timing = cls()
-        with phases_to(timing.take_phase):
+        with timings_to(timing.take_timing):
             yield timing
 
     def _record(self, key: str, start_ns: int, end_ns: int) -> None:
         self._phases[key] = (end_ns - start_ns) / 1e6
 
-    def take_phase(self, name: str, start_ns: int, end_ns: int) -> None:
-        """A ``PhaseSink``: one timed session call. The seam names a phase, so this spells its wire key."""
-        self._record(_phase_key(name), start_ns, end_ns)
+    def take_timing(self, name: str, start_ns: int, end_ns: int) -> None:
+        """A ``TimingSink``: one timed session call, filed under its wire key."""
+        self._record(_wire_key(name), start_ns, end_ns)
 
     @contextmanager
     def phase(self, key: str) -> Iterator[None]:
@@ -229,8 +229,8 @@ class _ServedTiming:
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
 
-def _phase_key(name: str) -> str:
-    """The wire key of a timed phase: ``model`` ships as ``model_ms``."""
+def _wire_key(name: str) -> str:
+    """The wire key of a timing name: ``model`` ships as ``model_ms``."""
     return f'{name}_ms'
 
 
