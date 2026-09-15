@@ -73,6 +73,15 @@ class EpisodeCaller:
         self._rollouts.append(rollout)
         return self._perform_task(rollout)
 
+    def wait_for_answers(self) -> None:
+        """Block until every function the rollouts asked for has answered.
+
+        A test that releases a held function calls this before it drives on: the world then cannot run
+        past the release while the answer is still on its way.
+        """
+        for rollout in self._rollouts:
+            rollout.rt.wait()
+
     def close(self) -> None:
         while self._rollouts:
             self._rollouts.pop().close()
