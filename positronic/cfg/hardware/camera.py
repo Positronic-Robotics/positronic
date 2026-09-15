@@ -24,6 +24,29 @@ arducam_right = arducam_left.override(
 )
 
 
+# rules-allow: primitive-type — a device path is the `str` `linuxpy.Device` takes and `LinuxVideo` hands it
+# The four RealSense D405 of the Trossen station. A D405 enumerates as a plain UVC device with six video
+# nodes, of which `-video-index4` carries the colour stream. The serial in the link is the USB one, which
+# is not the serial the RealSense SDK reports for the same camera.
+_D405_DEVICE_PATH_PREFIX = (
+    '/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405_'
+)
+
+d405_wrist_left = linux_video.override(
+    device_path=f'{_D405_DEVICE_PATH_PREFIX}251323070021-video-index4',
+    width=640,
+    height=480,
+    fps=30,
+    pixel_format='YUYV',
+)
+
+d405_wrist_right = d405_wrist_left.override(device_path=f'{_D405_DEVICE_PATH_PREFIX}251323070565-video-index4')
+
+d405_scene_top = d405_wrist_left.override(device_path=f'{_D405_DEVICE_PATH_PREFIX}260323072626-video-index4')
+
+d405_scene_bottom = d405_wrist_left.override(device_path=f'{_D405_DEVICE_PATH_PREFIX}260323072970-video-index4')
+
+
 @cfn.config()
 def zed(**kwargs):
     from positronic.drivers.camera.zed import SLCamera
