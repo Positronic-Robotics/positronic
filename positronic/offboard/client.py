@@ -264,11 +264,6 @@ class InferenceClient:
             infer_timeout=infer_timeout,
         )
 
-    @property
-    def uds(self) -> str | None:
-        """The Unix socket path this client dials, or ``None`` over a network."""
-        return self._address.uds
-
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
