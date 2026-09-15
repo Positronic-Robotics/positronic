@@ -213,7 +213,7 @@ class _ServedTiming:
 
     def take_timing(self, name: str, start_ns: int, end_ns: int) -> None:
         """A ``TimingSink``: one timed session call, filed under its wire key."""
-        self._record(protocol.wire_key(name), start_ns, end_ns)
+        self._record(protocol.timing_key(name), start_ns, end_ns)
 
     @contextmanager
     def phase(self, key: str) -> Iterator[None]:
