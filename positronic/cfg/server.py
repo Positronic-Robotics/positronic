@@ -204,7 +204,7 @@ def rollouts_episodes_table():
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
         # An episode the operator discarded or never scored measures nothing, so it is listed and
-        # counted and stays out of the rate. The report reads the same round the same way.
+        # counted and stays out of the rate.
         scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
         successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
         at_target = LADDER.index(Stage.AT_TARGET)

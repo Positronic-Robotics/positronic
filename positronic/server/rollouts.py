@@ -1,8 +1,7 @@
 """How the rollouts table draws what an attended episode recorded.
 
 `eval_vocabulary` owns the words; this owns their colour, the word the page shows, and the sortable
-cell a rung needs. The share view a customer reads and the local viewer both build on it, so a
-verdict looks the same in either.
+cell a rung needs.
 """
 
 from collections.abc import Iterable
