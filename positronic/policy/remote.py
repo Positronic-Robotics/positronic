@@ -1,21 +1,24 @@
 import collections.abc as cabc
 import logging
 import time
+from collections import deque
 from typing import Any
 
 import numpy as np
 import pos3
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard import protocol
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Answer, Layer, Policy, Runtime, Session
+from .base import Answer, DelegatingSession, Layer, Policy, Runtime, Session
+from .layers import TemporalStack
 from .recording import Recorder
-from .spec import from_spec
+from .spec import WIRE_LAYERS, from_spec
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,11 @@ class RemoteSession(Session):
             return None
         return [result] if isinstance(result, dict) else result
 
+    def push_frame(self, key, obs_time_ns, value):
+        # On the calling thread, and a JPEG encode with it: the frame must be on the wire before the
+        # observation that names it, and the round trip runs off-thread.
+        self._session.push_frame(key, obs_time_ns, _prepare_value(value) if self._compress_images else value)
+
     def cancel(self):
         # The cancel says the world the chunk applies to has gone. The session still reads the round trip
         # for its failure, and drops the chunk that comes with it.
@@ -116,6 +124,106 @@ class RemoteSession(Session):
         )
         self._session.close()
         logger.info('RemoteSession.close: session closed')
+
+
+class StreamedTemporalStack(Layer):
+    """``TemporalStack`` against a server that declared ``stream_frames``: the frames go ahead, the ids follow.
+
+    The stack the server assembles is the one ``TemporalStack`` would have sent: per offset, the latest
+    frame at or before ``now + offset``. The frame for an offset is pushed as soon as the tick at or after
+    ``trajectory_end + offset`` passes, so the server holds most of the stack before the chunk ends. At
+    the request, whatever the sample picks that was not pushed goes ahead of it, and the observation
+    carries the ids instead of the stack.
+    """
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, keys_: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
+            super().__init__(inner)
+            self._keys = keys_
+            self._offsets_ns = [int(round(off * 1e9)) for off in offsets_sec]
+            self._pad_start = pad_start
+            self._entries: deque[tuple[int, dict[str, Any]]] = deque()
+            self._pushed: set[int] = set()
+            self._trajectory_end_ns: int | None = None
+            self._awaiting = False
+
+        def _append(self, now: int, obs) -> None:
+            if self._entries and self._entries[-1][0] == now:
+                return
+            self._entries.append((now, {k: np.array(obs[k]) for k in self._keys}))
+            cutoff = now + min(self._offsets_ns)
+            while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
+                self._entries.popleft()
+            self._pushed &= {t for t, _ in self._entries}
+
+        def _at_or_before(self, target_ns: int) -> tuple[int, dict[str, Any]] | None:
+            picked = None
+            for t, values in self._entries:
+                if t > target_ns:
+                    break
+                picked = (t, values)
+            return picked
+
+        def _sample(self, now: int) -> list[tuple[int, dict[str, Any]]]:
+            picked = []
+            for off in self._offsets_ns:
+                entry = self._at_or_before(now + off)
+                if entry is None:
+                    if not self._pad_start:
+                        continue
+                    entry = self._entries[0]
+                picked.append(entry)
+            return picked
+
+        def _push(self, t: int, values: dict[str, Any]) -> None:
+            if t in self._pushed:
+                return
+            for k in self._keys:
+                self._inner.push_frame(k, t, values[k])
+            self._pushed.add(t)
+
+        def __call__(self, obs, time_ns):
+            now = int(obs[keys.OBS_TIME_NS])
+            self._append(now, obs)
+            if self._trajectory_end_ns is not None:
+                for off in self._offsets_ns:
+                    target = self._trajectory_end_ns + off
+                    if now >= target:
+                        entry = self._at_or_before(target) or self._entries[0]
+                        self._push(*entry)
+            fires = self._trajectory_end_ns is None or now >= self._trajectory_end_ns
+            picked = self._sample(now)
+            if fires and not self._awaiting:
+                for entry in picked:
+                    self._push(*entry)
+                self._awaiting = True
+            ids = [t for t, _ in picked]
+            result = self._inner({**obs, **{k: {protocol.FRAME_IDS: ids} for k in self._keys}}, time_ns)
+            if result is not None:
+                self._awaiting = False
+                self._trajectory_end_ns = int(round(result[-1][keys.ACTION_TIMESTAMP] * 1e9)) if result else None
+            return result
+
+        def cancel(self):
+            self._entries.clear()
+            self._pushed.clear()
+            self._trajectory_end_ns = None
+            self._awaiting = False
+            super().cancel()
+
+    WIRE_NAME = TemporalStack.WIRE_NAME
+
+    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True):
+        self._keys = tuple(keys)
+        self._offsets_sec = tuple(offsets_sec)
+        self._pad_start = pad_start
+
+    def make_session(self, inner: Session):
+        return StreamedTemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
+
+
+# The vocabulary a rig builds the declared stack from when the server takes frames ahead.
+_STREAMED_LAYERS = {**WIRE_LAYERS, TemporalStack.WIRE_NAME: StreamedTemporalStack}
 
 
 class _Endpoint(Policy):
@@ -181,8 +289,9 @@ class RemotePolicy(Policy):
         meta = self._endpoint.server_meta()
         version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
         declared = meta.get(offboard_keys.LOCAL_STACK)
+        layers = _STREAMED_LAYERS if meta.get(offboard_keys.STREAM_FRAMES) else WIRE_LAYERS
         try:
-            stack = from_spec(declared) if declared is not None else None
+            stack = from_spec(declared, layers) if declared is not None else None
         except Exception as e:
             raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
         if stack is None:

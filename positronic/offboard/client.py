@@ -106,6 +106,11 @@ class InferenceSession:
 
         return typed_commands(response[protocol.RESULT])
 
+    def push_frame(self, key: str, obs_time_ns: int, value: Any) -> None:
+        """Send one frame of a stacked entry ahead of the observation that will name it. No answer comes back."""
+        frame = {protocol.FRAME_KEY: key, protocol.FRAME_TIME_NS: obs_time_ns, protocol.FRAME_VALUE: value}
+        self._conn.send(serialise({protocol.FRAME: frame}))
+
     def close(self):
         logger.info('InferenceSession.close: %s', self._conn.close())
 
