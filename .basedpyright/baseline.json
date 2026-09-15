@@ -4884,24 +4884,6 @@
                 }
             }
         ],
-        "./positronic/policy/remote.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 38,
-                    "endColumn": 49,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 45,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/policy/tests/test_golden_pipeline.py": [
             {
                 "code": "reportOptionalMemberAccess",

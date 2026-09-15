@@ -4,6 +4,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
+from positronic.offboard import websocket_wire, wire
 from positronic.offboard.protocol import deserialise
 from positronic.policy.executor import blocking
 from positronic.policy.layers import ChunkedSchedule
@@ -53,6 +54,10 @@ class _DummyWebSocket:
         self.events.append('close')
         await self._close(**kwargs)
 
+    def as_connection(self) -> websocket_wire.WebsocketServerConnection:
+        """What the websocket wire hands the server for one session it has accepted."""
+        return websocket_wire.WebsocketServerConnection(self, wire.Endpoint('localhost', 8000))
+
 
 def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
     """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
@@ -96,7 +101,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     await server._startup()
     websocket = _DummyWebSocket()
-    await server.default_session(websocket)
+    await server._serve_session(websocket.as_connection(), None)
 
     assert requested['checkpoint_id'] == '42'
     ready = deserialise(websocket._send_bytes.await_args_list[0].args[0])
@@ -134,7 +139,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     server._manager.get_policy.reset_mock()
 
     websocket = _DummyWebSocket()
-    await server.model_session(websocket, '42')
+    await server._serve_session(websocket.as_connection(), '42')
 
     assert websocket.events == ['send_bytes', 'close']
     error_payload = websocket._send_bytes.await_args.args[0]

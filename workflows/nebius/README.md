@@ -210,14 +210,26 @@ an empty `wandb/` placeholder. SmolVLA matches the same layout; OpenPI and GR00T
 checkpoint shapes (see each vendor's README under `positronic/vendors/`). Live WandB metrics
 flow to your account directly via the API key — they aren't synced to S3.
 
-## Serve a checkpoint as an HTTP endpoint
+## Serve a checkpoint as an endpoint
 
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
-Nebius fronts the container's port 8000 with a managed `https://` URL, which terminates TLS and
-is the contact address. That URL survives endpoint stop/start; deleting an endpoint retires it,
-so a re-created one of the same name gets a new URL. Supported vendors: `lerobot_0_3_3`,
-`lerobot`, `openpi`, `gr00t`.
+Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
+the contact address. The server listens on port 8000 for the WebSocket wire, and on port 9000 for
+the gRPC one, so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one, and
+`NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
+survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
+gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
+`molmoact2`, the set `serve.sh` accepts.
+
+`serve.sh` declares the gRPC port as an ordinary HTTP port, so its front selects HTTP/2 over ALPN
+and terminates TLS; the server binds a plaintext port and holds no certificate. A port declared
+`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
+`Cannot check peer: missing selected ALPN property`. Check a front with
+`openssl s_client -alpn h2 -connect <host>:443`. Through the front an 846 KiB observation
+round-trips in about 6 ms over gRPC and about 60 ms over the WebSocket. The front shapes a session
+that sends faster than about 8 MB/s: a back-to-back loop settles at about 83 ms a round trip after
+some 11 MB, and returns to 6 ms after a minute of quiet.
 
 Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
 below for loading it and for why the check lives in the server rather than at the Nebius ingress.
@@ -254,8 +266,10 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
-`serve.sh` blocks until the managed URL appears (typically <1 min), then prints a banner with
-that URL, the endpoint ID, and the commands to follow logs and tear down. The container takes
+`serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
+of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
+the `https://` URL for the WebSocket, or the port-9000 host dialled as `grpcs://<host>:443` for gRPC.
+The banner prints the gRPC URL ready to paste. The container takes
 another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
 server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
 in [Authenticated inference](#authenticated-inference)):
@@ -281,15 +295,16 @@ When you're done, `stop.sh` deletes the endpoint:
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-Deleting retires the managed URL, and a re-created endpoint of the same name gets a new one — so anything
-holding it, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
+Deleting retires the managed URLs, and a re-created endpoint of the same name gets new ones — so anything
+holding one, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
 stop <id>` instead: it releases the compute too, and `start` resumes on the same URL.
 
-### The managed URL is assigned, not chosen
+### A managed URL is assigned, not chosen
 
-It belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
-`https://port8000-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. No flag sets it and nothing
-derives it, which is why `serve.sh` polls `status.public_endpoints` to learn it.
+Each belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
+`https://port<container-port>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. The port prefix
+tells the two wires apart. `serve.sh` polls `status.public_endpoints` to learn the URLs: no flag sets
+one and nothing derives one.
 
 A URL that outlives the endpoint needs a tunnel of your own (`nebius tunnel create`) with its agent in the
 container, which also names the host (`services.name`, up to 20 lowercase alphanumerics — `phail` rather
@@ -297,8 +312,10 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 ## Authenticated inference
 
-The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on the inference
-WebSocket, rejecting before the session opens. `serve.sh` injects the token from the
+The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
+wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
+of the printed `grpcs://` URL sends the same token, which `.authed_remote` carries as gRPC
+metadata. `serve.sh` injects the token from the
 `positronic-serverless-inference-token` secret as the container's `AUTH_TOKEN`; export the same
 value locally and `.authed_remote` sends it (it raises immediately if the variable is unset).
 
@@ -323,7 +340,14 @@ confirmed it on ticket U22281505; gRPC shares the proxy, so it is no escape hatc
 Two behaviours here are observed, not promised: Nebius documents no WebSocket or connection-lifetime
 contract at all, and the ingress closes a connection it has read nothing from after ~90 s — shorter than a
 cold checkpoint's first inference, so the client holds sessions open with pings (`ping_interval` in
-`positronic/offboard/client.py`). `pytest -m endpoint` is what catches either changing.
+`positronic/offboard/websocket_wire.py`, and the gRPC keepalive options in
+`positronic/offboard/grpc_wire.py`). `pytest -m endpoint` dials the websocket URL that the banner prints,
+so it catches a change on that wire alone. No endpoint-marked test dials the gRPC URL.
+
+A smoke test measured a third behaviour. The managed front passes about 10 MB before its rate limit
+takes effect, and then holds both wires to about 83 Mbit/s. Above that limit, one 846 KiB observation
+goes from 7 ms to 83 ms per call. Calls 500 ms apart stay at 7 ms. A rollout sends about 0.5 MB/s and
+stays under it.
 
 ### Letting the config read the secret
 

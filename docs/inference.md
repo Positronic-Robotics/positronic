@@ -1,10 +1,10 @@
 # Inference Guide
 
-Deploy trained policies for evaluation and production use. Positronic supports local inference (model loaded on robot/simulator machine) and inference with remote server (model runs on separate GPU server via WebSocket).
+Deploy trained policies for evaluation and production use. Positronic supports local inference (model loaded on robot/simulator machine) and inference with remote server (model runs on a separate GPU server, over a websocket or gRPC).
 
 ## Inference with Remote Server
 
-Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
+Positronic's unified session protocol connects any hardware to any model (LeRobot, GR00T, OpenPI); the same frames cross either wire, a websocket or gRPC. A heavy model (OpenPI needs ~62GB, GR00T ~8GB) runs on GPU hardware separate from the robot/simulator machine.
 
 Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server ee_rot6d_joints` launches that one. The available names are listed in each vendor's README.
 
@@ -56,7 +56,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
 ```
 
-Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
+Accepted forms: `host`, `host:port`, and `scheme://host[:port][/api/v1/session[/<model_id>]]`, each with an optional query. The scheme settles the wire and the TLS: `http`/`https` and `ws`/`wss` take the websocket wire, `grpc`/`grpcs` the gRPC one, and the `s` forms are the TLS ones. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's websocket default). Naming no model id serves the checkpoint the server pinned at startup.
 
 **Credentials stay out of the URL, and out of the command line.** The URL is meant to be safe to paste around, so a token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
@@ -119,5 +119,5 @@ Run inference with recording, review in Positronic server, score manually (succe
 
 - [Training Workflow](training-workflow.md) – Preparing data and training
 - [Codecs Guide](codecs.md) – Observation/action encoding
-- [Offboard README](../positronic/offboard/README.md) – WebSocket protocol
+- [Offboard README](../positronic/offboard/README.md) – the session protocol and both wires
 - Vendor guides: [OpenPI](../positronic/vendors/openpi/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [SmolVLA](../positronic/vendors/lerobot/README.md) | [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)

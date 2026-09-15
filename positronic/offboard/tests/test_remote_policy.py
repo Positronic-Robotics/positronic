@@ -1,18 +1,16 @@
 import threading
 import time
-from http import HTTPStatus
+from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from websockets.datastructures import Headers
-from websockets.exceptions import InvalidStatus
-from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
+from positronic.offboard import websocket_wire, wire
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -26,7 +24,31 @@ from positronic.policy.spec import PolicySource, remote
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
-def _mock_ws_session(metadata=None):
+class _FakeWire(wire.ClientWire):
+    """A client wire that answers each dial from ``outcomes``: a connection to return, or a refusal to raise."""
+
+    SCHEME = 'fake'
+    SECURE_SCHEME = 'fakes'
+
+    def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
+        self._outcomes = list(outcomes)
+        self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
+
+    def api_url(self, address: wire.SessionAddress) -> str:
+        return f'http://{address.netloc}{wire.API_PATH}'
+
+    def dial(self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float):
+        self.dials.append((address, headers, open_timeout))
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, wire.ConnectRefused):
+            raise outcome
+        return outcome
+
+
+_ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+
+
+def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
     session.infer.return_value = {'action': 'test'}
@@ -34,20 +56,20 @@ def _mock_ws_session(metadata=None):
 
 
 def _mock_remote_policy(metadata=None, infer_return=None):
-    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_ws)."""
-    mock_ws = _mock_ws_session(metadata)
+    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_session)."""
+    mock_session = _mock_session(metadata)
     if infer_return is not None:
-        mock_ws.infer.return_value = infer_return
+        mock_session.infer.return_value = infer_return
     policy = RemotePolicy('localhost:0')
     policy._endpoint._client = MagicMock()
-    policy._endpoint._client.new_session.return_value = mock_ws
-    return policy, mock_ws
+    policy._endpoint._client.new_session.return_value = mock_session
+    return policy, mock_session
 
 
 def _mock_endpoint(metadata=None, infer_return=None):
     """The bare wire connection, with no declared stack in front of it."""
-    policy, mock_ws = _mock_remote_policy(metadata, infer_return)
-    return policy._endpoint, mock_ws
+    policy, mock_session = _mock_remote_policy(metadata, infer_return)
+    return policy._endpoint, mock_session
 
 
 def _make_image(h, w):
@@ -81,45 +103,39 @@ class TestPrepareObs:
 
 class TestInferenceClientHeaders:
     def test_default_headers_empty(self):
-        assert InferenceClient('localhost:8000').headers is None
+        assert InferenceClient.from_url('localhost:8000').headers is None
 
     def test_headers_stored_and_copied(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        client = InferenceClient('localhost:8000', headers=headers)
+        client = InferenceClient.from_url('localhost:8000', headers=headers)
         assert client.headers == headers
         # Defensive copy — mutating the caller's dict must not affect the client.
         headers['Modal-Key'] = 'mutated'
         assert client.headers is not None and client.headers['Modal-Key'] == 'k'
 
-    def test_new_session_passes_additional_headers(self):
+    def test_new_session_dials_with_the_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
-        ):
-            client = InferenceClient('localhost:8000', headers=headers)
-            client.new_session()
+        conn = MagicMock()
+        fake = _FakeWire(conn)
+        with patch('positronic.offboard.client.InferenceSession') as mock_session_cls:
+            InferenceClient(fake, _ADDRESS, headers=headers).new_session()
 
-            mock_connect.assert_called_once()
-            assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=DEFAULT_INFER_TIMEOUT)
+        assert fake.dials == [(_ADDRESS, headers, DEFAULT_OPEN_TIMEOUT)]
+        assert mock_session_cls.call_args.args[0] is conn
+        assert mock_session_cls.call_args.kwargs['infer_timeout'] == DEFAULT_INFER_TIMEOUT
 
-    def test_new_session_without_headers_passes_none(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000')
-            client.new_session()
+    def test_new_session_without_headers_dials_with_none(self):
+        fake = _FakeWire(MagicMock())
+        with patch('positronic.offboard.client.InferenceSession'):
+            InferenceClient(fake, _ADDRESS).new_session()
 
-            mock_connect.assert_called_once()
-            assert mock_connect.call_args.kwargs['additional_headers'] is None
+        assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
     def test_list_models_passes_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
         with patch('positronic.offboard.client.httpx.get') as mock_get:
             mock_get.return_value.json.return_value = {'models': ['m1']}
-            client = InferenceClient('localhost:8000', headers=headers)
+            client = InferenceClient.from_url('localhost:8000', headers=headers)
 
             models = client.list_models()
 
@@ -129,7 +145,7 @@ class TestInferenceClientHeaders:
     def test_list_models_without_headers_passes_none(self):
         with patch('positronic.offboard.client.httpx.get') as mock_get:
             mock_get.return_value.json.return_value = {'models': []}
-            client = InferenceClient('localhost:8000')
+            client = InferenceClient.from_url('localhost:8000')
             client.list_models()
 
             assert mock_get.call_args.kwargs['headers'] is None
@@ -139,134 +155,149 @@ class TestInferenceClientUrl:
     """One URL carries host, port, TLS, model id, and session params; headers stay their own argument."""
 
     def test_bare_host_defaults_to_the_scheme_port(self):
-        client = InferenceClient('gpu-host')
+        client = InferenceClient.from_url('gpu-host')
         assert client.session_url == 'ws://gpu-host/api/v1/session'
         assert client.api_url == 'http://gpu-host/api/v1'
 
     def test_explicit_port_is_kept(self):
-        client = InferenceClient('localhost:8000')
+        client = InferenceClient.from_url('localhost:8000')
         assert client.session_url == 'ws://localhost:8000/api/v1/session'
         assert client.api_url == 'http://localhost:8000/api/v1'
 
+    def test_an_ipv6_host_is_bracketed_in_the_url(self):
+        """A caller that builds the address itself passes the host raw, brackets included by the wire."""
+        address = wire.SessionAddress('::1', 8000, wire.SESSION_PATH, '', secure=False)
+        client = InferenceClient(websocket_wire.WebsocketClientWire(), address)
+        assert client.session_url == 'ws://[::1]:8000/api/v1/session'
+        assert client.api_url == 'http://[::1]:8000/api/v1'
+
+    @pytest.mark.parametrize('host', ['127.0.0.1', 'gpu-host'])
+    def test_a_host_that_is_no_ipv6_literal_reaches_the_url_unchanged(self, host):
+        address = wire.SessionAddress(host, 8000, wire.SESSION_PATH, '', secure=False)
+        client = InferenceClient(websocket_wire.WebsocketClientWire(), address)
+        assert client.session_url == f'ws://{host}:8000/api/v1/session'
+        assert client.api_url == f'http://{host}:8000/api/v1'
+
     def test_query_rides_along_verbatim(self):
         """Nothing re-encodes the query: 'false' stays the JSON literal whoever wrote the URL meant."""
-        client = InferenceClient('gpu-host:9000?codec.fps=10&pad=false')
+        client = InferenceClient.from_url('gpu-host:9000?codec.fps=10&pad=false')
         assert client.session_url == 'ws://gpu-host:9000/api/v1/session?codec.fps=10&pad=false'
         assert client.api_url == 'http://gpu-host:9000/api/v1'
 
     def test_tls_scheme_defaults_to_443(self):
         """`https://` is the scheme a fronted endpoint hands out; `wss://` names the same connection."""
         for url in ('https://example.com', 'wss://example.com'):
-            client = InferenceClient(url)
+            client = InferenceClient.from_url(url)
             assert client.session_url == 'wss://example.com/api/v1/session'
             assert client.api_url == 'https://example.com/api/v1'
 
     def test_full_url_keeps_model_id_and_query(self):
-        client = InferenceClient('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
+        client = InferenceClient.from_url('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
         assert client.session_url == 'wss://gpu-host:8443/api/v1/session/10000?fps=2.5'
         assert client.api_url == 'https://gpu-host:8443/api/v1'
 
     @pytest.mark.parametrize('url', ['gpu-host/', 'http://gpu-host/api/v1/session', 'http://gpu-host/api/v1/session/'])
     def test_url_naming_no_model_is_the_bare_endpoint(self, url):
-        assert InferenceClient(url).session_url == 'ws://gpu-host/api/v1/session'
+        assert InferenceClient.from_url(url).session_url == 'ws://gpu-host/api/v1/session'
 
     def test_trailing_slash_belongs_to_the_model_id(self):
         """Sources advertise pinned checkpoint dirs verbatim, and `resolve` matches ids exactly."""
-        client = InferenceClient('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
+        client = InferenceClient.from_url('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
         assert client.session_url == 'ws://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/'
 
     def test_model_id_keeps_its_slashes(self):
-        client = InferenceClient('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
+        client = InferenceClient.from_url('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
         assert client.session_url == 'ws://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID'
 
     def test_percent_encoding_survives_as_written(self):
         """The server decodes the id whoever handed out the URL meant, so the client normalizes nothing."""
-        client = InferenceClient('gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
+        client = InferenceClient.from_url('gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
         assert client.session_url == 'ws://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231'
 
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
-            InferenceClient('gpu-host:8000/api/v2/other')
+            InferenceClient.from_url('gpu-host:8000/api/v2/other')
         with pytest.raises(ValueError, match='/api/v1/session'):
-            InferenceClient('gpu-host:8000/api/v1/sessions/10000')
+            InferenceClient.from_url('gpu-host:8000/api/v1/sessions/10000')
 
     def test_unknown_scheme_rejected(self):
         with pytest.raises(ValueError, match='scheme'):
-            InferenceClient('ftp://gpu-host:8000')
+            InferenceClient.from_url('ftp://gpu-host:8000')
 
-    def test_every_session_dials_the_session_url(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000/api/v1/session/10000?fps=10')
+    def test_every_session_dials_the_same_address(self):
+        address = wire.SessionAddress('localhost', 8000, f'{wire.SESSION_PATH}/10000', 'fps=10', secure=False)
+        fake = _FakeWire(MagicMock(), MagicMock())
+        with patch('positronic.offboard.client.InferenceSession'):
+            client = InferenceClient(fake, address)
             client.new_session()
             client.new_session()
 
-            assert mock_connect.call_count == 2
-            for call in mock_connect.call_args_list:
-                assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
+        assert [dialed for dialed, _headers, _timeout in fake.dials] == [address, address]
+        assert client.session_url == 'fake://localhost:8000/api/v1/session/10000?fps=10'
 
 
-def _refused(status: HTTPStatus) -> InvalidStatus:
-    return InvalidStatus(Response(status, 'refused', Headers()))
+def _refused(refusal: wire.Refusal) -> wire.ConnectRefused:
+    return wire.ConnectRefused(refusal, 'refused')
 
 
-class TestNewSessionRetriesRefusedUpgrades:
-    """Which non-101 upgrade responses are a backend still coming up, and which are the endpoint saying no."""
+class TestNewSessionRetriesRefusedConnects:
+    """Which refusals are a backend still coming up, and which are the endpoint saying no."""
 
-    def test_a_403_retries_and_the_session_that_follows_is_returned(self):
+    def test_a_forbidden_refusal_retries_and_the_session_that_follows_is_returned(self):
+        fake = _FakeWire(_refused(wire.Refusal.FORBIDDEN), MagicMock())
         with (
-            patch(
-                'positronic.offboard.client.connect', side_effect=[_refused(HTTPStatus.FORBIDDEN), MagicMock()]
-            ) as mock_connect,
             patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
             patch('positronic.offboard.client.time.sleep'),
         ):
-            session = InferenceClient('localhost:8000').new_session()
+            session = InferenceClient(fake, _ADDRESS).new_session()
 
-            assert mock_connect.call_count == 2
-            assert session is mock_session_cls.return_value
+        assert len(fake.dials) == 2
+        assert session is mock_session_cls.return_value
 
-    def test_a_403_gives_up_once_its_attempts_are_spent(self):
+    def test_a_forbidden_refusal_gives_up_once_its_attempts_are_spent(self):
+        fake = _FakeWire(*[_refused(wire.Refusal.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5))
         with (
-            patch(
-                'positronic.offboard.client.connect',
-                side_effect=[_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
-            ) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
-            pytest.raises(InvalidStatus),
+            pytest.raises(wire.ConnectRefused),
         ):
-            InferenceClient('localhost:8000').new_session()
+            InferenceClient(fake, _ADDRESS).new_session()
 
-        assert mock_connect.call_count == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
+        assert len(fake.dials) == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
 
-    @pytest.mark.parametrize('status', [HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND])
-    def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status):
+    def test_a_final_refusal_is_raised_at_once(self):
+        fake = _FakeWire(_refused(wire.Refusal.FINAL))
         with (
-            patch('positronic.offboard.client.connect', side_effect=_refused(status)) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
-            pytest.raises(InvalidStatus),
+            pytest.raises(wire.ConnectRefused) as refused,
         ):
-            InferenceClient('localhost:8000').new_session()
+            InferenceClient(fake, _ADDRESS).new_session()
 
-        assert mock_connect.call_count == 1
+        assert len(fake.dials) == 1
+        assert refused.value.refusal is wire.Refusal.FINAL
+
+    def test_a_cold_refusal_retries_to_the_deadline(self):
+        fake = _FakeWire(_refused(wire.Refusal.COLD))
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises(TimeoutError, match='fake://localhost:8000'),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=0.0).new_session()
+
+        assert len(fake.dials) == 1
 
     def test_each_session_opens_on_a_full_budget(self):
-        """A client that spent 403s opening one session still gets all of them for the next."""
-        one_session = [_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
-        with (
-            patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-            patch('positronic.offboard.client.time.sleep'),
-        ):
-            client = InferenceClient('localhost:8000')
+        """A client that spent forbidden refusals opening one session still gets all of them for the next."""
+        one_session = [_refused(wire.Refusal.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        fake = _FakeWire(*one_session * 2)
+        with patch('positronic.offboard.client.InferenceSession'), patch('positronic.offboard.client.time.sleep'):
+            client = InferenceClient(fake, _ADDRESS)
             client.new_session()
             client.new_session()
 
-            assert mock_connect.call_count == 2 * len(one_session)
+        assert len(fake.dials) == 2 * len(one_session)
 
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
@@ -314,8 +345,8 @@ def test_remote_session_normalizes_single_dict(open_session):
 
 
 def test_remote_session_passes_through_none(open_session):
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.return_value = None
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.return_value = None
     session, rt = open_session(endpoint)
 
     assert round_trip(session, rt, {}) is None
@@ -325,7 +356,7 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
     """A session never waits. Every call while the round trip is in flight answers ``None``, and none of
     them starts a second round trip."""
     chunk = [{'a': 1, 'timestamp': 0.0}]
-    endpoint, mock_ws = _mock_endpoint()
+    endpoint, mock_session = _mock_endpoint()
     started, release = threading.Event(), threading.Event()
 
     def blocked(obs):
@@ -333,13 +364,13 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
         assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
         return chunk
 
-    mock_ws.infer.side_effect = blocked
+    mock_session.infer.side_effect = blocked
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
     assert started.wait(ANSWER_SEC), 'the round-trip never started'
     assert session({}, 0) is None
-    assert mock_ws.infer.call_count == 1
+    assert mock_session.infer.call_count == 1
 
     release.set()
     rt.wait(ANSWER_SEC)
@@ -358,7 +389,7 @@ def test_opening_a_session_without_a_runtime_is_refused():
 def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     """A cancelled session drops the chunk it waited for, because that chunk applies to a world the cancel
     says has gone, and it asks for a new one."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -368,14 +399,14 @@ def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     assert session({}, 0) is None  # the cancelled answer, read and thrown away
     assert session({}, 0) is None  # a round-trip of its own
     rt.wait(ANSWER_SEC)
-    assert mock_ws.infer.call_count == 2
+    assert mock_session.infer.call_count == 2
 
 
 def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
     """A dropped chunk drops no failure. The session reads a cancelled answer, so a stalled server raises
     to the caller that asked for the episode."""
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -389,8 +420,8 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
 def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
     """A cancel ends with the round trip it was made against, even when that round trip fails. A caller
     that catches the failure and keeps the session gets the next chunk."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
+    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    mock_session.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -403,16 +434,16 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
 
 
 def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
-    """A runtime closes before the session it serves. A caller that closes the websocket under a round trip
-    gets an error that names the order, and not a failure on a dead socket."""
-    endpoint, mock_ws = _mock_endpoint()
+    """A runtime closes before the session it serves. A caller that closes the connection under a round trip
+    gets an error that names the order, and not a failure on a dead connection."""
+    endpoint, mock_session = _mock_endpoint()
     release = threading.Event()
 
     def blocked(obs):
         assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
         return None
 
-    mock_ws.infer.side_effect = blocked
+    mock_session.infer.side_effect = blocked
     session, _rt = open_session(endpoint)
 
     assert session({}, 0) is None
@@ -437,7 +468,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
     estimate the report derives from them."""
-    endpoint, _ = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint, _ = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
     session, rt = open_session(endpoint)
     encoded_at: list[int] = []
 
@@ -460,8 +491,8 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
 def test_records_infer_span_when_inference_raises(tmp_path, open_session):
     """A round trip that raises still records the time it took to fail, and the answer raises it again at
     the call that reads it."""
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    endpoint, mock_session = _mock_endpoint()
+    mock_session.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
@@ -486,7 +517,7 @@ def test_empty_declaration_fails_before_motion():
 
 def test_declared_stack_built_at_session_open(open_session):
     """The server-declared local stack runs in front of the connection."""
-    policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    policy, mock_session = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(policy)
 
     assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 1.0}]
@@ -503,19 +534,19 @@ def test_unknown_declared_entry_fails_before_motion():
 
 def test_compression_follows_the_server_declaration(open_session):
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
-    endpoint, mock_ws = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
+    assert isinstance(mock_session.infer.call_args.args[0]['cam'], dict)
 
 
 def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
-    endpoint, mock_ws = _mock_endpoint({'compress_images': False}, infer_return=[])
+    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: False}, infer_return=[])
     session, rt = open_session(endpoint)
 
     round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
+    assert isinstance(mock_session.infer.call_args.args[0]['cam'], np.ndarray)
 
 
 # rules-allow: hardcoded-keys — the command mapping below is spelled the way a server sends it. Reading
@@ -527,7 +558,7 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
     wire_action = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'timestamp': 0.0}]
     served = make_mock_policy(wire_action, {'model_name': 'm'})
-    host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
     session, rt = open_session(RemotePolicy(f'{host}:{port}'))
     actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})

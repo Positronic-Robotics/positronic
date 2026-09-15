@@ -13,9 +13,7 @@ Usage
     ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
 """
 
-import asyncio
 import json
-import socket
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -25,16 +23,15 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-import uvicorn
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.offboard import protocol
+from positronic.offboard import protocol, websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession
-from positronic.offboard.server import WS_IMPL, WS_MAX_BYTES, PolicyServer
+from positronic.offboard.server import PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -131,32 +128,16 @@ def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, reques
     return wire.sent
 
 
-def serve(pipeline) -> tuple[uvicorn.Server, threading.Thread, int]:
+def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
     """Serve ``pipeline`` on a free loopback port, and hand back what stops it."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as free_port:
-        free_port.bind(('127.0.0.1', 0))
-        port = free_port.getsockname()[1]
-    policy_server = PolicyServer(pipeline, host='127.0.0.1', port=port)
-    served = uvicorn.Server(
-        uvicorn.Config(
-            policy_server.app, host='127.0.0.1', port=port, log_level='warning', ws=WS_IMPL, ws_max_size=WS_MAX_BYTES
-        )
-    )
-
-    async def run():
-        await policy_server._startup()
-        await served.serve()
-
-    thread = threading.Thread(target=asyncio.run, args=(run(),), daemon=True)
+    server = PolicyServer(pipeline)
+    ws = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
+    ready = threading.Event()
+    thread = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
     thread.start()
-    deadline = time.time() + 30.0
-    while time.time() < deadline:
-        try:
-            with socket.create_connection(('127.0.0.1', port), timeout=0.2):
-                return served, thread, port
-        except OSError:
-            time.sleep(0.05)
-    raise RuntimeError('the probe server never came up')
+    if not ready.wait(timeout=30.0):
+        raise RuntimeError('the probe server never came up')
+    return server, thread, ws.endpoint.port
 
 
 def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_images: bool) -> list[dict[str, float]]:
@@ -168,9 +149,10 @@ def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_i
         encoded = time.perf_counter()
         # The same pack ``infer`` does next, timed on its own so the round trip below divides.
         message = protocol.serialise(prepared)
-        if len(message) > WS_MAX_BYTES:
+        if len(message) > wire.MAX_MESSAGE_BYTES:
             raise ValueError(
-                f"a {len(message) / 2**20:.1f} MiB payload exceeds the server's {WS_MAX_BYTES // 2**20} MiB message "
+                f"a {len(message) / 2**20:.1f} MiB payload exceeds the server's "
+                f'{wire.MAX_MESSAGE_BYTES // 2**20} MiB message '
                 f'limit; lower --frames, --width or --height, or keep --compress_images'
             )
         packed = time.perf_counter()
@@ -242,16 +224,16 @@ def main(
         raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
     print(f'captured {len(payloads)} payload(s) off episode {episode}')
 
-    served, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
+    server, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
     try:
-        session = InferenceClient(f'ws://127.0.0.1:{port}').new_session()
+        session = InferenceClient.from_url(f'ws://127.0.0.1:{port}').new_session()
         try:
             replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed
             rows = replay(session, payloads, compress_images)
         finally:
             session.close()
     finally:
-        served.should_exit = True
+        server.shutdown()
         thread.join(timeout=10.0)
 
     print(

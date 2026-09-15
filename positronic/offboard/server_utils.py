@@ -1,6 +1,6 @@
 """Sync helpers for ``ModelSource.load`` implementations.
 
-``load`` runs in a worker thread while the connected client sits in the websocket handshake with a
+``load`` runs in a worker thread while the connected client sits in the session handshake with a
 30s per-message timeout; these helpers pump ``on_progress`` every few seconds so long downloads,
 subprocess boots and first inferences keep that handshake alive.
 """

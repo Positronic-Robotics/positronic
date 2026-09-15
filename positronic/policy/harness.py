@@ -52,7 +52,7 @@ class Rollout:
     def close(self) -> None:
         """Close the runtime, then the session it was serving.
 
-        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
+        Until ``Executor.close`` returns, the function in flight still holds the session's connection or model.
         """
         logging.info('Rollout.close: closing the runtime')
         self.rt.close()
