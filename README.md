@@ -82,7 +82,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 | Model | Capability | Training | Inference | Best For |
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
-| **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
+| **[GR00T N1.7 DROID](positronic/vendors/gr00t/README.md)** | DROID robot policy | CUDA GPU | CUDA GPU | Joint control with 2 or 3 camera views |
 | **[LeRobot SmolVLA](positronic/vendors/lerobot/README.md)** | VLM-based, multi-task | Consumer GPU | Consumer GPU | Multi-task manipulation with language |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 

@@ -517,8 +517,9 @@ def serve(
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
-    Only the sockets and the recording taps are flags of their own. The codec, the source and the checkpoint
-    directory are reached through the pipeline (``--pipeline.source.checkpoints_dir=...``), each under one name.
+    Only the sockets and the recording taps are flags of their own; everything the served model is —
+    codec, source, checkpoint — is reached through the pipeline itself. GR00T selects checkpoints with
+    ``--pipeline.source.model_source=...``; LeRobot and OpenPI use ``--pipeline.source.checkpoints_dir=...``.
 
     ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
 

@@ -47,11 +47,14 @@ fi
 VENDOR="$1"
 shift
 
+UV_ARGS="run --python 3.13"
+HF_FLAGS=()
 case "$VENDOR" in
   lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 " ;;
   lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="" ;;
-  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA=""
+                 UV_ARGS="$GR00T_UV_ARGS"; HF_FLAGS=("${HF_ENV_FLAGS[@]}") ;;
   dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
@@ -92,7 +95,8 @@ if [ -n "$INPUT_BUCKET" ]; then
 fi
 
 JOB_NAME="${VENDOR//_/-}-train-$(date +%Y%m%d-%H%M%S)"
-TRAIN_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
+
+TRAIN_ARGS="${UV_ARGS} ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
 
 WANDB_FLAGS=()
 if [ -n "$WANDB_SECRET" ]; then
@@ -117,4 +121,5 @@ nebius ai job create \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
   "${S3_ENV_FLAGS[@]}" \
+  ${HF_FLAGS[@]+"${HF_FLAGS[@]}"} \
   ${WANDB_FLAGS[@]+"${WANDB_FLAGS[@]}"}

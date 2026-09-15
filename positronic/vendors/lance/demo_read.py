@@ -15,6 +15,8 @@ import av
 import lance
 import numpy as np
 
+from positronic.policy.codec import ACTION
+
 
 def main(output_dir: str) -> None:
     root = Path(output_dir)
@@ -29,9 +31,9 @@ def main(output_dir: str) -> None:
 
     # Batched iteration — one episode per row.
     print('first batch (one row = one episode):')
-    batch = next(iter(ds.to_batches(batch_size=4, columns=['trajectory_length', 'action', 'observation_state'])))
+    batch = next(iter(ds.to_batches(batch_size=4, columns=['trajectory_length', ACTION, 'observation_state'])))
     for i, r in enumerate(batch.to_pylist()):
-        action = np.asarray(r['action'])
+        action = np.asarray(r[ACTION])
         state = np.asarray(r['observation_state'])
         print(f'  row={i}  T={r["trajectory_length"]:4d}  action={action.shape}  observation_state={state.shape}')
     print()
