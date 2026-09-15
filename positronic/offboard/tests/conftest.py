@@ -1,10 +1,11 @@
 import threading
 from collections.abc import Callable, Generator, Mapping
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
 
+from positronic import keys
 from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
@@ -121,6 +122,13 @@ class DictSource(ModelSource):
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         return self._policies[model_id]
+
+
+class WarmSource(PolicySource):
+    """A ready policy, plus the observation a warm runs on, which ``PolicySource`` alone cannot build."""
+
+    def warm_observation(self, policy: Policy, task: str) -> dict[str, Any]:
+        return {keys.TASK: task}
 
 
 @pytest.fixture

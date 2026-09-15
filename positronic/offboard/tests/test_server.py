@@ -26,7 +26,7 @@ from positronic.offboard.client import InferenceClient, InferenceSession, _Conne
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.tests.conftest import round_trip
+from positronic.offboard.tests.conftest import WarmSource, round_trip
 from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
@@ -70,7 +70,7 @@ class _FailingWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         return wire.Endpoint('localhost', 0)
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, verbs: wire.VerbHandler, authorized: wire.Authorized) -> None:
         pass
 
     async def serve(self) -> None:
@@ -88,7 +88,7 @@ class _UnbindableWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         raise AssertionError('it never bound')
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, verbs: wire.VerbHandler, authorized: wire.Authorized) -> None:
         raise OSError('that port is taken')
 
     async def serve(self) -> None:
@@ -183,7 +183,7 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_policy):
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
     bound = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
-    asyncio.run(bound.start(MagicMock(), lambda _headers: True))
+    asyncio.run(bound.start(MagicMock(), MagicMock(), lambda _headers: True))
     try:
         assert len(bound._sockets) == 1
         assert bound.endpoint.port == bound._sockets[0].getsockname()[1] != 0
@@ -872,3 +872,143 @@ def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, ma
     # through _layer_name would assert the naming rule against itself.
     assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+
+
+class _HeldSource(_StubSource):
+    """Holds every load until ``release`` is set, so a caller reads the slot while it loads."""
+
+    def __init__(self, policy: Policy, name: str = 'stub'):
+        super().__init__(policy, name)
+        self.release = threading.Event()
+        self.loading = threading.Event()
+
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        self.loading.set()
+        assert self.release.wait(timeout=10.0), 'nothing released the load'
+        return self._policy
+
+
+def _warmed(client: InferenceClient, timeout: float = 10.0) -> protocol.Readiness:
+    """The record once the server has answered an inference. It raises when none arrives in time."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = client.readiness()
+        if state.inferences > 0:
+            return state
+        time.sleep(0.05)
+    raise AssertionError('the server answered no inference')
+
+
+class TestReadinessVerbs:
+    """``ready`` and ``warm``, which answer what the server can do now without opening a session."""
+
+    def test_a_served_server_reports_the_checkpoint_it_pinned_and_no_inferences(self, stub_server):
+        host, port, _server, _policy = stub_server
+        state = InferenceClient.from_url(f'{host}:{port}').readiness()
+        assert state.status is protocol.ServerStatus.READY
+        assert state.checkpoint_id == 'stub'
+        assert state.inferences == 0, 'a loaded checkpoint that answered nothing is cold'
+        assert state.positronic_version
+
+    def test_an_answered_observation_moves_the_count_and_brings_back_what_it_cost(self, stub_server):
+        host, port, _server, _policy = stub_server
+        client = InferenceClient.from_url(f'{host}:{port}')
+        session = client.new_session()
+        try:
+            session.infer({'obs': 'data'})
+        finally:
+            session.close()
+        state = client.readiness()
+        assert state.inferences == 1
+        assert state.timing[protocol.TIMING_SERVED] >= 0
+
+    def test_a_load_after_the_server_was_ready_reports_loading_again(self, start_server, make_mock_policy):
+        """Readiness is the state now, and it comes back: a ready server loads again and stops being ready."""
+        source = _HeldSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
+        source.release.set()
+        host, port, *_ = start_server(ChunkedSchedule() | remote | source)
+        client = InferenceClient.from_url(f'{host}:{port}')
+        assert client.readiness().status is protocol.ServerStatus.READY
+
+        source.release.clear()
+        source.loading.clear()
+        switched: list[str] = []
+        switching = threading.Thread(
+            target=lambda: switched.append(
+                InferenceClient.from_url(f'{host}:{port}/api/v1/session/other').new_session().metadata['checkpoint_id']
+            ),
+            daemon=True,
+        )
+        switching.start()
+        try:
+            assert source.loading.wait(timeout=10.0), 'the switch never reached the load'
+            assert client.readiness().status is protocol.ServerStatus.LOADING
+        finally:
+            source.release.set()
+        switching.join(timeout=10.0)
+        assert switched == ['other']
+        loaded = client.readiness()
+        assert loaded.status is protocol.ServerStatus.READY
+        assert loaded.checkpoint_id == 'other'
+        assert loaded.inferences == 0, 'a checkpoint that has just loaded has answered nothing'
+
+    def test_warm_answers_at_once_and_the_count_moves_after_it(self, start_server, make_mock_policy):
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        host, port, *_ = start_server(ChunkedSchedule() | remote | WarmSource(policy))
+        client = InferenceClient.from_url(f'{host}:{port}')
+        started = client.warm('pick up the red cube')
+        assert started.inferences == 0, 'warm reports the state it answers in, not the state it will reach'
+        assert _warmed(client).inferences == 1
+        policy._mock_session.assert_called_once_with({keys.TASK: 'pick up the red cube'}, ANY)
+        policy._mock_session.close.assert_called_once()
+
+    def test_warm_waits_for_the_count_when_asked_to(self, start_server, make_mock_policy):
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        host, port, *_ = start_server(ChunkedSchedule() | remote | WarmSource(policy))
+        client = InferenceClient.from_url(f'{host}:{port}')
+        assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+
+    def test_a_source_that_builds_no_warm_observation_warms_nothing(self, stub_server):
+        host, port, _server, policy = stub_server
+        client = InferenceClient.from_url(f'{host}:{port}')
+        assert client.warm('stack the cubes').status is protocol.ServerStatus.READY
+        time.sleep(_A_MOMENT_IDLE)
+        assert client.readiness().inferences == 0
+        policy._mock_session.assert_not_called()
+
+    def test_a_second_warm_joins_the_one_already_running(self, start_server, make_mock_policy):
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        source = WarmSource(policy)
+        held = threading.Event()
+        policy._mock_session.side_effect = lambda obs, time_ns: held.wait(timeout=10.0) and [{'action': [1]}]
+        host, port, *_ = start_server(ChunkedSchedule() | remote | source)
+        client = InferenceClient.from_url(f'{host}:{port}')
+        client.warm('stack the cubes')
+        client.warm('stack the cubes')
+        held.set()
+        assert _warmed(client).inferences == 1, 'the second call started a second warm'
+
+    def test_the_verbs_take_the_token_that_gates_the_session(self, authed_endpoint):
+        url, token = authed_endpoint
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient.from_url(url).readiness()
+        assert refused.value.refusal is wire.Refusal.FORBIDDEN
+        authed = InferenceClient.from_url(url, headers={AUTH_HEADER: bearer(token)})
+        assert authed.readiness().status is protocol.ServerStatus.READY
+
+    def test_a_server_too_old_for_the_verb_is_told_from_an_address_serving_nothing(self, stub_server, monkeypatch):
+        """A 404 is an old server where the catalogue beside it still answers, and a wrong address where it does not."""
+        host, port, _server, _policy = stub_server
+        client = InferenceClient.from_url(f'{host}:{port}')
+        monkeypatch.setattr(wire, 'READY', wire.Verb('no-such-verb', 'GET', 'NoSuchVerb'))
+        with pytest.raises(wire.VerbUnsupported):
+            client.readiness()
+
+        monkeypatch.setattr(wire, 'MODELS_ROUTE', 'no-such-route')
+        with pytest.raises(wire.ConnectRefused) as refused:
+            client.readiness()
+        assert refused.value.refusal is wire.Refusal.FINAL
+
+    def test_every_verb_the_protocol_declares_has_an_answer(self):
+        """The server answers by verb, so a verb added here needs a branch in ``_answer_verb``."""
+        assert wire.VERBS == (wire.READY, wire.WARM)

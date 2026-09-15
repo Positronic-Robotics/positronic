@@ -8,13 +8,15 @@ command channel, and nothing but the channel tells that mapping from any other d
 import collections.abc as cabc
 import functools
 from enum import StrEnum
-from typing import Any
+from types import MappingProxyType
+from typing import Any, NamedTuple, Self
 
 import msgpack
 import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import keys as offboard_keys
 from positronic.utils import serialization
 
 # The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
@@ -52,6 +54,49 @@ class ServerStatus(StrEnum):
     WAITING = 'waiting'
     LOADING = 'loading'
     ERROR = 'error'
+
+
+# How many inferences the loaded checkpoint has answered, in the record the unary verbs return.
+INFERENCES = 'inferences'
+
+
+class Readiness(NamedTuple):
+    """What a server says about itself when a caller asks, outside any session.
+
+    ``status`` is the state now and comes back: a server that answers ``READY`` may load another
+    checkpoint and answer ``LOADING`` again, with its port bound throughout. ``inferences`` counts what
+    the loaded checkpoint has answered and ``timing`` carries the phases of the last one, so a caller
+    picks the threshold it needs rather than taking one the server chose.
+    """
+
+    status: ServerStatus
+    message: str = ''
+    checkpoint_id: str | None = None
+    inferences: int = 0
+    timing: cabc.Mapping[str, float] = MappingProxyType({})
+    positronic_version: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            STATUS: str(self.status),
+            MESSAGE: self.message,
+            offboard_keys.CHECKPOINT_ID: self.checkpoint_id,
+            INFERENCES: self.inferences,
+            TIMING: dict(self.timing),
+            offboard_keys.POSITRONIC_VERSION: self.positronic_version,
+        }
+
+    @classmethod
+    def from_wire(cls, answer: cabc.Mapping[str, Any]) -> Self:
+        """The record ``answer`` carries. Raises ``ValueError`` when it names no status this protocol has."""
+        return cls(
+            status=ServerStatus(answer.get(STATUS)),
+            message=answer.get(MESSAGE) or '',
+            checkpoint_id=answer.get(offboard_keys.CHECKPOINT_ID),
+            inferences=int(answer.get(INFERENCES) or 0),
+            timing=MappingProxyType(dict(answer.get(TIMING) or {})),
+            positronic_version=answer.get(offboard_keys.POSITRONIC_VERSION),
+        )
 
 
 _CMD = b'__cmd__'
