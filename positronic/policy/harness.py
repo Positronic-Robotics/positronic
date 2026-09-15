@@ -334,13 +334,6 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = self._task.instruction
         return meta
 
-    def _episode_waypoints(self) -> _ScheduleFidelity:
-        """Every command channel's account for this episode, in one."""
-        total = _ScheduleFidelity()
-        for fidelity in self._fidelity.values():
-            total.merge(fidelity)
-        return total
-
     def _ready(
         self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, args: dict[str, Any]
     ) -> Generator[pimm.Command, None, None]:
@@ -367,16 +360,26 @@ class Harness(pimm.ControlSystem):
             return pimm.Sleep(POLL_PERIOD_SEC)
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
+    def _episode_waypoints(self) -> _ScheduleFidelity:
+        """Every command channel's account for this episode, in one."""
+        total = _ScheduleFidelity()
+        for fidelity in self._fidelity.values():
+            total.merge(fidelity)
+        return total
+
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
+        now_ns = clock.now_ns()
+        for name, schedule in self._schedules.items():
+            # The episode ends on this round, so a waypoint already due goes out on none.
+            self._fidelity[name].count_dropped(self._due_count(schedule, now_ns))
+            schedule.clear()  # devices hold their last commanded position
         # Stamped before the inference is retired: the meta overlays what its session reports.
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
-        for schedule in self._schedules.values():  # devices hold their last commanded position
-            schedule.clear()
         self._inference = None
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # The recorder reads only the last ``ds_command`` value. This round lets it read the STOP before the next START.
