@@ -63,10 +63,9 @@ INFERENCES = 'inferences'
 class Readiness(NamedTuple):
     """What a server says about itself when a caller asks, outside any session.
 
-    ``status`` is the state now and comes back: a server that answers ``READY`` may load another
+    ``status`` holds only for the moment it answers: a server that answers ``READY`` may load another
     checkpoint and answer ``LOADING`` again, with its port bound throughout. ``inferences`` counts what
-    the loaded checkpoint has answered and ``timing`` carries the phases of the last one, so a caller
-    picks the threshold it needs rather than taking one the server chose.
+    the loaded checkpoint has answered, and ``timing`` carries the phases of the last one.
     """
 
     status: ServerStatus
