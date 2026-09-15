@@ -26,11 +26,11 @@ The span helpers no-op while unbound (an eval recording nowhere binds nothing), 
 
 A recording run binds the harness's sidecar from ``POSITRONIC_ENV_TELEMETRY_DIR``, which
 ``positronic.cli.eval.run.prepare_output_dir`` sets to the directory the run uploads from. ``--timing`` adds
-the pass span and the machine-load stream on top.
+the pass span and the machine-load stream.
 
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
-``telemetry`` extra adds the OTel SDK and pynvml. ``bind`` and ``StatsSampler`` raise without it; a run that
-asked for neither and merely records loses its spans to a warning.
+``telemetry`` extra adds the OTel SDK and pynvml; ``bind`` and ``StatsSampler`` raise without it, and a
+recording run warns.
 """
 
 import functools
@@ -212,9 +212,8 @@ def bind_from_env(process: str) -> Iterator[None]:
     the reduce keys an episode by it. Two runs that share one file therefore stay apart.
 
     Inert while the directory is unset, while a provider is already bound, and where the sidecar refuses to
-    open — every recording run reaches this, and the episodes are what a run delivers, so a sidecar that
-    cannot open costs its timings and never the run. ``bind`` serves a caller that ASKED for telemetry
-    (``eval run --timing``) and still raises.
+    open: a run this fails on still delivers its episodes. ``bind`` serves a caller that asked for telemetry
+    and still raises.
     """
     directory = os.environ.get(ENV_TELEMETRY_DIR)
     if directory is None or _provider is not None:
