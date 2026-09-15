@@ -140,7 +140,8 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--port`: (Optional) Port to serve on (default: 8000)
-- `--uds`: (Optional) Unix socket path to bind in place of `--host`/`--port`, for a client on the same machine
+- `--uds`: (Optional) Unix socket path for the WebSocket wire, in place of `--host`/`--port`, for a client on
+  the same machine. `--grpc_port`, if set, still binds `--host`
 - `--grpc_port`: (Optional) Port for the gRPC wire, served beside the websocket one
 - `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
