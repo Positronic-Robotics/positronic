@@ -203,7 +203,7 @@ class _ServedTiming:
     @classmethod
     @contextmanager
     def opened(cls) -> Iterator['_ServedTiming']:
-        """Open the timing of one inference, and make it the one ``_timed`` writes to for the block."""
+        """Open the timing of one inference. ``_timed`` writes to it until the block ends."""
         timing = cls()
         token = _open_timing.set(timing)
         try:
