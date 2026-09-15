@@ -3,12 +3,14 @@
 The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
 
+import json
 import logging
 import queue
 import threading
 import time
 import urllib.parse
 from collections.abc import AsyncIterator, Mapping
+from typing import Any
 
 import grpc
 import grpc.aio
@@ -27,6 +29,12 @@ METHOD_PATH = f'/{SERVICE}/{METHOD}'
 # The session path and the query cross as metadata: a gRPC call carries no URL path of its own.
 SESSION_PATH_HEADER = 'positronic-session-path'
 SESSION_QUERY_HEADER = 'positronic-session-query'
+
+
+def verb_path(verb: wire.Verb) -> str:
+    """The method a unary verb answers on, beside the session on the same service."""
+    return f'/{SERVICE}/{verb.grpc_method}'
+
 
 _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_receive_message_length', wire.MAX_MESSAGE_BYTES),
@@ -243,6 +251,16 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
     return channel
 
 
+def _metadata(headers: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
+    """``headers`` as gRPC metadata, whose keys are lower case, as ``wire.Authorized`` reads them."""
+    return tuple((key.lower(), value) for key, value in (headers or {}).items())
+
+
+def _session_metadata(address: wire.SessionAddress) -> tuple[tuple[str, str], ...]:
+    """Where a session opens, which a gRPC call carries no URL path for."""
+    return ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
+
+
 class GrpcClientWire(wire.ClientWire):
     """The client side of the gRPC wire, whose port carries sessions alone."""
 
@@ -262,12 +280,32 @@ class GrpcClientWire(wire.ClientWire):
         """
         target = _target(address.host, address.port)
         channel = _ready_channel(target, address.secure, open_timeout)
-        # gRPC metadata keys are lower case, as ``wire.Authorized`` reads them.
-        metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
-            (SESSION_PATH_HEADER, address.path),
-            (SESSION_QUERY_HEADER, address.query),
-        )
-        return GrpcClientConnection(channel, target, metadata)
+        return GrpcClientConnection(channel, target, _metadata(headers) + _session_metadata(address))
+
+    def call(
+        self,
+        address: wire.SessionAddress,
+        verb: wire.Verb,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        """What the server answers ``verb`` with, over a unary call on its own channel.
+
+        ``timeout`` bounds the channel and the call, one after the other.
+        """
+        target = _target(address.host, address.port)
+        channel = _ready_channel(target, address.secure, timeout)
+        try:
+            unary = channel.unary_unary(verb_path(verb), request_serializer=None, response_deserializer=None)
+            answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=timeout)
+        except grpc.RpcError as e:
+            if e.code() is grpc.StatusCode.UNIMPLEMENTED:
+                raise wire.VerbUnsupported(f'{target} serves sessions but not {verb.name}') from e
+            raise wire.ConnectRefused(_refusal(e), f'{e} (calling {verb.name} on {target})') from e
+        finally:
+            channel.close()
+        return json.loads(answer)
 
 
 class GrpcServerConnection(wire.ServerConnection):
@@ -348,7 +386,7 @@ def model_id_of(session_path: str) -> str | None:
 
 
 class GrpcWire(wire.Wire):
-    """The gRPC wire: sessions on a port of their own, one bidirectional stream each.
+    """The gRPC wire: sessions on a port of their own, one stream each, and the unary verbs beside them.
 
     A ``port`` of 0 binds any free one. The port is plaintext; a TLS edge in front of it serves an
     authenticated endpoint.
@@ -365,7 +403,7 @@ class GrpcWire(wire.Wire):
         assert self._endpoint is not None, 'The gRPC wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: wire.SessionHandler, verbs: wire.VerbHandler, authorized: wire.Authorized) -> None:
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):
@@ -379,9 +417,19 @@ class GrpcWire(wire.Wire):
                 logger.error(f'Failed gRPC session: {e}', exc_info=True)
                 await context.abort(grpc.StatusCode.INTERNAL, str(e))
 
+        def answer_verb(verb: wire.Verb) -> grpc.RpcMethodHandler:
+            async def answer_one(payload: bytes, context: grpc.aio.ServicerContext) -> bytes:
+                if not authorized(_headers(context)):
+                    await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
+                answer = await verbs(verb, json.loads(payload) if payload else {})
+                return json.dumps(dict(answer)).encode()
+
+            return grpc.unary_unary_rpc_method_handler(answer_one, request_deserializer=None, response_serializer=None)
+
         handler = grpc.stream_stream_rpc_method_handler(serve_one, request_deserializer=None, response_serializer=None)
         server = grpc.aio.server(options=_server_options())
-        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
+        methods = {METHOD: handler, **{verb.grpc_method: answer_verb(verb) for verb in wire.VERBS}}
+        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, methods),))
         bound = server.add_insecure_port(_target(self._host, self._port))
         if bound == 0:
             # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.

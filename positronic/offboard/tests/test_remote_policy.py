@@ -1,6 +1,7 @@
 import threading
 import time
 from collections.abc import Mapping
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -33,6 +34,9 @@ class _FakeWire(wire.ClientWire):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
+        self.calls: list[wire.Verb] = []
+        # What ``call`` answers; ``None`` stands for a server too old to answer the verb at all.
+        self.readiness: Mapping[str, Any] | None = None
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'http://{address.netloc}{wire.API_PATH}'
@@ -43,6 +47,12 @@ class _FakeWire(wire.ClientWire):
         if isinstance(outcome, wire.ConnectRefused):
             raise outcome
         return outcome
+
+    def call(self, address, verb, payload, headers, timeout):
+        self.calls.append(verb)
+        if self.readiness is None:
+            raise wire.VerbUnsupported('this wire answers sessions alone')
+        return self.readiness
 
 
 _ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
@@ -276,6 +286,30 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 1
         assert refused.value.refusal is wire.Refusal.FINAL
+
+    def test_a_server_too_old_to_say_how_warm_it_is_is_asked_once(self):
+        """Every wait reads the server's state, and one that does not answer the verb is not asked again."""
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 4)
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=60.0).new_session()
+
+        assert fake.calls == [wire.READY]
+
+    def test_every_wait_reads_what_the_server_says_it_is_doing(self):
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 3)
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint 30000'}
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=60.0).new_session()
+
+        assert fake.calls == [wire.READY] * 3
 
     def test_a_cold_refusal_retries_to_the_deadline(self):
         fake = _FakeWire(_refused(wire.Refusal.COLD))
