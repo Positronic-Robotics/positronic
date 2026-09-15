@@ -93,6 +93,13 @@ class Session(ABC):
         """End this session and release per-episode resources."""
         return None
 
+    def push_frame(self, key: str, obs_time_ns: int, value: Any) -> None:
+        """Take one frame of a stacked entry ahead of the observation that will name it.
+
+        Only a session that forwards to a server which declared ``stream_frames`` takes one.
+        """
+        raise TypeError(f'{type(self).__name__} takes no frame ahead of the observation')
+
 
 class DelegatingSession(Session):
     """Session that delegates all methods to an inner session. Subclass and override what you need."""
@@ -112,6 +119,9 @@ class DelegatingSession(Session):
 
     def close(self):
         self._inner.close()
+
+    def push_frame(self, key, obs_time_ns, value):
+        self._inner.push_frame(key, obs_time_ns, value)
 
 
 # One timed session call: the name it is timed as, and its start and end on ``time.time_ns``. Whoever owns

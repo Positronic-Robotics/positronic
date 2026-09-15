@@ -28,6 +28,16 @@ ERROR = 'error'
 # milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
 TIMING = 'timing'
 
+# A frame the rig sends ahead of the observation it belongs to, when the server declared
+# ``stream_frames``. It carries one stacked key's value at one ``obs_time_ns``, and gets no answer.
+FRAME = '__frame__'
+FRAME_KEY = 'key'
+FRAME_TIME_NS = 'obs_time_ns'
+FRAME_VALUE = 'value'
+# What replaces a stacked entry in an observation whose frames went ahead: the ``obs_time_ns`` of each
+# frame of the stack, oldest first. The server assembles the stack from the frames it holds.
+FRAME_IDS = '__frame_ids__'
+
 # The phases ``TIMING`` reports. `SERVED` brackets the others: it opens on the observation
 # arriving and closes before the answer is encoded.
 TIMING_SERVED = 'served_ms'
