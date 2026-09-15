@@ -17,28 +17,19 @@ the same order.
 | gRPC | `grpc://host:9000/api/v1/session[/<model_id>]` | the server's `grpc_port`, sessions alone |
 | gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
 
-The WebSocket wire is the default, and a server serves gRPC only when `grpc_port` names a port. A
-gRPC session is one bidirectional stream of the same frames on the generic RPC method
-`/positronic.offboard.v1.Inference/Session`; no `.proto` file describes them.
-The session path and the query cross as the `positronic-session-path` and `positronic-session-query`
-metadata, and `Authorization` crosses as the `authorization` metadata.
-
-Python's WebSocket stack spends about 30 ms per 846 KiB observation on framing and reassembly; gRPC
-spends about 1 ms. Take the gRPC wire wherever it reaches.
-
-It reaches through a managed HTTPS front, and an authenticated endpoint stands behind one. The front
-terminates TLS, and the HTTP/2 connection runs end to end; the server binds a plaintext port and holds
-no certificate. The front must select HTTP/2 over ALPN. Check a new front with
-`openssl s_client -alpn h2 -connect <host>:443`. On a Nebius Serverless Endpoint, declare the gRPC
-port as an ordinary HTTP port and dial its `https://` host as `grpcs://<host>:443`. A port declared
-`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
-`Cannot check peer: missing selected ALPN property`.
-
-Through such an endpoint an 846 KiB observation round-trips in about 6 ms over gRPC and about 60 ms
-over the WebSocket. gRPC holds 6 ms at 10 Hz, which is 8 MB/s of observation. The front shapes a
-session that sends faster: a back-to-back loop settles at about 83 ms a round trip after some 11 MB,
-and returns to 6 ms after a minute of quiet. The WebSocket holds its 60 ms throughout, below the rate
-the front shapes at.
+- The WebSocket wire is the default. A server serves gRPC only when `grpc_port` names a port.
+- A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
+  No `.proto` file describes the frames.
+- The session path, the query and the bearer token cross as the `positronic-session-path`,
+  `positronic-session-query` and `authorization` metadata.
+- Take the gRPC wire wherever it reaches. Python's WebSocket stack spends about 30 ms per
+  846 KiB observation on framing; gRPC spends about 1 ms. Through a managed front the same
+  observation round-trips in about 6 ms over gRPC and about 60 ms over the WebSocket.
+- gRPC reaches through a managed HTTPS front. The front terminates TLS and must select HTTP/2
+  over ALPN. The server binds a plaintext port and holds no certificate.
+- On Nebius, declare the gRPC port as an HTTP port and dial it as `grpcs://<host>:443`.
+  A `/tcp` port selects no ALPN protocol, and gRPC refuses it. See
+  [workflows/nebius/README.md](../../workflows/nebius/README.md#serve-a-checkpoint-as-an-endpoint).
 
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.

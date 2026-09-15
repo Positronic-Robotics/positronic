@@ -222,6 +222,15 @@ survive endpoint stop/start; deleting an endpoint retires them, so a re-created 
 gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
 `molmoact2`, the set `serve.sh` accepts.
 
+`serve.sh` declares the gRPC port as an ordinary HTTP port, so its front selects HTTP/2 over ALPN
+and terminates TLS; the server binds a plaintext port and holds no certificate. A port declared
+`/tcp` gets a `tls://` URL that selects no ALPN protocol, and gRPC refuses it with
+`Cannot check peer: missing selected ALPN property`. Check a front with
+`openssl s_client -alpn h2 -connect <host>:443`. Through the front an 846 KiB observation
+round-trips in about 6 ms over gRPC and about 60 ms over the WebSocket. The front shapes a session
+that sends faster than about 8 MB/s: a back-to-back loop settles at about 83 ms a round trip after
+some 11 MB, and returns to 6 ms after a minute of quiet.
+
 Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
 below for loading it and for why the check lives in the server rather than at the Nebius ingress.
 
