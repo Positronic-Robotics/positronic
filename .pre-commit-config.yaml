@@ -48,11 +48,11 @@ repos:
         stages: [pre-commit]
       - id: member-version-bumps
         name: a changed workspace member declares a new version, and the root pins what it pins
-        # Reads git and every member manifest, so takes no filenames. Scoped to the paths that can
-        # put them out of step: a published member, its manifest, and the root's pins.
+        # Reads git and every member manifest, so takes no filenames — and runs unconditionally,
+        # because a path filter would name the members the checker goes out of its way to discover.
         entry: uv run --locked python3 utilities/check_member_version_bumps.py
         language: system
-        files: '^(client/.*|vocabulary/.*|pyproject\.toml)$'
+        always_run: true
         pass_filenames: false
         stages: [pre-commit]
       - id: basedpyright-baseline-ratchet
