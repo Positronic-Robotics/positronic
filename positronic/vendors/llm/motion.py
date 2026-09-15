@@ -6,8 +6,6 @@ from typing import Annotated
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from scipy.spatial.transform import Rotation as SciRotation
-from scipy.spatial.transform import Slerp
 
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition
@@ -53,10 +51,7 @@ class Motion:
     def duration(self, start: geom.Transform3D, end: geom.Transform3D) -> float:
         """Validate a displacement and return the minimum duration allowed by the speed bounds."""
         distance = float(np.linalg.norm(end.translation - start.translation))
-        rotations = SciRotation.from_matrix(
-            np.stack([start.rotation.as_rotation_matrix, end.rotation.as_rotation_matrix])
-        )
-        angle = float((rotations[1] * rotations[0].inv()).magnitude())
+        angle = (end.rotation * start.rotation.inv).angle
         if distance > self.max_translation + 1e-9:
             raise ValueError(f'Move is {distance:.4f} m; maximum is {self.max_translation:.4f} m. Split the move.')
         if angle > self.max_rotation + 1e-9:
@@ -66,21 +61,14 @@ class Motion:
     def trajectory(self, start: geom.Transform3D, target: MoveTo) -> list[dict]:
         end = target.pose
         duration = self.duration(start, end)
-        delta = end.translation - start.translation
-        rotations = SciRotation.from_matrix(
-            np.stack([start.rotation.as_rotation_matrix, end.rotation.as_rotation_matrix])
-        )
         steps = math.ceil(duration * self.fps)
         times = np.arange(1, steps + 1) / self.fps
         fractions = times / times[-1]
-        orientations = Slerp([0, 1], rotations)(fractions).as_matrix()
         return [
             {
-                keys.ROBOT_COMMAND: CartesianPosition(
-                    geom.Transform3D(start.translation + delta * fraction, geom.Rotation.from_rotation_matrix(rotation))
-                ),
+                keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
                 keys.TARGET_GRIP: target.gripper,
                 keys.ACTION_TIMESTAMP: float(timestamp),
             }
-            for fraction, rotation, timestamp in zip(fractions, orientations, times, strict=True)
+            for fraction, timestamp in zip(fractions, times, strict=True)
         ]

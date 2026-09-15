@@ -9,8 +9,10 @@ from positronic import geom, keys
 from positronic.vendors.llm.motion import Motion, MoveTo
 
 
-def test_motion_uses_short_rotation_path_and_respects_speed():
+@pytest.mark.parametrize('quaternion_sign', [1, -1])
+def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
     start = geom.Transform3D([0, 0, 0], geom.Rotation.from_euler([0, 0, math.radians(179)]))
+    start.rotation = geom.Rotation.from_quat(quaternion_sign * start.rotation.as_quat)
     target = MoveTo(x=0.05, y=0, z=0, roll=0, pitch=0, yaw=math.radians(-179), gripper=0.7, note='approach')
     motion = Motion()
     trajectory = motion.trajectory(start, target)
