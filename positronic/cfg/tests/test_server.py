@@ -107,6 +107,28 @@ def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
     assert row['successes'] == 1
 
 
+def test_a_rung_above_the_target_still_counts_as_reaching_it():
+    """The skew a floating append-only vocabulary allows: an install whose ladder runs past
+    `AT_TARGET` ranks such an episode higher, and the arm reached the target on its way there."""
+    group = cfg_server.rollouts_by_model.instantiate()
+    beyond = LADDER.index(Stage.AT_TARGET) + 1
+
+    row = group.group_fn([_row(Outcome.SUCCESS, StageCell(beyond, 'put it down again'))])
+
+    assert row['at_target'] == 1
+
+
+def test_a_rung_below_the_target_does_not_count_as_reaching_it():
+    """The boundary of the one above. The count is of episodes that reached the target, so widening
+    the comparison must not sweep in the rungs underneath it."""
+    group = cfg_server.rollouts_by_model.instantiate()
+    below = Stage.CONTROL
+
+    row = group.group_fn([_row(Outcome.FAIL, StageCell(LADDER.index(below), STAGE_LABELS[below]))])
+
+    assert row['at_target'] == 0
+
+
 def test_an_episode_nobody_scored_reads_as_unscored():
     """A console seeds the field with `UNSCORED` and an unattended end leaves it out entirely. Both
     are the same state, so both reach the page as the one word the badge carries."""
