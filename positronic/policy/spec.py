@@ -102,8 +102,7 @@ class ModelSource(abc.ABC):
     def warm_observation(self, policy: Policy, task: str) -> dict[str, Any] | None:
         """One observation ``policy`` answers, carrying ``task`` as its prompt.
 
-        A server runs it to pay the first inference before a scored episode does. ``None`` where this
-        source builds none, and then the server warms nothing.
+        ``None`` where this source builds none, and then the server warms nothing.
         """
         return None
 

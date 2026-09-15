@@ -331,11 +331,7 @@ class PolicyServer:
         return {'models': self._source.get_models()}
 
     def readiness(self) -> protocol.Readiness:
-        """What this server can do now.
-
-        Read again for the answer again: a server that is ready loads another checkpoint and stops
-        being ready, with its port bound throughout.
-        """
+        """What this server can do now."""
         state = self._manager.state
         return protocol.Readiness(
             status=state.status,

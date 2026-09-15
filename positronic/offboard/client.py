@@ -294,12 +294,8 @@ class InferenceClient:
             backoff = min(backoff * 2, 30.0)
 
     def readiness(self) -> protocol.Readiness:
-        """What the server says about itself now, outside any session.
-
-        Read it again for the answer again: a server that is ready loads another checkpoint and stops
-        being ready, with its port bound throughout. Raises ``wire.VerbUnsupported`` where the server
-        serves sessions but does not answer the verb.
-        """
+        """What the server says about itself now. Raises ``wire.VerbUnsupported`` where the server serves
+        sessions but not the verb."""
         return protocol.Readiness.from_wire(
             self._wire.call(self._address, wire.READY, {}, self.headers, self.verb_timeout)
         )
