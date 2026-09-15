@@ -73,7 +73,7 @@ class PageConfig:
     show_paths: bool = True
     static_export: bool = False
     asset_dir: PurePosixPath = DEFAULT_ASSET_DIR
-    attribution: Attribution | None = None  # None = the header names nobody
+    attribution: Attribution | None = None
 
 
 # The app state's key for the `PageConfig` every page reads.
@@ -399,7 +399,7 @@ def configure_pages(
     the header text, the dataset root when empty. `show_paths` says whether a page reports where the
     dataset lives. `static_export` makes the pages read the files a static export writes. `asset_dir` is
     the directory under the asset route the pages read the app's own scripts, styles and viewer from.
-    `attribution` names the publisher in the header and links their address; None names nobody.
+    `attribution` is the publisher; None names nobody.
     """
     app_state[_PAGE_CONFIG_KEY] = PageConfig(
         base_href=normalized_base_href(base_href),
