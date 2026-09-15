@@ -2600,6 +2600,8 @@ def test_a_layer_the_rig_runs_lands_in_the_sidecar_as_its_own_span(world, tmp_pa
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     by_name = {span.name: span for span in spans}
-    assert {'marker', 'stop_on_fault', telemetry_keys.SPAN_POLICY_CALL} <= by_name.keys()
-    call, marker, inner = by_name[telemetry_keys.SPAN_POLICY_CALL], by_name['marker'], by_name['stop_on_fault']
+    named = {_Marker.WIRE_NAME, StopOnFault.WIRE_NAME, telemetry_keys.SPAN_POLICY_CALL}
+    assert named <= by_name.keys()
+    call = by_name[telemetry_keys.SPAN_POLICY_CALL]
+    marker, inner = by_name[_Marker.WIRE_NAME], by_name[StopOnFault.WIRE_NAME]
     assert call.start_ns <= marker.start_ns <= inner.start_ns <= inner.end_ns <= marker.end_ns <= call.end_ns
