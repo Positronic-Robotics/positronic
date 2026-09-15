@@ -99,24 +99,26 @@ def sampled_span(signals: list[VideoSignal]) -> tuple[int, int]:
 
 
 def bounded_frames(
-    signal: VideoSignal, span: tuple[int, int], rate_hz: float, bound: RestrictImageSize
+    signal: VideoSignal, span: tuple[int, int], rate_hz: float, bound: RestrictImageSize, count: int
 ) -> list[np.ndarray]:
-    """The frame at or before each sample time over ``span``, through the rig's own bound."""
+    """The first ``count`` frames at or before each sample time over ``span``, through the rig's own bound.
+
+    ``count`` 0 keeps every sample time; a decoded frame is held in memory, so ask for the frames the windows need.
+    """
     key = 'image'
     start, stop = span
     # The writer encodes every video at one fixed rate; the recorded cadence is in the frames index ``time`` reads.
-    sampled = signal.time[start : stop : round(1e9 / rate_hz)]
+    sampled = signal.time[np.arange(start, stop, round(1e9 / rate_hz))[: count or None]]
     assert isinstance(sampled, Signal)
     return [bound.encode({key: frame})[key] for frame in sampled.values()]
 
 
-def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[Codec], limit: int) -> list[Cost]:
-    """One row per codec per window, over the windows the episode holds."""
+def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[Codec]) -> list[Cost]:
+    """One row per codec per window, over every window ``frames`` holds."""
     if len(frames) < depth:
         raise ValueError(f'{camera}: {len(frames)} sampled frames cannot fill one {depth}-frame window')
-    starts = list(range(0, len(frames) - depth + 1))[: limit or None]
     rows = []
-    for window_index, start in enumerate(starts):
+    for window_index, start in enumerate(range(0, len(frames) - depth + 1)):
         window = np.stack(frames[start : start + depth])
         for codec in codecs:
             size, encode_ms, decode_ms = codec.cost(window)
@@ -171,11 +173,12 @@ def main() -> int:
         for camera in args.cameras.split(',')
     }
     span = sampled_span(list(signals.values()))
+    frame_count = args.windows + args.frames - 1 if args.windows else 0
     rows: list[Cost] = []
     for camera, signal in signals.items():
-        frames = bounded_frames(signal, span, args.rate, bound)
+        frames = bounded_frames(signal, span, args.rate, bound, frame_count)
         print(f'{camera}: {len(frames)} sampled frames at {frames[0].shape[1]}x{frames[0].shape[0]}')
-        rows += costs(frames, camera, args.frames, codecs, args.windows)
+        rows += costs(frames, camera, args.frames, codecs)
 
     report(rows, args.frames)
     if args.json:

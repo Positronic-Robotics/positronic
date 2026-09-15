@@ -24,7 +24,7 @@ def _frame_ids(frames: list[np.ndarray]) -> list[int]:
 
 def test_sampling_follows_the_recorded_timestamps_not_the_video_rate(tmp_path):
     camera = _camera(tmp_path, 'cam', SEC, 8)
-    frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64))
+    frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64), 0)
     assert _frame_ids(frames) == [0, 2, 4, 6]
 
 
@@ -33,12 +33,18 @@ def test_every_camera_samples_one_grid_over_the_span_all_cover(tmp_path):
     short = _camera(tmp_path, 'short', SEC + PERIOD_30HZ, 6)
     span = sampled_span([long, short])
     bound = RestrictImageSize(64, 64)
-    assert _frame_ids(bounded_frames(long, span, 15.0, bound)) == [1, 3, 5]
-    assert _frame_ids(bounded_frames(short, span, 15.0, bound)) == [0, 2, 4]
+    assert _frame_ids(bounded_frames(long, span, 15.0, bound, 0)) == [1, 3, 5]
+    assert _frame_ids(bounded_frames(short, span, 15.0, bound, 0)) == [0, 2, 4]
+
+
+def test_count_caps_the_frames_decoded(tmp_path):
+    camera = _camera(tmp_path, 'cam', SEC, 8)
+    frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64), 3)
+    assert _frame_ids(frames) == [0, 2, 4]
 
 
 def test_costs_refuses_fewer_frames_than_one_window(tmp_path):
     camera = _camera(tmp_path, 'cam', SEC, 4)
-    frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64))
+    frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64), 0)
     with pytest.raises(ValueError, match='cannot fill one 4-frame window'):
-        costs(frames, 'cam', 4, [Jpeg()], 0)
+        costs(frames, 'cam', 4, [Jpeg()])
