@@ -211,11 +211,7 @@ def test_handles_none_actions(tmp_path):
         def __call__(self, obs, time_ns):
             return None
 
-    class _NonePolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _NoneSession()
-
-    session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()
+    session = Recorder(tmp_path).tap('t').make_session(_NoneSession())
     assert session({'x': 1.0}, 0) is None
     assert session._step == 1
 

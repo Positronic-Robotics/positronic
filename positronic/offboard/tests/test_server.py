@@ -19,6 +19,7 @@ from websockets.http11 import Response
 from websockets.sync.client import connect
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, websocket_wire, wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
@@ -30,7 +31,7 @@ from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
 
@@ -405,6 +406,105 @@ def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
         session.close()
 
 
+_STUB_SLEEP_MS = 40.0
+
+
+def _slow_model(*_args):
+    time.sleep(_STUB_SLEEP_MS / 1000.0)
+    return [{'action': [1, 2, 3]}]
+
+
+def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_policy):
+    """``model_ms`` holds the model's own call, inside ``infer_ms``."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+        timing = session.served_timing
+    finally:
+        session.close()
+
+    assert timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+    assert timing[protocol.TIMING_MODEL] <= timing[protocol.TIMING_INFER] <= timing[protocol.TIMING_SERVED]
+
+
+class _SlowCodec(Codec):
+    """Sleeps ``_STUB_SLEEP_MS`` on the model's answer."""
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data):
+        time.sleep(_STUB_SLEEP_MS / 1000.0)
+        return data
+
+
+def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
+    """The gap between ``infer_ms`` and ``model_ms`` holds the codec's cost."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+        timing = session.served_timing
+    finally:
+        session.close()
+
+    assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+
+
+def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_mock_policy):
+    """``StopOnFault`` answers a faulted arm without the model, and that answer carries no ``model_ms``."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    host, port, _server = start_server(ChunkedSchedule() | remote | StopOnFault() | _StubSource(policy))
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.AVAILABLE)})
+        ran = session.served_timing
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.ERROR)})
+        stopped = session.served_timing
+    finally:
+        session.close()
+
+    assert ran[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+    assert protocol.TIMING_MODEL not in stopped
+
+
+class _FailingCodec(Codec):
+    """Raises on the model's answer, after the model has run."""
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data):
+        raise RuntimeError('decode failed')
+
+
+def test_an_inference_that_raises_leaves_no_model_time_behind(start_server, make_mock_policy):
+    """The next answer carries no ``model_ms`` from a call that raised after the model ran."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    stack = ChunkedSchedule() | remote | StopOnFault() | _FailingCodec()
+    host, port, _server = start_server(stack | _StubSource(policy))
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        with pytest.raises(RuntimeError, match='decode failed'):
+            session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.AVAILABLE)})
+        session.infer({'image': 'test', keys.ROBOT_STATUS: int(RobotStatus.ERROR)})
+        stopped = session.served_timing
+    finally:
+        session.close()
+
+    assert protocol.TIMING_MODEL not in stopped
+
+
 def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {})
     obs = {'obs': 'zeros'}
@@ -753,3 +853,22 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
         )
         status = sock.recv(64).split(b' ')[1]
     assert status == b'401'
+
+
+def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, make_mock_policy):
+    """Each layer the server wraps ships as ``<name>_ms``, nested from ``infer_ms`` down to ``model_ms``."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy._mock_session.side_effect = _slow_model
+    host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+        timing = session.served_timing
+    finally:
+        session.close()
+
+    # rules-allow: hardcoded-keys — the seam derives this key from the class name, so reading it back
+    # through _layer_name would assert the naming rule against itself.
+    assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+    assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS

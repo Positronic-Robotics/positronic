@@ -29,7 +29,6 @@ SPAN_RECORD_IO = 'record.io'
 # The rig-side stack between the harness and the wire. `policy.call` opens on every control tick,
 # including the ones a scheduling layer answers without inferring.
 SPAN_POLICY_CALL = 'policy.call'
-SPAN_POLICY_STACK = 'policy.stack'
 SPAN_POLICY_ENCODE = 'policy.encode'
 SPAN_POLICY_PREPARE = 'policy.prepare'
 SPAN_WIRE_SEND = 'wire.send'

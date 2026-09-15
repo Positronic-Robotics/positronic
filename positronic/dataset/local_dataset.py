@@ -40,6 +40,7 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+META_FILE = 'meta.json'
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -254,7 +255,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
 
-        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
+        with (self._path / META_FILE).open('w', encoding='utf-8') as f:
             json.dump(self._meta, f, indent=2)
 
         _clear_unfinished(self._path)
@@ -398,7 +399,7 @@ class DiskEpisode(Episode):
     def meta(self) -> dict:
         if self._meta is None:
             meta: dict[str, Any] = {}
-            meta_json = self._dir / 'meta.json'
+            meta_json = self._dir / META_FILE
             if meta_json.exists():
                 with meta_json.open('r', encoding='utf-8') as f:
                     try:
@@ -478,6 +479,9 @@ class LocalDataset(Dataset):
         for block_dir in sorted([p for p in self.root.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
             for ep_dir in sorted([p for p in block_dir.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
                 if (ep_dir / UNFINISHED_MARKER).exists():
+                    continue
+                # An S3 mirror writes a bucket's folder marker as an empty directory, which carries no identity.
+                if not (ep_dir / META_FILE).exists():
                     continue
                 ep_id = int(ep_dir.name)
                 self._episodes.append((ep_id, ep_dir))

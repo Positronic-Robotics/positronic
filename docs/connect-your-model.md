@@ -174,7 +174,7 @@ Implement a `Policy`, close a pipeline over it with `PolicySource`, and hand the
 
 ```python
 from positronic.drivers.roboarm import command
-from positronic.offboard import PolicyServer
+from positronic.offboard.server import PolicyServer
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset import Episode, edits
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import (
     UNFINISHED_MARKER,
     DiskEpisode,
@@ -194,6 +195,16 @@ def test_local_dataset_requires_existing_root(tmp_path):
         LocalDataset(missing_root)
 
     assert str(missing_root) in str(excinfo.value)
+
+
+def test_a_directory_without_meta_is_not_an_episode(tmp_path):
+    root = tmp_path / 'ds'
+    uids = [ep.meta[META_UID] for ep in build_dataset_with_signal(root, [0, 1])]
+    # An S3 mirror writes a bucket's folder marker as an empty directory
+    (root / '000000000000' / '000000000099').mkdir()
+
+    assert len(LocalDataset(root)) == 2
+    assert [ep.meta[META_UID] for ep in load_dataset(root)] == uids
 
 
 # --- load_all_datasets tests ---
