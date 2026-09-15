@@ -20,6 +20,9 @@ the same order.
 - The WebSocket wire is the default. A server serves gRPC only when `grpc_port` names a port.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
+- `ready` and `warm` are unary calls beside the session: HTTP routes under `/api/v1` on the
+  WebSocket wire, and the `Ready` and `Warm` methods on the same gRPC service. Both wires carry
+  JSON for them, so a person reads either answer with `curl` or `grpcurl`.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
   `positronic-session-query` and `authorization` metadata.
 - Take the gRPC wire wherever it reaches. Python's WebSocket stack spends about 30 ms per
@@ -65,6 +68,59 @@ curl http://localhost:8000/api/v1/models
 ```
 
 Use this to discover which models are available before connecting.
+
+#### `GET /api/v1/ready`
+
+What the server can do now, without opening a session.
+
+```bash
+curl http://localhost:8000/api/v1/ready
+```
+
+**Response:**
+```json
+{
+  "status": "ready",
+  "message": "Serving checkpoint 30000",
+  "checkpoint_id": "30000",
+  "inferences": 4,
+  "timing": {"served_ms": 41.2, "infer_ms": 38.9, "model_ms": 37.1},
+  "positronic_version": "0.2.1"
+}
+```
+
+`status` is one of `ready`, `loading`, `waiting` and `error`, and it holds only for the moment it answers.
+A ready server that loads another checkpoint answers `loading` again, with its port bound throughout, so a
+caller reads this verb as often as it needs the answer.
+
+`inferences` counts what the loaded checkpoint has answered, and `timing` carries the phases of the last
+one, under the keys the served `timing` block uses. A caller picks its own threshold from the two: an
+operator reads the word, a queue that must not score a cold model waits for a count above zero, and a
+report reads the numbers. Both go back to their starting values on every load.
+
+#### `POST /api/v1/warm`
+
+Asks the server to pay the first inference, so a scored episode does not. The body names the task the run
+uses, because the prompt is an input the model's first call is compiled against.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/warm -d '{"task": "pick up the red cube"}'
+```
+
+The answer is the record above, and it comes back at once: the server starts the warm and does not hold the
+call open, which a front with an idle close would drop. The caller then reads `/api/v1/ready` until the
+inference count moves. A second call while a warm runs starts no second one.
+
+How a server warms is its own business, and the protocol fixes only the states and the verbs. This server
+runs one real inference on the loaded checkpoint, which is the work a first episode would otherwise do. A
+server whose model source builds no warm observation runs nothing, and the count says so by staying at zero.
+
+#### A server that answers neither verb
+
+A server that serves sessions but not these verbs answers `UNIMPLEMENTED` on the gRPC wire and `404` on the
+HTTP one. The client reads either as the verb's absence and raises `wire.VerbUnsupported`. `new_session`
+opens the session and says once in its log that how warm the server is is unknown. A `404` from an address
+whose model catalogue does not answer either is a refusal rather than a server without the verb.
 
 #### `/api/v1/session`
 Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
@@ -290,8 +346,12 @@ meta = session.metadata
 action = session.infer(observation)
 ```
 
+`readiness()` answers what the server can do now, and `warm(task)` asks it to pay the first inference;
+`warm(task, wait_deadline=...)` reads the count again until it moves. Both raise `wire.VerbUnsupported`
+against a server too old to answer.
+
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
-cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
+cold. Each wait names what the server says it is doing, which the readiness verb answers. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
 

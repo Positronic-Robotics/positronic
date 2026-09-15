@@ -8,7 +8,7 @@ from typing import Any, Self
 
 import httpx
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 
 from . import protocol, wire, wires
 from .protocol import deserialise, serialise, typed_commands
@@ -23,6 +23,10 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One TCP/TLS handshake, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# One unary call, which answers off state the server already holds.
+DEFAULT_VERB_TIMEOUT = 30.0
+# How often ``warm(wait=True)`` reads the count again. A warm is a forward pass, not a load.
+WARM_POLL_SEC = 2.0
 
 
 class InferenceSession:
@@ -137,6 +141,31 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
+class _ConnectWaits:
+    """The log line each wait of one ``new_session`` writes.
+
+    The readiness verb names what the server is doing, where a refused connect names only that it was
+    refused. A server too old to answer the verb is asked once.
+    """
+
+    def __init__(self, client: 'InferenceClient'):
+        self._client = client
+        self._answers_ready = True
+
+    def line(self, not_ready: BaseException) -> str:
+        if self._answers_ready:
+            try:
+                state = self._client.readiness()
+            except wire.VerbUnsupported:
+                self._answers_ready = False
+            except (wire.ConnectRefused, OSError):
+                # The probe adds nothing here: ``not_ready`` already says the server answers nothing.
+                return f'Server not ready: {not_ready}'
+            else:
+                return f'Server answers {state.status} on {state.inferences} inferences: {state.message}'
+        return f'Server not ready, and too old to say how warm it is: {not_ready}'
+
+
 def _session_path(path: str, url: str) -> str:
     """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
 
@@ -169,6 +198,7 @@ class InferenceClient:
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        verb_timeout: float = DEFAULT_VERB_TIMEOUT,
     ):
         self._wire = client_wire
         self._address = address
@@ -178,6 +208,7 @@ class InferenceClient:
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
+        self.verb_timeout = verb_timeout
 
     @classmethod
     def from_url(
@@ -243,6 +274,7 @@ class InferenceClient:
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
         retries = _ConnectRetries()
+        waits = _ConnectWaits(self)
         while True:
             try:
                 return self._open_session()
@@ -257,9 +289,36 @@ class InferenceClient:
                 raise not_ready
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+            logger.info('%s; retrying in %.0fs', waits.line(not_ready), backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+
+    def readiness(self) -> protocol.Readiness:
+        """What the server says about itself now. Raises ``wire.VerbUnsupported`` where the server serves
+        sessions but not the verb."""
+        return protocol.Readiness.from_wire(
+            self._wire.call(self._address, wire.READY, {}, self.headers, self.verb_timeout)
+        )
+
+    def warm(self, task: str, wait_deadline: float = 0.0) -> protocol.Readiness:
+        """Ask the server to pay the first inference on ``task``, and answer what it says now.
+
+        The server starts the warm and does not wait for it, so the record comes back cold. A
+        ``wait_deadline`` above zero reads the count again until it moves, and gives up at that many
+        seconds. Raises ``wire.VerbUnsupported`` where the server does not answer the verb.
+        """
+        payload = {keys.TASK: task}
+        started = protocol.Readiness.from_wire(
+            self._wire.call(self._address, wire.WARM, payload, self.headers, self.verb_timeout)
+        )
+        if wait_deadline <= 0 or started.inferences > 0:
+            return started
+        deadline = time.monotonic() + wait_deadline
+        latest = started
+        while latest.inferences == 0 and time.monotonic() < deadline:
+            time.sleep(WARM_POLL_SEC)
+            latest = self.readiness()
+        return latest
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
