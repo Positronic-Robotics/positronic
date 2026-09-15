@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import re
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, ClassVar
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
@@ -110,6 +114,45 @@ class DelegatingSession(Session):
         self._inner.close()
 
 
+# Receives one timed session call: the phase's name, and its start and end on ``time.time_ns``. Whoever
+# owns the figures binds one with ``phases_to``; unbound, a timed call writes nothing.
+PhaseSink = Callable[[str, int, int], None]
+_phase_sink: ContextVar[PhaseSink | None] = ContextVar('phase_sink', default=None)
+
+
+@contextmanager
+def phases_to(sink: PhaseSink) -> Iterator[None]:
+    """Send every timed session call in the block to ``sink``."""
+    token = _phase_sink.set(sink)
+    try:
+        yield
+    finally:
+        _phase_sink.reset(token)
+
+
+class _TimedSession(DelegatingSession):
+    """Reports each call to the bound ``PhaseSink`` under ``phase``, the inner call's failure included."""
+
+    def __init__(self, inner: Session, phase: str):
+        super().__init__(inner)
+        self._phase = phase
+
+    def __call__(self, obs, time_ns):
+        sink = _phase_sink.get()
+        if sink is None:
+            return self._inner(obs, time_ns)
+        started = time.time_ns()
+        try:
+            return self._inner(obs, time_ns)
+        finally:
+            sink(self._phase, started, time.time_ns())
+
+
+def timed(session: Session, phase: str) -> Session:
+    """``session`` with each call reported to the bound ``PhaseSink`` as ``phase``."""
+    return _TimedSession(session, phase)
+
+
 class Policy(ABC):
     """Factory for inference sessions.
 
@@ -204,15 +247,35 @@ class Layer:
         return (self,)
 
 
+def _phase_base(layer: Layer) -> str:
+    wire_name = getattr(type(layer), 'WIRE_NAME', None)
+    return wire_name or re.sub(r'(?<!^)(?=[A-Z])', '_', type(layer).__name__.lstrip('_')).lower()
+
+
+def _phases_beneath(policy: Policy) -> Iterator[str]:
+    while isinstance(policy, DelegatingPolicy):
+        if isinstance(policy, _LayerPolicy):
+            yield policy.phase_base
+        policy = policy._inner
+
+
 class _LayerPolicy(DelegatingPolicy):
-    """Policy produced by ``Layer.wrap()``."""
+    """Policy produced by ``Layer.wrap()``. Every session it makes is timed under ``phase``.
+
+    ``phase`` is the layer's ``WIRE_NAME``, else its class name in snake case, with an ordinal when a
+    layer of the same name sits beneath it: the second ``temporal_stack`` from the inside is
+    ``temporal_stack_2``.
+    """
 
     def __init__(self, inner: Policy, layer: Layer):
         super().__init__(inner)
         self._layer = layer
+        self.phase_base = _phase_base(layer)
+        repeats = sum(1 for base in _phases_beneath(inner) if base == self.phase_base)
+        self.phase = self.phase_base if repeats == 0 else f'{self.phase_base}_{repeats + 1}'
 
     def new_session(self, context=None, rt=None):
-        return self._layer.make_session(self._inner.new_session(context, rt))
+        return timed(self._layer.make_session(self._inner.new_session(context, rt)), self.phase)
 
 
 class _ComposedLayer(Layer):

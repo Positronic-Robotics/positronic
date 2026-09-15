@@ -1,5 +1,6 @@
 """Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
+import time
 from typing import Any
 
 import numpy as np
@@ -10,10 +11,11 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import base as base_module
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import Layer, Policy, Session
+from positronic.policy.base import DelegatingSession, Layer, Policy, Session, phases_to
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -684,3 +686,88 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
+
+
+class _Marker(Layer):
+    """A layer that changes nothing, so a stack of them tests the seam alone."""
+
+    def make_session(self, inner: Session) -> Session:
+        return inner
+
+
+class _Named(_Marker):
+    WIRE_NAME = 'named'
+
+
+class _SlowLayer(Layer):
+    """Spends ``sleep_s`` above the inner call, so the figure under it reads smaller than its own."""
+
+    def __init__(self, sleep_s: float):
+        self._sleep_s = sleep_s
+
+    def make_session(self, inner: Session) -> Session:
+        sleep_s = self._sleep_s
+
+        class _Session(DelegatingSession):
+            def __call__(self, obs, time_ns):
+                time.sleep(sleep_s)
+                return self._inner(obs, time_ns)
+
+        return _Session(inner)
+
+
+class TestTimedLayers:
+    """Every layer in a stack reports its call to the bound ``PhaseSink``, named for the layer."""
+
+    @staticmethod
+    def _phases(pipeline: Layer) -> list[tuple[str, int, int]]:
+        taken: list[tuple[str, int, int]] = []
+        session = pipeline.wrap(_ConstPolicy([{'v': 1}])).new_session()
+        with phases_to(lambda name, start_ns, end_ns: taken.append((name, start_ns, end_ns))):
+            session(_obs(), 0)
+        return taken
+
+    def test_each_layer_in_a_stack_reports_under_its_own_name(self):
+        phases = self._phases(StopOnFault() | _Named() | _Marker())
+        assert [name for name, _, _ in phases] == ['marker', 'named', 'stop_on_fault']
+
+    def test_a_repeated_layer_takes_an_ordinal_counted_from_the_inside(self):
+        phases = self._phases(_Marker() | _Named() | _Marker() | _Marker())
+        assert [name for name, _, _ in phases] == ['marker', 'marker_2', 'named', 'marker_3']
+
+    def test_the_durations_nest_outer_around_inner(self):
+        phases = self._phases(_SlowLayer(0.01) | _SlowLayer(0.01))
+        (inner, inner_start, inner_end), (outer, outer_start, outer_end) = phases
+        assert (inner, outer) == ('slow_layer', 'slow_layer_2')
+        assert outer_start <= inner_start <= inner_end <= outer_end
+        assert outer_end - outer_start >= inner_end - inner_start + 10_000_000
+
+    def test_a_call_that_raises_is_still_reported(self):
+        class _Raising(Layer):
+            def make_session(self, inner: Session) -> Session:
+                class _Session(DelegatingSession):
+                    def __call__(self, obs, time_ns):
+                        raise RuntimeError('boom')
+
+                return _Session(inner)
+
+        taken: list[str] = []
+        session = (_Marker() | _Raising()).wrap(_ConstPolicy([])).new_session()
+        with phases_to(lambda name, *_: taken.append(name)), pytest.raises(RuntimeError, match='boom'):
+            session(_obs(), 0)
+        assert taken == ['raising', 'marker']
+
+    def test_an_unbound_sink_leaves_no_figure_and_no_reading_of_the_clock(self, monkeypatch):
+        policy = _ConstPolicy([{'v': 1}])
+        session = (_Marker() | _Named()).wrap(policy).new_session()
+        monkeypatch.setattr(base_module.time, 'time_ns', lambda: pytest.fail('the clock was read with no sink bound'))
+        assert session(_obs(), 0) == [{'v': 1}]
+        assert policy._session is not None and policy._session.call_count == 1
+
+    def test_the_sink_is_bound_for_the_block_and_no_longer(self):
+        taken: list[str] = []
+        session = _Marker().wrap(_ConstPolicy([])).new_session()
+        with phases_to(lambda name, *_: taken.append(name)):
+            session(_obs(), 0)
+        session(_obs(), 0)
+        assert taken == ['marker']

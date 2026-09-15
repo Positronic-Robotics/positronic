@@ -21,7 +21,7 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import DelegatingSession, Layer, Session
+from positronic.policy.base import Layer, phases_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
@@ -203,13 +203,18 @@ class _ServedTiming:
     @classmethod
     @contextmanager
     def opened(cls) -> Iterator['_ServedTiming']:
-        """Open the timing of one inference. ``_timed`` writes to it until the block ends."""
+        """Open the timing of one inference. ``_timed`` and every timed session write to it until the block ends."""
         timing = cls()
         token = _open_timing.set(timing)
         try:
-            yield timing
+            with phases_to(timing.take_phase):
+                yield timing
         finally:
             _open_timing.reset(token)
+
+    def take_phase(self, name: str, start_ns: int, end_ns: int) -> None:
+        """A ``PhaseSink``: one timed session call, filed under its wire key."""
+        self._phases[_phase_key(name)] = (end_ns - start_ns) / 1e6
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -235,19 +240,9 @@ def _timed(name: str) -> AbstractContextManager[None]:
     return nullcontext() if timing is None else timing.phase(name)
 
 
-class _ModelTimer(Layer):
-    """Time the model's own call as the ``TIMING_MODEL`` phase of the inference being served.
-
-    Wrap it under every codec and layer, so the figure holds the model alone.
-    """
-
-    class _Session(DelegatingSession):
-        def __call__(self, obs, time_ns):
-            with _timed(protocol.TIMING_MODEL):
-                return self._inner(obs, time_ns)
-
-    def make_session(self, inner: Session) -> Session:
-        return _ModelTimer._Session(inner)
+def _phase_key(name: str) -> str:
+    """The wire key of a timed phase: ``model`` ships as ``model_ms``."""
+    return f'{name}_ms'
 
 
 class PolicyServer:
@@ -388,7 +383,7 @@ class PolicyServer:
             policy = await self._manager.get_policy(rid, websocket)
             # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
             # above it sees one call per answer rather than one per call the answer took.
-            answered = _ModelTimer().wrap(blocking(policy))
+            answered = blocking(policy)
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
