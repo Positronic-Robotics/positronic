@@ -129,6 +129,7 @@ cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joint
 | `--pipeline.source.checkpoint` | Specific checkpoint ID | Latest | `10000`, `50000` |
 | `--port` | Server port | `8000` | `8001` |
 | `--uds` | Unix socket path to bind in place of `--host`/`--port` | `None` | `/run/policy.sock` |
+| `--grpc_port` | Port for the gRPC wire, served beside the websocket one | `None` | `8001` |
 | `--pipeline.source.modality_config` | Override the pipeline's paired modality config | Paired | `ee_rot6d_q` |
 
 **Session parameters:** a client can tune the served pipeline per connection via query params on the
