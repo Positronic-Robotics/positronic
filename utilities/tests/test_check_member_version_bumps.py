@@ -2,7 +2,9 @@
 
 import pytest
 
-from utilities import check_client_version_bump as gate
+from utilities import check_member_version_bumps as gate
+
+CLIENT = 'positronic-platform-client'
 
 
 def test_a_later_version_is_later():
@@ -52,10 +54,10 @@ def test_a_base_side_manifest_that_does_not_parse_abstains():
 
 
 def test_this_repositorys_own_manifest_that_does_not_parse_fails_closed():
-    # Named as guarded, it is the file the gate protects: present and unreadable is corrupt, not
-    # absent, and reading it as "no version declared" would skip the bump check on a broken client.
+    # Named as guarded, it is a file the gate protects: present and unreadable is corrupt, not
+    # absent, and reading it as "no version declared" would skip the bump check on a broken member.
     with pytest.raises(SystemExit):
-        gate.declared_version('[project\nname = "x"\n', guarded=gate.CLIENT_MANIFEST)
+        gate.declared_version('[project\nname = "x"\n', guarded='client/pyproject.toml')
 
 
 def manifest(*dependencies: str, trailing: str = '') -> str:
@@ -65,27 +67,27 @@ def manifest(*dependencies: str, trailing: str = '') -> str:
 
 
 def test_the_root_pin_is_read_from_a_dependency_list():
-    assert gate.pinned_version(manifest('positronic-platform-client==0.1.0', 'httpx')) == '0.1.0'
-    assert gate.pinned_version(manifest('httpx', 'positronic-platform-client == 2.10.3')) == '2.10.3'
+    assert gate.pinned_version(manifest('positronic-platform-client==0.1.0', 'httpx'), CLIENT) == '0.1.0'
+    assert gate.pinned_version(manifest('httpx', 'positronic-platform-client == 2.10.3'), CLIENT) == '2.10.3'
     # The name is matched as a distribution, so the spelling variants an index treats as one match.
-    assert gate.pinned_version(manifest('Positronic_Platform_Client==0.1.0')) == '0.1.0'
+    assert gate.pinned_version(manifest('Positronic_Platform_Client==0.1.0'), CLIENT) == '0.1.0'
 
 
 def test_a_relaxed_or_absent_pin_reads_as_no_pin():
     # Read as absent, and `check` treats that as a FAILURE rather than a reason to skip: deleting
     # the pin reaches the same stale-or-incompatible install as letting it lag.
-    assert gate.pinned_version(manifest('httpx', 'pydantic>=2')) is None
-    assert gate.pinned_version(manifest('positronic-platform-client')) is None
-    assert gate.pinned_version(manifest('positronic-platform-client>=0.1.0')) is None
-    assert gate.pinned_version(manifest('positronic-platform-client>=0.1.0,==0.1.0')) is None
+    assert gate.pinned_version(manifest('httpx', 'pydantic>=2'), CLIENT) is None
+    assert gate.pinned_version(manifest('positronic-platform-client'), CLIENT) is None
+    assert gate.pinned_version(manifest('positronic-platform-client>=0.1.0'), CLIENT) is None
+    assert gate.pinned_version(manifest('positronic-platform-client>=0.1.0,==0.1.0'), CLIENT) is None
 
 
 def test_a_conditional_pin_is_no_pin():
     # A marker that is false on every supported interpreter installs the client nowhere, while the
     # CLI imports `platform_client` unconditionally — so a fresh install fails at startup.
-    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version < '3'")) is None
-    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version >= '3'")) is None
-    assert gate.pinned_version(manifest('positronic-platform-client==0.2.0')) == '0.2.0'
+    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version < '3'"), CLIENT) is None
+    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version >= '3'"), CLIENT) is None
+    assert gate.pinned_version(manifest('positronic-platform-client==0.2.0'), CLIENT) == '0.2.0'
 
 
 def test_a_deleted_dependency_left_behind_as_a_comment_is_no_pin():
@@ -93,16 +95,16 @@ def test_a_deleted_dependency_left_behind_as_a_comment_is_no_pin():
     # text it reads as a live pin, which passes the missing-dependency case this gate exists to
     # refuse — so the dependency list is parsed, where a comment does not exist at all.
     left_behind = manifest('httpx', trailing='    # "positronic-platform-client==0.1.0",\n')
-    assert gate.pinned_version(left_behind) is None
+    assert gate.pinned_version(left_behind, CLIENT) is None
 
 
 def test_a_manifest_that_does_not_parse_fails_closed():
     # Present and unreadable is a corrupt guarded file, not an absence to skip past.
     with pytest.raises(SystemExit):
-        gate.pinned_version('[project\nname = "positronic"\n')
+        gate.pinned_version('[project\nname = "positronic"\n', CLIENT)
 
 
-def test_only_shipped_paths_under_the_client_demand_a_bump():
+def test_only_shipped_paths_under_the_member_demand_a_bump():
     paths = [
         'client/platform_client/responses.py',
         'client/README.md',
@@ -111,11 +113,42 @@ def test_only_shipped_paths_under_the_client_demand_a_bump():
     ]
     # The README ships in the wheel but cannot change what an install runs; the two paths outside
     # `client/` belong to the root distribution, which carries its own version.
-    assert gate.shipped_changes(paths) == ['client/platform_client/responses.py']
+    assert gate.shipped_changes(paths, 'client') == ['client/platform_client/responses.py']
 
 
-def test_a_client_test_counts_as_shipped():
+def test_a_member_test_counts_as_shipped():
     # It sits inside the package directory, so two revisions behind one version would differ.
-    assert gate.shipped_changes(['client/platform_client/tests/test_models.py']) == [
+    assert gate.shipped_changes(['client/platform_client/tests/test_models.py'], 'client') == [
         'client/platform_client/tests/test_models.py'
     ]
+
+
+def test_one_members_paths_are_not_anothers():
+    """The gate judges each member against its own manifest, so a change under one must not demand
+    a bump of the other — which would make every member's version move together."""
+    paths = ['vocabulary/eval_vocabulary/progress.py', 'client/platform_client/responses.py']
+
+    assert gate.shipped_changes(paths, 'vocabulary') == ['vocabulary/eval_vocabulary/progress.py']
+
+
+def test_the_members_come_from_the_root_workspace():
+    """Listed here, a member added later would publish ungated — which is the failure this gate
+    exists to catch, one level up."""
+    members = gate.workspace_members('[tool.uv.workspace]\nmembers = ["client", "vocabulary"]\n')
+
+    assert members == ['client', 'vocabulary']
+
+
+def test_this_repository_declares_every_member_this_gate_then_judges():
+    """The one that binds: a member added to the workspace without a manifest, or without a name,
+    raises rather than being skipped."""
+    root = (gate.REPO_ROOT / gate.ROOT_MANIFEST).read_text()
+
+    for member in gate.workspace_members(root):
+        manifest = (gate.REPO_ROOT / member / 'pyproject.toml').read_text()
+        assert gate.distribution_name(manifest, guarded=member)
+        assert gate.declared_version(manifest, guarded=member)
+
+
+def test_a_workspace_declaring_no_members_reads_as_none():
+    assert gate.workspace_members('[project]\nname = "positronic"\n') == []
