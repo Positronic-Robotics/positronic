@@ -13,11 +13,12 @@
 {% endblock %}
 
 {% block content %}
+{% from "_attribution.html" import attribution_line %}
 <main class="main">
     <header class="page-header">
         <div class="page-kicker">Group Explorer</div>
         <h1>{{ title }}</h1>
-        {% include "_attribution.html" %}
+        {{ attribution_line(attribution) }}
         <p id="dataset-stats">Loading dataset information...</p>
         <div class="dataset-info">
             <div id="loading-status" class="loading-status">

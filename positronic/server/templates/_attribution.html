@@ -1,1 +1,3 @@
+{% macro attribution_line(attribution) -%}
 {% if attribution %}<div class="attribution">by <a href="{{ attribution.url }}" target="_blank" rel="noopener">{{ attribution.label }}</a></div>{% endif %}
+{%- endmacro %}
