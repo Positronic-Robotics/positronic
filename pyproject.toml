@@ -29,6 +29,7 @@ dependencies = [
     "grpcio",
     "httpx",
     "msgpack",
+    "msgpack-numpy==0.4.8",
     "mujoco",
     "numpy",
     "opencv-python-headless",

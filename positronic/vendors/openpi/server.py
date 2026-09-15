@@ -16,7 +16,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Codec, Policy, Session
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
+from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -132,7 +132,7 @@ class _OpenpiSession(Session):
     def __call__(self, obs, time_ns):
         response = self._client.infer(obs)
         actions = response['actions']
-        return [{'action': a} for a in actions]
+        return [{ACTION: a} for a in actions]
 
 
 class OpenpiPolicy(Policy):
