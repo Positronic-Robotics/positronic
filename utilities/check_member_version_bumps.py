@@ -55,9 +55,10 @@ BASE_REV_ENV = 'RATCHET_BASE'
 
 ROOT_MANIFEST = 'pyproject.toml'
 
-# The distributions the root must pin exactly. A member it depends on by a FLOOR is deliberate and
-# is not listed: `positronic-eval-vocabulary` is append-only and read tolerantly.
-EXACTLY_PINNED = ('positronic-platform-client',)
+# The distributions the root must pin exactly, canonicalized so a manifest spelling the same name
+# another way is still held to it. A member the root depends on by a FLOOR is deliberate and is not
+# listed: `positronic-eval-vocabulary` is append-only and read tolerantly.
+EXACTLY_PINNED = frozenset(map(canonicalize_name, ('positronic-platform-client',)))
 
 # Changes that cannot reach the installed wheel. A test is NOT here: it ships inside the package
 # directory, and a reader comparing two revisions may expect the same code behind the same version.
@@ -222,7 +223,7 @@ def pin_failures(member: Member) -> list[str]:
     The pin travels with the version whether or not this change touched the member, so it is checked
     unconditionally: a bump that forgets the pin is the same stale install.
     """
-    if member.distribution not in EXACTLY_PINNED:
+    if canonicalize_name(member.distribution) not in EXACTLY_PINNED:
         return []
     pinned = pinned_version((REPO_ROOT / ROOT_MANIFEST).read_text(), member.distribution)
     if pinned is None:
@@ -261,7 +262,7 @@ def bump_failures(base: str, member: Member, edited: list[str]) -> list[str]:
     if is_later_version(was, member.version, member.manifest):
         return []
     moved = 'still' if was == member.version else f'moved BACKWARDS from {was} to'
-    pin = ' (and the root pin with it)' if member.distribution in EXACTLY_PINNED else ''
+    pin = ' (and the root pin with it)' if canonicalize_name(member.distribution) in EXACTLY_PINNED else ''
     return [
         f'{len(edited)} file(s) changed under {member.dir}/ with `version` {moved} {member.version}. '
         f'Bump it in {member.manifest}{pin}: the release publishes with `skip-existing`, so '

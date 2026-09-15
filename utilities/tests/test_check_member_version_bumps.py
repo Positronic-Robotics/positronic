@@ -1,6 +1,7 @@
 """The gate that keeps the client's code, its version, and the root's pin on it in step."""
 
 import pytest
+from packaging.utils import canonicalize_name
 
 from utilities import check_member_version_bumps as gate
 
@@ -148,6 +149,12 @@ def test_this_repository_declares_every_member_this_gate_then_judges():
         manifest = (gate.REPO_ROOT / member / 'pyproject.toml').read_text()
         assert gate.distribution_name(manifest, guarded=member)
         assert gate.declared_version(manifest, guarded=member)
+
+
+def test_a_member_spelled_another_way_is_still_held_to_its_pin():
+    """`EXACTLY_PINNED` is matched the way an index matches a name, so a manifest declaring
+    `Positronic_Platform_Client` does not slip the pin requirement on a spelling."""
+    assert canonicalize_name('Positronic_Platform_Client') in gate.EXACTLY_PINNED
 
 
 def test_a_workspace_declaring_no_members_reads_as_none():
