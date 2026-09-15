@@ -89,9 +89,8 @@ class WebsocketClientWire(wire.ClientWire):
     def session_url(self, address: wire.SessionAddress) -> str:
         if address.uds is None:
             return super().session_url(address)
-        # ``dial`` reads ``uds``, so this reads it too: a URL that named a socket must name one back.
-        # Spell it as the URL wrote it, since a decoded ``?`` or ``#`` reads as a delimiter and names
-        # another socket; an address built in code carries no spelling, so the dialled path is it.
+        # FOOTGUN: spell the path as the URL wrote it. A decoded ``?`` or ``#`` reads as a delimiter,
+        # so re-encoding a round trip through this URL would name a different socket.
         query = f'?{address.query}' if address.query else ''
         return f'{wire.UNIX_SCHEME}://{address.uds_as_written or quote(address.uds)}{address.path}{query}'
 
