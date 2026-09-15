@@ -2206,9 +2206,9 @@ def test_uncharged_chunks_have_no_extra_control_tick(world, wall_sec):
 
 @pytest.mark.timeout(20.0)
 def test_a_charged_call_costs_the_trial_the_time_the_model_is_out(world):
-    """``charge_inference_time=True`` keeps the loop stepping while the model is out, so the trial pays for
-    that time and a slow server is scored as slow. The function here answers 0.2s of world time past the
-    observation, and the chunk it returns cannot be played before that."""
+    """``charge_inference_time=True`` keeps the loop stepping while the model is out, so the world runs on
+    while it does. The function here answers 0.2s of world time past the observation, and the chunk it
+    returns cannot be played before that."""
     released = threading.Event()
     policy = ServedPolicy(_HeldInferenceSession(slow_chunk(), released))
     played = _run_episode(
