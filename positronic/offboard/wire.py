@@ -5,8 +5,10 @@ A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
 
 import abc
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar, NamedTuple
+from urllib.parse import unquote
 
 from starlette.datastructures import QueryParams
 
@@ -30,7 +32,8 @@ def bracket_ipv6(host: str) -> str:
     return f'[{host}]' if ':' in host else host
 
 
-class SessionAddress(NamedTuple):
+@dataclass(frozen=True)
+class SessionAddress:
     """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
 
     ``uds`` is the Unix socket path to dial, decoded, and it alone decides that a session goes over a
@@ -46,6 +49,12 @@ class SessionAddress(NamedTuple):
     secure: bool
     uds: str | None = None
     uds_as_written: str | None = None
+
+    def __post_init__(self) -> None:
+        # FOOTGUN: one address, one socket. A spelling that decodes to another path would name a socket
+        # nobody dials, and a client rebuilt from that URL would reach it.
+        if self.uds_as_written is not None and unquote(self.uds_as_written) != self.uds:
+            raise ValueError(f'{self.uds_as_written!r} spells a different socket from the one dialled, {self.uds!r}')
 
     @property
     def netloc(self) -> str:

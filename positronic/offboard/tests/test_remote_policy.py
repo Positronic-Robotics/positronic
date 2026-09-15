@@ -256,6 +256,18 @@ class TestInferenceClientUrl:
         assert client.uds == '/run/odd?name.sock'
         assert client.session_url == 'unix:///run/odd%3Fname.sock/api/v1/session'
 
+    def test_an_address_cannot_name_one_socket_and_dial_another(self):
+        with pytest.raises(ValueError, match='different socket'):
+            wire.SessionAddress(
+                host='localhost',
+                port=0,
+                path='/api/v1/session',
+                query='',
+                secure=False,
+                uds='/run/a.sock',
+                uds_as_written='/run/b.sock',
+            )
+
     def test_a_socket_path_ends_at_the_api_segment(self):
         client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')
         assert client.uds == '/run/policy.sock'
