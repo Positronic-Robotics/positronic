@@ -198,27 +198,6 @@ class _FakeInferenceSession(InferenceSession):
         pass
 
 
-class _HeldInferenceSession(_FakeInferenceSession):
-    """A function the test ends: it reports the instant it began on ``entered``, and answers once the test
-    calls ``release``. The trial then pays a world duration for it, which no stall can shorten."""
-
-    def __init__(self, action: list[dict[str, Any]]) -> None:
-        super().__init__(action)
-        self.entered = threading.Event()
-        self._released = threading.Event()
-
-    def release(self) -> None:
-        self._released.set()
-
-    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
-        self.entered.set()
-        # This bound expires inside the 10 s timeout of the tests that hold a function, so the failure
-        # names the release that never came.
-        if not self._released.wait(timeout=5.0):
-            raise AssertionError('the function was never released')
-        return super().infer(obs)
-
-
 class ServedPolicy(Policy):
     """A policy whose model runs in a served function: a real ``RemoteSession`` over the ``InferenceSession``
     it is given, so its inference round-trips ``RemoteSession.__call__`` and records the ``policy.infer``
@@ -1449,6 +1428,27 @@ def test_an_ask_the_world_stops_before_is_answered(world):
         answer.result()
 
 
+class _HeldInferenceSession(_FakeInferenceSession):
+    """A function the test ends: it sets ``entered`` as it begins, and answers once the test calls
+    ``release``."""
+
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        super().__init__(action)
+        self.entered = threading.Event()
+        self._released = threading.Event()
+
+    def release(self) -> None:
+        self._released.set()
+
+    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        self.entered.set()
+        # This bound expires inside the 10 s timeout of the tests that hold a function, so the failure
+        # names the release that never came.
+        if not self._released.wait(timeout=5.0):
+            raise AssertionError('the function was never released')
+        return super().infer(obs)
+
+
 class _FrameWatchingSession(_HeldInferenceSession):
     """Reads its camera frame at both ends of a function the test releases, so a rewrite underneath it shows
     up as a difference."""
@@ -2143,12 +2143,12 @@ def _run_episode(
     steps=4000,
     run_sec=1.5,
     held: _HeldInferenceSession | None = None,
-    release_at: float = 0.0,
+    hold_sec: float = 0.0,
 ) -> list[tuple[float, Any]]:
     """One trial run with ``charge_inference_time``; returns the grip commands with the world time each went
     out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need.
 
-    ``held`` is released ``release_at`` seconds of world time after it begins, and its answer is in before
+    ``held`` is released ``hold_sec`` seconds of world time after it begins, and its answer is in before
     the world runs on: the trial pays that duration for it, whatever the machine does meanwhile.
     """
     wrapped = layer.wrap(policy)
@@ -2180,7 +2180,7 @@ def _run_episode(
     if held is not None:
         drive_until(scheduler, held.entered.is_set, max_steps=steps)
         began = world.clock.now()
-        drive_until(scheduler, lambda: world.clock.now() >= began + release_at, max_steps=steps)
+        drive_until(scheduler, lambda: world.clock.now() >= began + hold_sec, max_steps=steps)
         held.release()
         perform_task.wait_for_functions()
     drive_scheduler(scheduler, steps=steps)
@@ -2221,7 +2221,7 @@ def test_a_charged_call_costs_the_trial_the_time_the_model_is_out(world):
     returns cannot be played before that."""
     held = _HeldInferenceSession(slow_chunk())
     played = _run_episode(
-        world, ServedPolicy(held), ChunkedSchedule(), charge_inference_time=True, held=held, release_at=0.2
+        world, ServedPolicy(held), ChunkedSchedule(), charge_inference_time=True, held=held, hold_sec=0.2
     )
 
     assert played, 'no command was played'
@@ -2240,7 +2240,7 @@ def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
         charge_inference_time=False,
         simulated=False,
         held=held,
-        release_at=0.2,
+        hold_sec=0.2,
     )
 
     assert played, 'no command was played'
