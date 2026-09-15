@@ -93,6 +93,12 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
 
+## Public VLM / LLM APIs
+
+The [LLM policy](../positronic/vendors/llm/README.md) calls OpenAI, Anthropic, Google, or an OpenAI-compatible endpoint directly from the rig. It needs no Positronic inference server. Install `uv sync --extra llm` and select `--policy=@positronic.vendors.llm.policy.llm` with a model name and provider credentials.
+
+The model sees measured hand state and camera images, then requests one bounded absolute hand move at a time. The existing robot driver performs inverse kinematics. Each episode has its own conversation and transcript.
+
 ## Who Decides Episode Boundaries
 
 Something has to say when an episode starts and when it finishes. There are two answers, one command each:
@@ -100,6 +106,8 @@ Something has to say when an episode starts and when it finishes. There are two 
 **Unattended — `positronic eval run`:** a driver walks the eval's tasks, `--eval.trial_count=10` episodes back-to-back. Each ends when its benchmark reports the task done, or when the task's timeout expires (`--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
 **Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
+
+A policy can also request an end through `Session.stop_requested`. The harness records `eval.ended_by=policy` without setting `eval.success`. An external terminal or an expired deadline takes precedence. Ending clears scheduled commands and cancels outstanding inference before the runtime and session close.
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the session the episode runs on and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 

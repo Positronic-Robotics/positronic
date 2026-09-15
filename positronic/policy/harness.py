@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 from opentelemetry.trace import Span
@@ -42,7 +43,8 @@ class Rollout:
         self.output_path = output_path
         # The Harness charges the trial for the model's time through this runtime. TODO(#661): the framework
         # takes over the chain, and only the charge keeps a runtime here.
-        self.rt = Executor(policy.functions)
+        artifacts = output_path / 'policy' / uuid4().hex if output_path is not None else None
+        self.rt = Executor(policy.functions, artifact_dir=artifacts)
         try:
             self.session = policy.new_session(rt=self.rt)
         except BaseException:
@@ -55,6 +57,7 @@ class Rollout:
         Until ``Executor.close`` returns, the function in flight still holds the session's connection or model.
         """
         logging.info('Rollout.close: closing the runtime')
+        self.session.cancel()
         self.rt.close()
         logging.info('Rollout.close: runtime closed, closing the session')
         self.session.close()
@@ -74,6 +77,13 @@ class _EpisodeInference:
     @property
     def meta(self) -> dict[str, Any]:
         return self._rollout.session.meta
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._rollout.session.stop_requested
+
+    def cancel(self) -> None:
+        self._rollout.session.cancel()
 
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
@@ -280,6 +290,8 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
+        assert self._inference is not None
+        self._inference.cancel()
         # Stamped before the inference is retired: the meta overlays what its session reports.
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
@@ -367,7 +379,10 @@ class Harness(pimm.ControlSystem):
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
-        if (trajectory := inference(obs)) is not None:
+        trajectory = inference(obs)
+        if inference.stop_requested:
+            self._reschedule([], clock)
+        elif trajectory is not None:
             self._reschedule(trajectory, clock)
         inference.wait(should_stop)
 
@@ -413,6 +428,8 @@ class Harness(pimm.ControlSystem):
             return {**done.data, eval_keys.TERMINATED: True}
         if deadline_ns is not None and clock.now_ns() >= deadline_ns:
             return {eval_keys.TERMINATED: False}
+        if self._inference is not None and self._inference.stop_requested:
+            return {eval_keys.TERMINATED: True, eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY}
         return None
 
     def _guarded(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

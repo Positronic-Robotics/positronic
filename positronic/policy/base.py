@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, ClassVar
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
@@ -46,6 +47,11 @@ class Runtime(ABC):
     def fns(self) -> Mapping[str, Fn]:
         """The policy's functions, under the names it declared them by."""
 
+    @property
+    def artifact_dir(self) -> Path | None:
+        """Directory for this session's supplementary recordings; ``None`` when recording is disabled."""
+        return None
+
 
 class Session(ABC):
     """Per-episode inference session. Created by ``Policy.new_session()``.
@@ -82,6 +88,11 @@ class Session(ABC):
         """What this session reports about its model and its episode."""
         return {}
 
+    @property
+    def stop_requested(self) -> bool:
+        """Whether the policy asks to end the episode. This makes no claim about task success."""
+        return False
+
     def cancel(self):
         """Drop any in-flight trajectory state. Layers that buffer/schedule a
         trajectory (e.g. ``ChunkedSchedule``) should reset so the next call
@@ -106,6 +117,10 @@ class DelegatingSession(Session):
     @property
     def meta(self):
         return self._inner.meta
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._inner.stop_requested
 
     def cancel(self):
         self._inner.cancel()

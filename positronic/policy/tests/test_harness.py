@@ -767,6 +767,57 @@ def test_trial_ends_at_its_timeout(world):
     assert eval_keys.SUCCESS not in stops[0].static_data
 
 
+@pytest.mark.parametrize('external', [False, True])
+def test_policy_stop_finalizes_without_claiming_success_and_external_done_wins(world, external):
+    class StoppingSession(_StubSession):
+        @property
+        def stop_requested(self):
+            return requested.is_set()
+
+    class StoppingPolicy(StubPolicy):
+        def new_session(self, context=None, rt=None):
+            return StoppingSession(self)
+
+    requested = threading.Event()
+    policy = (StopOnFault() | ChunkedSchedule()).wrap(StoppingPolicy())
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy)
+    scheduler = world.start([harness])
+    answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None))
+    drive_scheduler(scheduler, steps=5)
+    requested.set()
+    if external:
+        p['done_em'].emit({eval_keys.SUCCESS: True})
+    drive_scheduler(scheduler, steps=10)
+    assert answer.done()
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
+    assert meta[eval_keys.TERMINATED] is True
+    if external:
+        assert meta[eval_keys.SUCCESS] is True
+        assert eval_keys.ENDED_BY not in meta
+    else:
+        assert meta[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert eval_keys.SUCCESS not in meta
+
+
+def test_rollouts_have_distinct_artifact_directories_only_when_recorded(tmp_path):
+    task = Task(instruction_source='test', timeout_sec=None)
+    first = Rollout(task, StubPolicy(), tmp_path)
+    second = Rollout(task, StubPolicy(), tmp_path)
+    unrecorded = Rollout(task, StubPolicy(), None)
+    try:
+        assert first.rt.artifact_dir is not None
+        assert first.rt.artifact_dir.is_relative_to(tmp_path)
+        assert first.rt.artifact_dir != second.rt.artifact_dir
+        assert unrecorded.rt.artifact_dir is None
+    finally:
+        first.close()
+        second.close()
+        unrecorded.close()
+
+
 @pytest.mark.timeout(3.0)
 def test_trial_budget_starts_when_the_rig_is_ready(world):
     """The 0.05 budget is measured from the end of the prepare, not from the ask: the 0.2 the scene takes to
