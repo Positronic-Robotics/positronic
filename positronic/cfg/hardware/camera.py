@@ -33,8 +33,7 @@ def zed(**kwargs):
 
 zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
-# Serial 13785037 is a ZED-M, so the name and the hardware disagree (Positronic-Robotics/internal#1297).
-zed_2i_second = zed.override(serial_number=13785037)
+zed_2i_second = zed.override(serial_number=39058547)
 
 _DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
 
