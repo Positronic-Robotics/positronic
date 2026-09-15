@@ -212,9 +212,9 @@ class _HeldInferenceSession(_FakeInferenceSession):
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         self.entered.set()
-        # The bound is there so a test that never releases it fails rather than hanging the process on a
-        # worker thread.
-        if not self._released.wait(timeout=30.0):
+        # Under the smallest timeout of the tests that hold one, so the test fails on this rather than on
+        # a pytest timeout that names nothing.
+        if not self._released.wait(timeout=5.0):
             raise AssertionError('the function was never released')
         return super().infer(obs)
 
