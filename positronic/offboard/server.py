@@ -386,7 +386,7 @@ class PolicyServer:
             listens = (
                 {offboard_keys.HOST: endpoint.host, offboard_keys.PORT: endpoint.port}
                 if endpoint.uds is None
-                else {offboard_keys.UDS: endpoint.uds}
+                else {offboard_keys.UDS: str(endpoint.uds)}
             )
             meta = {
                 **listens,

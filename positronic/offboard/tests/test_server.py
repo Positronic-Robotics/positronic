@@ -589,7 +589,7 @@ def test_a_socket_path_carrying_url_escapes_is_dialled_as_a_filename(start_unix_
 
     client = InferenceClient.from_url(f'unix://{urllib.parse.quote(uds)}')
 
-    assert client._address.uds == uds
+    assert str(client._address.uds) == uds
     assert client.list_models() == ['stub']
     session = client.new_session()
     try:

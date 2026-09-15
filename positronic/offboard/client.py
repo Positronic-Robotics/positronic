@@ -4,6 +4,7 @@ import time
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self
 
@@ -138,7 +139,7 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str, str]:
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[Path, str, str]:
     """The socket path a ``unix://`` URL names — decoded to dial, as written to name — and the URL
     path left over for the server.
 
@@ -155,7 +156,7 @@ def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, st
     written = split.path if marker is None else split.path[: marker.start()]
     if not written:
         raise ValueError(f'No socket path in {url!r}; write unix:///path/to.sock/api/v1/session')
-    return urllib.parse.unquote(written), written, ('' if marker is None else split.path[marker.start() :])
+    return Path(urllib.parse.unquote(written)), written, ('' if marker is None else split.path[marker.start() :])
 
 
 def _session_path(path: str, url: str) -> str:
@@ -307,7 +308,7 @@ class InferenceClient:
         """List available models from the server."""
         if self.api_url is None:
             raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        transport = None if self._address.uds is None else httpx.HTTPTransport(uds=self._address.uds)
+        transport = None if self._address.uds is None else httpx.HTTPTransport(uds=str(self._address.uds))
         with httpx.Client(transport=transport) as client:
             response = client.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
         response.raise_for_status()

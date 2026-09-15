@@ -1,6 +1,7 @@
 import threading
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -49,8 +50,8 @@ _ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=
 
 
 def _dialled_socket(client: InferenceClient) -> str | None:
-    """The socket path ``client`` would hand ``unix_connect``, decoded."""
-    return client._address.uds
+    """The socket path ``client`` would hand ``unix_connect``, decoded, as text to compare."""
+    return None if client._address.uds is None else str(client._address.uds)
 
 
 def _mock_session(metadata=None):
@@ -251,7 +252,7 @@ class TestInferenceClientUrl:
     def test_an_address_built_in_code_still_names_its_socket_back(self):
         """``uds`` alone decides the transport, so a URL built from it names the socket the client dials."""
         address = wire.SessionAddress(
-            host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds='/run/policy.sock'
+            host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds=Path('/run/policy.sock')
         )
         assert websocket_wire.WebsocketClientWire().session_url(address) == 'unix:///run/policy.sock/api/v1/session'
 
@@ -269,7 +270,7 @@ class TestInferenceClientUrl:
                 path='/api/v1/session',
                 query='',
                 secure=False,
-                uds='/run/a.sock',
+                uds=Path('/run/a.sock'),
                 uds_as_written='/run/b.sock',
             )
 
@@ -277,13 +278,15 @@ class TestInferenceClientUrl:
         """A relative path reads back as the URL's authority, so no URL could name that socket."""
         with pytest.raises(ValueError, match='relative socket path'):
             wire.SessionAddress(
-                host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds='policy.sock'
+                host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds=Path('policy.sock')
             )
 
     @pytest.mark.parametrize('uds', ['/tmp/api/v1/policy.sock', '/api/v1/policy.sock'])
     def test_a_socket_under_an_api_directory_round_trips(self, uds):
         """The URL escapes the marker inside the path, so reparsing ends the socket where it began."""
-        address = wire.SessionAddress(host='localhost', port=0, path=wire.SESSION_PATH, query='', secure=False, uds=uds)
+        address = wire.SessionAddress(
+            host='localhost', port=0, path=wire.SESSION_PATH, query='', secure=False, uds=Path(uds)
+        )
         url = websocket_wire.WebsocketClientWire().session_url(address)
         assert _dialled_socket(InferenceClient.from_url(url)) == uds
 
