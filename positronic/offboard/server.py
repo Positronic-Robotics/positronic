@@ -197,7 +197,8 @@ class _ServedTiming:
     """
 
     def __init__(self) -> None:
-        self._opened = time.perf_counter()
+        # The wall clock, which stamps every ``PhaseSink`` call: one report, one clock.
+        self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
 
     @classmethod
@@ -218,15 +219,15 @@ class _ServedTiming:
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
-        started = time.perf_counter()
+        started = time.time_ns()
         try:
             yield
         finally:
-            self._phases[name] = (time.perf_counter() - started) * 1000.0
+            self._phases[name] = (time.time_ns() - started) / 1e6
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
-        return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
+        return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
 
 # The ``_ServedTiming`` of the inference this task serves. ``asyncio.to_thread`` copies the context, so the
