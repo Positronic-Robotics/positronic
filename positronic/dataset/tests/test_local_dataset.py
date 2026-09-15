@@ -554,6 +554,18 @@ def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
     assert episode_ids(load_dataset(root)[:]) == [0]
 
 
+def test_edited_view_keeps_episode_directory_without_meta(tmp_path):
+    root = tmp_path / 'ds'
+    uids = [ep.meta['uid'] for ep in build_dataset_with_signal(root, [0, 1])]
+    # An S3 mirror writes a folder marker as an empty directory, which LocalDataset reads as an episode
+    (root / '000000000000' / '000000000099').mkdir()
+    assert len(load_dataset(root)) == 3
+
+    load_dataset(root).drop(uids[1])
+
+    assert [ep.meta.get('uid') for ep in load_dataset(root)] == [uids[0], None]
+
+
 def test_overlay_skips_dropped_episode_with_colliding_edit(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])

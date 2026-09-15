@@ -107,7 +107,8 @@ class EditedDataset(Dataset):
         self._base = base
         self._edits_dir = Path(edits_dir)
         self._statics, self._dropped = _load_edits(self._edits_dir)
-        self._kept = FilterDataset(base, lambda ep: ep.meta[META_UID] not in self._dropped)
+        # A recording directory with no meta.json carries no uid, and no drop record can name it.
+        self._kept = FilterDataset(base, lambda ep: ep.meta.get(META_UID) not in self._dropped)
 
     def __len__(self) -> int:
         return len(self._kept)
