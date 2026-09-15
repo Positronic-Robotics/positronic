@@ -143,6 +143,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
 {% endblock %}
 
 {% block content %}
+{% from "_attribution.html" import attribution_line %}
 <main class="main main--full-screen">
     <div class="header">
         <div class="breadcrumbs">
@@ -162,6 +163,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             </span>
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
+        {{ attribution_line(attribution) }}
     </div>
     <div class="episode-info-header">
         {% if (show_paths and episode_path) or episode_size_mb %}
