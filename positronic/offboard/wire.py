@@ -22,9 +22,8 @@ MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
 class Verb(NamedTuple):
     """One unary call beside the session, and the spelling each wire gives it.
 
-    ``ready`` asks what the server can do now, and ``warm`` asks it to pay the first inference, naming
-    the run's task under ``positronic.keys.TASK``. Both answer one ``protocol.Readiness`` record and
-    neither opens a session, so a caller reads the answer as often as it needs it.
+    ``ready`` asks what the server can do now, and ``warm`` asks it to warm, naming the run's task under
+    ``positronic.keys.TASK``. Both answer one ``protocol.Readiness`` record and neither opens a session.
     """
 
     name: str

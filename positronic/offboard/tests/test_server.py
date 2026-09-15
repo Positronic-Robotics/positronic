@@ -923,7 +923,6 @@ class TestReadinessVerbs:
         assert state.timing[protocol.TIMING_SERVED] >= 0
 
     def test_a_load_after_the_server_was_ready_reports_loading_again(self, start_server, make_mock_policy):
-        """Readiness is the state now, and it comes back: a ready server loads again and stops being ready."""
         source = _HeldSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
         source.release.set()
         host, port, *_ = start_server(ChunkedSchedule() | remote | source)
