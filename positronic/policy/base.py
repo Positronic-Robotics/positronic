@@ -1,13 +1,13 @@
-"""Typed processors, their construction recipes, and the runtime that serves them."""
+"""Reusable processors, their episode generators, and the runtime that serves them."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
-from copy import deepcopy
+from collections.abc import Callable, Generator, Mapping
 from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
 from attr import dataclass
+from typing_extensions import TypeAliasType
 
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
@@ -50,13 +50,18 @@ class Step:
 
 
 P = ParamSpec('P')
+InputT = TypeVar('InputT')
+OutputT = TypeVar('OutputT')
+
+ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, None], type_params=(InputT, OutputT))
 
 
 class Runtime(ABC):
-    """What the framework offers one session. Every session gets its own.
+    """What the framework offers one episode. Every episode gets its own.
 
-    Closed before the session it serves: a call still in flight is using what that session holds.
+    At episode shutdown, drain submitted work before closing live generators whose resources it may use.
 
+    TODO: Define how generators report episode metadata.
     TODO: Expose per-processor and submitted-call timings through the runtime.
     """
 
@@ -72,99 +77,80 @@ class Runtime(ABC):
         """The current tick number."""
         pass
 
+    def start(
+        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT]:
+        """Create and prime an episode generator. The caller owns its closure."""
+        run = processor.run(self, *args, **kwargs)
+        initial = next(run)
+        if initial is not None:
+            run.close()
+            raise AssertionError('a processor must yield None before receiving its first input')
+        return run
+
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
 
 
-InputT = TypeVar('InputT')
-OutputT = TypeVar('OutputT')
-
-
 class Processor(ABC, Generic[InputT, OutputT]):
-    """An episode-scoped computation with typed inputs and outputs."""
+    """A reusable computation definition with typed inputs and outputs.
+
+    Constructors hold configuration. Each ``run`` creates one episode's generator, keeping mutable
+    episode state in its locals. ``Runtime.start`` advances it to its first yield, which must be
+    ``None``, after which ``send(input)`` returns one output. Dependencies are supplied live and already
+    primed when they are generators. Whoever starts a generator owns its closure.
+    """
 
     # A receiver resolves this name through its registry of installed processor classes.
     WIRE_NAME: ClassVar[str | None] = None
 
-    def __init__(self, runtime: Runtime) -> None:
-        self._runtime = runtime
-
     @abstractmethod
-    def __call__(self, value: InputT) -> OutputT: ...
-
-    def close(self) -> None:
-        return None
+    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
 
     def meta(self) -> dict[str, Any]:
-        """What this processor reports about its computation and its episode."""
+        """Model and configuration metadata shared across episodes."""
         return {}
+
+    def to_spec(self) -> dict[str, Any]:
+        """A registered name and plain-data constructor arguments, for deliverable processors.
+
+        TODO: Have the wire-spec loader construct processor definitions from registered names.
+        """
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
 
 Policy = Processor[Obs, Step]
+PolicyRun = ProcessorRun[Obs, Step]
 
 
-ProcessorT = TypeVar('ProcessorT', bound=Processor[Any, Any])
+class Sequential(Processor[InputT, OutputT]):
+    """Nest processor definitions, with the first outermost.
 
-
-class Factory(Generic[ProcessorT]):
-    """A processor constructor and its configuration, reusable across episodes.
-
-    Configured arguments are copied for each build. Supply live dependencies, such as child
-    processors or inference callables, to ``build`` after the runtime; they are passed by reference.
-    ``to_spec`` describes only the constructor and configuration, without creating episode state.
-
-    TODO: Have the wire-spec loader resolve registered names into factories before building a stack.
+    ``runtime.start(Sequential(A(...), B(...)), infer)`` passes ``infer`` to B's generator and B's
+    generator to A. Each processor controls when and how often it sends inputs to its child.
+    This sequence owns the generators it creates; external dependencies remain owned by their caller.
     """
 
-    def __init__(self, processor: type[ProcessorT], /, **kwargs: Any) -> None:
-        self._processor = processor
-        self._kwargs = deepcopy(kwargs)
-
-    def build(self, runtime: Runtime, /, *dependencies: Any) -> ProcessorT:
-        """Create a fresh processor with positional dependencies followed by configured keywords."""
-        return self._processor(runtime, *dependencies, **deepcopy(self._kwargs))
-
-    @staticmethod
-    def _spec_value(value: Any) -> Any:
-        if value is None or isinstance(value, (bool, int, float, str, bytes)):
-            return value
-        if isinstance(value, (tuple, list)):
-            return [Factory._spec_value(item) for item in value]
-        if isinstance(value, dict):
-            if not all(isinstance(key, str) for key in value):
-                raise TypeError('Wire-spec argument dictionaries must have string keys')
-            return {key: Factory._spec_value(item) for key, item in value.items()}
-        raise TypeError(f'{type(value).__name__} is not a wire-spec argument')
-
-    def to_spec(self) -> dict[str, Any]:
-        """Describe construction using a registered name and plain-data keyword arguments."""
-        name = self._processor.WIRE_NAME
-        if name is None:
-            raise TypeError(f'{self._processor.__name__} has no wire name')
-        spec: dict[str, Any] = {'name': name}
-        if self._kwargs:
-            spec['args'] = self._spec_value(self._kwargs)
-        return spec
-
-
-class Sequential(Generic[ProcessorT]):
-    """Nest processor factories, with the first outermost and a child supplied at build time.
-
-    ``Sequential(Factory(A), Factory(B)).build(runtime, child)`` constructs
-    ``A(runtime, B(runtime, child))``. Each processor controls calls to its child.
-    """
-
-    def __init__(
-        self, first: Factory[ProcessorT] | Sequential[ProcessorT], /, *rest: Factory[Any] | Sequential[Any]
-    ) -> None:
+    def __init__(self, first: Processor[InputT, OutputT], /, *rest: Processor[Any, Any]) -> None:
         self._first = first
         self._rest = rest
 
-    def build(self, runtime: Runtime, inner: Callable[..., Any]) -> ProcessorT:
-        """Build inside out, passing each newly created processor to its parent."""
-        for factory in reversed(self._rest):
-            inner = factory.build(runtime, inner)
-        return self._first.build(runtime, inner)
+    def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT]:
+        children: list[ProcessorRun[Any, Any]] = []
+        try:
+            for processor in reversed((self._first, *self._rest)):
+                child = runtime.start(processor, *dependencies)
+                children.append(child)
+                dependencies = (child,)
+            value = yield
+            while True:
+                value = yield children[-1].send(value)
+        finally:
+            for child in reversed(children):
+                child.close()
+
+    def meta(self) -> dict[str, Any]:
+        return self._first.meta()
 
     def to_spec(self) -> dict[str, Any]:
-        return {SEQ: [factory.to_spec() for factory in (self._first, *self._rest)]}
+        return {SEQ: [processor.to_spec() for processor in (self._first, *self._rest)]}

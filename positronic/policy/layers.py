@@ -1,18 +1,17 @@
 """Policy processors for scheduling, fault handling, and temporal frame stacking.
 
-Processors receive their runtime and child callables at construction. Control processors return a
-``Step`` containing commands and the next wake-up time on the runtime's clock.
+Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
+locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
 
-Use factories to describe a local stack without creating episode state::
+Describe a local stack without creating episode state::
 
-    from positronic.policy.base import Factory, Sequential
+    from positronic.policy.base import Sequential
 
     definition = Sequential(
-        Factory(StopOnFault),
-        Factory(TemporalStack, keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)),
-        Factory(ChunkedSchedule, fps=20),
+        StopOnFault(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)
     )
-    policy = definition.build(runtime, infer)
+    episode = runtime.start(definition, infer)
+    step = episode.send(obs)
 """
 
 from collections import deque
@@ -23,7 +22,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import Answer, Commands, Obs, Policy, Processor, Runtime, Step
+from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -53,14 +52,16 @@ class StopOnFault(Policy):
 
     WIRE_NAME = 'stop_on_fault'
 
-    def __init__(self, runtime: Runtime, inner: Policy) -> None:
-        super().__init__(runtime)
-        self._inner = inner
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        obs = yield
+        while True:
+            if _arms_available(obs):
+                obs = yield inner.send(obs)
+            else:
+                obs = yield Step({}, runtime.time_ns + MILLISECOND)
 
-    def __call__(self, obs: Obs) -> Step:
-        if _arms_available(obs):
-            return self._inner(obs)
-        return Step({}, self._runtime.time_ns + MILLISECOND)
+    def to_spec(self) -> dict[str, Any]:
+        return {'name': self.WIRE_NAME}
 
 
 class ChunkedSchedule(Policy):
@@ -73,38 +74,41 @@ class ChunkedSchedule(Policy):
 
     WIRE_NAME = 'chunked_schedule'
 
-    def __init__(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]], fps: float) -> None:
-        super().__init__(runtime)
-        self._infer = infer
-        self._trajectory: deque[tuple[Commands, int]] = deque()
-        self._answer: Answer[Sequence[Commands]] | None = None
-        self._tick = int(1e9 / fps)
+    def __init__(self, fps: float) -> None:
+        self._fps = fps
 
-    def __call__(self, obs: Obs) -> Step:
-        now_ns = self._runtime.time_ns
-
-        if self._answer is not None and self._answer.done():
-            chunk = self._answer.result()
-            self._trajectory = deque((waypoint, now_ns + i * self._tick) for i, waypoint in enumerate(chunk))
-            self._answer = None
-
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+        tick_ns = int(1e9 / self._fps)
+        answer: Answer[Sequence[Commands]] | None = None
         commands: dict[str, Any] = {}
-        while self._trajectory:
-            waypoint, execute_at_ns = self._trajectory[0]
-            if execute_at_ns > now_ns:
-                break
-            commands.update(waypoint)
-            self._trajectory.popleft()
+        obs = yield
+        now_ns = runtime.time_ns
+        try:
+            while True:
+                answer = runtime.submit(infer, obs)
+                obs = yield Step(commands, now_ns + tick_ns)
+                now_ns = runtime.time_ns
+                while not answer.done():
+                    obs = yield Step({}, now_ns + tick_ns)
+                    now_ns = runtime.time_ns
 
-        if not self._trajectory and self._answer is None:
-            self._answer = self._runtime.submit(self._infer, obs)
+                trajectory = deque((waypoint, now_ns + i * tick_ns) for i, waypoint in enumerate(answer.result()))
+                answer = None
+                commands = {}
+                while trajectory:
+                    commands = {}
+                    while trajectory and trajectory[0][1] <= now_ns:
+                        commands.update(trajectory.popleft()[0])
+                    if not trajectory:
+                        break
+                    obs = yield Step(commands, now_ns + tick_ns)
+                    now_ns = runtime.time_ns
+        finally:
+            if answer is not None:
+                answer.cancel()
 
-        return Step(commands, now_ns + self._tick)
-
-    def close(self) -> None:
-        if self._answer is not None:
-            self._answer.cancel()
-            self._answer = None
+    def to_spec(self) -> dict[str, Any]:
+        return {'name': self.WIRE_NAME, 'args': {'fps': self._fps}}
 
 
 class _StackBuffer:
@@ -156,8 +160,8 @@ OutputT = TypeVar('OutputT')
 class TemporalStack(Processor[Obs, OutputT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
-    Every call records the selected channels on the runtime's clock, then passes the stacked
-    observations to ``inner`` and returns its result. Offsets are ascending seconds relative to now.
+    Every sent observation records the selected channels on the runtime's clock, then passes the stacked
+    observations to ``inner`` and yields its result. Offsets are ascending seconds relative to now.
     Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
@@ -166,24 +170,25 @@ class TemporalStack(Processor[Obs, OutputT]):
 
     WIRE_NAME = 'temporal_stack'
 
-    def __init__(
-        self,
-        runtime: Runtime,
-        inner: Callable[[Obs], OutputT],
-        keys: tuple[str, ...],
-        offsets_sec: tuple[float, ...],
-        pad_start: bool = True,
-    ) -> None:
-        super().__init__(runtime)
-        self._inner = inner
+    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
         self._keys = tuple(keys)
-        assert pad_start or 0.0 in offsets_sec, (
+        self._offsets_sec = tuple(offsets_sec)
+        self._pad_start = pad_start
+        assert pad_start or 0.0 in self._offsets_sec, (
             'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
             'in-range targets and the stack would be empty'
         )
-        self._buffer = _StackBuffer(tuple(offsets_sec), pad_start=pad_start)
 
-    def __call__(self, obs: Obs) -> OutputT:
-        now_sec = self._runtime.time_ns / 1e9
-        self._buffer.append(now_sec, {k: obs[k] for k in self._keys})
-        return self._inner({**obs, **self._buffer.sample(now_sec)})
+    def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT]) -> ProcessorRun[Obs, OutputT]:
+        buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
+        obs = yield
+        while True:
+            now_sec = runtime.time_ns / 1e9
+            buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            obs = yield inner.send({**obs, **buffer.sample(now_sec)})
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            'name': self.WIRE_NAME,
+            'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
+        }
