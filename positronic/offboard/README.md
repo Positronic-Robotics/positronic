@@ -89,9 +89,9 @@ curl http://localhost:8000/api/v1/ready
 }
 ```
 
-`status` is one of `ready`, `loading`, `waiting` and `error`, and it is the state now rather than a signal
-the server sends once. A ready server that loads another checkpoint answers `loading` again, with its port
-bound throughout, so a caller reads this verb as often as it needs the answer.
+`status` is one of `ready`, `loading`, `waiting` and `error`, and it holds only for the moment it answers.
+A ready server that loads another checkpoint answers `loading` again, with its port bound throughout, so a
+caller reads this verb as often as it needs the answer.
 
 `inferences` counts what the loaded checkpoint has answered, and `timing` carries the phases of the last
 one, under the keys the served `timing` block uses. A caller picks its own threshold from the two: an
@@ -117,10 +117,10 @@ server whose model source builds no warm observation runs nothing, and the count
 
 #### A server that answers neither verb
 
-A server built before these verbs answers `UNIMPLEMENTED` on the gRPC wire and `404` on the HTTP one. The
-client reads either as the verb's absence and raises `wire.VerbUnsupported`. `new_session` then opens the
-session as it always did, and says once in its log that how warm the server is is unknown. A `404` from an
-address whose model catalogue does not answer either is a refusal rather than an old server.
+A server that serves sessions but not these verbs answers `UNIMPLEMENTED` on the gRPC wire and `404` on the
+HTTP one. The client reads either as the verb's absence and raises `wire.VerbUnsupported`. `new_session`
+opens the session and says once in its log that how warm the server is is unknown. A `404` from an address
+whose model catalogue does not answer either is a refusal rather than a server without the verb.
 
 #### `/api/v1/session`
 Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
