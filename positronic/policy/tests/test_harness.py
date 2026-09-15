@@ -199,8 +199,8 @@ class _FakeInferenceSession(InferenceSession):
 
 
 class _HeldInferenceSession(_FakeInferenceSession):
-    """A function the test ends: it answers once ``released`` is set. What the trial pays for it is then a
-    world duration, which no stall on the machine can shorten."""
+    """A function the test ends: it answers once ``released`` is set. The trial then pays a world duration
+    for it, which no stall on the machine can shorten."""
 
     def __init__(self, action: list[dict[str, Any]], released: threading.Event) -> None:
         super().__init__(action)
