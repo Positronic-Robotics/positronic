@@ -9,6 +9,7 @@ You ship a new checkpoint and want a clean answer to one question: is it actuall
 ## What you get
 
 - **One checkpoint, every target.** Sim: LIBERO, RoboLab (NVIDIA Isaac Lab), MolmoSpaces. Real hardware: the DROID setup (Franka FR3 + Robotiq 2F-85), bimanual next. Serve a DROID policy once and it runs across all of them, and on the rig, with nothing to port. Sim for cheap, broad iteration; real hardware as ground truth.
+- **Native benchmarks, comparable scores.** Each benchmark runs with its own task definitions and horizons — the run reproduces the native benchmark rather than a re-interpretation of it — so your score is comparable with the benchmark's own published numbers.
 - **Blinded A/B.** Your checkpoint against your own previous checkpoints, or against our maintained baselines (π0.5, GR00T, SmolVLA, ACT) — randomized and blinded, so lighting and setup drift don't bias the result.
 - **Every run returned.** Multi-view video, full telemetry, and the complete run dataset — not just a success rate. Yours to analyze.
 - **Latency-honest execution.** On real hardware, inference and network delay are real — a slow model is scored as slow. In sim the world pauses during inference by default (as in other harnesses), but you can charge the model's measured inference time with `--charge_inference_time=True`, so sim scores reflect the delay the robot would actually feel — something sim-only harnesses can't model.

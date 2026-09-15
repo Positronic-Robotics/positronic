@@ -18,6 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -94,10 +95,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = conn.reset(self._adapter.reset_token(params))
-        self._meta = self._frame['meta']
+        self._meta = self._frame[protocol.FRAME_META]
         self._active = True
-        self.robot_meta.emit(self._frame['robot_meta'])
-        self._emit_payload(self._frame['obs'])
+        self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
+        self._emit_payload(self._frame[protocol.FRAME_OBS])
         # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
 
@@ -111,7 +112,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 # The proxy paces every turn; ``control_dt`` is known only once a reset ran.
-                yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
+                yield pimm.Sleep(self._frame[protocol.FRAME_CONTROL_DT] if self._frame is not None else _IDLE_DT)
                 if (call := next(self.env_reset.incoming(), None)) is not None:
                     with pimm.calls.raise_to(call):
                         self.reset(dict(call.request or {}))
@@ -121,11 +122,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame['obs'])
+                            self._emit_payload(self._frame[protocol.FRAME_OBS])
         finally:
             self._cleanup.close()
 
     def _step_env(self) -> dict[str, Any]:
+        # Stepping is reachable only while ``_active``, which ``reset`` sets once the connection is up.
+        assert self._conn is not None, 'stepped before the first reset connected'
         reads = ((name, receiver.read()) for name, receiver in self.commands.items())
         commands = {name: msg for name, msg in reads if msg is not None}
         result = self._conn.step(self._adapter.action(commands))

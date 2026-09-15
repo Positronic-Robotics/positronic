@@ -67,7 +67,9 @@ class Task:
     """One trial: the goal the policy conditions on, the time budget it runs under, and what sets it up."""
 
     instruction_source: str | Callable[[], str]
-    # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone.
+    # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone. A benchmark sim enforces the task's own
+    # horizon and reports expiry as a terminal, so there the budget is a runaway-cost net set well beyond any
+    # healthy horizon; a real or attended eval has no such terminal and the budget is the trial's actual bound.
     timeout_sec: float | None
     # What to ask for, keyed as ``Embodiment.prepare_handlers`` is; a handler this does not name goes unasked
     prepare_args: dict[str, Any] = field(default_factory=dict)
