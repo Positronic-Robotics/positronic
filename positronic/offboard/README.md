@@ -11,12 +11,12 @@ The protocol connects any hardware to any model. All Positronic inference server
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
 the same order.
 
-| Wire | URL | Port |
+| Wire | URL | Address |
 |---|---|---|
 | WebSocket | `ws://host:8000/api/v1/session[/<model_id>]` | the server's `port`, beside the HTTP routes |
 | gRPC | `grpc://host:9000/api/v1/session[/<model_id>]` | the server's `grpc_port`, sessions alone |
 | gRPC over TLS | `grpcs://host:443/api/v1/session[/<model_id>]` | a TLS edge in front of that same `grpc_port` |
-| WebSocket over a Unix socket | `unix:///run/policy.sock[/api/v1/session[/<model_id>]]` | the server's `uds` path, beside the HTTP routes |
+| WebSocket over a Unix socket | `unix:///run/policy.sock[/api/v1/session[/<model_id>]]` | the server's `uds` socket, beside the HTTP routes |
 
 - The WebSocket wire is the default. A server serves gRPC only when `grpc_port` names a port.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
@@ -35,8 +35,8 @@ the same order.
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route and stays on the server's `port`. `InferenceClient.list_models`
-refuses a `grpc://` URL.
+`/api/v1/models` is an HTTP route and answers wherever the WebSocket wire bound — the server's
+`port`, or its `uds` socket. `InferenceClient.list_models` refuses a `grpc://` URL.
 
 ### Authentication
 
