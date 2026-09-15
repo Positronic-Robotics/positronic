@@ -69,9 +69,11 @@ Translation is linear and rotation follows the shortest spherical interpolation.
 
 ## Recordings and cancellation
 
-With `--output_dir`, each rollout receives a unique `policy/<id>/transcript.jsonl` under that dataset directory. Episode metadata links it through `inference.policy.transcript`. Without an output directory, no transcript is written.
+Each session buffers a compact transcript and exposes a snapshot through `Session.meta`. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Without an output directory, the transcript remains in memory.
 
-The transcript contains configuration, prompts, tool schemas, encoded images, request/response bodies, observation timestamps, usage, corrections, accepted/discarded decisions, and the closing outcome. It records request paths and bodies, excluding authentication headers and credential values. The image history limit only affects requests; captured images remain in the transcript. API failures leave their transcript on disk even if the robot episode cannot commit.
+Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted/discarded decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
+
+The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
 Only one request can be in flight. Faults and episode endings invalidate its result; a late response cannot command motion. The runtime waits for that bounded request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
 

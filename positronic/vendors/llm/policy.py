@@ -15,10 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
-    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     SystemPromptPart,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -101,7 +101,7 @@ class _Observation:
             images[name] = BinaryContent(data.getvalue(), media_type='image/png')
         return cls(pose, grip, str(obs[keys.TASK]), int(obs[keys.OBS_TIME_NS]), images)
 
-    def message(self, target: MoveTo | None) -> str:
+    def state(self, target: MoveTo | None) -> dict[str, Any]:
         state = {
             'task': self.task,
             'obs_time_ns': self.time_ns,
@@ -114,7 +114,7 @@ class _Observation:
             state['remaining_translation_m'] = (target.pose.translation - self.pose.translation).tolist()
             state['remaining_gripper'] = target.gripper - self.grip
             state['previous_target'] = target.model_dump()
-        return json.dumps(state, allow_nan=False)
+        return state
 
     def frames(self, cameras: list[str]) -> ModelRequest:
         content: list[str | BinaryContent] = []
@@ -197,22 +197,24 @@ class _Conversation:
         return outgoing
 
     def _initial(self) -> ModelRequest:
-        return ModelRequest([
-            SystemPromptPart(
-                'Control one robot arm through exactly one tool call per response. '
-                'Use absolute hand targets in the coordinate frame of the measured pose. '
-                'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
-                'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
-                'Moves play before the next observation; actual arrival must be checked from the measured state. '
-                'Camera frames remain fixed during a decision. '
-                'take_pic only reveals a frame; it does not move a camera. '
-                'A note should briefly describe what you see and why you chose the motion. '
-                'Use done when you believe the task is complete, or give_up when you cannot continue. '
-                'Both require hindsight for inspection; no advice is carried into another episode. '
-                f'Motion limits: {json.dumps(asdict(self.policy.motion))}. '
-                f'API call budget, including corrections and pictures: {self.policy.max_calls}.'
-            )
-        ])
+        prompt = (
+            'Control one robot arm through exactly one tool call per response. '
+            'Use absolute hand targets in the coordinate frame of the measured pose. '
+            'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
+            'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
+            'Moves play before the next observation; actual arrival must be checked from the measured state. '
+            'Camera frames remain fixed during a decision. '
+            'take_pic only reveals a frame; it does not move a camera. '
+            'A note should briefly describe what you see and why you chose the motion. '
+            'Use done when you believe the task is complete, or give_up when you cannot continue. '
+            'Both require hindsight for inspection; no advice is carried into another episode. '
+            f'Motion limits: {json.dumps(asdict(self.policy.motion))}. '
+            f'API call budget, including corrections and pictures: {self.policy.max_calls}.'
+        )
+        self.transcript.write(
+            'instructions', prompt=prompt, tools={tool.name: tool.parameters_json_schema for tool in self.tools}
+        )
+        return ModelRequest([SystemPromptPart(prompt)])
 
     @staticmethod
     def _reject(messages: list[ModelMessage], calls: list[ToolCallPart], error: str) -> None:
@@ -265,13 +267,34 @@ class _Conversation:
             self.transcript.write('rejected', call=self.calls, reason=str(exc))
             raise
 
+    def _request(self, messages: list[ModelMessage], obs_time_ns: int, cameras: set[str]) -> ModelResponse:
+        self.calls += 1
+        self.transcript.write('request', call=self.calls, obs_time_ns=obs_time_ns, cameras=sorted(cameras))
+        response = self.policy.endpoint.request(self._outgoing(messages), self.tools)
+        self.transcript.write(
+            'response',
+            call=self.calls,
+            model=response.model_name,
+            finish_reason=response.finish_reason,
+            usage=asdict(response.usage),
+            tools=[
+                {'name': part.tool_name, 'arguments': part.args, 'id': part.tool_call_id}
+                for part in response.parts
+                if isinstance(part, ToolCallPart)
+            ],
+            text=[part.content for part in response.parts if isinstance(part, TextPart)],
+        )
+        return response
+
     @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
     def advance(
         self, history: list[ModelMessage], target: MoveTo | None, raw: Mapping[str, Any], cancelled: threading.Event
     ) -> _Decision | None:
         obs = _Observation.read(raw, self.policy.camera_keys, self.policy.image_size)
         messages: list[ModelMessage] = list(history) if history else [self._initial()]
-        messages.append(ModelRequest.user_text_prompt(obs.message(target)))
+        state = obs.state(target)
+        self.transcript.write('observation', **state)
+        messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
         revealed: set[str] = set()
         if self.policy.images is Images.ALWAYS:
             messages.append(obs.frames(list(obs.images)))
@@ -281,15 +304,11 @@ class _Conversation:
             if self.calls >= self.policy.max_calls:
                 self.transcript.write('budget_exhausted', calls=self.calls)
                 return _Decision(messages, stop_reason='call_budget')
-            self.calls += 1
-            response = self.policy.endpoint.request(
-                self._outgoing(messages), self.tools, self.transcript, self.calls, obs.time_ns
-            )
+            response = self._request(messages, obs.time_ns, revealed)
             if cancelled.is_set():
                 self.transcript.write('discarded', call=self.calls)
                 return None
             messages.append(response)
-            self.transcript.write('usage', call=self.calls, usage=asdict(response.usage))
             try:
                 decision = self._turn(response, messages, obs, revealed)
             except ValueError as exc:
@@ -299,11 +318,6 @@ class _Conversation:
                 continue
             failures = 0
             if decision is not None:
-                self.transcript.write(
-                    'decision',
-                    call=self.calls,
-                    messages=ModelMessagesTypeAdapter.dump_python(messages[len(history) :], mode='json'),
-                )
                 return decision
         return None
 
@@ -316,7 +330,7 @@ class LLMPolicy(Policy):
     class _Session(Session):
         def __init__(self, policy: 'LLMPolicy', rt: Runtime):
             self._rt = rt
-            self._transcript = Transcript(rt.artifact_dir)
+            self._transcript = Transcript()
             self._conversation = _Conversation(policy, self._transcript)
             self._history: list[ModelMessage] = []
             self._target: MoveTo | None = None
@@ -324,7 +338,6 @@ class LLMPolicy(Policy):
             self._cancelled = threading.Event()
             self._stop_reason: str | None = None
             self._hindsight: str | None = None
-            self._transcript.write('session', meta=self.meta)
 
         @property
         def stop_requested(self) -> bool:
@@ -346,11 +359,10 @@ class LLMPolicy(Policy):
                 'camera_keys': list(policy.camera_keys),
                 'image_size': policy.image_size,
                 'image_horizon': policy.image_horizon,
+                'transcript': self._transcript.snapshot(),
             }
             if policy.endpoint.base_url is not None:
                 meta['base_url'] = policy.endpoint.base_url
-            if self._transcript.path is not None:
-                meta['transcript'] = str(self._transcript.path)
             if self._stop_reason is not None:
                 meta['stop_reason'] = self._stop_reason
             if self._hindsight is not None:
@@ -414,7 +426,6 @@ class LLMPolicy(Policy):
             self.cancel()
             if self._answer is not None:
                 self._transcript.write('discarded', call=self._conversation.calls)
-            self._transcript.write('closed', calls=self._conversation.calls, stop_reason=self._stop_reason)
 
     def __init__(
         self,
