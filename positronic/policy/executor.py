@@ -9,6 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
+from positronic.offboard.protocol import MODEL_CALL
 from positronic.policy.base import (
     Answer,
     DelegatingPolicy,
@@ -113,10 +114,6 @@ class Executor(Runtime):
             # and the log is the only place the failure can go.
             if (exc := answer.failure()) is not None:
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
-
-
-# A blocking session's call is timed as the model: the heavy work it waits out.
-MODEL_CALL = 'model'
 
 
 class _BlockingPolicy(DelegatingPolicy):

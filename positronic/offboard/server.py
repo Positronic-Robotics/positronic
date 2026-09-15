@@ -213,7 +213,7 @@ class _ServedTiming:
 
     def take_timing(self, name: str, start_ns: int, end_ns: int) -> None:
         """A ``TimingSink``: one timed session call, filed under its wire key."""
-        self._record(_wire_key(name), start_ns, end_ns)
+        self._record(protocol.wire_key(name), start_ns, end_ns)
 
     @contextmanager
     def phase(self, key: str) -> Iterator[None]:
@@ -227,11 +227,6 @@ class _ServedTiming:
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
-
-
-def _wire_key(name: str) -> str:
-    """The wire key of a timing name: ``model`` ships as ``model_ms``."""
-    return f'{name}_ms'
 
 
 class PolicyServer:

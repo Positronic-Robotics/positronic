@@ -35,8 +35,17 @@ TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
 # Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
+
+
+def wire_key(name: str) -> str:
+    """The key a timing of ``name`` ships under."""
+    return f'{name}_ms'
+
+
+# What a blocking session's call is timed as: the heavy work it waits out.
+MODEL_CALL = 'model'
 # Time the model's own call took, inside `INFER`.
-TIMING_MODEL = 'model_ms'
+TIMING_MODEL = wire_key(MODEL_CALL)
 
 
 class ServerStatus(StrEnum):
