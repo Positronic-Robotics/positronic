@@ -201,7 +201,7 @@ class _ScheduleFidelity:
         self._scheduled += waypoints
 
     def count_dropped(self, waypoints: int) -> None:
-        """Record waypoints discarded without going out, a fresh chunk having replaced them after their time."""
+        """Record waypoints that came due and went out on no round."""
         self._dropped += waypoints
 
     def count_played(self, popped: int, late_ns: int) -> None:
