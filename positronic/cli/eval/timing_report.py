@@ -157,23 +157,24 @@ class WaypointReport:
     """How well the loop kept the trajectory's schedule, summed over the pass's episodes and their command
     channels.
 
-    ``dropped_share`` is a fraction of ``emitted + dropped``, the waypoints that came due. The distribution
-    behind the lateness figures is per channel in the episode's own statics; a percentile of the pass is
-    not recoverable from here.
+    ``dropped_share`` is a fraction of ``emitted + dropped``, the waypoints that came due. The lateness
+    figures are over the waypoints that went out. Each reads ``None`` where its own population is empty: a
+    zero there reads as perfect timing over nothing observed. The distribution behind the lateness figures
+    is per channel in the episode's own statics; a percentile of the pass is not recoverable from here.
 
     ``episodes`` is how many of the pass's episodes carried an account, which is what every figure here
-    covers. A directory holding passes from either side of this account's arrival reduces to fewer than the
-    pass's episodes, and the report says so rather than counting an episode that measured nothing as one
-    that dropped nothing.
+    covers. An episode whose span carries no waypoint attributes is left out rather than counted as one
+    that dropped nothing, so ``episodes`` below the pass's own episode count says the figures cover part
+    of the pass.
     """
 
     episodes: int
     scheduled: int
     emitted: int
     dropped: int
-    dropped_share: float
-    mean_late_ms: float
-    max_late_ms: float
+    dropped_share: float | None
+    mean_late_ms: float | None
+    max_late_ms: float | None
 
 
 @dataclass
@@ -540,9 +541,9 @@ def _waypoint_report(timings: list[_EpisodeTiming]) -> WaypointReport | None:
         scheduled=sum(a.scheduled for a in accounts),
         emitted=emitted,
         dropped=dropped,
-        dropped_share=(dropped / due) if due else 0.0,
-        mean_late_ms=(sum(a.late_sum_ms for a in accounts) / emitted) if emitted else 0.0,
-        max_late_ms=max((a.late_max_ms for a in accounts), default=0.0),
+        dropped_share=(dropped / due) if due else None,
+        mean_late_ms=(sum(a.late_sum_ms for a in accounts) / emitted) if emitted else None,
+        max_late_ms=max(a.late_max_ms for a in accounts) if emitted else None,
     )
 
 
@@ -674,11 +675,21 @@ def _render(report: PassReport) -> str:
         lines.append(_share_row('materialize', split.materialize))
     if report.waypoints is not None:
         way = report.waypoints
+        drops = (
+            'unavailable: no waypoint came due'
+            if way.dropped_share is None
+            else f'{way.dropped_share * 100:>6.1f}% of the waypoints that came due'
+        )
+        late = (
+            'unavailable: no waypoint went out'
+            if way.mean_late_ms is None or way.max_late_ms is None
+            else f'{way.mean_late_ms:.1f} ms (max {way.max_late_ms:.1f})'
+        )
         lines += [
             f'waypoints:           {way.scheduled} scheduled, {way.emitted} emitted, {way.dropped} dropped'
             + (f' over {way.episodes} of {report.episodes} episodes' if way.episodes < report.episodes else ''),
-            f'waypoint drops:      {way.dropped_share * 100:>6.1f}% of the waypoints that came due',
-            f'waypoint late mean:  {way.mean_late_ms:.1f} ms (max {way.max_late_ms:.1f})',
+            f'waypoint drops:      {drops}',
+            f'waypoint late mean:  {late}',
         ]
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)

@@ -791,10 +791,64 @@ def test_a_pass_whose_episodes_carry_no_waypoint_account_reports_none(tmp_path):
     assert not any(line.startswith('waypoint') for line in _render(report).splitlines())
 
 
+def _one_waypoint_episode(telemetry_dir, *, emitted: int, dropped: int, late_sum_ms: float, late_max_ms: float):
+    """One pass, one episode carrying exactly this waypoint account."""
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+            _span(
+                SPAN_EPISODE,
+                0,
+                40,
+                'ep0',
+                'pass0',
+                {
+                    ATTR_EPISODE_VIRTUAL_S: 20.0,
+                    ATTR_WAYPOINTS_SCHEDULED: 100,
+                    ATTR_WAYPOINTS_EMITTED: emitted,
+                    ATTR_WAYPOINTS_DROPPED: dropped,
+                    ATTR_WAYPOINTS_LATE_SUM_MS: late_sum_ms,
+                    ATTR_WAYPOINTS_LATE_MAX_MS: late_max_ms,
+                },
+            ),
+        ],
+    )
+
+
+def test_a_pass_whose_waypoints_never_came_due_reports_no_rate(tmp_path):
+    """An episode that schedules only waypoints ahead of it, and ends first, observes no rate at all. A zero
+    reads as a loop that dropped nothing and ran on time."""
+    _one_waypoint_episode(tmp_path / TELEMETRY_SUBDIR, emitted=0, dropped=0, late_sum_ms=0.0, late_max_ms=0.0)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    assert report.waypoints is not None
+    assert report.waypoints.dropped_share is None
+    assert report.waypoints.mean_late_ms is None
+    assert report.waypoints.max_late_ms is None
+    rendered = _render(report).splitlines()
+    assert 'waypoint drops:      unavailable: no waypoint came due' in rendered
+    assert 'waypoint late mean:  unavailable: no waypoint went out' in rendered
+
+
+def test_a_pass_that_dropped_every_due_waypoint_reports_that_share(tmp_path):
+    """The drop share and the lateness figures stand on their own populations. Every due waypoint dropped is
+    a share of 100 per cent, and leaves no emission to be late."""
+    _one_waypoint_episode(tmp_path / TELEMETRY_SUBDIR, emitted=0, dropped=30, late_sum_ms=0.0, late_max_ms=0.0)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    assert report.waypoints is not None
+    assert report.waypoints.dropped_share == pytest.approx(1.0)
+    assert report.waypoints.mean_late_ms is None
+    assert report.waypoints.max_late_ms is None
+    assert 'waypoint drops:       100.0% of the waypoints that came due' in _render(report).splitlines()
+
+
 def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_path):
-    """A directory holding passes from either side of the account's arrival reduces over the episodes that
-    carry one, and reports how many that was — an episode that measured nothing is not one that dropped
-    nothing."""
+    """A directory mixing episodes that carry an account with episodes that do not reduces over the ones
+    that carry one, and reports how many that was — an episode that measured nothing is not one that
+    dropped nothing."""
     telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     _waypoint_fixture(telemetry_dir)
     _write_lines(
