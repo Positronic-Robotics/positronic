@@ -8,8 +8,7 @@ import os
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
-from contextvars import ContextVar
+from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -204,14 +203,10 @@ class _ServedTiming:
     @classmethod
     @contextmanager
     def opened(cls) -> Iterator['_ServedTiming']:
-        """Open the timing of one inference. ``_timed`` and every timed session write to it until the block ends."""
+        """Open the timing of one inference. Every timed session writes to it until the block ends."""
         timing = cls()
-        token = _open_timing.set(timing)
-        try:
-            with phases_to(timing.take_phase):
-                yield timing
-        finally:
-            _open_timing.reset(token)
+        with phases_to(timing.take_phase):
+            yield timing
 
     def take_phase(self, name: str, start_ns: int, end_ns: int) -> None:
         """A ``PhaseSink``: one timed session call, filed under its wire key."""
@@ -228,17 +223,6 @@ class _ServedTiming:
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
-
-
-# The ``_ServedTiming`` of the inference this task serves. ``asyncio.to_thread`` copies the context, so the
-# thread that runs the pipeline sees the same one.
-_open_timing: ContextVar[_ServedTiming | None] = ContextVar('open_timing', default=None)
-
-
-def _timed(name: str) -> AbstractContextManager[None]:
-    """The ``name`` phase of the open ``_ServedTiming``. A no-op while none is open."""
-    timing = _open_timing.get()
-    return nullcontext() if timing is None else timing.phase(name)
 
 
 def _phase_key(name: str) -> str:
@@ -420,14 +404,14 @@ class PolicyServer:
                     self._last_activity = time.monotonic()
                     try:
                         with _ServedTiming.opened() as timing:
-                            with _timed(protocol.TIMING_DECODE):
+                            with timing.phase(protocol.TIMING_DECODE):
                                 raw_obs = deserialise(message)
                             # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
                             # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                            with _timed(protocol.TIMING_QUEUED):
+                            with timing.phase(protocol.TIMING_QUEUED):
                                 await self._infer_lock.acquire()
                             try:
-                                with _timed(protocol.TIMING_INFER):
+                                with timing.phase(protocol.TIMING_INFER):
                                     # The server's clock is not the rig's.
                                     actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                             finally:

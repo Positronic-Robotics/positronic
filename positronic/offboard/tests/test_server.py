@@ -661,6 +661,8 @@ def test_every_served_layer_reports_its_own_phase_inside_infer(start_server, mak
     finally:
         session.close()
 
+    # rules-allow: hardcoded-keys — the seam derives this key from the class name, so reading it back
+    # through _phase_base would assert the naming rule against itself.
     assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
 
