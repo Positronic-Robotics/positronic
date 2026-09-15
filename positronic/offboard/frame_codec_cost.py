@@ -57,6 +57,8 @@ class H264:
 
     def cost(self, window: np.ndarray) -> tuple[int, float, float]:
         """Bytes, encode ms and decode ms for one window."""
+        # yuv420p halves the chroma planes, so x264 refuses an odd side.
+        window = window[:, : window.shape[1] - window.shape[1] % 2, : window.shape[2] - window.shape[2] % 2]
         height, width = window.shape[1:3]
         buffer = io.BytesIO()
         start = time.perf_counter()
@@ -73,8 +75,7 @@ class H264:
 
         start = time.perf_counter()
         with av.open(io.BytesIO(payload), 'r') as container:
-            for frame in container.decode(video=0):
-                frame.to_ndarray(format='rgb24')
+            np.stack([frame.to_ndarray(format='rgb24') for frame in container.decode(video=0)])
         return len(payload), encode_ms, 1000 * (time.perf_counter() - start)
 
 
@@ -103,7 +104,7 @@ def bounded_frames(
 ) -> list[np.ndarray]:
     """The first ``count`` frames at or before each sample time over ``span``, through the rig's own bound.
 
-    ``count`` 0 keeps every sample time; a decoded frame is held in memory, so ask for the frames the windows need.
+    Ask for the frames the windows need: a decoded frame stays in memory. ``count`` 0 keeps every sample time.
     """
     key = 'image'
     start, stop = span

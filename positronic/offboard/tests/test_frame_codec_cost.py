@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
-from positronic.offboard.frame_codec_cost import Jpeg, bounded_frames, costs, sampled_span
+from positronic.offboard.frame_codec_cost import H264, Jpeg, bounded_frames, costs, sampled_span
 from positronic.policy.codec import RestrictImageSize
 
 SEC = 1_000_000_000
@@ -48,3 +48,8 @@ def test_costs_refuses_fewer_frames_than_one_window(tmp_path):
     frames = bounded_frames(camera, sampled_span([camera]), 15.0, RestrictImageSize(64, 64), 0)
     with pytest.raises(ValueError, match='cannot fill one 4-frame window'):
         costs(frames, 'cam', 4, [Jpeg()])
+
+
+def test_h264_encodes_a_window_with_odd_sides():
+    size, encode_ms, decode_ms = H264('ultrafast', 20).cost(np.zeros((3, 15, 17, 3), dtype=np.uint8))
+    assert size > 0 and encode_ms > 0 and decode_ms > 0
