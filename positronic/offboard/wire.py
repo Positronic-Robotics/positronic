@@ -16,6 +16,8 @@ SESSION_PATH = f'{API_PATH}/session'
 # The model catalogue, served under the HTTP API.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
+# The scheme that names a Unix socket path in place of a host. The websocket wire carries it.
+UNIX_SCHEME = 'unix'
 
 
 def default_port(secure: bool) -> int:
@@ -29,13 +31,20 @@ def bracket_ipv6(host: str) -> str:
 
 
 class SessionAddress(NamedTuple):
-    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax."""
+    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
+
+    ``uds`` is the Unix socket path a ``unix://`` URL named, decoded to dial; ``uds_as_written`` is the
+    same path as the URL spelt it, which is how a session URL names it back. Both are ``None`` over a
+    network, where ``host`` and ``port`` are the address.
+    """
 
     host: str
     port: int
     path: str
     query: str
     secure: bool
+    uds: str | None = None
+    uds_as_written: str | None = None
 
     @property
     def netloc(self) -> str:
@@ -75,10 +84,11 @@ class ConnectRefused(Exception):
 
 
 class Endpoint(NamedTuple):
-    """Where a wire serves."""
+    """Where a wire serves. A wire bound to a Unix socket names its path in ``uds``, and its port is 0."""
 
     host: str
     port: int
+    uds: str | None = None
 
 
 class Scheme(NamedTuple):
