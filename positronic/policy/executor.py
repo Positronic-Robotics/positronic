@@ -1,159 +1,153 @@
-"""The in-process runtime: a call starts the work on a worker thread and returns an ``Answer``."""
+"""Threaded policy execution with answer visibility on the episode's clock.
+
+TODO: Migrate callers of the blocking policy adapter to the Processor API.
+"""
 
 import concurrent.futures
 import contextvars
 import logging
 import threading
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from functools import partial
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
-from positronic.offboard.protocol import MODEL_CALL
-from positronic.policy.base import (
-    Answer,
-    DelegatingPolicy,
-    DelegatingSession,
-    Fn,
-    NotAnswered,
-    Policy,
-    Runtime,
-    Session,
-    TimedSession,
-)
+import pimm
+from positronic.policy.base import Answer, NotAnswered, Runtime
+
+P = ParamSpec('P')
+T = TypeVar('T')
+
+# Check shutdown while waiting for a function that may never return.
+STOP_POLL_SEC = 0.1
+
+
+class _UnchargedAnswer(Answer[T]):
+    """A function's result, readable as soon as its worker finishes."""
+
+    def __init__(self, call: Future[T]) -> None:
+        self.call = call
+        self.result_read = False
+
+    def done(self) -> bool:
+        return self.call.done()
+
+    def result(self) -> T:
+        if not self.done():
+            raise NotAnswered('The call has not answered on the episode clock')
+        self.result_read = True
+        return self.call.result()
+
+    def cancel(self) -> None:
+        """Cancel queued work; a function already running must finish before its resources can close."""
+        self.call.cancel()
+
+    def wait(self, until_ns: int, should_stop: pimm.SignalReceiver[bool]) -> None:
+        """Wait for completion while simulated time stands still."""
+        while not self.call.done() and not should_stop.value:
+            concurrent.futures.wait((self.call,), timeout=STOP_POLL_SEC)
+
+
+class _ChargedAnswer(_UnchargedAnswer[T]):
+    """A worker result visible after the episode clock pays for queueing and execution."""
+
+    def __init__(self, pool: ThreadPoolExecutor, clock: pimm.Clock, function: Callable[[], T]) -> None:
+        self._clock = clock
+        self._submitted_ns = clock.now_ns()
+        self._submitted_wall_ns = time.monotonic_ns()
+        self._ready_at_ns: int | None = None
+        super().__init__(pool.submit(self._run, function))
+
+    def _run(self, function: Callable[[], T]) -> T:
+        try:
+            return function()
+        finally:
+            self._ready_at_ns = self._submitted_ns + time.monotonic_ns() - self._submitted_wall_ns
+
+    def done(self) -> bool:
+        if not self.call.done():
+            return False
+        if self.call.cancelled():
+            return True
+        assert self._ready_at_ns is not None, 'a finished function has a visibility timestamp'
+        return self._clock.now_ns() >= self._ready_at_ns
+
+    def wait(self, until_ns: int, should_stop: pimm.SignalReceiver[bool]) -> None:
+        """Wait for completion or enough elapsed wall time to permit the requested episode time."""
+        while not self.call.done() and not should_stop.value:
+            remaining_ns = until_ns - self._submitted_ns - (time.monotonic_ns() - self._submitted_wall_ns)
+            if remaining_ns <= 0:
+                break
+            timeout = min(STOP_POLL_SEC, remaining_ns / 1e9)
+            concurrent.futures.wait((self.call,), timeout=timeout)
 
 
 class Executor(Runtime):
-    """Serves a set of functions on worker threads of its own, ``max_workers`` calls at a time.
+    """Run submitted functions on worker threads and expose their answers on ``clock``.
 
-    A call runs under a copy of the context it was made in, so telemetry recorded inside it anchors where
-    it was asked for.
+    Real execution exposes completed futures immediately and never waits for simulated time. In
+    simulation, charged calls include queueing and execution time; uncharged calls hold the simulator
+    until the worker finishes. Submission and result reads belong to the control thread; submitted
+    functions must not mutate episode state.
     """
 
-    class _Answer(Answer):
-        def __init__(self, name: str, call: Future[Any], read: Callable[['Executor._Answer'], None]):
-            self.name = name
-            self.call = call
-            self._read = read
-
-        def done(self) -> bool:
-            return self.call.done()
-
-        def result(self) -> Any:
-            if not self.call.done():
-                raise NotAnswered('The call is not answered yet')
-            self._read(self)
-            return self.call.result()
-
-        def failure(self) -> BaseException | None:
-            """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
-            return None if self.call.cancelled() else self.call.exception()
-
-    def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
+    def __init__(
+        self, clock: pimm.Clock, *, simulated: bool, charge_inference_time: bool, max_workers: int = 1
+    ) -> None:
+        self._clock = clock
+        self._simulated = simulated
+        self._charge_inference_time = charge_inference_time
+        self._tick = -1
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
-        self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every answer that no caller has read. A call that has still to answer is one of these, so
-        # ``in_flight`` and ``owes_an_answer`` read this one set.
-        self._unread: set[Executor._Answer] = set()
+        self._answers: set[_UnchargedAnswer[Any]] = set()
         self._lock = threading.Lock()
 
     @property
-    def fns(self) -> Mapping[str, Fn]:
-        return self._fns
+    def time_ns(self) -> int:
+        return self._clock.now_ns()
 
     @property
-    def in_flight(self) -> bool:
-        """Whether any call is still to answer."""
-        with self._lock:
-            return any(not answer.done() for answer in self._unread)
+    def tick(self) -> int:
+        """The zero-based policy-call index, or -1 before the first call."""
+        return self._tick
 
-    @property
-    def owes_an_answer(self) -> bool:
-        """Whether any call's answer has still to be read, whether or not that call has landed."""
-        # TODO(#661): a caller polls this because a session cannot say when it wants the next call. Rung 7
-        # gives the session ``resume_at``, and the poll goes with it.
-        with self._lock:
-            return bool(self._unread)
+    def start_tick(self) -> None:
+        """Start one root-policy call on the control thread."""
+        self._tick += 1
 
-    def wait(self, timeout: float | None = None) -> None:
-        """Block until every call made so far has answered, or until ``timeout`` seconds pass."""
-        with self._lock:
-            pending = [answer.call for answer in self._unread]
-        concurrent.futures.wait(pending, timeout=timeout)
-
-    def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         context = contextvars.copy_context()
-        call = self._pool.submit(context.run, fn, *args, **kwargs)
-        answer = self._Answer(name, call, self._read)
+
+        def work() -> T:
+            return context.run(function, *args, **kwargs)
+
+        answer = (
+            _ChargedAnswer(self._pool, self._clock, work)
+            if self._simulated and self._charge_inference_time
+            else _UnchargedAnswer(self._pool.submit(work))
+        )
         with self._lock:
-            self._unread.add(answer)
+            self._answers = {pending for pending in self._answers if not pending.result_read}
+            self._answers.add(answer)
         return answer
 
-    def _read(self, answer: '_Answer') -> None:
+    def wait(self, until_ns: int, should_stop: pimm.SignalReceiver[bool]) -> None:
+        """In simulation, let calls reach ``until_ns`` or finish. Real execution returns immediately."""
+        if not self._simulated:
+            return
         with self._lock:
-            self._unread.discard(answer)
-
-    @staticmethod
-    def _closed(*args: Any, **kwargs: Any) -> Answer:
-        raise RuntimeError('The runtime is closed and serves nothing')
+            pending = tuple(self._answers)
+        for answer in pending:
+            answer.wait(until_ns, should_stop)
 
     def close(self) -> None:
-        """Drop the queued calls and wait out those in flight, which may still hold their caller's resources.
-        A call made after close raises.
-
-        Reports what a call raised that no caller read: the session that asked for it has gone.
-        """
+        """Cancel queued calls, drain running calls, and report failures whose results were never read."""
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
-            # A function holds what it was declared with — model weights, a socket. Nothing reaches them
-            # through this runtime after it closes.
-            unread, self._unread = self._unread, set()
-            self._fns = dict.fromkeys(self._fns, self._closed)
-        for answer in unread:
-            # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
-            # and the log is the only place the failure can go.
-            if (exc := answer.failure()) is not None:
-                logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
-
-
-class _BlockingPolicy(DelegatingPolicy):
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, rt: Executor):
-            super().__init__(inner)
-            self._rt = rt
-
-        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-            # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
-            # on a call that lands while the session call runs, leaving its answer unread.
-            while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
-                self._rt.wait()
-            return actions
-
-        def close(self):
-            # The runtime closes first: a call in flight is still using what the session holds.
-            self._rt.close()
-            self._inner.close()
-
-    def new_session(self, context=None, rt=None) -> Session:
-        assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
-        own = Executor(self._inner.functions)
-        try:
-            return TimedSession(_BlockingPolicy._Session(self._inner.new_session(context, own), own), MODEL_CALL)
-        except BaseException:
-            own.close()
-            raise
-
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {}
-
-
-def blocking(policy: Policy) -> Policy:
-    """``policy`` with its heavy work waited out: a session answers in the call that asked.
-
-    For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
-    Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
-    ``policy`` composes itself are inside, so those still run once per call, each with the ``time_ns`` of
-    the call that asked.
-    """
-    return _BlockingPolicy(policy)
+            answers, self._answers = self._answers, set()
+        for answer in answers:
+            if answer.result_read or answer.call.cancelled():
+                continue
+            # rules-allow: swallowed-error — the caller dropped this answer; report its failure during cleanup.
+            if (exc := answer.call.exception()) is not None:
+                logging.error('A submitted function failed without its result being read: %s', exc)

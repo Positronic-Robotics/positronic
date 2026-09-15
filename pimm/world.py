@@ -615,7 +615,7 @@ class World:
                 if isinstance(command, Yield):
                     carried.append(i)
                 else:
-                    heapq.heappush(pq, (now_ns + max(1, round(command.seconds * 1e9)), i))
+                    heapq.heappush(pq, (self._clock.now_ns() + max(1, round(command.seconds * 1e9)), i))
 
             # A pending sleep (this round or earlier) or a finishing loop is progress toward the clock
             # advancing; an all-yield round with neither stalls it. Persistent stalling means no loop is

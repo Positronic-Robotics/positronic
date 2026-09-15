@@ -717,6 +717,28 @@ class TestIntegration:
 class TestWorldInterleave:
     """Test the World.interleave method with comprehensive scenarios."""
 
+    def test_sleep_starts_when_the_loop_yields(self, monkeypatch):
+        now_ns = 0
+        calls = []
+        with World() as world:
+            monkeypatch.setattr(world.clock, 'now_ns', lambda: now_ns)
+
+            def loop(stop_reader, clock):
+                nonlocal now_ns
+                for _ in range(2):
+                    calls.append(clock.now_ns())
+                    now_ns += 3_000_000
+                    yield Sleep(0.002)
+
+            scheduler = world.interleave(loop)
+            pause = next(scheduler)
+            assert isinstance(pause, Sleep)
+            assert pause.seconds == pytest.approx(0.002)
+            now_ns += round(pause.seconds * 1e9)
+            next(scheduler)
+            assert calls == [0, 5_000_000]
+            list(scheduler)
+
     def test_single_loop(self):
         """Test interleaving with multiple scenarios: single loop, multiple loops, timing, and scheduling."""
 
