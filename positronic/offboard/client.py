@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
-# One TCP/TLS handshake, and the retries until a cold backend answers.
+# Opening one session — the socket or TCP/TLS connect and the WebSocket handshake on it — and the
+# retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
@@ -177,8 +178,9 @@ class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
     ``from_url`` reads the wire and the address off one URL. ``headers`` carry the credentials; the address
-    carries none. ``open_timeout`` bounds one TCP/TLS handshake, ``connect_deadline`` the retries until a
-    cold backend answers, and ``infer_timeout`` one inference round trip.
+    carries none. ``open_timeout`` bounds opening one session on either transport — the socket or TCP/TLS connect and
+    the handshake on it — ``connect_deadline`` the retries until a cold backend answers, and
+    ``infer_timeout`` one inference round trip.
     """
 
     def __init__(

@@ -33,9 +33,10 @@ def bracket_ipv6(host: str) -> str:
 class SessionAddress(NamedTuple):
     """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
 
-    ``uds`` is the Unix socket path a ``unix://`` URL named, decoded to dial; ``uds_as_written`` is the
-    same path as the URL spelt it, which is how a session URL names it back. Both are ``None`` over a
-    network, where ``host`` and ``port`` are the address.
+    ``uds`` is the Unix socket path to dial, decoded, and it alone decides that a session goes over a
+    socket rather than the network. ``uds_as_written`` is that path as a URL spelt it, kept so the URL
+    names the socket back unchanged; an address built in code leaves it unset. ``uds`` is ``None`` over
+    a network, where ``host`` and ``port`` are the address.
     """
 
     host: str
