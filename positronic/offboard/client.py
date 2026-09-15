@@ -112,26 +112,6 @@ class InferenceSession:
         logger.info('InferenceSession.close: %s', self._conn.close())
 
 
-def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str, str]:
-    """The socket path a ``unix://`` URL names — decoded to dial, as written to name — and the URL
-    path left over for the server.
-
-    The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
-    Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
-    socket path cannot hold a directory whose own name carries a slash. Only the socket path is
-    decoded, because it names a file; the URL path reaches the server as written, so a model id
-    carries its own escapes. The path as written stays for ``session_url``: a decoded ``?`` or ``#``
-    would read there as a delimiter, so that URL would name a different socket.
-    """
-    if split.netloc or not split.path.startswith('/'):
-        raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
-    marker = re.search(r'/api/v1(?=/|$)', split.path)
-    written = split.path if marker is None else split.path[: marker.start()]
-    if not written:
-        raise ValueError(f'No socket path in {url!r}; write unix:///path/to.sock/api/v1/session')
-    return urllib.parse.unquote(written), written, ('' if marker is None else split.path[marker.start() :])
-
-
 class _ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
@@ -157,6 +137,26 @@ class _ConnectRetries:
         else:
             again = refusal is wire.Refusal.COLD
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
+
+
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[str, str, str]:
+    """The socket path a ``unix://`` URL names — decoded to dial, as written to name — and the URL
+    path left over for the server.
+
+    The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
+    Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
+    socket path cannot hold a directory whose own name carries a slash. Only the socket path is
+    decoded, because it names a file; the URL path reaches the server as written, so a model id
+    carries its own escapes. The path as written stays for ``session_url``: a decoded ``?`` or ``#``
+    would read there as a delimiter, so that URL would name a different socket.
+    """
+    if split.netloc or not split.path.startswith('/'):
+        raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
+    marker = re.search(r'/api/v1(?=/|$)', split.path)
+    written = split.path if marker is None else split.path[: marker.start()]
+    if not written:
+        raise ValueError(f'No socket path in {url!r}; write unix:///path/to.sock/api/v1/session')
+    return urllib.parse.unquote(written), written, ('' if marker is None else split.path[marker.start() :])
 
 
 def _session_path(path: str, url: str) -> str:
