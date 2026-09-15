@@ -7,6 +7,7 @@ import abc
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar, NamedTuple
 from urllib.parse import unquote
 
@@ -47,16 +48,16 @@ class SessionAddress:
     path: str
     query: str
     secure: bool
-    uds: str | None = None
+    uds: Path | None = None
     uds_as_written: str | None = None
 
     def __post_init__(self) -> None:
         # FOOTGUN: one address, one socket. A spelling that decodes to another path would name a socket
         # nobody dials, and a client rebuilt from that URL would reach it.
-        if self.uds_as_written is not None and unquote(self.uds_as_written) != self.uds:
+        if self.uds_as_written is not None and Path(unquote(self.uds_as_written)) != self.uds:
             raise ValueError(f'{self.uds_as_written!r} spells a different socket from the one dialled, {self.uds!r}')
         # A relative path reads back as the authority of a ``unix://`` URL, so the URL would name no socket.
-        if self.uds is not None and not self.uds.startswith('/'):
+        if self.uds is not None and not self.uds.is_absolute():
             raise ValueError(f'{self.uds!r} is a relative socket path; a session URL can only name an absolute one')
 
     @property
@@ -101,7 +102,7 @@ class Endpoint(NamedTuple):
 
     host: str
     port: int
-    uds: str | None = None
+    uds: Path | None = None
 
 
 class Scheme(NamedTuple):

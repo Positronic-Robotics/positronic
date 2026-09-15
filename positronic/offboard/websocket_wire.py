@@ -7,6 +7,7 @@ import ssl
 import stat
 from collections.abc import Mapping
 from http import HTTPStatus
+from pathlib import Path
 from urllib.parse import quote
 
 import uvicorn
@@ -46,7 +47,7 @@ class WebsocketClientConnection(wire.ClientConnection):
         return f'state {state_before_close} -> {self._websocket.state.name}, close code {self._websocket.close_code}'
 
 
-def _socket_may_still_appear(uds: str, e: OSError) -> bool:
+def _socket_may_still_appear(uds: Path, e: OSError) -> bool:
     """Whether a failed dial is a co-located server that has not bound its socket yet.
 
     Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting for
@@ -72,14 +73,14 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
-def _spell(uds: str) -> str:
+def _spell(uds: Path) -> str:
     """``uds`` as a URL names it: the route marker escaped, so only the route this URL appends is one."""
     # The parser ends the socket path at the first ``/api/v1``, so a socket under a directory of that
     # name would otherwise read back as a shorter path and a longer route — a different socket. Escape
     # a separator INSIDE the marker: escaping the one before it would eat the path's leading slash,
     # and a URL whose path does not start with ``/`` names its first segment as the authority.
     marker = wire.API_PATH
-    return quote(uds, safe='/').replace(marker, marker[0] + marker[1:].replace('/', '%2F'))
+    return quote(str(uds), safe='/').replace(marker, marker[0] + marker[1:].replace('/', '%2F'))
 
 
 class WebsocketClientWire(wire.ClientWire):
@@ -124,7 +125,7 @@ class WebsocketClientWire(wire.ClientWire):
                 websocket = connect(self.session_url(address), **settings)
             else:
                 # The handshake asks for the path and the query under a host that stands in for the socket.
-                websocket = unix_connect(address.uds, uri=address.url(self.SCHEME), **settings)
+                websocket = unix_connect(str(address.uds), uri=address.url(self.SCHEME), **settings)
         except InvalidStatus as e:
             raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
         except ssl.SSLCertVerificationError as e:
@@ -210,7 +211,7 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
 LIVE_SOCKET_PROBE_SEC = 1.0
 
 
-def _is_stale_socket(path: str) -> bool:
+def _is_stale_socket(path: Path) -> bool:
     """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
 
     A live socket, a probe that runs out of time against a full backlog, and a path that holds something
@@ -224,7 +225,7 @@ def _is_stale_socket(path: str) -> bool:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
         probe.settimeout(LIVE_SOCKET_PROBE_SEC)
         try:
-            probe.connect(path)
+            probe.connect(str(path))
         except ConnectionRefusedError:
             return True
         except OSError:
@@ -232,7 +233,7 @@ def _is_stale_socket(path: str) -> bool:
     return False
 
 
-def claim_socket_path(path: str) -> socket.socket:
+def claim_socket_path(path: Path) -> socket.socket:
     """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
 
     The bind is the claim, so two servers starting together cannot both take one path: the loser's bind
@@ -242,14 +243,14 @@ def claim_socket_path(path: str) -> socket.socket:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         try:
-            sock.bind(path)
+            sock.bind(str(path))
         except OSError as taken:
             if taken.errno != errno.EADDRINUSE:
                 raise
             if not _is_stale_socket(path):
                 raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
             os.unlink(path)
-            sock.bind(path)
+            sock.bind(str(path))
         # The mode is the deployment's, through its umask: widening it here would open the socket to
         # every local account that can reach the directory.
         sock.listen()
@@ -275,10 +276,11 @@ class WebsocketWire(wire.Wire):
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter, uds: str | None = None):
+    def __init__(self, host: str, port: int, api: APIRouter, uds: str | Path | None = None):
         # The client refuses a relative socket path, because no ``unix://`` URL can name one. A server
         # that bound one would serve a path its own working directory decided and publish it unreachable.
-        if uds is not None and not uds.startswith('/'):
+        uds = None if uds is None else Path(uds)
+        if uds is not None and not uds.is_absolute():
             raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
         self._host = host
         self._port = port
