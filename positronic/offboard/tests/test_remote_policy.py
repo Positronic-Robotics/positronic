@@ -243,6 +243,19 @@ class TestInferenceClientUrl:
         assert client.session_url == 'unix:///run/policy.sock/api/v1/session'
         assert client.api_url == 'http://localhost/api/v1'
 
+    def test_an_address_built_in_code_still_names_its_socket_back(self):
+        """``uds`` alone decides the transport, so a URL built from it names the socket the client dials."""
+        address = wire.SessionAddress(
+            host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds='/run/policy.sock'
+        )
+        assert websocket_wire.WebsocketClientWire().session_url(address) == 'unix:///run/policy.sock/api/v1/session'
+
+    def test_a_socket_path_a_url_spelt_is_named_back_as_written(self):
+        """The written spelling wins where there is one: a decoded ``?`` would name another socket."""
+        client = InferenceClient.from_url('unix:///run/odd%3Fname.sock')
+        assert client.uds == '/run/odd?name.sock'
+        assert client.session_url == 'unix:///run/odd%3Fname.sock/api/v1/session'
+
     def test_a_socket_path_ends_at_the_api_segment(self):
         client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')
         assert client.uds == '/run/policy.sock'

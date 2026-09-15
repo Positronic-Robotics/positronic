@@ -7,6 +7,7 @@ import ssl
 import stat
 from collections.abc import Mapping
 from http import HTTPStatus
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
@@ -86,11 +87,13 @@ class WebsocketClientWire(wire.ClientWire):
     )
 
     def session_url(self, address: wire.SessionAddress) -> str:
-        if address.uds_as_written is None:
+        if address.uds is None:
             return super().session_url(address)
-        # The path as written: a decoded ``?`` or ``#`` would read as a delimiter and name another socket.
+        # ``dial`` reads ``uds``, so this reads it too: a URL that named a socket must name one back.
+        # Spell it as the URL wrote it, since a decoded ``?`` or ``#`` reads as a delimiter and names
+        # another socket; an address built in code carries no spelling, so the dialled path is it.
         query = f'?{address.query}' if address.query else ''
-        return f'{wire.UNIX_SCHEME}://{address.uds_as_written}{address.path}{query}'
+        return f'{wire.UNIX_SCHEME}://{address.uds_as_written or quote(address.uds)}{address.path}{query}'
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
