@@ -1,7 +1,7 @@
 from eval_vocabulary.outcome import ABSENT, VERDICTS, Outcome, is_scored
 
-# The values episodes on disk carry. A change here orphans every recording scored with the old word,
-# so this pins them against the literal rather than against the enum it is testing.
+# The values episodes on disk carry, pinned against the literal rather than against the enum under
+# test: a change here orphans every recording scored with the old word.
 WIRE_VALUES = ('Success', 'Fail', 'Ran out of time', 'Safety', 'System', 'UNSCORED', 'Discarded')
 
 

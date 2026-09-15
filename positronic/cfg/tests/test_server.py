@@ -41,7 +41,7 @@ def test_the_stage_cell_shows_the_operators_word_for_the_rung():
 
 
 def test_the_highest_rung_reached_is_the_one_shown():
-    """A rollout records every rung it passes, so the cell is the maximum and not the last written."""
+    """The cell is the maximum rather than the last written: a rollout records every rung it passes."""
     cell = cfg_server.highest_rollout_stage(_with_stages('at-target', 'reaching', 'contact'))
 
     assert cell.label == STAGE_LABELS[Stage.AT_TARGET]
