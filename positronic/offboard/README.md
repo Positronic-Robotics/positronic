@@ -22,9 +22,10 @@ the same order.
   No `.proto` file describes the frames.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
   `positronic-session-query` and `authorization` metadata.
-- Take the gRPC wire wherever it reaches. Python's WebSocket stack spends about 30 ms per
-  846 KiB observation on framing; gRPC spends about 1 ms. Through a managed front the same
-  observation round-trips in about 6 ms over gRPC and about 60 ms over the WebSocket.
+- Neither wire compresses: the WebSocket refuses permessage-deflate, and gRPC offers none. On one
+  box a 338 KiB observation round-trips in about 1 ms over the WebSocket and about 2 ms over gRPC.
+- Through a managed front an 846 KiB observation round-trips in about 6 ms over gRPC. The
+  WebSocket's cost through that front is unmeasured.
 - gRPC reaches through a managed HTTPS front. The front terminates TLS and must select HTTP/2
   over ALPN. The server binds a plaintext port and holds no certificate.
 - On Nebius, declare the gRPC port as an HTTP port and dial it as `grpcs://<host>:443`.
