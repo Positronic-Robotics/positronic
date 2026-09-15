@@ -418,7 +418,7 @@ def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_p
     """``model_ms`` holds the model's own call, inside ``infer_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _StubSource(policy))
 
     session = InferenceClient.from_url(f'{host}:{port}').new_session()
     try:
@@ -445,7 +445,7 @@ class _SlowCodec(Codec):
 def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
     """The gap between ``infer_ms`` and ``model_ms`` holds the codec's cost."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
 
     session = InferenceClient.from_url(f'{host}:{port}').new_session()
     try:
@@ -461,7 +461,7 @@ def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_
     """``StopOnFault`` answers a faulted arm without the model, and that answer carries no ``model_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
-    host, port, _server = start_server(ChunkedSchedule() | remote | StopOnFault() | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | StopOnFault() | _StubSource(policy))
 
     session = InferenceClient.from_url(f'{host}:{port}').new_session()
     try:
@@ -491,7 +491,7 @@ def test_an_inference_that_raises_leaves_no_model_time_behind(start_server, make
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
     stack = ChunkedSchedule() | remote | StopOnFault() | _FailingCodec()
-    host, port, _server = start_server(stack | _StubSource(policy))
+    host, port, *_ = start_server(stack | _StubSource(policy))
 
     session = InferenceClient.from_url(f'{host}:{port}').new_session()
     try:
@@ -859,7 +859,7 @@ def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, ma
     """Each layer the server wraps ships as ``<name>_ms``, nested from ``infer_ms`` down to ``model_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
-    host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
+    host, port, *_ = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
 
     session = InferenceClient.from_url(f'{host}:{port}').new_session()
     try:
