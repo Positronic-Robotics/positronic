@@ -225,17 +225,16 @@ def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
         session.close()
 
 
-# What a stub spends, so a phase that holds it reads well clear of the clock's own noise.
-_SLOW_MS = 40.0
+_STUB_SLEEP_MS = 40.0
 
 
 def _slow_model(*_args):
-    time.sleep(_SLOW_MS / 1000.0)
+    time.sleep(_STUB_SLEEP_MS / 1000.0)
     return [{'action': [1, 2, 3]}]
 
 
 def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_policy):
-    """``model_ms`` holds the model's own call, inside the ``infer_ms`` that brackets the pipeline."""
+    """``model_ms`` holds the model's own call, inside ``infer_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
     host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
@@ -247,27 +246,23 @@ def test_the_answer_reports_what_the_model_itself_took(start_server, make_mock_p
     finally:
         session.close()
 
-    assert timing[protocol.TIMING_MODEL] >= _SLOW_MS
+    assert timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing[protocol.TIMING_MODEL] <= timing[protocol.TIMING_INFER] <= timing[protocol.TIMING_SERVED]
 
 
 class _SlowCodec(Codec):
-    """A codec that spends ``_SLOW_MS`` on the model's answer, which is a cost around the model."""
+    """Sleeps ``_STUB_SLEEP_MS`` on the model's answer."""
 
     def encode(self, data):
         return data
 
     def _decode_single(self, data):
-        time.sleep(_SLOW_MS / 1000.0)
+        time.sleep(_STUB_SLEEP_MS / 1000.0)
         return data
 
 
 def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, make_mock_policy):
-    """A codec's cost lands in ``infer_ms`` and not in ``model_ms``: the phase holds the model alone.
-
-    The gap between the two figures is what carries that. A timer opened around the served pipeline
-    puts the codec in both, which closes the gap.
-    """
+    """The gap between ``infer_ms`` and ``model_ms`` holds the codec's cost."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     host, port, _server = start_server(ChunkedSchedule() | remote | _SlowCodec() | _StubSource(policy))
 
@@ -278,14 +273,11 @@ def test_the_layers_around_the_model_fall_outside_what_it_took(start_server, mak
     finally:
         session.close()
 
-    assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _SLOW_MS
+    assert timing[protocol.TIMING_INFER] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
 
 
 def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_mock_policy):
-    """``model_ms`` is absent where the model did not run, rather than holding what an earlier call took.
-
-    The served pipeline returns without reaching the model: ``StopOnFault`` answers a faulted arm itself.
-    """
+    """``StopOnFault`` answers a faulted arm without the model, and that answer carries no ``model_ms``."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
     host, port, _server = start_server(ChunkedSchedule() | remote | StopOnFault() | _StubSource(policy))
@@ -299,12 +291,12 @@ def test_an_answer_the_model_never_saw_reports_no_model_time(start_server, make_
     finally:
         session.close()
 
-    assert ran[protocol.TIMING_MODEL] >= _SLOW_MS
+    assert ran[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert protocol.TIMING_MODEL not in stopped
 
 
 class _FailingCodec(Codec):
-    """A codec that fails on the model's answer, so the failure lands after the model has run."""
+    """Raises on the model's answer, after the model has run."""
 
     def encode(self, data):
         return data
@@ -314,7 +306,7 @@ class _FailingCodec(Codec):
 
 
 def test_an_inference_that_raises_leaves_no_model_time_behind(start_server, make_mock_policy):
-    """A call that fails after the model ran leaves no figure for a later call to report as its own."""
+    """The next answer carries no ``model_ms`` from a call that raised after the model ran."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     policy._mock_session.side_effect = _slow_model
     stack = ChunkedSchedule() | remote | StopOnFault() | _FailingCodec()

@@ -8,7 +8,8 @@ import os
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextvars import ContextVar
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -199,58 +200,54 @@ class _ServedTiming:
         self._opened = time.perf_counter()
         self._phases: dict[str, float] = {}
 
+    @classmethod
+    @contextmanager
+    def opened(cls) -> Iterator['_ServedTiming']:
+        """Open the timing of one inference, and make it the one ``_timed`` writes to for the block."""
+        timing = cls()
+        token = _open_timing.set(timing)
+        try:
+            yield timing
+        finally:
+            _open_timing.reset(token)
+
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
         started = time.perf_counter()
         try:
             yield
         finally:
-            self.record(name, (time.perf_counter() - started) * 1000.0)
-
-    def record(self, name: str, ms: float) -> None:
-        """Take one phase from whoever timed it."""
-        self._phases[name] = ms
+            self._phases[name] = (time.perf_counter() - started) * 1000.0
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
 
 
-class _TimeTheModel(Layer):
-    """Time the model's own call and record it on the report of the call that asked for it.
+# The ``_ServedTiming`` of the inference this task serves. ``asyncio.to_thread`` copies the context, so the
+# thread that runs the pipeline sees the same one.
+_open_timing: ContextVar[_ServedTiming | None] = ContextVar('open_timing', default=None)
 
-    It goes innermost, so the figure holds the model alone and the codecs and layers around it fall
-    outside. A call that never reaches the model, one that raises, and one made outside the block
-    each leave the report with no model figure: the layer writes only inside ``reporting_to``.
+
+def _timed(name: str) -> AbstractContextManager[None]:
+    """The ``name`` phase of the open ``_ServedTiming``. A no-op while none is open."""
+    timing = _open_timing.get()
+    return nullcontext() if timing is None else timing.phase(name)
+
+
+class _ModelTimer(Layer):
+    """Time the model's own call as the ``TIMING_MODEL`` phase of the inference being served.
+
+    Wrap it under every codec and layer, so the figure holds the model alone.
     """
 
-    def __init__(self) -> None:
-        self._report: _ServedTiming | None = None
-
-    @contextmanager
-    def reporting_to(self, timing: _ServedTiming) -> Iterator[None]:
-        """Send the model's figure to this call's report, for the length of the call and no longer."""
-        self._report = timing
-        try:
-            yield
-        finally:
-            self._report = None
-
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, timed: '_TimeTheModel') -> None:
-            super().__init__(inner)
-            self._timed = timed
-
         def __call__(self, obs, time_ns):
-            started = time.perf_counter()
-            try:
+            with _timed(protocol.TIMING_MODEL):
                 return self._inner(obs, time_ns)
-            finally:
-                if (report := self._timed._report) is not None:
-                    report.record(protocol.TIMING_MODEL, (time.perf_counter() - started) * 1000.0)
 
     def make_session(self, inner: Session) -> Session:
-        return _TimeTheModel._Session(inner, self)
+        return _ModelTimer._Session(inner)
 
 
 class PolicyServer:
@@ -391,8 +388,7 @@ class PolicyServer:
             policy = await self._manager.get_policy(rid, websocket)
             # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
             # above it sees one call per answer rather than one per call the answer took.
-            time_the_model = _TimeTheModel()
-            answered = time_the_model.wrap(blocking(policy))
+            answered = _ModelTimer().wrap(blocking(policy))
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
@@ -427,20 +423,20 @@ class PolicyServer:
                     message = await websocket.receive_bytes()
                     self._last_activity = time.monotonic()
                     try:
-                        timing = _ServedTiming()
-                        with timing.phase(protocol.TIMING_DECODE):
-                            raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        with timing.phase(protocol.TIMING_QUEUED):
-                            await self._infer_lock.acquire()
-                        try:
-                            with timing.phase(protocol.TIMING_INFER), time_the_model.reporting_to(timing):
-                                # The server's clock is not the rig's.
-                                actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        finally:
-                            self._infer_lock.release()
-                        answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                        with _ServedTiming.opened() as timing:
+                            with _timed(protocol.TIMING_DECODE):
+                                raw_obs = deserialise(message)
+                            # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
+                            # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                            with _timed(protocol.TIMING_QUEUED):
+                                await self._infer_lock.acquire()
+                            try:
+                                with _timed(protocol.TIMING_INFER):
+                                    # The server's clock is not the rig's.
+                                    actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                            finally:
+                                self._infer_lock.release()
+                            answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

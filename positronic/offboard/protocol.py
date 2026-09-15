@@ -35,8 +35,7 @@ TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
 # Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
-# Time the model itself took, inside `INFER`. `INFER` brackets the whole served pipeline, so the
-# difference between the two is what the codecs and layers around the model cost.
+# Time the model's own call took, inside `INFER`.
 TIMING_MODEL = 'model_ms'
 
 
