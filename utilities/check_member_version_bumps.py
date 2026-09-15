@@ -7,16 +7,13 @@ reports success, and the root release then goes out against a version whose byte
 in this repository. Nothing fails — a fresh install just gets the old member, which is why this is
 caught here rather than at release time.
 
-Two things are checked:
+A change under a member must bump that member's `pyproject.toml` `version`, whichever member it is:
+`skip-existing` does not care which package it skips. The root's `==` pin must then name exactly
+that version, for the members in `EXACTLY_PINNED` — a set declared rather than read off the root's
+current dependencies, since deriving it would mean a deleted pin stops being required.
 
-1. A change under a member bumps that member's `pyproject.toml` `version`. This applies to EVERY
-   member, because `skip-existing` skips a version already published whichever member it belongs to.
-2. The root's `==` pin names exactly that version, for the members in `EXACTLY_PINNED`. That set is
-   declared rather than read off the root's current dependencies: deriving it would mean a pin
-   deleted stops being required, which is the same stale install reached by another route.
-
-The members come from the root's `[tool.uv.workspace] members`, so a member added later is covered
-by check 1 without touching this file.
+The members come from the root's `[tool.uv.workspace] members`, so one added later is gated without
+touching this file.
 
 The version must INCREASE, not merely differ: a version already published under other code is worse
 than no bump at all, since the index will keep whichever bytes got there first.
@@ -58,10 +55,8 @@ BASE_REV_ENV = 'RATCHET_BASE'
 
 ROOT_MANIFEST = 'pyproject.toml'
 
-# The distributions the root must pin at an exact version, by name. Only these: `positronic` imports
-# `platform_client`, so a floating client resolves whatever the index offers. A member the root
-# depends on by a FLOOR is deliberate and is not listed — `positronic-eval-vocabulary` is append-only
-# and read tolerantly, which is what lets an install carry one newer than this release.
+# The distributions the root must pin exactly. A member it depends on by a FLOOR is deliberate and
+# is not listed: `positronic-eval-vocabulary` is append-only and read tolerantly.
 EXACTLY_PINNED = ('positronic-platform-client',)
 
 # Changes that cannot reach the installed wheel. A test is NOT here: it ships inside the package
