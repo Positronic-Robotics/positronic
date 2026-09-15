@@ -47,23 +47,6 @@ class WebsocketClientConnection(wire.ClientConnection):
         return f'state {state_before_close} -> {self._websocket.state.name}, close code {self._websocket.close_code}'
 
 
-def _socket_may_still_appear(uds: Path, e: OSError) -> bool:
-    """Whether a failed dial is a co-located server that has not bound its socket yet.
-
-    Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting for
-    it spends the whole deadline on an answer that will not change. A refusal then reads the path, which
-    tells a restarting server from a path naming something that is not a socket.
-    """
-    if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
-        return False
-    try:
-        return stat.S_ISSOCK(os.stat(uds).st_mode)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-
-
 def _status_refusal(status_code: int) -> wire.Refusal:
     """What a non-101 answer to the upgrade says about the server."""
     if status_code == HTTPStatus.FORBIDDEN:
@@ -82,7 +65,7 @@ def _spell(uds: Path) -> str:
 
 
 class WebsocketClientWire(wire.ClientWire):
-    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
+    """The client side of the websocket wire, which the server carries beside its API on one address."""
 
     SCHEME = 'ws'
     SECURE_SCHEME = 'wss'
@@ -105,6 +88,23 @@ class WebsocketClientWire(wire.ClientWire):
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
+
+    @staticmethod
+    def _socket_may_still_appear(uds: Path, e: OSError) -> bool:
+        """Whether a failed dial is a co-located server that has not bound its socket yet.
+
+        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting for
+        it spends the whole deadline on an answer that will not change. A refusal then reads the path, which
+        tells a restarting server from a path naming something that is not a socket.
+        """
+        if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
+            return False
+        try:
+            return stat.S_ISSOCK(os.stat(uds).st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
 
     def dial(
         self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -134,7 +134,7 @@ class WebsocketClientWire(wire.ClientWire):
             raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
         except OSError as e:
             # A socket a co-located server has not bound yet is a backend that is not ready.
-            if address.uds is not None and _socket_may_still_appear(address.uds, e):
+            if address.uds is not None and self._socket_may_still_appear(address.uds, e):
                 raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
             raise
         return WebsocketClientConnection(websocket)
@@ -264,7 +264,7 @@ WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port.
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same address.
 
     ``uds`` binds a Unix socket path in place of ``host:port``. The socket file stays after ``stop``: a
     successor reads it as stale, where an unlink here could take a path that successor has claimed.
