@@ -20,12 +20,17 @@ Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<proce
 machine-load sample per line). The env server writes its own set; nothing rides over the wire.
 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
-The span helpers no-op while unbound (a normal eval binds nothing), so a call site carries no ``None`` check.
-The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
+The span helpers no-op while unbound (an eval recording nowhere binds nothing), so a call site carries no
+``None`` check. The pass-level report is an offline reduce over the raw files
+(``positronic.cli.eval.timing_report``).
+
+A recording run binds the harness's sidecar from ``POSITRONIC_ENV_TELEMETRY_DIR``, which
+``positronic.cli.eval.run.prepare_output_dir`` sets to the directory the run uploads from. ``--timing`` adds
+the pass span and the machine-load stream.
 
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
-``telemetry`` extra adds the OTel SDK and pynvml, imported by ``bind`` and ``StatsSampler``, the two entry
-points ``--timing`` reaches.
+``telemetry`` extra adds the OTel SDK and pynvml; ``bind`` and ``StatsSampler`` raise without it, and a
+recording run warns.
 """
 
 import functools
@@ -37,7 +42,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -198,20 +203,32 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         yield provider
 
 
-def bind_from_env(process: str):
+@contextmanager
+def bind_from_env(process: str) -> Iterator[None]:
     """Bind ``process``'s sidecar from the telemetry environment, for a binary that is not the eval CLI.
 
     The directory turns recording on, and ``process`` names the file, as it does for the env server. This
     mints a run id when the environment sets none. Every record holds the run id in its resource block, and
     the reduce keys an episode by it. Two runs that share one file therefore stay apart.
 
-    Inert while the directory is unset, and while a provider is already bound.
+    Inert while the directory is unset, while a provider is already bound, and where the sidecar refuses to
+    open: a run this fails on still delivers its episodes. ``bind`` serves a caller that asked for telemetry
+    and still raises.
     """
     directory = os.environ.get(ENV_TELEMETRY_DIR)
     if directory is None or _provider is not None:
-        return nullcontext()
+        yield
+        return
     run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
-    return _bind_to(Path(directory) / f'{process}{SPANS_SUFFIX}', process, run_id)
+    path = Path(directory) / f'{process}{SPANS_SUFFIX}'
+    with ExitStack() as opened:
+        try:
+            opened.enter_context(_bind_to(path, process, run_id))
+        except Exception:
+            # rules-allow: swallowed-error — the warning IS the report; there is no caller to raise to that
+            # would not also lose the episodes.
+            logger.warning('recording no telemetry: the sidecar %s did not open', path, exc_info=True)
+        yield
 
 
 def force_flush() -> None:
