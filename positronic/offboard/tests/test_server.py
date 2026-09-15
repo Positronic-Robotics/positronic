@@ -16,6 +16,7 @@ from unittest.mock import ANY, MagicMock, patch
 import configuronic as cfn
 import httpx
 import pytest
+from fastapi import APIRouter
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
@@ -1076,3 +1077,9 @@ def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, ma
     # through _layer_name would assert the naming rule against itself.
     assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+
+
+def test_a_server_refuses_a_relative_socket_path():
+    """No ``unix://`` URL names a relative path, so a server binding one publishes an unreachable address."""
+    with pytest.raises(ValueError, match='relative socket path'):
+        websocket_wire.WebsocketWire('localhost', 0, APIRouter(), uds='policy.sock')
