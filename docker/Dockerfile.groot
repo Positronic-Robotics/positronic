@@ -1,4 +1,4 @@
-ARG BASE_IMAGE
+ARG BASE_IMAGE=positro/gr00t-base:latest
 FROM ${BASE_IMAGE}
 
 WORKDIR /positronic
@@ -11,6 +11,6 @@ ENV PYTHONPATH=/positronic:/gr00t
 
 # Keep Positronic's dependencies separate from the checkpoint runtime.
 ENV UV_PROJECT_ENVIRONMENT=/positronic/.venv VIRTUAL_ENV=/positronic/.venv
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --python 3.12 --no-dev
+ENV UV_LINK_MODE=copy UV_HTTP_TIMEOUT=600 PIP_DEFAULT_TIMEOUT=600
 
 CMD ["bash"]

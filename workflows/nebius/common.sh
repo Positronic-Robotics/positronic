@@ -32,7 +32,7 @@ AUTH_TOKEN_KEY=AUTH_TOKEN
 # The Hugging Face account must have access to the checkpoint's gated backbone.
 HF_TOKEN_SECRET="${NEBIUS_HF_TOKEN_SECRET:-huggingface-read-token}"
 HF_ENV_FLAGS=(--env-secret "HF_TOKEN=${HF_TOKEN_SECRET}")
-GR00T_UV_ARGS="run --no-sync --python 3.12"
+GR00T_UV_ARGS="run --python 3.12"
 
 # S3 credentials and endpoint for pos3, as `nebius ai job|endpoint create` flags. Expand into a
 # create call with "${S3_ENV_FLAGS[@]}".

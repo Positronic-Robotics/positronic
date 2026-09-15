@@ -12,7 +12,8 @@ running inference from your robot or simulator against the served policy — wor
 reached at a managed `https://` URL and gated on a bearer token: see
 [Authenticated inference](#authenticated-inference).
 
-GR00T training and serving use the image's Python 3.12 environment without resynchronizing dependencies.
+GR00T training and serving install Positronic's Python 3.12 environment on startup using the shared uv cache.
+The model runs in the base image's separate GR00T environment.
 They inject `HF_TOKEN` from the MysteryBox secret `huggingface-read-token`.
 Override its name with `NEBIUS_HF_TOKEN_SECRET`; the payload key must be `HF_TOKEN`.
 The token's account must have access to the gated `nvidia/Cosmos-Reason2-2B` backbone.

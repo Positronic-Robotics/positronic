@@ -192,12 +192,12 @@ services:
     container_name: groot-train
     shm_size: 8g
     ipc: host
-    entrypoint: ["uv", "run", "--no-sync", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.train"]
+    entrypoint: ["uv", "run", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "--no-sync", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"
 

@@ -34,7 +34,7 @@ native-checkpoint configuration for that simulator.
 
 ## Docker
 
-Build the pinned fork and the Positronic image:
+Build the Positronic image using the published GR00T base:
 
 ```bash
 make -C docker build-groot
@@ -42,11 +42,11 @@ cd docker
 export IMAGE_TAG=local
 ```
 
-`build-groot` builds its base from the fork revision pinned in `docker/Makefile`.
-To use an existing base image, pass `GROOT_BASE_IMAGE=<image:tag>`.
+`build-groot` pulls `positro/gr00t-base:latest`, published by the fork's GitHub workflow.
 
 The GR00T environment is `/opt/gr00t-venv` (Python 3.12, upstream locked dependencies).
-Positronic has a separate environment at `/positronic/.venv`. Training and serving require a CUDA GPU.
+Positronic creates its separate environment at `/positronic/.venv` on startup using the mounted uv cache.
+Training and serving require a CUDA GPU.
 
 The checkpoint also loads the gated `nvidia/Cosmos-Reason2-2B` backbone. The Hugging Face account
 must have access to it, with its token available inside the container through `HF_TOKEN`,
