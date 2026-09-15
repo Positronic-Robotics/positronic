@@ -347,43 +347,41 @@ class PolicyServer:
         )
 
     async def _answer_verb(self, verb: wire.Verb, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Answer one unary call with the state at the moment it answers.
-
-        ``WARM`` does not wait for the warm it starts. The caller reads ``ready`` until the inference
-        count moves, which is what says the checkpoint has answered something.
-        """
+        """Answer one unary call with the state at the moment it answers. ``WARM`` does not wait for the
+        warm it starts."""
         if verb is wire.WARM:
             self._start_warming(str(payload.get(keys.TASK) or ''))
         return self.readiness().to_wire()
 
     def _start_warming(self, task: str) -> None:
-        """Start one warm inference, off the call that asked for it.
-
-        A warm already running is not started a second time, so a caller that polls may ask again.
-        """
+        """Start one warm inference off the call that asked for it. A warm already running is not started
+        a second time."""
         if self._warming is None or self._warming.done():
             self._warming = asyncio.create_task(self._warm(task))
 
     async def _warm(self, task: str) -> None:
-        """Answer one observation on the loaded checkpoint, so a scored episode does not pay the first one."""
+        """The warm a ``WARM`` call starts. Nothing awaits it, so a failure is reported and not raised."""
         try:
-            policy = await self._manager.loaded_policy()
-            if policy is None:
-                logger.error('Nothing to warm: the model slot is empty')
-                return
-            obs = self._source.warm_observation(policy, task)
-            if obs is None:
-                logger.info('This model source builds no warm observation; the checkpoint warms at load alone')
-                return
-            # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
-            async with self._infer_lock:
-                timing = await asyncio.to_thread(self._warm_once, policy, obs)
-            self._manager.record_inference(timing)
-            logger.info(f'Warmed {self._manager.current_checkpoint_id} in {timing[protocol.TIMING_SERVED]:.0f}ms')
+            await self._warm_loaded_checkpoint(task)
         except Exception as e:
-            # The checkpoint stays loaded and answers sessions, and the inference count still reads zero,
-            # which is what tells a caller that nothing has warmed it.
+            # The checkpoint stays loaded and answers sessions, and the inference count stays at zero.
             logger.error(f'Warming failed: {e}', exc_info=True)
+
+    async def _warm_loaded_checkpoint(self, task: str) -> None:
+        """Answer one observation on the loaded checkpoint, so a scored episode does not pay the first one."""
+        policy = await self._manager.loaded_policy()
+        if policy is None:
+            logger.error('Nothing to warm: the model slot is empty')
+            return
+        obs = self._source.warm_observation(policy, task)
+        if obs is None:
+            logger.info('This model source builds no warm observation; the checkpoint warms at load alone')
+            return
+        # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
+        async with self._infer_lock:
+            timing = await asyncio.to_thread(self._warm_once, policy, obs)
+        self._manager.record_inference(timing)
+        logger.info(f'Warmed {self._manager.current_checkpoint_id} in {timing[protocol.TIMING_SERVED]:.0f}ms')
 
     @staticmethod
     def _warm_once(policy: Policy, obs: dict[str, Any]) -> dict[str, float]:

@@ -159,8 +159,7 @@ class _ConnectWaits:
             except wire.VerbUnsupported:
                 self._answers_ready = False
             except (wire.ConnectRefused, OSError):
-                # The server answers nothing, which is what ``not_ready`` says; the refused connect is
-                # the failure, and this probe is one more reading of it.
+                # The probe adds nothing here: ``not_ready`` already says the server answers nothing.
                 return f'Server not ready: {not_ready}'
             else:
                 return f'Server answers {state.status} on {state.inferences} inferences: {state.message}'
