@@ -242,13 +242,15 @@ class _ScheduleFidelity:
             f'{prefix}.{eval_keys.DROPPED}': self._dropped,
         }
         if self._emitted > 0:
-            meta[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._late_percentile_ms(50)
-            meta[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._late_percentile_ms(90)
+            meta[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._late_percentile_floor_ms(50)
+            meta[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._late_percentile_floor_ms(90)
             meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._max_late_ns / 1e6
         return meta
 
-    def _late_percentile_ms(self, percent: int) -> float:
-        """The whole millisecond at or under which ``percent`` of the emitted waypoints went out."""
+    def _late_percentile_floor_ms(self, percent: int) -> float:
+        """The whole millisecond at or under which ``percent`` of the emitted waypoints went out. The top bin
+        holds every lateness past ``_LATE_BINS_MS``, so a result at that bound is a lower bound, and
+        ``_max_late_ns`` carries the true worst."""
         rank = -(-self._emitted * percent // 100)  # nearest-rank, in integers, so no float rounds it off by one
         seen = 0
         for ms, count in enumerate(self._late_bins):

@@ -44,11 +44,13 @@ TASK = 'eval.task'
 
 # How well the loop kept the trajectory's schedule, per command channel, keyed
 # f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. The harness owns every key under ``SCHEDULE``.
-# ``DROPPED`` counts a waypoint that came due and went out on no round. Lateness is in milliseconds.
+# ``DROPPED`` counts a waypoint that came due and went out on no round.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
+# Milliseconds. A percentile is floored to the whole millisecond, and the harness's top bin saturates, so a
+# percentile reading that bound is a lower bound; ``LATE_MAX_MS`` is exact.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'

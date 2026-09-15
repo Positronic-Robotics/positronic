@@ -27,7 +27,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
+from positronic.policy.harness import _LATE_BINS_MS, POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -1848,6 +1848,41 @@ def test_the_lateness_percentiles_read_the_spread_of_the_rounds():
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P50_MS)] == pytest.approx(4.0)
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P90_MS)] == pytest.approx(8.0)
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_MAX_MS)] == pytest.approx(9.0)
+
+
+@pytest.mark.timeout(3.0)
+def test_a_lateness_percentile_floors_to_the_whole_millisecond():
+    """Lateness bins by the whole millisecond, so a percentile reads its bin's own millisecond and not the
+    lateness inside it. Ten rounds 0.9 ms into each millisecond report the percentiles of ten exactly on it,
+    while the maximum keeps the tenth of a millisecond."""
+    harness, _ = _harness_recording_commands()
+
+    for late_ms in range(10):
+        due_ns = 100 * late_ms * 1_000_000
+        harness._schedules[keys.ROBOT_COMMAND].append((due_ns, f'waypoint@{late_ms}'))
+        harness._fidelity[keys.ROBOT_COMMAND].count_scheduled(1)
+        harness._issue_due_commands(_FrozenClock(due_ns + late_ms * 1_000_000 + 900_000))
+
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P50_MS)] == pytest.approx(4.0)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P90_MS)] == pytest.approx(8.0)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_MAX_MS)] == pytest.approx(9.9)
+
+
+@pytest.mark.timeout(3.0)
+def test_a_lateness_percentile_past_the_last_bin_reads_the_bound():
+    """The top bin holds every lateness past the bound, so a percentile in it reads the bound itself and says
+    nothing about how far past. Only the maximum separates a round that late."""
+    harness, _ = _harness_recording_commands()
+    late_ms = _LATE_BINS_MS + 500
+
+    harness._schedules[keys.ROBOT_COMMAND].append((0, 'waypoint'))
+    harness._fidelity[keys.ROBOT_COMMAND].count_scheduled(1)
+    harness._issue_due_commands(_FrozenClock(late_ms * 1_000_000))
+
+    account = _schedule_account(harness, keys.ROBOT_COMMAND)
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_P50_MS)] == pytest.approx(float(_LATE_BINS_MS))
+    assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.LATE_MAX_MS)] == pytest.approx(float(late_ms))
 
 
 @pytest.mark.timeout(3.0)
