@@ -11,10 +11,12 @@ the model. See [NOTICE](NOTICE). The adapter does not grant additional model rig
 
 Pretrained DROID/Franka inference through Positronic's standard remote policy API.
 The backend calls Galaxea's `PolicyInferencer` and returns the **entire predicted
-chunk in one response**. It does not use the upstream step cache or its
-`action_steps` setting. The checkpoint determines the prediction length; the
-adapter neither truncates nor repeats steps. GPU and real-robot evaluation are
-required to establish performance on a particular rig.
+chunk in one response**. It does not use the upstream step cache, and it neither
+repeats nor reorders steps. The checkpoint determines the prediction length. The
+`droid` pipeline then plays the first 16 steps and takes a fresh observation. That
+is the cadence Galaxea's own server serves per inference, through its
+`action_steps` setting (`scripts/serve_policy.py`, default 16). GPU and real-robot
+evaluation are required to establish performance on a particular rig.
 
 The server-side [codec](codecs.py) handles all embodiment conversion:
 
@@ -35,8 +37,10 @@ See upstream [`DroidLerobotDataset._slice_meta_feature`](https://github.com/Open
 
 Galaxea's processor performs image resizing, state normalization, and action
 denormalization. There is no gripper conversion on the robot client. Every step
-receives its 15 Hz timestamp and the standard end-of-chunk timestamp. Positronic's
-`ChunkedSchedule` executes the complete chunk before asking for a new prediction.
+receives its 15 Hz timestamp. `ActionHorizon` then keeps the steps inside the
+16-step open loop and closes the chunk at that boundary, so Positronic's
+`ChunkedSchedule` asks for a new prediction after 16 steps. A chunk of 16 steps or
+fewer passes through with its own end-of-chunk timestamp.
 The backend has no per-episode action cache; closing or cancelling a session
 cannot carry cached actions into another episode.
 

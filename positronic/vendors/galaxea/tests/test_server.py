@@ -74,7 +74,7 @@ def backend():
             assert not thread.is_alive()
 
 
-def test_live_adapter_returns_full_chunk_with_server_side_gripper_conversion(backend):
+def test_live_adapter_cuts_the_chunk_and_converts_grip_server_side(backend):
     codec = codecs.droid()
     policy = codec.wrap(server.GalaxeaPolicy(backend, 5))
     session = blocking(policy).new_session()
@@ -88,9 +88,9 @@ def test_live_adapter_returns_full_chunk_with_server_side_gripper_conversion(bac
     try:
         assert session.meta == codec.meta
         actions = session(obs, 0)
-        assert len(actions) == 33
-        assert actions[-1] == {keys.ACTION_TIMESTAMP: 32 / 15}
-        np.testing.assert_array_equal(actions[-2][keys.ROBOT_COMMAND].positions, np.arange(217, 224))
+        assert len(actions) == 17
+        assert actions[-1] == {keys.ACTION_TIMESTAMP: 16 / 15}
+        np.testing.assert_array_equal(actions[-2][keys.ROBOT_COMMAND].positions, np.arange(105, 112))
         assert all(step[keys.TARGET_GRIP] == 1 for step in actions[:-1])
         assert len(backend.requests) == 1
         np.testing.assert_allclose(backend.requests[0][protocol.STATE][protocol.RIGHT_GRIPPER], [0.7])
