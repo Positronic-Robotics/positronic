@@ -199,17 +199,23 @@ class _FakeInferenceSession(InferenceSession):
 
 
 class _HeldInferenceSession(_FakeInferenceSession):
-    """A function the test ends: it answers once ``released`` is set. The trial then pays a world duration
-    for it, which no stall on the machine can shorten."""
+    """A function the test ends: it reports the instant it began on ``entered``, and answers once the test
+    calls ``release``. The trial then pays a world duration for it, which no stall can shorten."""
 
-    def __init__(self, action: list[dict[str, Any]], released: threading.Event) -> None:
+    def __init__(self, action: list[dict[str, Any]]) -> None:
         super().__init__(action)
-        self._released = released
+        self.entered = threading.Event()
+        self._released = threading.Event()
+
+    def release(self) -> None:
+        self._released.set()
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
-        # The bound only keeps a test that never releases it from hanging the process on a worker thread:
-        # a run that reaches it has already failed its own assertion.
-        self._released.wait(timeout=30.0)
+        self.entered.set()
+        # The bound is there so a test that never releases it fails rather than hanging the process on a
+        # worker thread.
+        if not self._released.wait(timeout=30.0):
+            raise AssertionError('the function was never released')
         return super().infer(obs)
 
 
@@ -1450,8 +1456,8 @@ class _FrameWatchingSession(_HeldInferenceSession):
     """Reads its camera frame at both ends of a function the test releases, so a rewrite underneath it shows
     up as a difference."""
 
-    def __init__(self, released: threading.Event):
-        super().__init__([], released)
+    def __init__(self):
+        super().__init__([])
         self.seen: list[tuple[np.ndarray, np.ndarray]] = []
 
     def infer(self, obs):
@@ -1465,8 +1471,7 @@ class _FrameWatchingSession(_HeldInferenceSession):
 def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(world):
     """A camera renders into the array behind the adapter it re-emits, and a wall-charged trial keeps the loop
     stepping while the function runs — so the observation handed to that function has to be its own copy."""
-    rewritten = threading.Event()
-    watcher = _FrameWatchingSession(released=rewritten)
+    watcher = _FrameWatchingSession()
     policy = ServedPolicy(watcher)
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
@@ -1486,9 +1491,10 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
     ])
 
     scheduler = world.start([harness, driver])
-    drive_until(scheduler, lambda: frame.array[0, 0, 0] == 9, max_steps=60)
-    rewritten.set()  # the function answers with the rewrite behind it, whatever the machine does meanwhile
-    p['perform_task'].wait_for_answers()
+    drive_until(scheduler, watcher.entered.is_set, max_steps=60)  # the function is holding the frame
+    drive_until(scheduler, lambda: frame.array[0, 0, 0] == 9, max_steps=60)  # and the producer rewrites it
+    watcher.release()
+    p['perform_task'].wait_for_functions()
 
     assert watcher.seen, 'the function never saw the rewrite'
     entry, exit_ = watcher.seen[0]
@@ -2137,14 +2143,14 @@ def _run_episode(
     simulated=True,
     steps=4000,
     run_sec=1.5,
-    release: threading.Event | None = None,
+    held: _HeldInferenceSession | None = None,
     release_at: float = 0.0,
 ) -> list[tuple[float, Any]]:
     """One trial run with ``charge_inference_time``; returns the grip commands with the world time each went
     out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need.
 
-    ``release`` is set once the world reaches ``release_at``, and the answer is in before the world runs on:
-    a function waiting on that event costs the trial a world duration the test names.
+    ``held`` is released ``release_at`` seconds of world time after it begins, and its answer is in before
+    the world runs on: the trial pays that duration for it, whatever the machine does meanwhile.
     """
     wrapped = layer.wrap(policy)
     harness = Harness(make_embodiment(simulated=simulated))
@@ -2172,10 +2178,12 @@ def _run_episode(
     ])
     systems = [harness, driver, _Pacer()] if simulated else [harness, driver]
     scheduler = world.start(systems)
-    if release is not None:
-        drive_until(scheduler, lambda: world.clock.now() >= release_at, max_steps=steps)
-        release.set()
-        perform_task.wait_for_answers()
+    if held is not None:
+        drive_until(scheduler, held.entered.is_set, max_steps=steps)
+        began = world.clock.now()
+        drive_until(scheduler, lambda: world.clock.now() >= began + release_at, max_steps=steps)
+        held.release()
+        perform_task.wait_for_functions()
     drive_scheduler(scheduler, steps=steps)
     return grip_recorder.emitted
 
@@ -2196,10 +2204,9 @@ def test_a_charged_call_costs_the_trial_the_time_the_model_is_out(world):
     """``charge_inference_time=True`` keeps the loop stepping while the model is out, so the world runs on
     while it does. The function here answers 0.2s of world time past the observation, and the chunk it
     returns cannot be played before that."""
-    released = threading.Event()
-    policy = ServedPolicy(_HeldInferenceSession(slow_chunk(), released))
+    held = _HeldInferenceSession(slow_chunk())
     played = _run_episode(
-        world, policy, ChunkedSchedule(), charge_inference_time=True, release=released, release_at=0.2
+        world, ServedPolicy(held), ChunkedSchedule(), charge_inference_time=True, held=held, release_at=0.2
     )
 
     assert played, 'no command was played'
@@ -2210,10 +2217,15 @@ def test_a_charged_call_costs_the_trial_the_time_the_model_is_out(world):
 def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
     """The knob is sim-only: a real rig pays what its functions take, so a task leaving
     ``charge_inference_time`` unset does not hold the world for them."""
-    released = threading.Event()
-    policy = ServedPolicy(_HeldInferenceSession(slow_chunk(), released))
+    held = _HeldInferenceSession(slow_chunk())
     played = _run_episode(
-        world, policy, ChunkedSchedule(), charge_inference_time=False, simulated=False, release=released, release_at=0.2
+        world,
+        ServedPolicy(held),
+        ChunkedSchedule(),
+        charge_inference_time=False,
+        simulated=False,
+        held=held,
+        release_at=0.2,
     )
 
     assert played, 'no command was played'
