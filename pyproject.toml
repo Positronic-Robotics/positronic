@@ -45,8 +45,7 @@ dependencies = [
     # resolve a contract it was never built against.
     "positronic-platform-client==0.8.2",
     # The words an attended rollout records, which the rollouts viewer colours and counts. A floor
-    # rather than a pin: the vocabulary is append-only, so a reader built against fewer words still
-    # reads every recording.
+    # rather than a pin: a reader built against fewer words still reads every recording.
     "positronic-eval-vocabulary>=0.1",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
