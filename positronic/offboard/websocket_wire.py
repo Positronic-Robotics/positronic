@@ -1,15 +1,20 @@
 """The websocket wire, and the two ends of a websocket session."""
 
+import errno
+import os
 import socket
 import ssl
+import stat
 from collections.abc import Mapping
 from http import HTTPStatus
+from pathlib import Path
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
-from websockets.sync.client import connect
+from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
 from . import wire
@@ -51,31 +56,74 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
+def _spell(uds: Path) -> str:
+    """``uds`` as a URL names it: the route marker escaped, so only the route this URL appends is one."""
+    # FOOTGUN: escape a separator INSIDE the marker. The one before it is the path's leading slash, and
+    # a URL path that does not start with ``/`` reads its first segment as the authority.
+    marker = wire.API_PATH
+    return quote(str(uds), safe='/').replace(marker, marker[0] + marker[1:].replace('/', '%2F'))
+
+
 class WebsocketClientWire(wire.ClientWire):
-    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
+    """The client side of the websocket wire, which the server carries beside its API on one address."""
 
     SCHEME = 'ws'
     SECURE_SCHEME = 'wss'
     # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
-    ALIASES = (wire.Scheme('', secure=False), wire.Scheme('http', secure=False), wire.Scheme('https', secure=True))
+    ALIASES = (
+        wire.Scheme('', secure=False),
+        wire.Scheme('http', secure=False),
+        wire.Scheme('https', secure=True),
+        # A Unix socket path in place of a host. The session upgrades from HTTP over that socket.
+        wire.Scheme(wire.UNIX_SCHEME, secure=False),
+    )
+
+    def session_url(self, address: wire.SessionAddress) -> str:
+        if address.uds is None:
+            return super().session_url(address)
+        # FOOTGUN: spell the path as the URL wrote it. A decoded ``?`` or ``#`` reads as a delimiter,
+        # so re-encoding a round trip through this URL would name a different socket.
+        query = f'?{address.query}' if address.query else ''
+        return f'{wire.UNIX_SCHEME}://{address.uds_as_written or _spell(address.uds)}{address.path}{query}'
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
+
+    @staticmethod
+    def _socket_may_still_appear(uds: Path, e: OSError) -> bool:
+        """Whether a failed dial is a co-located server that has not bound its socket yet.
+
+        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting for
+        it spends the whole deadline on an answer that will not change. A refusal then reads the path, which
+        tells a restarting server from a path naming something that is not a socket.
+        """
+        if not isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
+            return False
+        try:
+            return stat.S_ISSOCK(os.stat(uds).st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
 
     def dial(
         self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> WebsocketClientConnection:
         """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
+        # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
+        # nothing until it answers. The pings keep it open.
+        settings = {
+            'open_timeout': open_timeout,
+            'additional_headers': headers,
+            'ping_interval': 20.0,
+            'max_size': wire.MAX_MESSAGE_BYTES,
+        }
         try:
-            # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
-            # nothing until it answers. The pings keep it open.
-            websocket = connect(
-                self.session_url(address),
-                open_timeout=open_timeout,
-                additional_headers=headers,
-                ping_interval=20.0,
-                max_size=wire.MAX_MESSAGE_BYTES,
-            )
+            if address.uds is None:
+                websocket = connect(self.session_url(address), **settings)
+            else:
+                # The handshake asks for the path and the query under a host that stands in for the socket.
+                websocket = unix_connect(str(address.uds), uri=address.url(self.SCHEME), **settings)
         except InvalidStatus as e:
             raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
         except ssl.SSLCertVerificationError as e:
@@ -84,6 +132,11 @@ class WebsocketClientWire(wire.ClientWire):
         # not ready.
         except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
             raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
+        except OSError as e:
+            # A socket a co-located server has not bound yet is a backend that is not ready.
+            if address.uds is not None and self._socket_may_still_appear(address.uds, e):
+                raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
+            raise
         return WebsocketClientConnection(websocket)
 
 
@@ -151,21 +204,85 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
     return sockets
 
 
+# The probe bounds its wait, and reads a wait that runs out as a live server: a server whose backlog is
+# full holds a connect open, and an unbounded one would stall startup.
+LIVE_SOCKET_PROBE_SEC = 1.0
+
+
+def _is_stale_socket(path: Path) -> bool:
+    """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+
+    A live socket, a probe that runs out of time against a full backlog, and a path that holds something
+    other than a socket are none of them stale.
+    """
+    try:
+        if not stat.S_ISSOCK(os.stat(path).st_mode):
+            return False
+    except FileNotFoundError:
+        return False
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(LIVE_SOCKET_PROBE_SEC)
+        try:
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def claim_socket_path(path: Path) -> socket.socket:
+    """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
+
+    The bind is the claim for a live path: it precedes any probe, so the loser fails on ``EADDRINUSE``.
+    A stale file is unlinked and rebound, and two starters racing one stale path can both get through
+    that branch. This flow gives each socket path one starter. Serve the returned socket by its
+    descriptor: a server handed the path instead binds again, and unlinks this claim.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        try:
+            sock.bind(str(path))
+        except OSError as taken:
+            if taken.errno != errno.EADDRINUSE:
+                raise
+            if not _is_stale_socket(path):
+                raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
+            os.unlink(path)
+            sock.bind(str(path))
+        # The mode is the deployment's, through its umask: widening it here would open the socket to
+        # every local account that can reach the directory.
+        sock.listen()
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 # uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
 # (measured by positronic/offboard/serving_cost.py).
 WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same address.
+
+    ``uds`` binds a Unix socket path in place of ``host:port``. The socket file stays after ``stop``: a
+    successor reads it as stale, where an unlink here could take a path that successor has claimed.
+    """
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter):
+    def __init__(self, host: str, port: int, api: APIRouter, uds: str | Path | None = None):
+        # A relative path has no ``unix://`` spelling, so this wire could publish no address for it.
+        uds = None if uds is None else Path(uds)
+        if uds is not None and not uds.is_absolute():
+            raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
         self._host = host
         self._port = port
+        self._uds = uds
         self._api = api
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
@@ -179,8 +296,12 @@ class WebsocketWire(wire.Wire):
 
     async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
         self._served = False
-        self._sockets = _listening_sockets(self._host, self._port)
-        self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
+        if self._uds is not None:
+            self._sockets = [claim_socket_path(self._uds)]
+            self._endpoint = wire.Endpoint(self._host, 0, uds=self._uds)
+        else:
+            self._sockets = _listening_sockets(self._host, self._port)
+            self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
         app = FastAPI()
         app.include_router(self._api)
         self._route_sessions(app, session, authorized)

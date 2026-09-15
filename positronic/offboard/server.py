@@ -382,9 +382,14 @@ class PolicyServer:
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
             endpoint = conn.endpoint
+            # Where the server listens. A socket path is not a host, so it has its own key.
+            listens = (
+                {offboard_keys.HOST: endpoint.host, offboard_keys.PORT: endpoint.port}
+                if endpoint.uds is None
+                else {offboard_keys.UDS: str(endpoint.uds)}
+            )
             meta = {
-                offboard_keys.HOST: endpoint.host,
-                offboard_keys.PORT: endpoint.port,
+                **listens,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,
@@ -506,7 +511,7 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None)
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None, uds=None)
 def serve(
     pipeline: cfn.Config,
     host: str,
@@ -514,13 +519,16 @@ def serve(
     recording_dir: str | None,
     idle_timeout_min: float | None,
     grpc_port: int | None,
+    uds: str | None,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
     Only the sockets and the recording taps are flags of their own. The codec, the source and the checkpoint
     directory are reached through the pipeline (``--pipeline.source.checkpoints_dir=...``), each under one name.
 
-    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
+    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``uds`` binds
+    the websocket wire to that Unix socket path instead of ``host`` and ``port``; the gRPC wire still
+    binds ``host``, so a socket-served websocket beside a gRPC port is still reachable over the network.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
@@ -531,7 +539,7 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
+    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api, uds=uds)]
     if grpc_port is not None:
         wires.append(grpc_wire.GrpcWire(host, grpc_port))
     server.serve(wires)

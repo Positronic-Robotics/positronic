@@ -1,6 +1,7 @@
 import threading
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -46,6 +47,11 @@ class _FakeWire(wire.ClientWire):
 
 
 _ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+
+
+def _dialled_socket(client: InferenceClient) -> str | None:
+    """The socket path ``client`` would hand ``unix_connect``, decoded, as text to compare."""
+    return None if client._address.uds is None else str(client._address.uds)
 
 
 def _mock_session(metadata=None):
@@ -133,7 +139,8 @@ class TestInferenceClientHeaders:
 
     def test_list_models_passes_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
+        with patch('positronic.offboard.client.httpx.Client') as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
             mock_get.return_value.json.return_value = {'models': ['m1']}
             client = InferenceClient.from_url('localhost:8000', headers=headers)
 
@@ -143,7 +150,8 @@ class TestInferenceClientHeaders:
             assert mock_get.call_args.kwargs['headers'] == headers
 
     def test_list_models_without_headers_passes_none(self):
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
+        with patch('positronic.offboard.client.httpx.Client') as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
             mock_get.return_value.json.return_value = {'models': []}
             client = InferenceClient.from_url('localhost:8000')
             client.list_models()
@@ -234,6 +242,119 @@ class TestInferenceClientUrl:
 
         assert [dialed for dialed, _headers, _timeout in fake.dials] == [address, address]
         assert client.session_url == 'fake://localhost:8000/api/v1/session/10000?fps=10'
+
+    def test_a_socket_path_alone_is_the_default_session(self):
+        client = InferenceClient.from_url('unix:///run/policy.sock')
+        assert _dialled_socket(client) == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session'
+        assert client.api_url == 'http://localhost/api/v1'
+
+    def test_an_address_built_in_code_still_names_its_socket_back(self):
+        """``uds`` alone decides the transport, so a URL built from it names the socket the client dials."""
+        address = wire.SessionAddress(
+            host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds=Path('/run/policy.sock')
+        )
+        assert websocket_wire.WebsocketClientWire().session_url(address) == 'unix:///run/policy.sock/api/v1/session'
+
+    def test_a_socket_path_a_url_spelt_is_named_back_as_written(self):
+        """The written spelling wins where there is one: a decoded ``?`` would name another socket."""
+        client = InferenceClient.from_url('unix:///run/odd%3Fname.sock')
+        assert _dialled_socket(client) == '/run/odd?name.sock'
+        assert client.session_url == 'unix:///run/odd%3Fname.sock/api/v1/session'
+
+    def test_an_address_cannot_name_one_socket_and_dial_another(self):
+        with pytest.raises(ValueError, match='different socket'):
+            wire.SessionAddress(
+                host='localhost',
+                port=0,
+                path='/api/v1/session',
+                query='',
+                secure=False,
+                uds=Path('/run/a.sock'),
+                uds_as_written='/run/b.sock',
+            )
+
+    def test_an_address_refuses_a_relative_socket_path(self):
+        """A relative path reads back as the URL's authority, so no URL could name that socket."""
+        with pytest.raises(ValueError, match='relative socket path'):
+            wire.SessionAddress(
+                host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds=Path('policy.sock')
+            )
+
+    @pytest.mark.parametrize('uds', ['/tmp/api/v1/policy.sock', '/api/v1/policy.sock'])
+    def test_a_socket_under_an_api_directory_round_trips(self, uds):
+        """The URL escapes the marker inside the path, so reparsing ends the socket where it began."""
+        address = wire.SessionAddress(
+            host='localhost', port=0, path=wire.SESSION_PATH, query='', secure=False, uds=Path(uds)
+        )
+        url = websocket_wire.WebsocketClientWire().session_url(address)
+        assert _dialled_socket(InferenceClient.from_url(url)) == uds
+
+    def test_a_socket_path_ends_at_the_api_segment(self):
+        client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')
+        assert _dialled_socket(client) == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session/10000?fps=10'
+
+    def test_a_query_on_a_bare_socket_path_rides_along(self):
+        client = InferenceClient.from_url('unix:///run/policy.sock?fps=10')
+        assert _dialled_socket(client) == '/run/policy.sock'
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session?fps=10'
+
+    def test_the_api_marker_is_a_whole_segment(self):
+        """A socket under a directory whose name only starts with the marker is still the whole path."""
+        client = InferenceClient.from_url('unix:///run/api/v1x/policy.sock')
+        assert _dialled_socket(client) == '/run/api/v1x/policy.sock'
+        assert client.session_url == 'unix:///run/api/v1x/policy.sock/api/v1/session'
+
+    def test_the_socket_path_is_decoded_and_the_session_path_is_not(self):
+        """The socket path names a file, so its escapes are resolved for the dial; the model id reaches
+        the server as written, which is how an id carrying its own escapes survives."""
+        client = InferenceClient.from_url('unix:///run/a%20b%25c/policy.sock/api/v1/session/s3%3A//ckpt')
+        assert _dialled_socket(client) == '/run/a b%c/policy.sock'
+        assert client.session_url == 'unix:///run/a%20b%25c/policy.sock/api/v1/session/s3%3A//ckpt'
+
+    def test_a_reserved_character_in_the_socket_path_stays_escaped_in_the_session_url(self):
+        """``session_url`` is a URL, so a decoded ``?`` there would read as the query delimiter and the
+        value would name a shorter socket than the one being dialled."""
+        client = InferenceClient.from_url('unix:///run/a%3Fb.sock/api/v1/session/10000')
+        assert _dialled_socket(client) == '/run/a?b.sock'
+        assert client.session_url == 'unix:///run/a%3Fb.sock/api/v1/session/10000'
+        assert _dialled_socket(InferenceClient.from_url(client.session_url)) == _dialled_socket(client)
+
+    def test_a_socket_path_needing_no_escape_gains_none(self):
+        client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')
+        assert client.session_url == 'unix:///run/policy.sock/api/v1/session/10000?fps=10'
+        assert _dialled_socket(InferenceClient.from_url(client.session_url)) == _dialled_socket(client)
+
+    def test_a_url_naming_no_socket_is_refused(self):
+        """The marker at offset zero leaves no socket path, so there is nothing to dial."""
+        with pytest.raises(ValueError, match='No socket path'):
+            InferenceClient.from_url('unix:///api/v1/session')
+
+    def test_a_one_segment_socket_path_is_enough(self):
+        client = InferenceClient.from_url('unix:///s.sock/api/v1/session')
+        assert _dialled_socket(client) == '/s.sock'
+        assert client.session_url == 'unix:///s.sock/api/v1/session'
+
+    def test_an_escaped_separator_is_a_separator_once_decoded(self):
+        """The decode resolves every escape, so no socket path can hold a slash inside one name."""
+        client = InferenceClient.from_url('unix:///run/odd%2Fname/policy.sock')
+        assert _dialled_socket(client) == '/run/odd/name/policy.sock'
+
+    def test_a_relative_socket_path_rejected(self):
+        with pytest.raises(ValueError, match='absolute'):
+            InferenceClient.from_url('unix://policy.sock')
+
+    def test_a_unix_url_dials_the_socket_and_asks_for_the_url_path(self):
+        with (
+            patch('positronic.offboard.websocket_wire.unix_connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10').new_session()
+
+            mock_connect.assert_called_once()
+            assert mock_connect.call_args.args[0] == '/run/policy.sock'
+            assert mock_connect.call_args.kwargs['uri'] == 'ws://localhost/api/v1/session/10000?fps=10'
 
 
 def _refused(refusal: wire.Refusal) -> wire.ConnectRefused:

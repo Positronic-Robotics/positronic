@@ -1,8 +1,10 @@
 import logging
+import re
 import time
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self
 
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
-# One TCP/TLS handshake, and the retries until a cold backend answers.
+# Opening one session: the connect on either transport, and the handshake on it.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
@@ -137,6 +139,26 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
+def _socket_and_path(split: urllib.parse.SplitResult, url: str) -> tuple[Path, str, str]:
+    """The socket path a ``unix://`` URL names — decoded to dial, as written to name — and the URL
+    path left over for the server.
+
+    The split runs over the encoded path, so an escaped ``/api/v1`` cannot be read as the marker.
+    Decoding follows, and it resolves every escape: ``%2F`` becomes a separator like any other, so a
+    socket path cannot hold a directory whose own name carries a slash. Only the socket path is
+    decoded, because it names a file; the URL path reaches the server as written, so a model id
+    carries its own escapes. The path as written stays for ``session_url``: a decoded ``?`` or ``#``
+    would read there as a delimiter, so that URL would name a different socket.
+    """
+    if split.netloc or not split.path.startswith('/'):
+        raise ValueError(f'Socket path must be absolute in {url!r}; write unix:///path/to.sock')
+    marker = re.search(r'/api/v1(?=/|$)', split.path)
+    written = split.path if marker is None else split.path[: marker.start()]
+    if not written:
+        raise ValueError(f'No socket path in {url!r}; write unix:///path/to.sock/api/v1/session')
+    return Path(urllib.parse.unquote(written)), written, ('' if marker is None else split.path[marker.start() :])
+
+
 def _session_path(path: str, url: str) -> str:
     """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
 
@@ -156,8 +178,9 @@ class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
     ``from_url`` reads the wire and the address off one URL. ``headers`` carry the credentials; the address
-    carries none. ``open_timeout`` bounds one TCP/TLS handshake, ``connect_deadline`` the retries until a
-    cold backend answers, and ``infer_timeout`` one inference round trip.
+    carries none. ``open_timeout`` bounds opening one session on either transport — the socket or TCP/TLS connect and
+    the handshake on it — ``connect_deadline`` the retries until a cold backend answers, and
+    ``infer_timeout`` one inference round trip.
     """
 
     def __init__(
@@ -196,23 +219,43 @@ class InferenceClient:
         (``wires.BY_SCHEME`` lists them); a URL with no scheme takes the wire that lists the empty scheme,
         without TLS. The port defaults to 443 with TLS and to 80 without. The model id and the query reach
         the server as written, and every session opened here carries them.
+
+        ``unix://<absolute socket path>[/api/v1/session[/<model_id>]][?query]`` reaches a server on the
+        same machine over a Unix domain socket, which needs no network. The socket path runs to the first
+        ``/api/v1`` segment, so ``unix:///run/policy.sock`` is the default session and
+        ``unix:///run/policy.sock/api/v1/session/10000?fps=10`` names a model and a param. TLS does not
+        apply.
         """
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
         selected = wires.BY_SCHEME.get(split.scheme)
         if selected is None:
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
         client_wire, scheme = selected
-        address = wire.SessionAddress(
-            host=split.hostname,
-            port=wire.default_port(scheme.secure) if split.port is None else split.port,
-            path=_session_path(split.path, url),
-            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
-            # wrote the URL knows whether `true` means the bool or the string.
-            query=split.query,
-            secure=scheme.secure,
-        )
+        # The query is forwarded verbatim: the server reads each param value as a JSON literal, and only
+        # whoever wrote the URL knows whether `true` means the bool or the string.
+        if split.scheme == wire.UNIX_SCHEME:
+            uds, written, path = _socket_and_path(split, url)
+            # A socket path is not a host. The server reads the path and the query alone, so the handshake
+            # asks for them under a host that stands in for the socket.
+            address = wire.SessionAddress(
+                host='localhost',
+                port=wire.default_port(scheme.secure),
+                path=_session_path(path, url),
+                query=split.query,
+                secure=scheme.secure,
+                uds=uds,
+                uds_as_written=written,
+            )
+        else:
+            if not split.hostname:
+                raise ValueError(f'No host in {url!r}')
+            address = wire.SessionAddress(
+                host=split.hostname,
+                port=wire.default_port(scheme.secure) if split.port is None else split.port,
+                path=_session_path(split.path, url),
+                query=split.query,
+                secure=scheme.secure,
+            )
         return cls(
             client_wire,
             address,
@@ -265,6 +308,8 @@ class InferenceClient:
         """List available models from the server."""
         if self.api_url is None:
             raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
+        transport = None if self._address.uds is None else httpx.HTTPTransport(uds=str(self._address.uds))
+        with httpx.Client(transport=transport) as client:
+            response = client.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']
