@@ -67,6 +67,8 @@ uv run positronic-data-collection real \
 
 Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --locked --extra hardware` (Linux only). Configure network connection and udev rules (see [Drivers](../positronic/drivers/)).
 
+The run opens the brakes and activates FCI itself, given `FRANKA_DESK_USER` and `FRANKA_DESK_PASSWORD`. When the control box needs attention between runs, `positronic-franka-desk` reaches the same Desk API from the shell: `state --host=<desk-host>` prints brakes, FCI and control-token state as JSON without taking control, `reboot` recovers a control token stranded by a crashed session or a `SafetyError`, and `ack_errors` clears recoverable safety errors by running the TD2 self-test.
+
 ### Other Platforms
 - **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova --nominal_joints=[0.0,0.0,0.5,-1.5,0.0,-0.5,1.5708]` — the start pose the right stick puts the arm at belongs to the arm, so it is named with it
 - **SO101**: Use `positronic-data-collection so101` (bimanual setup)
