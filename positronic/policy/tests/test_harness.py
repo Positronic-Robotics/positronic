@@ -802,22 +802,6 @@ def test_policy_stop_finalizes_without_claiming_success_and_external_done_wins(w
         assert eval_keys.SUCCESS not in meta
 
 
-def test_rollouts_have_distinct_artifact_directories_only_when_recorded(tmp_path):
-    task = Task(instruction_source='test', timeout_sec=None)
-    first = Rollout(task, StubPolicy(), tmp_path)
-    second = Rollout(task, StubPolicy(), tmp_path)
-    unrecorded = Rollout(task, StubPolicy(), None)
-    try:
-        assert first.rt.artifact_dir is not None
-        assert first.rt.artifact_dir.is_relative_to(tmp_path)
-        assert first.rt.artifact_dir != second.rt.artifact_dir
-        assert unrecorded.rt.artifact_dir is None
-    finally:
-        first.close()
-        second.close()
-        unrecorded.close()
-
-
 @pytest.mark.timeout(3.0)
 def test_trial_budget_starts_when_the_rig_is_ready(world):
     """The 0.05 budget is measured from the end of the prepare, not from the ask: the 0.2 the scene takes to

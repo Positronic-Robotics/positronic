@@ -4,7 +4,6 @@ from collections import deque
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 from opentelemetry.trace import Span
@@ -43,8 +42,7 @@ class Rollout:
         self.output_path = output_path
         # The Harness charges the trial for the model's time through this runtime. TODO(#661): the framework
         # takes over the chain, and only the charge keeps a runtime here.
-        artifacts = output_path / 'policy' / uuid4().hex if output_path is not None else None
-        self.rt = Executor(policy.functions, artifact_dir=artifacts)
+        self.rt = Executor(policy.functions)
         try:
             self.session = policy.new_session(rt=self.rt)
         except BaseException:

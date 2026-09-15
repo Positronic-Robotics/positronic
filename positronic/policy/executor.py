@@ -7,7 +7,6 @@ import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from positronic.offboard.protocol import MODEL_CALL
@@ -50,10 +49,7 @@ class Executor(Runtime):
             """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
             return None if self.call.cancelled() else self.call.exception()
 
-    def __init__(
-        self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1, artifact_dir: Path | None = None
-    ):
-        self._artifact_dir = artifact_dir
+    def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
         # Every answer that no caller has read. A call that has still to answer is one of these, so
@@ -64,10 +60,6 @@ class Executor(Runtime):
     @property
     def fns(self) -> Mapping[str, Fn]:
         return self._fns
-
-    @property
-    def artifact_dir(self) -> Path | None:
-        return self._artifact_dir
 
     @property
     def in_flight(self) -> bool:

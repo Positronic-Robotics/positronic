@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -39,7 +38,7 @@ class Camera(pimm.ControlSystem):
 def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, ending, charge):
     states = []
 
-    def request(endpoint, messages, tools, transcript, call, obs_time_ns):
+    def request(endpoint, messages, tools):
         observations = [
             json.loads(part.content)
             for message in messages
@@ -49,7 +48,7 @@ def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, endin
         ]
         state = observations[-1]
         states.append(state)
-        if call == 1:
+        if 'previous_target' not in state:
             x, y, z = state['position_m']
             roll, pitch, yaw = state['roll_pitch_yaw_rad']
             return ModelResponse([
@@ -68,7 +67,6 @@ def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, endin
                     tool_call_id='move',
                 )
             ])
-        assert call == 2
         return ModelResponse([
             ToolCallPart(
                 ending, {'reason': 'Finish smoke test.', 'hindsight': 'Small move observed.'}, tool_call_id='finish'
@@ -98,23 +96,35 @@ def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, endin
         LLMPolicy(Endpoint('mock'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
     )
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
-    run_world(embodiment, TaskDriver(lambda: [task], policy, tmp_path))
+    run_world(embodiment, TaskDriver(lambda: [task, task], policy, tmp_path))
     dataset = LocalDataset(tmp_path)
-    assert len(dataset) == 1
-    episode = dataset[0]
-    assert isinstance(episode, Episode)
-    assert episode[eval_keys.TERMINATED] is True
-    assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
-    assert eval_keys.SUCCESS not in episode
-    assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
-    assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
-    transcript = Path(episode[f'{policy_keys.POLICY_META}.transcript'])
-    assert transcript.is_file()
-    assert len(states) == 2
-    assert states[0]['position_m'][0] < states[1]['position_m'][0] <= states[0]['position_m'][0] + 0.01
-    assert states[1]['gripper'] == pytest.approx(0.2)
-    remaining = states[0]['position_m'][0] + 0.01 - states[1]['position_m'][0]
-    assert states[1]['remaining_translation_m'] == pytest.approx([remaining, 0, 0], abs=1e-7)
-    final_pose = list(episode[keys.EE_POSE].values())[-1]
-    assert final_pose[0] == pytest.approx(states[0]['position_m'][0] + 0.01)
-    assert len(episode[keys.EE_POSE]) > 1
+    assert len(dataset) == 2
+    assert len(states) == 4
+    assert not (tmp_path / 'policy').exists()
+    assert not list(tmp_path.rglob('*.jsonl'))
+    for index, episode in enumerate(dataset):
+        assert isinstance(episode, Episode)
+        assert episode[eval_keys.TERMINATED] is True
+        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert eval_keys.SUCCESS not in episode
+        assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
+        assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
+        transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']
+        assert isinstance(transcript, list)
+        assert len([e for e in transcript if e['event'] == 'instructions']) == 1
+        requests = [e for e in transcript if e['event'] == 'request']
+        responses = [e for e in transcript if e['event'] == 'response']
+        before, after = states[index * 2 : index * 2 + 2]
+        assert [e['call'] for e in requests] == [1, 2]
+        assert [e['call'] for e in responses] == [1, 2]
+        assert [e['obs_time_ns'] for e in requests] == [before['obs_time_ns'], after['obs_time_ns']]
+        assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
+        assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
+        assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
+        assert before['position_m'][0] < after['position_m'][0] <= before['position_m'][0] + 0.01
+        assert after['gripper'] == pytest.approx(0.2)
+        remaining = before['position_m'][0] + 0.01 - after['position_m'][0]
+        assert after['remaining_translation_m'] == pytest.approx([remaining, 0, 0], abs=1e-7)
+        final_pose = list(episode[keys.EE_POSE].values())[-1]
+        assert final_pose[0] == pytest.approx(before['position_m'][0] + 0.01)
+        assert len(episode[keys.EE_POSE]) > 1

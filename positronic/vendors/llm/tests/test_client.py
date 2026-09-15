@@ -16,8 +16,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.tools import ToolDefinition
 
+from positronic import keys
 from positronic.vendors.llm.client import API, Endpoint
-from positronic.vendors.llm.recording import Transcript
+from positronic.vendors.llm.motion import Motion
+from positronic.vendors.llm.policy import LLMPolicy
+from positronic.vendors.llm.tests.test_policy import complete, observation, session
 
 
 @pytest.fixture
@@ -146,7 +149,7 @@ def provider(request):
             )
 
 
-def test_native_requests_round_trip_images_tools_and_reasoning(http, provider, tmp_path):
+def test_native_requests_round_trip_images_tools_and_reasoning(http, provider):
     requests, responses = http
     api, model, payload, reasoning = provider
     responses.extend([httpx.Response(200, json=payload), httpx.Response(200, json=payload)])
@@ -170,14 +173,13 @@ def test_native_requests_round_trip_images_tools_and_reasoning(http, provider, t
         )
     ]
     endpoint = Endpoint(model, api=api, base_url='https://test.invalid/v1')
-    transcript = Transcript(tmp_path)
-    response = endpoint.request(messages, tools, transcript, 1, 1000)
+    response = endpoint.request(messages, tools)
     call = response.tool_calls[0]
     assert call.tool_name == 'done'
     assert response.usage.input_tokens == 100
     assert response.usage.output_tokens == 20
     messages += [response, ModelRequest([ToolReturnPart('done', 'Ended.', tool_call_id=call.tool_call_id)])]
-    endpoint.request(messages, tools, transcript, 2, 2000)
+    endpoint.request(messages, tools)
     assert len(requests) == 2
     first, second = [request.content.decode() for request in requests]
     encoded_image = (base64.urlsafe_b64encode if api is API.GOOGLE else base64.b64encode)(png.getvalue()).decode()
@@ -188,23 +190,37 @@ def test_native_requests_round_trip_images_tools_and_reasoning(http, provider, t
     if api is API.OPENAI_RESPONSES:
         assert json.loads(first)['store'] is False
         assert 'previous_response_id' not in json.loads(second)
-    assert transcript.path is not None
-    recorded = transcript.path.read_text()
+
+
+def test_session_metadata_records_compact_provider_reply(http, provider):
+    _, responses = http
+    api, model, payload, reasoning = provider
+    responses.append(httpx.Response(200, json=payload))
+    policy = LLMPolicy(Endpoint(model, api=api, base_url='https://test.invalid/v1'), Motion())
+    with session(policy) as (active, rt):
+        complete(active, rt, observation(1000))
+        meta = active.meta
+    recorded = json.dumps(meta)
     assert 'test-secret-do-not-record' not in recorded
-    assert encoded_image in recorded
-    events = [json.loads(line) for line in recorded.splitlines()]
-    assert [event['event'] for event in events] == ['request', 'response', 'request', 'response']
-    assert events[0]['obs_time_ns'] == 1000
+    if api is not API.OPENAI_CHAT:
+        assert reasoning not in recorded
+    assert 'iVBOR' not in recorded
+    events = meta['transcript']
+    request = next(e for e in events if e['event'] == 'request')
+    assert request['obs_time_ns'] == 1000
+    assert request['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
+    response = next(e for e in events if e['event'] == 'response')
+    assert response['tools'][0]['name'] == 'done'
+    assert response['usage']['input_tokens'] == 100
+    assert response['usage']['output_tokens'] == 20
 
 
-def test_http_error_is_recorded_and_not_retried(http, tmp_path):
+def test_http_error_is_not_retried(http):
     requests, responses = http
     responses.append(httpx.Response(429, json={'error': {'message': 'rate limit', 'type': 'rate_limit'}}))
     with pytest.raises(Exception, match='429'):
-        Endpoint('gpt-5').request([ModelRequest.user_text_prompt('stop')], [], Transcript(tmp_path), 1, 0)
+        Endpoint('gpt-5').request([ModelRequest.user_text_prompt('stop')], [])
     assert len(requests) == 1
-    events = [json.loads(line) for line in (tmp_path / 'transcript.jsonl').read_text().splitlines()]
-    assert [event['event'] for event in events] == ['request', 'response', 'error']
 
 
 @pytest.mark.parametrize('base_url', ['https://key@example.com', 'https://example.com?key=secret', 'file:///tmp/api'])
@@ -213,7 +229,7 @@ def test_endpoint_rejects_credentials_in_recorded_url(base_url):
         Endpoint('gpt-5', base_url=base_url)
 
 
-def test_timeout_bounds_the_whole_model_request(monkeypatch, tmp_path):
+def test_timeout_bounds_the_whole_model_request(monkeypatch):
     async def delayed(request):
         await asyncio.sleep(5)
         raise AssertionError('The timeout should cancel this request')
@@ -225,5 +241,4 @@ def test_timeout_bounds_the_whole_model_request(monkeypatch, tmp_path):
     monkeypatch.setattr(httpx, 'AsyncClient', Client)
     monkeypatch.setenv(API.OPENAI_RESPONSES.key_env, 'test-secret')
     with pytest.raises(TimeoutError):
-        Endpoint('gpt-5', timeout=0.02).request([ModelRequest.user_text_prompt('stop')], [], Transcript(tmp_path), 1, 0)
-    assert 'TimeoutError' in (tmp_path / 'transcript.jsonl').read_text()
+        Endpoint('gpt-5', timeout=0.02).request([ModelRequest.user_text_prompt('stop')], [])

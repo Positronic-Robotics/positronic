@@ -50,7 +50,7 @@ def finish(tool='done'):
 def model(monkeypatch):
     requests, replies = [], []
 
-    def request(endpoint, messages, tools, transcript, call, obs_time_ns):
+    def request(endpoint, messages, tools):
         requests.append((messages, tools))
         response = replies.pop(0)
         return response() if callable(response) else response
@@ -60,8 +60,8 @@ def model(monkeypatch):
 
 
 @contextmanager
-def session(policy, directory=None):
-    rt = Executor(policy.functions, artifact_dir=directory)
+def session(policy):
+    rt = Executor(policy.functions)
     active = policy.new_session(rt=rt)
     try:
         yield active, rt
@@ -90,16 +90,22 @@ def frames(messages):
     ]
 
 
-def test_history_keeps_two_observations_images_and_reports_actual_pose(model, tmp_path):
+def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     requests, replies = model
     replies.extend([move(), move(), finish()])
     policy = LLMPolicy(Endpoint('test'), Motion(), image_size=8)
-    with session(policy, tmp_path) as (active, rt):
+    with session(policy) as (active, rt):
         complete(active, rt, observation(1))
+        first_meta = active.meta
+        first_serialized = json.dumps(first_meta)
         complete(active, rt, observation(2))
         assert complete(active, rt, observation(3)) == []
         assert active.stop_requested
         assert active.meta['hindsight'] == 'Inspect the final image.'
+        events = active.meta['transcript']
+        assert json.dumps(first_meta) == first_serialized
+        first_meta['transcript'][1]['position_m'][0] = 123
+        assert active.meta['transcript'][1]['position_m'][0] == 0
     assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 4]
     second = requests[1][0]
     states = [
@@ -112,13 +118,17 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model, tm
     assert states[-1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
     assert Image.open(io.BytesIO(frames(requests[-1][0])[0].data)).size == (8, 4)
-    events = [json.loads(line) for line in (tmp_path / 'transcript.jsonl').read_text().splitlines()]
-    assert len([event for event in events if event['event'] == 'decision']) == 3
+    assert [event['obs_time_ns'] for event in events if event['event'] == 'observation'] == [1, 2, 3]
+    assert [event['call'] for event in events if event['event'] == 'accepted'] == [1, 2, 3]
+    assert len([event for event in events if event['event'] == 'instructions']) == 1
+    assert 'privileged-value-never-send' not in json.dumps(events)
     with session(policy) as (fresh, rt):
+        assert fresh.meta['transcript'] == []
         replies.append(finish('give_up'))
         complete(fresh, rt, observation())
         assert len(frames(requests[-1][0])) == 2
         assert 'Inspect the final image.' not in str(requests[-1][0])
+        assert [e['call'] for e in fresh.meta['transcript'] if e['event'] == 'request'] == [1]
 
 
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
@@ -128,9 +138,13 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     policy = LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)
     with session(policy) as (active, rt):
         complete(active, rt, observation())
+        events = active.meta['transcript']
     assert [len(frames(messages)) for messages, _ in requests] == [0, 1, 1]
     assert 'already revealed' in str(requests[-1][0])
     assert 'take_pic' in [tool.name for tool in requests[0][1]]
+    assert [e['cameras'] for e in events if e['event'] == 'request'] == [[], [keys.WRIST_IMAGE], [keys.WRIST_IMAGE]]
+    assert len([e for e in events if e['event'] == 'observation']) == 1
+    assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
 
 
 @pytest.mark.parametrize(
@@ -165,7 +179,7 @@ def test_call_budget_includes_picture_requests(model):
 
 
 @pytest.mark.parametrize('cancel_before_answer', [True, False])
-def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, tmp_path, cancel_before_answer):
+def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, cancel_before_answer):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
@@ -176,7 +190,7 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, tm
 
     replies.extend([delayed, finish()])
     policy = (StopOnFault() | ChunkedSchedule()).wrap(LLMPolicy(Endpoint('test'), Motion()))
-    with session(policy, tmp_path) as (active, rt):
+    with session(policy) as (active, rt):
         assert active(observation(), 0) is None
         assert entered.wait(5)
         for tick in range(10):
@@ -193,10 +207,51 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, tm
             assert active(observation(), 12) is None
         complete(active, rt, observation(20), 20)
         assert active.stop_requested
+        events = [event['event'] for event in active.meta['transcript']]
     assert len(requests) == 2
     assert 'Reassess' in str(requests[-1][0])
-    events = [json.loads(line)['event'] for line in (tmp_path / 'transcript.jsonl').read_text().splitlines()]
     assert 'discarded' in events
+
+
+def test_metadata_snapshot_excludes_response_arriving_after_cancellation(model):
+    _, replies = model
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed():
+        entered.set()
+        assert release.wait(5)
+        return move()
+
+    replies.append(delayed)
+    with session(LLMPolicy(Endpoint('test'), Motion())) as (active, rt):
+        assert active(observation(), 0) is None
+        assert entered.wait(5)
+        active.cancel()
+        recorded_meta = active.meta
+        serialized = json.dumps(recorded_meta)
+        release.set()
+        rt.wait(5)
+        assert json.dumps(recorded_meta) == serialized
+        assert not any(e['event'] == 'response' for e in recorded_meta['transcript'])
+        assert any(e['event'] == 'discarded' for e in active.meta['transcript'])
+
+
+@pytest.mark.parametrize('bad', [move(0.2), ModelResponse([TextPart('I will move.')])])
+def test_corrected_replies_are_preserved_in_static_transcript(model, bad):
+    _, replies = model
+    replies.extend([bad, finish()])
+    with session(LLMPolicy(Endpoint('test'), Motion())) as (active, rt):
+        complete(active, rt, observation(123))
+        events = active.meta['transcript']
+    assert [e['call'] for e in events if e['event'] == 'response'] == [1, 2]
+    assert [e['call'] for e in events if e['event'] == 'rejected'] == [1]
+    assert [e['call'] for e in events if e['event'] == 'accepted'] == [2]
+    assert [e['obs_time_ns'] for e in events if e['event'] == 'request'] == [123, 123]
+    response = next(e for e in events if e['event'] == 'response')
+    if bad.tool_calls:
+        assert response['tools'][0]['arguments']['x'] == 0.2
+    else:
+        assert response['text'] == ['I will move.']
 
 
 @pytest.mark.parametrize('current_x,accepted', [(0.02, True), (-0.1, False)])

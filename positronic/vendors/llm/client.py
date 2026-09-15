@@ -1,7 +1,6 @@
 """Native provider APIs, with one bounded request per call."""
 
 import asyncio
-import json
 import math
 import os
 from contextlib import AsyncExitStack
@@ -25,8 +24,6 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-
-from .recording import Transcript
 
 
 class API(StrEnum):
@@ -111,32 +108,9 @@ class Endpoint:
                 return GoogleModel(self.model, provider=GoogleProvider(client=google))
         raise ValueError(f'Unsupported API: {self.api}')
 
-    async def _request(
-        self,
-        messages: list[ModelMessage],
-        tools: list[ToolDefinition],
-        transcript: Transcript,
-        call: int,
-        obs_time_ns: int,
-    ) -> ModelResponse:
-        async def capture_request(request: httpx.Request):
-            body = await request.aread()
-            transcript.write(
-                'request', call=call, obs_time_ns=obs_time_ns, path=request.url.path, body=json.loads(body)
-            )
-
-        async def capture_response(response: httpx.Response):
-            body = await response.aread()
-            transcript.write(
-                'response', call=call, status=response.status_code, body=body.decode('utf-8', errors='replace')
-            )
-
+    async def _request(self, messages: list[ModelMessage], tools: list[ToolDefinition]) -> ModelResponse:
         async with AsyncExitStack() as stack:
-            http = await stack.enter_async_context(
-                httpx.AsyncClient(
-                    timeout=self.timeout, event_hooks={'request': [capture_request], 'response': [capture_response]}
-                )
-            )
+            http = await stack.enter_async_context(httpx.AsyncClient(timeout=self.timeout))
             model = self._model(http, stack)
             settings: ModelSettings = {**self.settings, 'timeout': self.timeout}
             if self.api in (API.OPENAI_RESPONSES, API.OPENAI_CHAT):
@@ -151,16 +125,5 @@ class Endpoint:
                 timeout=self.timeout,
             )
 
-    def request(
-        self,
-        messages: list[ModelMessage],
-        tools: list[ToolDefinition],
-        transcript: Transcript,
-        call: int,
-        obs_time_ns: int,
-    ) -> ModelResponse:
-        try:
-            return asyncio.run(self._request(messages, tools, transcript, call, obs_time_ns))
-        except Exception as exc:
-            transcript.write('error', call=call, error_type=type(exc).__name__)
-            raise
+    def request(self, messages: list[ModelMessage], tools: list[ToolDefinition]) -> ModelResponse:
+        return asyncio.run(self._request(messages, tools))

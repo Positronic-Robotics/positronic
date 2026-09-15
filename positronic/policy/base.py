@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any, ClassVar
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
@@ -46,11 +45,6 @@ class Runtime(ABC):
     @abstractmethod
     def fns(self) -> Mapping[str, Fn]:
         """The policy's functions, under the names it declared them by."""
-
-    @property
-    def artifact_dir(self) -> Path | None:
-        """Directory for this session's supplementary recordings; ``None`` when recording is disabled."""
-        return None
 
 
 class Session(ABC):
