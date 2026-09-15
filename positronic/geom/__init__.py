@@ -117,6 +117,11 @@ class Transform3D(metaclass=Transform3DMeta):
     def copy(self):
         return Transform3D(self.translation.copy(), self.rotation.copy())
 
+    def interpolate(self, other: Transform3D, fraction: float) -> Transform3D:
+        """Blend translation linearly and rotation along the shortest arc, for a fraction in [0, 1]."""
+        rotation = self.rotation.interpolate(other.rotation, fraction)
+        return Transform3D(self.translation + fraction * (other.translation - self.translation), rotation)
+
 
 class RotationMeta(type):
     @property
@@ -132,6 +137,7 @@ class Rotation(metaclass=RotationMeta):
     """
 
     __slots__ = ('_quat',)
+    _quat: np.ndarray
 
     def __init__(self, *args, **kwargs):
         raise NotImplementedError('Use Rotation.from_... methods to create a Rotation object')
@@ -336,20 +342,9 @@ class Rotation(metaclass=RotationMeta):
         Returns:
             Rotation object representing the same rotation
         """
-        angle = np.linalg.norm(rotvec)
-        if angle < 1e-10:  # Handle small angles to avoid division by zero
-            return cls.from_quat(np.array([1.0, 0.0, 0.0, 0.0]))
-
-        axis = rotvec / angle
-        sin_theta_2 = np.sin(angle / 2)
-        cos_theta_2 = np.cos(angle / 2)
-
-        w = cos_theta_2
-        x = axis[0] * sin_theta_2
-        y = axis[1] * sin_theta_2
-        z = axis[2] * sin_theta_2
-
-        return cls.from_quat(np.array([w, x, y, z]))
+        angle = float(np.linalg.norm(rotvec))
+        scale = 0.5 * np.sinc(angle / (2 * np.pi))
+        return cls.from_quat(np.concatenate(([np.cos(angle / 2)], scale * np.asarray(rotvec))))
 
     @classmethod
     def from_rot6d(cls, rot6d: np.ndarray) -> Rotation:
@@ -439,22 +434,9 @@ class Rotation(metaclass=RotationMeta):
 
     @property
     def as_rotvec(self) -> np.ndarray:
-        """
-        Represent the rotation as a rotation vector.
-
-        Returns:
-            numpy.ndarray: 3D rotation vector representing axis-angle rotation. The direction
-                          of the vector indicates the axis of rotation and its magnitude
-                          represents the angle in radians.
-        """
-        q = self._quat / np.linalg.norm(self._quat)
-        angle = 2 * np.arccos(q[0])
-        if angle < 1e-10:  # Handle small angles to avoid division by zero
-            return np.zeros(3)
-
-        sin_theta_2 = np.sin(angle / 2)
-        axis = np.array([q[1], q[2], q[3]]) / sin_theta_2
-        return axis * angle
+        """Principal rotation vector: its direction is the axis and its length is in [0, pi] radians."""
+        quat = self._quat if self._quat[0] >= 0 else -self._quat
+        return quat[1:] * (2 / np.sinc(self.angle / (2 * np.pi)))
 
     @property
     def as_rot6d(self) -> np.ndarray:
@@ -508,11 +490,16 @@ class Rotation(metaclass=RotationMeta):
         return np.array([self._quat[1], self._quat[2], self._quat[3], self._quat[0]])
 
     @property
-    def angle(self):
-        """
-        Compute the angle of the rotation in radians.
-        """
-        return 2 * np.arccos(self._quat[0])
+    def angle(self) -> float:
+        """Shortest rotation angle in [0, pi] radians, independent of quaternion sign."""
+        return float(2 * np.arctan2(np.linalg.norm(self._quat[1:]), abs(self._quat[0])))
+
+    def interpolate(self, other: Rotation, fraction: float) -> Rotation:
+        """Interpolate along the shortest arc, with 0 selecting self and 1 selecting other."""
+        if not 0 <= fraction <= 1:
+            raise ValueError('Interpolation fraction must be in [0, 1]')
+        relative = self.inv * other
+        return self * Rotation.from_rotvec(relative.as_rotvec * fraction)
 
     def copy(self):
         return Rotation.from_quat(self._quat.copy())
