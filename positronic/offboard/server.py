@@ -20,7 +20,7 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import Layer
+from positronic.policy.base import Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
@@ -196,20 +196,37 @@ class _ServedTiming:
     """
 
     def __init__(self) -> None:
-        self._opened = time.perf_counter()
+        # The wall clock: every ``TimingSink`` call is stamped on it, and one report must not mix clocks.
+        self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
 
+    @classmethod
     @contextmanager
-    def phase(self, name: str) -> Iterator[None]:
-        started = time.perf_counter()
+    def opened(cls) -> Iterator['_ServedTiming']:
+        """Open the timing of one inference. Every timed session writes to it until the block ends."""
+        timing = cls()
+        with timings_to(timing.take_timing):
+            yield timing
+
+    def _record(self, key: str, start_ns: int, end_ns: int) -> None:
+        self._phases[key] = (end_ns - start_ns) / 1e6
+
+    def take_timing(self, name: str, start_ns: int, end_ns: int) -> None:
+        """A ``TimingSink``: one timed session call, filed under its wire key."""
+        self._record(protocol.timing_key(name), start_ns, end_ns)
+
+    @contextmanager
+    def phase(self, key: str) -> Iterator[None]:
+        """A block no session call brackets, under a wire key the protocol already spells."""
+        started = time.time_ns()
         try:
             yield
         finally:
-            self._phases[name] = (time.perf_counter() - started) * 1000.0
+            self._record(key, started, time.time_ns())
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
-        return {protocol.TIMING_SERVED: (time.perf_counter() - self._opened) * 1000.0, **self._phases}
+        return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
 
 class PolicyServer:
@@ -385,20 +402,20 @@ class PolicyServer:
                     message = await websocket.receive_bytes()
                     self._last_activity = time.monotonic()
                     try:
-                        timing = _ServedTiming()
-                        with timing.phase(protocol.TIMING_DECODE):
-                            raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                        with timing.phase(protocol.TIMING_QUEUED):
-                            await self._infer_lock.acquire()
-                        try:
-                            with timing.phase(protocol.TIMING_INFER):
-                                # The server's clock is not the rig's.
-                                actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                        finally:
-                            self._infer_lock.release()
-                        answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                        with _ServedTiming.opened() as timing:
+                            with timing.phase(protocol.TIMING_DECODE):
+                                raw_obs = deserialise(message)
+                            # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
+                            # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                            with timing.phase(protocol.TIMING_QUEUED):
+                                await self._infer_lock.acquire()
+                            try:
+                                with timing.phase(protocol.TIMING_INFER):
+                                    # The server's clock is not the rig's.
+                                    actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                            finally:
+                                self._infer_lock.release()
+                            answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                         await websocket.send_bytes(answer)
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

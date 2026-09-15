@@ -14,7 +14,7 @@ pytest.importorskip('torch')
 from lerobot.configs.types import FeatureType, PolicyFeature  # noqa: E402
 from lerobot.policies.act.configuration_act import ACTConfig  # noqa: E402
 
-from positronic.offboard import PolicyServer  # noqa: E402
+from positronic.offboard.server import PolicyServer  # noqa: E402
 from positronic.policy.observation import TASK_FIELD
 from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
 from positronic.vendors.lerobot_0_3_3.policy import warm_observation  # noqa: E402

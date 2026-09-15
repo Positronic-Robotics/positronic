@@ -2568,3 +2568,40 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
     assert not _emitted_commands(cmd_recorder)
+
+
+def test_a_layer_the_rig_runs_lands_in_the_sidecar_as_its_own_span(world, tmp_path):
+    """The harness binds every timed layer to the telemetry sidecar, one span per layer per call."""
+
+    class _Answering(Policy):
+        class _Session(Session):
+            def __call__(self, obs, time_ns):
+                return []
+
+        def new_session(self, context=None, rt=None):
+            return _Answering._Session()
+
+    class _Marker(Layer):
+        WIRE_NAME = 'marker'
+
+        def make_session(self, inner: Session) -> Session:
+            return inner
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-layers'):
+        rollout = Rollout(
+            Task(instruction_source='t', timeout_sec=None), (_Marker() | StopOnFault()).wrap(_Answering()), None
+        )
+        try:
+            _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)({
+                keys.ROBOT_STATUS: RobotStatus.AVAILABLE
+            })
+        finally:
+            rollout.close()
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    by_name = {span.name: span for span in spans}
+    named = {_Marker.WIRE_NAME, StopOnFault.WIRE_NAME, telemetry_keys.SPAN_POLICY_CALL}
+    assert named <= by_name.keys()
+    call = by_name[telemetry_keys.SPAN_POLICY_CALL]
+    marker, inner = by_name[_Marker.WIRE_NAME], by_name[StopOnFault.WIRE_NAME]
+    assert call.start_ns <= marker.start_ns <= inner.start_ns <= inner.end_ns <= marker.end_ns <= call.end_ns

@@ -9,6 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
+from positronic.offboard.protocol import MODEL_CALL
 from positronic.policy.base import (
     Answer,
     DelegatingPolicy,
@@ -18,6 +19,7 @@ from positronic.policy.base import (
     Policy,
     Runtime,
     Session,
+    TimedSession,
 )
 
 
@@ -136,7 +138,7 @@ class _BlockingPolicy(DelegatingPolicy):
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
         try:
-            return _BlockingPolicy._Session(self._inner.new_session(context, own), own)
+            return TimedSession(_BlockingPolicy._Session(self._inner.new_session(context, own), own), MODEL_CALL)
         except BaseException:
             own.close()
             raise
