@@ -301,6 +301,8 @@ class TestNewSessionRetriesRefusedConnects:
 
     def test_every_wait_reads_what_the_server_says_it_is_doing(self):
         fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 3)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields;
+        # sharing the constant would leave nothing pinning the client to the wire.
         fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint 30000'}
         with (
             patch('positronic.offboard.client.InferenceSession'),

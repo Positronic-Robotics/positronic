@@ -31,11 +31,6 @@ SESSION_PATH_HEADER = 'positronic-session-path'
 SESSION_QUERY_HEADER = 'positronic-session-query'
 
 
-def verb_path(verb: wire.Verb) -> str:
-    """The method a unary verb answers on, beside the session on the same service."""
-    return f'/{SERVICE}/{verb.grpc_method}'
-
-
 _MESSAGE_SIZE_OPTIONS = [
     ('grpc.max_receive_message_length', wire.MAX_MESSAGE_BYTES),
     ('grpc.max_send_message_length', wire.MAX_MESSAGE_BYTES),
@@ -297,7 +292,8 @@ class GrpcClientWire(wire.ClientWire):
         target = _target(address.host, address.port)
         channel = _ready_channel(target, address.secure, timeout)
         try:
-            unary = channel.unary_unary(verb_path(verb), request_serializer=None, response_deserializer=None)
+            path = f'/{SERVICE}/{verb.grpc_method}'
+            unary = channel.unary_unary(path, request_serializer=None, response_deserializer=None)
             answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=timeout)
         except grpc.RpcError as e:
             if e.code() is grpc.StatusCode.UNIMPLEMENTED:
