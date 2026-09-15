@@ -11,9 +11,9 @@ This distribution is the one definition of those words. It depends on nothing, s
 programs installs it alone.
 
 ```python
-from eval_vocabulary.outcome import OUTCOME_STATIC, Outcome, is_scored
+from eval_vocabulary.outcome import ABSENT, OUTCOME, is_scored
 
-outcome = episode.get(OUTCOME_STATIC, Outcome.ABSENT)
+outcome = episode.get(OUTCOME, ABSENT)
 scored = is_scored(outcome)
 ```
 

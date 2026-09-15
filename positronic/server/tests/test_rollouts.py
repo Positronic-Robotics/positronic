@@ -18,10 +18,19 @@ def _variants_app_js_accepts() -> set[str]:
     return set(re.findall(r"'([^']+)'", listed.group(1)))
 
 
-def test_every_word_the_vocabulary_carries_has_a_badge():
-    """A word with no option draws as itself on a neutral badge, which reads as unscored to an
-    operator scanning the column."""
+def test_every_word_this_release_knows_has_a_colour_chosen_for_it():
+    """The fallback below keeps a newer vocabulary rendering, and would also swallow a word added
+    here with no colour picked for it. This is what catches that."""
+    assert set(rollouts.OUTCOME_VARIANT) == set(Outcome)
     assert set(rollouts.OUTCOME_BADGE.options) == set(Outcome)
+
+
+def test_a_word_added_after_this_release_draws_neutral(monkeypatch):
+    """The vocabulary floats and is append-only, so an install can hold a word this module has no
+    colour for — the state this makes, by taking one away. Reading it must not raise at import."""
+    monkeypatch.delitem(rollouts.OUTCOME_VARIANT, Outcome.DISCARDED)
+
+    assert rollouts.outcome_variant(Outcome.DISCARDED) == rollouts.NEUTRAL
 
 
 def test_every_colour_is_one_the_page_accepts():
@@ -44,3 +53,14 @@ def test_a_rung_carries_the_operators_word_and_its_place_on_the_ladder():
 def test_an_episode_that_marked_nothing_sorts_under_every_rung():
     assert rollouts.stage_cell([]) == rollouts.NO_STAGE
     assert rollouts.NO_STAGE.rank < 0
+
+
+def test_a_rate_carries_the_number_it_sorts_on_and_the_text_it_shows():
+    assert rollouts.rate_cell(1, 4) == (25.0, '25%')
+
+
+def test_a_model_nobody_scored_sorts_under_every_rate():
+    """A bare string among numbers is not an ordering, and this column is the table's default sort."""
+    assert rollouts.rate_cell(0, 0) == rollouts.NO_RATE
+    assert rollouts.NO_RATE.rate < 0
+    assert isinstance(rollouts.NO_RATE.rate, float)
