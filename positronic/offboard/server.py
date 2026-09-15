@@ -208,17 +208,21 @@ class _ServedTiming:
         with phases_to(timing.take_phase):
             yield timing
 
+    def _record(self, key: str, start_ns: int, end_ns: int) -> None:
+        self._phases[key] = (end_ns - start_ns) / 1e6
+
     def take_phase(self, name: str, start_ns: int, end_ns: int) -> None:
-        """A ``PhaseSink``: one timed session call, filed under its wire key."""
-        self._phases[_phase_key(name)] = (end_ns - start_ns) / 1e6
+        """A ``PhaseSink``: one timed session call. The seam names a phase, so this spells its wire key."""
+        self._record(_phase_key(name), start_ns, end_ns)
 
     @contextmanager
-    def phase(self, name: str) -> Iterator[None]:
+    def phase(self, key: str) -> Iterator[None]:
+        """A block no session call brackets, under a wire key the protocol already spells."""
         started = time.time_ns()
         try:
             yield
         finally:
-            self._phases[name] = (time.time_ns() - started) / 1e6
+            self._record(key, started, time.time_ns())
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
