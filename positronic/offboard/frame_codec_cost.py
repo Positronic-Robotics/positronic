@@ -1,11 +1,11 @@
 """Measure what one observation window costs per image codec: bytes, encode time, decode time.
 
-Replays a recorded episode's cameras through the rig-side bound, then encodes each temporal-stack
-window as one JPEG per frame, which the wire carries, and as one h264 GOP. JPEG encodes
-single-threaded through ``encode_jpeg``; h264 encodes with x264's own frame threading.
+Samples a recorded episode's cameras at the stack's cadence, through the rig-side bound, then encodes
+each temporal-stack window as one JPEG per frame, which the wire carries, and as one h264 GOP. JPEG
+encodes single-threaded through ``encode_jpeg``; h264 encodes with x264's own frame threading.
 
 Usage
-  python -m positronic.offboard.frame_codec_cost --episode <dir holding <camera>.mp4>
+  python -m positronic.offboard.frame_codec_cost --episode <dir holding <camera>.mp4 and <camera>.frames.parquet>
   python -m positronic.offboard.frame_codec_cost --episode <dir> --bound 640x180 --json rows.json
 """
 
@@ -20,6 +20,8 @@ import time
 import av
 import numpy as np
 
+from positronic.dataset.signal import Signal
+from positronic.dataset.video import VideoSignal
 from positronic.policy.codec import RestrictImageSize
 from positronic.utils.serialization import FRAMES, encode_jpeg, unpack
 
@@ -61,7 +63,7 @@ class H264:
         with av.open(buffer, 'w', format='mp4') as container:
             stream = container.add_stream('libx264', rate=15)
             stream.width, stream.height, stream.pix_fmt = width, height, 'yuv420p'
-            # One self-contained GOP with no lookahead: a request carries its own window and waits on it.
+            # The window is the payload, so it is one closed GOP; zerolatency drops the lookahead that delays frames.
             stream.options = {'preset': self.preset, 'crf': str(self.crf), 'tune': 'zerolatency', 'g': str(len(window))}
             for frame in window:
                 container.mux(stream.encode(av.VideoFrame.from_ndarray(frame, format='rgb24')))
@@ -91,24 +93,27 @@ class Cost:
     decode_ms: float
 
 
-def bounded_frames(mp4: pathlib.Path, bound: RestrictImageSize, rate_hz: float) -> list[np.ndarray]:
-    """Every frame the stack samples, through the rig's own bound."""
+def sampled_span(signals: list[VideoSignal]) -> tuple[int, int]:
+    """The time every camera covers, as ``(start_ns, stop_ns)``."""
+    return max(signal.start_ts for signal in signals), min(signal.last_ts for signal in signals) + 1
+
+
+def bounded_frames(
+    signal: VideoSignal, span: tuple[int, int], rate_hz: float, bound: RestrictImageSize
+) -> list[np.ndarray]:
+    """The frame at or before each sample time over ``span``, through the rig's own bound."""
     key = 'image'
-    with av.open(str(mp4), 'r') as container:
-        recorded_rate = container.streams.video[0].average_rate
-        if recorded_rate is None:
-            raise ValueError(f'{mp4} declares no frame rate, so the sampled frames cannot be chosen')
-        step = max(1, round(float(recorded_rate) / rate_hz))
-        frames = []
-        for index, frame in enumerate(container.decode(video=0)):
-            if index % step:
-                continue
-            frames.append(bound.encode({key: frame.to_ndarray(format='rgb24')})[key])
-    return frames
+    start, stop = span
+    # The writer encodes every video at one fixed rate; the recorded cadence is in the frames index ``time`` reads.
+    sampled = signal.time[start : stop : round(1e9 / rate_hz)]
+    assert isinstance(sampled, Signal)
+    return [bound.encode({key: frame})[key] for frame in sampled.values()]
 
 
 def costs(frames: list[np.ndarray], camera: str, depth: int, codecs: list[Codec], limit: int) -> list[Cost]:
     """One row per codec per window, over the windows the episode holds."""
+    if len(frames) < depth:
+        raise ValueError(f'{camera}: {len(frames)} sampled frames cannot fill one {depth}-frame window')
     starts = list(range(0, len(frames) - depth + 1))[: limit or None]
     rows = []
     for window_index, start in enumerate(starts):
@@ -146,7 +151,9 @@ def report(rows: list[Cost], depth: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--episode', required=True, type=pathlib.Path, help='directory holding <camera>.mp4')
+    parser.add_argument(
+        '--episode', required=True, type=pathlib.Path, help='directory holding <camera>.mp4 and <camera>.frames.parquet'
+    )
     parser.add_argument('--cameras', default='image.exterior,image.wrist')
     parser.add_argument('--frames', type=int, default=25, help='temporal-stack depth')
     parser.add_argument('--rate', type=float, default=15.0, help='stack sampling rate, Hz')
@@ -159,9 +166,14 @@ def main() -> int:
     bound = RestrictImageSize(*(int(side) for side in args.bound.lower().split('x')))
     codecs: list[Codec] = [Jpeg()]
     codecs += [H264(spec.split(':')[0], int(spec.split(':')[1])) for spec in args.x264.split(',')]
+    signals = {
+        camera: VideoSignal(args.episode / f'{camera}.mp4', args.episode / f'{camera}.frames.parquet')
+        for camera in args.cameras.split(',')
+    }
+    span = sampled_span(list(signals.values()))
     rows: list[Cost] = []
-    for camera in args.cameras.split(','):
-        frames = bounded_frames(args.episode / f'{camera}.mp4', bound, args.rate)
+    for camera, signal in signals.items():
+        frames = bounded_frames(signal, span, args.rate, bound)
         print(f'{camera}: {len(frames)} sampled frames at {frames[0].shape[1]}x{frames[0].shape[0]}')
         rows += costs(frames, camera, args.frames, codecs, args.windows)
 
