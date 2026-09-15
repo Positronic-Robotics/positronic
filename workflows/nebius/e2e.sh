@@ -147,7 +147,7 @@ case "$VENDOR" in
       "--output_path=$CKPT_DIR" \
       "--exp_name=$EXP_NAME" \
       --num_train_steps=200 --save_steps=100 2>&1)
-    SERVE_SUBCMD=(droid --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(droid --pipeline.source.model_source="$CKPT_DIR$EXP_NAME/")
     ;;
 esac
 echo "$TRAIN_OUT" >> "$LOG"

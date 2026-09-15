@@ -21,7 +21,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
-  --pipeline.source.checkpoints_dir=/data/checkpoints/experiment_v1/
+  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
 
 # OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
 cd docker && docker compose run --rm --service-ports openpi-server ee \

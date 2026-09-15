@@ -9,7 +9,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
 # shares a value with ``keys.TASK`` by vocabulary, not by contract: that one names the prompt on the way in.
@@ -47,7 +47,7 @@ class ObservationCodec(Codec):
                 lerobot_features[name] = lerobot_state(sum(features.values()), list(features.keys()))
         for name, (_, (w, h)) in images.items():
             lerobot_features[name] = lerobot_image(w, h)
-        self._training_meta = {'lerobot_features': lerobot_features}
+        self._training_meta = {LEROBOT_FEATURES: lerobot_features}
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]

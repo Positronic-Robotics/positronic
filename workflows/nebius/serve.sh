@@ -65,7 +65,7 @@ Examples:
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server droid \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+    --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
 fi

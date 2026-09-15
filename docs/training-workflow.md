@@ -197,7 +197,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 
 ```bash
 cd docker && docker compose run --rm --service-ports groot-server droid \
-  --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
+  --pipeline.source.model_source=~/checkpoints/groot/experiment_v1/
 ```
 
 **OpenPI Server:**
@@ -214,6 +214,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 |-----------|-------------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
 | `--pipeline.source.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
+| `--pipeline.source.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
 | `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
 | `--pipeline.ee_frame` | OpenPI only: the EE frame the checkpoint speaks, relative to the rig's `default` | `None` |
 | `--port` | Server port | `8000` (default) |

@@ -267,8 +267,8 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Same shape for the other vendors — replace the vendor token and point `--pipeline.source.checkpoints_dir` at the
-matching checkpoint:
+Use the vendor's source option to select the matching checkpoint (`model_source` for GR00T,
+`checkpoints_dir` for LeRobot and OpenPI):
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
@@ -280,7 +280,7 @@ bash workflows/nebius/serve.sh openpi my-openpi ee \
   --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+  --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
