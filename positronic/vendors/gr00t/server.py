@@ -231,7 +231,7 @@ class Gr00tSource(ModelSource):
     def __init__(
         self,
         modality: dict[str, dict],
-        model_source: str = 'hf://' + gr00t.BASE_MODEL,
+        model_source: str = gr00t.HF_MODEL_PREFIX + gr00t.BASE_MODEL,
         checkpoint: str | None = None,
         groot_venv_path: str = gr00t.VENV,
         zmq_port: int = 5555,
@@ -261,7 +261,7 @@ class Gr00tSource(ModelSource):
 
     @property
     def _is_hub_model(self) -> bool:
-        return self.model_source.startswith('hf://')
+        return self.model_source.startswith(gr00t.HF_MODEL_PREFIX)
 
     @staticmethod
     def _step_id(raw: str) -> str:
@@ -270,7 +270,7 @@ class Gr00tSource(ModelSource):
 
     def get_models(self) -> list[str]:
         if self._is_hub_model:
-            return [self.model_source.removeprefix('hf://')]
+            return [self.model_source.removeprefix(gr00t.HF_MODEL_PREFIX)]
         return [self._step_id(r) for r in self._raw_ids()]
 
     def resolve(self, model_id: str | None) -> str:

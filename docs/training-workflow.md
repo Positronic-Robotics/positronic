@@ -196,8 +196,8 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 **GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports groot-server droid \
-  --pipeline.source.model_source=~/checkpoints/groot/experiment_v1/
+cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
+  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
 ```
 
 **OpenPI Server:**
