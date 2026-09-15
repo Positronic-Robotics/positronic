@@ -55,7 +55,8 @@ ATTR_POLICY_ANSWERED = 'policy.answered'
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
-# One episode's waypoint account, totalled over its command channels.
+# One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
+# came due and went out on no round.
 ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
 ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'

@@ -1800,7 +1800,7 @@ def test_an_episode_ending_on_due_waypoints_counts_them_dropped(world):
 
 @pytest.mark.timeout(5.0)
 def test_an_episode_ending_on_waypoints_still_ahead_counts_no_drop(world):
-    """A waypoint the episode ends before is not one the loop overtook, so the end counts no drop for it."""
+    """A waypoint the episode ends before never came due, so the end counts no drop for it."""
     before, reported = _dropped_over_an_episode_ending_on_held_waypoints(world, offset_ms=10_000)
 
     assert reported == before

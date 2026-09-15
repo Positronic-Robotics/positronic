@@ -184,9 +184,9 @@ _LATE_BINS_MS = 1000
 class _ScheduleFidelity:
     """How well one episode's loop played the waypoints scheduled on one command channel.
 
-    A round emits only the newest waypoint that has come due, so a round longer than the control period
-    discards every earlier one it overtook. This counts those against what the schedule took, and bins how
-    far past its own due time each emitted waypoint went out.
+    A waypoint is dropped when it came due and went out on no round: a later waypoint overtook it inside a
+    round, a fresh chunk replaced it after its time, or the episode ended holding it. This counts those
+    against what the schedule took, and bins how far past its own due time each emitted waypoint went out.
     """
 
     def __init__(self) -> None:

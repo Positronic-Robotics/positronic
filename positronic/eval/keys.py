@@ -42,9 +42,9 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# How well the loop kept the trajectory's schedule, per command channel: a reader composes the prefix, a
-# channel and a field, as f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. ``DROPPED`` is a waypoint a later one
-# overtook before it could go out; the lateness figures are milliseconds against a waypoint's own due time.
+# How well the loop kept the trajectory's schedule, per command channel, keyed
+# f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. The harness owns every key under ``SCHEDULE``.
+# ``DROPPED`` counts a waypoint that came due and went out on no round. Lateness is in milliseconds.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'

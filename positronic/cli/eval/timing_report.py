@@ -396,7 +396,8 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
 
 @dataclass
 class _EpisodeWaypoints:
-    """One episode's waypoint totals over its command channels, as its span carries them."""
+    """One episode's waypoint totals over its command channels, as its span carries them. ``dropped`` is a
+    waypoint that came due and went out on no round."""
 
     scheduled: int
     emitted: int
