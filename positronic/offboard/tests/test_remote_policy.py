@@ -280,13 +280,12 @@ class TestInferenceClientUrl:
                 host='localhost', port=0, path='/api/v1/session', query='', secure=False, uds='policy.sock'
             )
 
-    def test_a_socket_under_an_api_directory_round_trips(self):
+    @pytest.mark.parametrize('uds', ['/tmp/api/v1/policy.sock', '/api/v1/policy.sock'])
+    def test_a_socket_under_an_api_directory_round_trips(self, uds):
         """The URL escapes the marker inside the path, so reparsing ends the socket where it began."""
-        address = wire.SessionAddress(
-            host='localhost', port=0, path=wire.SESSION_PATH, query='', secure=False, uds='/tmp/api/v1/policy.sock'
-        )
+        address = wire.SessionAddress(host='localhost', port=0, path=wire.SESSION_PATH, query='', secure=False, uds=uds)
         url = websocket_wire.WebsocketClientWire().session_url(address)
-        assert _dialled_socket(InferenceClient.from_url(url)) == '/tmp/api/v1/policy.sock'
+        assert _dialled_socket(InferenceClient.from_url(url)) == uds
 
     def test_a_socket_path_ends_at_the_api_segment(self):
         client = InferenceClient.from_url('unix:///run/policy.sock/api/v1/session/10000?fps=10')

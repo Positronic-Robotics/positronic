@@ -75,8 +75,11 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 def _spell(uds: str) -> str:
     """``uds`` as a URL names it: the route marker escaped, so only the route this URL appends is one."""
     # The parser ends the socket path at the first ``/api/v1``, so a socket under a directory of that
-    # name would otherwise read back as a shorter path and a longer route — a different socket.
-    return quote(uds, safe='/').replace(wire.API_PATH, f'%2F{wire.API_PATH.lstrip("/")}')
+    # name would otherwise read back as a shorter path and a longer route — a different socket. Escape
+    # a separator INSIDE the marker: escaping the one before it would eat the path's leading slash,
+    # and a URL whose path does not start with ``/`` names its first segment as the authority.
+    marker = wire.API_PATH
+    return quote(uds, safe='/').replace(marker, marker[0] + marker[1:].replace('/', '%2F'))
 
 
 class WebsocketClientWire(wire.ClientWire):
