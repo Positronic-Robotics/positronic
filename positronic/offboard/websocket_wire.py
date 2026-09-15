@@ -117,6 +117,9 @@ class WebsocketClientWire(wire.ClientWire):
             'additional_headers': headers,
             'ping_interval': 20.0,
             'max_size': wire.MAX_MESSAGE_BYTES,
+            # No permessage-deflate. An observation is camera frames: zlib keeps 97% of a JPEG
+            # frame's bytes and 40% of a raw one's, for about 10 ms per 338 KiB in each direction.
+            'compression': None,
         }
         try:
             if address.uds is None:
@@ -314,6 +317,8 @@ class WebsocketWire(wire.Wire):
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
+            # A client that offers permessage-deflate is refused it, and pays no zlib for asking.
+            ws_per_message_deflate=False,
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
