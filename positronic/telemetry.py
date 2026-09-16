@@ -24,10 +24,6 @@ The span helpers no-op while unbound (an eval recording nowhere binds nothing), 
 ``None`` check. The pass-level report is an offline reduce over the raw files
 (``positronic.cli.eval.timing_report``).
 
-A recording run binds the harness's sidecar from ``POSITRONIC_ENV_TELEMETRY_DIR``, which
-``positronic.cli.eval.run.prepare_output_dir`` sets to the directory the run uploads from. ``--timing`` adds
-the pass span and the machine-load stream.
-
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
 ``telemetry`` extra adds the OTel SDK and pynvml; ``bind`` and ``StatsSampler`` raise without it, and a
 recording run warns.
