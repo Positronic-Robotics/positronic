@@ -149,6 +149,25 @@ class _Endpoint(Policy):
         return {INFER: round_trip}
 
 
+def declared_stack(meta: cabc.Mapping[str, Any]) -> Layer:
+    """The rig-side stack a server's handshake declares.
+
+    Raises when the handshake declares no stack, and when this build cannot honour the one it declares.
+    """
+    version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
+    spec = meta.get(offboard_keys.LOCAL_STACK)
+    try:
+        stack = from_spec(spec) if spec is not None else None
+    except Exception as e:
+        raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
+    if stack is None:
+        raise ValueError(
+            f'Server declares no rig-side stack (server positronic {version}); the rig runs what the '
+            f'handshake declares and nothing else, so serve it from a pipeline that declares one'
+        )
+    return stack
+
+
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
@@ -182,24 +201,9 @@ class RemotePolicy(Policy):
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
 
-    def _resolve_stack(self) -> Layer:
-        meta = self._endpoint.server_meta()
-        version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
-        declared = meta.get(offboard_keys.LOCAL_STACK)
-        try:
-            stack = from_spec(declared) if declared is not None else None
-        except Exception as e:
-            raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None:
-            raise ValueError(
-                f'Server declares no rig-side stack (server positronic {version}); the rig runs what the '
-                f'handshake declares and nothing else, so serve it from a pipeline that declares one'
-            )
-        return stack
-
     def _policy(self) -> Policy:
         if self._stacked is None:
-            stack = self._resolve_stack()
+            stack = declared_stack(self._endpoint.server_meta())
             if self._recording_dir is not None:
                 rec = Recorder(self._recording_dir)
                 stack = rec.tap('raw') | stack | rec.tap('server')
