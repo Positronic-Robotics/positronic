@@ -84,7 +84,7 @@ Then sweep the payload, which says whether the cost scales with bytes or is a fi
 for KIB in 128 750 2026; do $PROBE source --host=$SERVER --port=9100 --kib=$KIB --transfers=10; done
 ```
 
-And raise a reader that competes for the interpreter, which is what a busy model does to the loop that
+And raise a reader that competes for the interpreter, as a busy model does to the loop that
 reads for it:
 
 ```bash
@@ -115,9 +115,9 @@ uv run --locked python -m positronic.offboard.serving_cost \
     --requests=20 --out=served-grpc.json
 ```
 
-Each run prints the stack it rebuilt from the handshake. Read it: it is what the rig sends.
+Each run prints the stack it rebuilt from the handshake. Read it: the rig sends that.
 
-Read `wire_kib` before anything else. It is what the observation came to on the wire, and if it is not
+Read `wire_kib` before anything else. The observation came to that on the wire, and if it is not
 close to what the rig sends in production, the episode is not standing in for the rig and no figure
 under it compares to one. `round_trip_ms - pack_ms - served_ms` is the cost this whole procedure is
 about, and `send_ms` against `recv_ms` says which half of the wire holds it.

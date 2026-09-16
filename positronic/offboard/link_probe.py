@@ -281,7 +281,7 @@ def _queue_reader(port: int) -> Callable[[int], list[dict[str, Any]]]:
 def watch(port: int, interval_ms: int, seconds: float, out: str | None):
     """Sample the receive queue of every established socket on ``port``, for ``seconds``.
 
-    This is what tells a slow path from a late reader. Bytes piling up in ``recv_q`` while the sender
+    The queue tells a slow path from a late reader. Bytes piling up in ``recv_q`` while the sender
     is still writing mean the receiver is not draining them; a queue that stays near empty while the
     sender blocks means the bytes are not arriving. Run it in the receiver's namespace, against the
     sink's port or the policy server's.
@@ -317,7 +317,7 @@ def _sysctl(path: Path) -> str | None:
     """One kernel setting, or ``None`` where this kernel has no such file.
 
     Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
-    namespace, and this is the tool that reports those.
+    namespace, and this tool reports those.
     """
     try:
         return path.read_text().strip()
@@ -328,8 +328,8 @@ def _sysctl(path: Path) -> str | None:
 def network_facts(peer: str | None) -> dict[str, Any]:
     """What this namespace does to a transfer: its interfaces, its buffers, its congestion control.
 
-    The MTU is the figure to read first: an overlay or a tunnel carries less than an ethernet link,
-    and a sender that does not learn it retransmits its way through every transfer.
+    An overlay or a tunnel carries less than an ethernet link, and a sender that does not learn the
+    MTU retransmits its way through every transfer.
     """
     interfaces = {}
     for entry in sorted(Path('/sys/class/net').iterdir()):

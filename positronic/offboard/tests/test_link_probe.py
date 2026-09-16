@@ -64,7 +64,7 @@ def _unread_connection(port_holder: list[int]) -> tuple[socket.socket, socket.so
 
 @pytest.mark.skipif(shutil.which('ss') is None, reason='ss is not installed here')
 def test_both_queue_readers_see_the_same_unread_bytes():
-    """``ss`` prints a state column the readers index past; ``/proc/net/tcp`` is what answers without it."""
+    """``ss`` prints a state column the readers index past; ``/proc/net/tcp`` answers without it."""
     held: list[int] = []
     listener, client, accepted = _unread_connection(held)
     try:
@@ -81,7 +81,7 @@ def test_both_queue_readers_see_the_same_unread_bytes():
 
 @pytest.mark.skipif(shutil.which('ss') is None, reason='ss is not installed here')
 def test_a_socket_with_nothing_queued_is_still_reported():
-    """A queue that stays empty is the finding when a sender is blocked, so an empty read is not no read."""
+    """An empty queue reports a blocked sender, so an empty read is not no read."""
     held: list[int] = []
     listener, client, accepted = _unread_connection(held)
     try:
@@ -130,7 +130,7 @@ def test_a_kernel_without_the_setting_reports_it_absent(tmp_path):
 
 
 def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
-    """A namespace refusing /proc/sys is the finding; reported as null it reads as an absent setting."""
+    """A namespace refusing /proc/sys must raise; reported as null it reads as an absent setting."""
     refused = tmp_path / 'refused'
     refused.write_text('4096 131072 6291456\n')
     refused.chmod(0o000)
