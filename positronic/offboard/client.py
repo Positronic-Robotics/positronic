@@ -23,8 +23,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
-# What ``wire_timing`` reports: the uplink, and the wait that follows it. The server's own span sits
-# inside the second one, so the two minus ``served_ms`` is what the link and the receiver cost.
+# What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
+# cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
 

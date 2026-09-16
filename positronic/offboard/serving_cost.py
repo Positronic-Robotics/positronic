@@ -207,8 +207,8 @@ def against_loopback(stack: Layer, compress_images: bool, model: Policy) -> Iter
 def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_images: bool) -> list[dict[str, float]]:
     """Send each payload, and report what its round trip cost beside what the server reports spending.
 
-    The session's own ``send_ms``/``recv_ms`` ride along, so one run tells an uplink the receiver would
-    not drain from a wait the server spent inside its own span.
+    One run tells an uplink the receiver would not drain from a wait the server spent inside its own
+    span: the session's own ``send_ms``/``recv_ms`` ride along.
     """
     rows = []
     for obs in payloads:
