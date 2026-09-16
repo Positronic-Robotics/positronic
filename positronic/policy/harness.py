@@ -76,9 +76,6 @@ class _EpisodeInference:
     def meta(self) -> dict[str, Any]:
         return self._rollout.session.meta
 
-    def cancel(self) -> None:
-        self._rollout.session.cancel()
-
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
         """The observation with its arrays copied, so nothing rewrites what a function is still reading.
@@ -284,8 +281,6 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
-        assert self._inference is not None
-        self._inference.cancel()
         # Stamped before the inference is retired: the meta overlays what its session reports.
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
@@ -373,8 +368,7 @@ class Harness(pimm.ControlSystem):
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
-        trajectory = inference(obs)
-        if trajectory is not None:
+        if (trajectory := inference(obs)) is not None:
             self._reschedule(trajectory, clock)
         inference.wait(should_stop)
 

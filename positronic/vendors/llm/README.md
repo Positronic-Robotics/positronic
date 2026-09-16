@@ -77,7 +77,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one request can be in flight. Faults and episode endings invalidate its result; a late response cannot command motion. The runtime waits for that bounded request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
+Only one request can be in flight. Faults and rollout closure invalidate pending decisions; a late response cannot command motion. Closing a rollout cancels the decision before waiting for its current API request, preventing follow-up picture or correction requests during that wait. The runtime waits for the request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
 
 ## Supervised hardware
 

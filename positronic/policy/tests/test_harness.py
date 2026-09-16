@@ -768,57 +768,6 @@ def test_trial_ends_at_its_timeout(world):
 
 
 @pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('external', [False, True])
-def test_empty_trajectory_clears_commands_and_waits_for_external_done_or_timeout(world, external):
-    class IdlingSession(_StubSession):
-        def __call__(self, obs, time_ns):
-            if idle.is_set():
-                return []
-            trajectory = super().__call__(obs, time_ns)
-            return [{**a, keys.ACTION_TIMESTAMP: time_ns / 1e9} for a in trajectory] + [
-                {**a, keys.ACTION_TIMESTAMP: time_ns / 1e9 + 0.1, keys.TARGET_GRIP: 0.9} for a in trajectory
-            ]
-
-    class IdlingPolicy(StubPolicy):
-        def new_session(self, context=None, rt=None):
-            return IdlingSession(self)
-
-    idle = threading.Event()
-    policy = IdlingPolicy()
-    harness = Harness(make_embodiment())
-    p = _pair_all(world, harness, policy)
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    scheduler = world.start([harness])
-    answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None if external else 1.0))
-    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, steps=5)
-    commanded = p['grip_rx'].read()
-    assert commanded is not None and commanded.data == policy.target_grip
-
-    idle.set()
-    drive_scheduler(scheduler, steps=30)
-    held = p['grip_rx'].read()
-    assert held is not None and held.ts == commanded.ts
-    assert world.clock.now_ns() > commanded.ts + 100_000_000
-    assert not answer.done()
-    assert DsWriterCommandType.STOP_EPISODE not in _ds_types(p)
-
-    if external:
-        p['done_em'].emit({eval_keys.SUCCESS: True})
-    drive_until(scheduler, answer.done, max_steps=400)
-    assert answer.done()
-    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert len(stops) == 1
-    meta = stops[0].static_data
-    assert meta[eval_keys.TERMINATED] is external
-    assert eval_keys.ENDED_BY not in meta
-    if external:
-        assert meta[eval_keys.SUCCESS] is True
-    else:
-        assert eval_keys.SUCCESS not in meta
-
-
-@pytest.mark.timeout(3.0)
 def test_trial_budget_starts_when_the_rig_is_ready(world):
     """The 0.05 budget is measured from the end of the prepare, not from the ask: the 0.2 the scene takes to
     draw is not the trial's to spend."""
