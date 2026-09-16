@@ -133,3 +133,22 @@ def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
     for obs in handed:
         assert 'robot_state.left.q' in obs, 'a suffixed state channel was dropped'
         assert keys.GRIP in obs and keys.WRIST_IMAGE in obs
+
+
+def test_a_camera_the_flags_did_not_name_is_not_sent(tmp_path):
+    """A flag-built stack forwards an unstacked camera at full size, so the wire carries what nobody asked for."""
+    period_ns = int(1e9 / 15.0)
+    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
+        for tick in range(3):
+            at = tick * period_ns
+            for camera in (*CAMERAS, keys.EXTERIOR_IMAGE_2):
+                writer.append(camera, np.zeros((48, 64, 3), np.uint8), at)
+            writer.append(keys.GRIP, 0.0, at)
+
+    episode = DiskEpisode(tmp_path / 'episode')
+    by_flags = next(iter(observations(episode, rate_hz=15.0, cameras=CAMERAS)))
+    declared = next(iter(observations(episode, rate_hz=15.0)))
+
+    assert keys.EXTERIOR_IMAGE_2 not in by_flags, 'a camera the flags did not name rode along to the wire'
+    assert all(camera in by_flags for camera in CAMERAS)
+    assert keys.EXTERIOR_IMAGE_2 in declared, 'a declared stack picks its own cameras, so every one is handed over'

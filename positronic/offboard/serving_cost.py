@@ -104,17 +104,21 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
     )
 
 
-# What a rig observation carries beside its cameras. The episode holds much more — the arm's URDF, its
-# meshes, every recorded command — and none of that crosses the wire.
-def observations(episode: Episode, rate_hz: float) -> Iterator[dict[str, Any]]:
+def observations(episode: Episode, rate_hz: float, cameras: Sequence[str] | None = None) -> Iterator[dict[str, Any]]:
     """The episode as the harness hands it to the stack: one observation per control tick.
 
-    Every signal the episode recorded goes in. The harness names none either: which of them a request
-    carries, and at what size, is the stack's to decide.
+    Every signal the episode recorded goes in, so a declared stack finds whatever it asks for and the
+    harness names none either. ``cameras`` keeps only those, for a flag-built stack: it stacks the
+    cameras it was told about and forwards the rest at full size, which the wire then carries.
     """
     period_ns = int(1e9 / rate_hz)
     for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
-        yield {**episode.time[ts], keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
+        sample = dict(episode.time[ts])
+        if cameras is not None:
+            unasked = [key for key in sample if key.startswith(keys.IMAGE_PREFIX) and key not in cameras]
+            for key in unasked:
+                del sample[key]
+        yield {**sample, keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
 
 
 def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, requests: int) -> list[dict[str, Any]]:
@@ -295,7 +299,9 @@ def main(
     )
     with opened as measured:
         print(f'stack: {json.dumps(measured.stack.to_spec())}')
-        payloads = capture(observations(chosen, rate_hz), measured.stack, model, requests)
+        # The declared stack chooses for a named server; the flags do it here, so nothing unasked-for is sent.
+        selected = None if server_url else cameras
+        payloads = capture(observations(chosen, rate_hz, selected), measured.stack, model, requests)
         if not payloads:
             raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
         print(f'captured {len(payloads)} payload(s) off episode {episode}')
