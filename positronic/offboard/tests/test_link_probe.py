@@ -126,7 +126,7 @@ def test_ss_is_the_reader_where_it_answers():
 
 def test_a_kernel_without_the_setting_reports_it_absent(tmp_path):
     """A setting this kernel does not carry is a legitimate absence, and the facts still print."""
-    assert _sysctl(str(tmp_path / 'no_such_setting')) is None
+    assert _sysctl(tmp_path / 'no_such_setting') is None
 
 
 def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
@@ -135,4 +135,4 @@ def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
     refused.write_text('4096 131072 6291456\n')
     refused.chmod(0o000)
     with pytest.raises(PermissionError):
-        _sysctl(str(refused))
+        _sysctl(refused)
