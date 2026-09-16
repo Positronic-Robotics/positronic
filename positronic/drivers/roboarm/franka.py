@@ -312,6 +312,23 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
             self._refusals = 0
 
+    def clear_held_fault(self) -> None:
+        """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
+
+        A reflex latches libfranka into ``Reflex`` mode, where the arm rejects every move, and the latch
+        outlives the error flags ``state().error`` reads — a refused goal is the only sign of it here.
+        Recovery clears the latch and commands no motion; a triggered safe input is left alone, because a
+        person may hold the arm and only they release it.
+        """
+        if not self._refused or self.safe_inputs.triggered:
+            return
+        logger.info('The arm is rejecting moves; clearing the fault it holds before it takes another')
+        if not self.robot.recover_from_errors():
+            raise RuntimeError(
+                'the arm holds a fault that rejects every move, and the recovery did not clear it: '
+                'clear the error in Desk, then start the run again'
+            )
+
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
@@ -336,6 +353,7 @@ class _Arm(DriverRun[command.CommandType]):
             return abandoned() or expired()
 
         try:
+            self.clear_held_fault()
             self.command_target(target, mode)
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 st = self.robot.state()
