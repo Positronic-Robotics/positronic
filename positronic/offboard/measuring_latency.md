@@ -4,8 +4,8 @@ A served round trip divides into what the server reports spending and what it do
 `served_ms` covers the observation's decode, the queue and the model. Everything else — the link, and
 whether the receiver drains it — is outside every figure the server sends.
 
-This is the order to measure that in. Each step answers on its own, and every step that needs no model
-runs before the model is loaded, so a session cut short still holds its results.
+Each step below answers on its own, and every step that needs no model runs before the model is
+loaded, so a session cut short still holds its results.
 
 ## What each probe answers
 
@@ -124,7 +124,7 @@ about, and `send_ms` against `recv_ms` says which half of the wire holds it.
 
 ## 6. Test the countermeasures the readings point at
 
-Two are worth running whatever the readings say.
+Run these two whatever the readings say.
 
 **A sink during a real inference.** Run step 3's sink in the container while step 5 is mid-round-trip.
 A sink that stalls too says the whole box is busy; a sink that reads at full speed while the server
@@ -140,7 +140,7 @@ sysctl -w net.core.rmem_max=8388608 net.ipv4.tcp_rmem='4096 131072 8388608'
 A `write_ms` that falls to what the link needs proves the cost is the receiver's scheduling, and that
 buffering absorbs it. A `write_ms` that does not move rules the buffer out.
 
-Three more, each worth running only if the readings above point at it:
+Run each of these only where the readings above point at it:
 
 | Reading | Countermeasure | What it would prove |
 |---|---|---|

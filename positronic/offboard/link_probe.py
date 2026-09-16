@@ -5,12 +5,9 @@ measures the rest: the link, and whether the receiver drains it. It carries no p
 so it answers before a model is loaded, and it runs wherever the receiver runs — a container's
 network namespace is not its host's.
 
-``sink`` reads, and reports the read: when the first byte landed, when the last one did, and every
-read between them. ``source`` writes, and reports how long its own write took to return — on a
-websocket that is the uplink, and a write outlasting its own bytes means the far end is not
-draining. ``watch`` samples a socket's receive queue while either runs, which is what tells a slow
-path from a late reader. ``facts`` reports the MTU, the namespace and the buffer sizes of wherever
-it runs.
+``sink`` times the read, ``source`` times the write, ``watch`` samples the receive queue while
+either runs, and ``facts`` reports the namespace. Each command's own docstring says what it reports;
+``measuring_latency.md`` is the order to run them in.
 
 Usage
     # In the container, before anything else is up:
