@@ -11,6 +11,7 @@ from positronic.offboard.link_probe import (
     READ_BYTES,
     _numeric_summary,
     _proc_queues,
+    _queue_reader,
     _ss_queues,
     network_facts,
     receive_one,
@@ -60,6 +61,7 @@ def _unread_connection(port_holder: list[int]) -> tuple[socket.socket, socket.so
     return listener, client, accepted
 
 
+@pytest.mark.skipif(shutil.which('ss') is None, reason='ss is not installed here')
 def test_both_queue_readers_see_the_same_unread_bytes():
     """``ss`` prints a state column the readers index past; ``/proc/net/tcp`` is what answers without it."""
     held: list[int] = []
@@ -69,8 +71,6 @@ def test_both_queue_readers_see_the_same_unread_bytes():
         proc = _proc_queues(held[0])
         by_ss = _ss_queues(held[0])
         assert [row['recv_q'] for row in proc] == [1100]
-        if by_ss is None:
-            pytest.skip('ss is not installed here')
         assert any(row['recv_q'] == 1100 for row in by_ss)
     finally:
         client.close()
@@ -85,7 +85,7 @@ def test_a_socket_with_nothing_queued_is_still_reported():
     listener, client, accepted = _unread_connection(held)
     try:
         rows = _ss_queues(held[0])
-        assert rows is not None and rows, 'an established socket on the port was not seen at all'
+        assert rows, 'an established socket on the port was not seen at all'
         assert all(row['recv_q'] == 0 for row in rows)
     finally:
         client.close()
@@ -109,3 +109,15 @@ def test_the_summary_skips_a_column_that_is_not_a_number():
     summary = _numeric_summary(rows)
     assert 'write_ms' in summary
     assert 'read_timeline' not in summary and 'local' not in summary
+
+
+def test_a_missing_ss_falls_back_to_the_kernel_table(monkeypatch):
+    """A reader that cannot run must name itself at the start, not read as an empty queue per sample."""
+    monkeypatch.setenv('PATH', '')
+    assert _queue_reader(9100) is _proc_queues
+
+
+@pytest.mark.skipif(shutil.which('ss') is None, reason='ss is not installed here')
+def test_ss_is_the_reader_where_it_answers():
+    """The fallback must not be the path every run quietly takes."""
+    assert _queue_reader(9100) is _ss_queues
