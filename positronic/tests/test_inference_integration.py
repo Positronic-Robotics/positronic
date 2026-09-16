@@ -284,7 +284,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path, monkeypatch):
             timing=True,
         )
 
-    # Neither outlives the run: `timed_pass` restores the run id and `scoped_telemetry_dir` the directory.
+    # Neither outlives the run: both are set inside a `scoped_env_var`.
     assert env_telemetry.ENV_RUN_ID not in os.environ
     assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
 

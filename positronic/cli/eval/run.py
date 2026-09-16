@@ -50,22 +50,21 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
 
 
 @contextmanager
-def scoped_telemetry_dir() -> Iterator[None]:
-    """Restore ``ENV_TELEMETRY_DIR`` on exit, so the destination `prepare_output_dir` set does not outlive the
-    run that set it.
+def scoped_env_var(name: str) -> Iterator[None]:
+    """Restore ``name`` on exit, so a telemetry variable a run sets does not outlive that run.
 
-    FOOTGUN: left set, it binds a harness the next run never asked to record — into the previous run's
-    directory. Binding adds an exporter thread, and a World forking a background control system deadlocks on
-    one, so the residue hangs the process rather than mislabelling a file.
+    FOOTGUN: a telemetry directory left set binds a harness the next run never asked to record, into the
+    previous run's directory. Binding adds an exporter thread, and a World forking a background control system
+    deadlocks on one, so the residue hangs the process rather than mislabelling a file.
     """
-    previous = os.environ.get(ENV_TELEMETRY_DIR)
+    previous = os.environ.get(name)
     try:
         yield
     finally:
         if previous is None:
-            os.environ.pop(ENV_TELEMETRY_DIR, None)
+            os.environ.pop(name, None)
         else:
-            os.environ[ENV_TELEMETRY_DIR] = previous
+            os.environ[name] = previous
 
 
 class TaskDriver(pimm.ControlSystem):
@@ -184,11 +183,9 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
         return
     timed_dir = Path(output_dir)
     run_id = uuid.uuid4().hex
-    previous_run_id = os.environ.get(ENV_RUN_ID)
-    # Set before any world comes up: a launched env server reads it off the forwarded environment and joins
-    # its own sidecar to this process's by it.
-    os.environ[ENV_RUN_ID] = run_id
-    try:
+    with scoped_env_var(ENV_RUN_ID):
+        # Set before any world comes up, so a launched env server's environment carries it.
+        os.environ[ENV_RUN_ID] = run_id
         # Built outside the pass: the constructor initialises NVML, enumerates its handles and primes the CPU
         # counters, and that setup is not eval wall — charging it to W_pass depresses the real-time factor.
         sampler = telemetry.StatsSampler(telemetry.stats_path(timed_dir, telemetry_keys.HARNESS_PROCESS))
@@ -203,11 +200,6 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
             sampler,
         ):
             yield
-    finally:
-        if previous_run_id is None:
-            os.environ.pop(ENV_RUN_ID, None)
-        else:
-            os.environ[ENV_RUN_ID] = previous_run_id
 
 
 def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False):
@@ -232,7 +224,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     blocking(policy).new_session().close()
 
     try:
-        with scoped_telemetry_dir():
+        with scoped_env_var(ENV_TELEMETRY_DIR):
             output_path = prepare_output_dir(output_dir)
             with timed_pass(output_path, timing, policy):
                 for ev in evals:
