@@ -35,12 +35,27 @@ zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
 zed_2i_second = zed.override(serial_number=39058547)
 
+# The station's two sideviews, by side, read off the rig (Positronic-Robotics/internal#1131).
+sideview_left = zed_2i
+sideview_right = zed_2i_second
+
 _DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
 
-droid = {keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM), keys.EXTERIOR_IMAGE: zed_2i.override(**_DROID_STREAM)}
+droid = {
+    keys.WRIST_IMAGE: zed_m.override(**_DROID_STREAM),
+    keys.EXTERIOR_IMAGE: sideview_left.override(**_DROID_STREAM),
+}
 
-# `exterior_2` runs on `zed_2i_second`, a ZED-M, so its optics differ from `exterior`.
-droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: zed_2i_second.override(**_DROID_STREAM)}
+droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
+
+# `droid_left` holds `sideview_left` under `exterior`; `droid_right` holds `sideview_right` there.
+# FOOTGUN: `exterior` and `exterior_2` hold opposite sideviews in the two dicts.
+droid_left = droid_3cam  # the unsided three-camera set already binds the left sideview as `exterior`
+droid_right = {
+    **droid_3cam,
+    keys.EXTERIOR_IMAGE: sideview_right.override(**_DROID_STREAM),
+    keys.EXTERIOR_IMAGE_2: sideview_left.override(**_DROID_STREAM),
+}
 
 # YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
 zed_x_top = zed.override(serial_number=48953814)
