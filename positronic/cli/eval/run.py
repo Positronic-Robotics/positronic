@@ -185,8 +185,8 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
     timed_dir = Path(output_dir)
     run_id = uuid.uuid4().hex
     previous_run_id = os.environ.get(ENV_RUN_ID)
-    # Set before any world comes up: a launched env server reads it off the forwarded environment, and joins
-    # its own sidecar to this process's by it. Only `--timing` sets it, so only a timed run has that pair.
+    # Set before any world comes up: a launched env server reads it off the forwarded environment and joins
+    # its own sidecar to this process's by it.
     os.environ[ENV_RUN_ID] = run_id
     try:
         # Built outside the pass: the constructor initialises NVML, enumerates its handles and primes the CPU
