@@ -13,6 +13,7 @@ from positronic.offboard.link_probe import (
     _proc_queues,
     _queue_reader,
     _ss_queues,
+    _sysctl,
     network_facts,
     receive_one,
 )
@@ -121,3 +122,17 @@ def test_a_missing_ss_falls_back_to_the_kernel_table(monkeypatch):
 def test_ss_is_the_reader_where_it_answers():
     """The fallback must not be the path every run quietly takes."""
     assert _queue_reader(9100) is _ss_queues
+
+
+def test_a_kernel_without_the_setting_reports_it_absent(tmp_path):
+    """A setting this kernel does not carry is a legitimate absence, and the facts still print."""
+    assert _sysctl(str(tmp_path / 'no_such_setting')) is None
+
+
+def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
+    """A namespace refusing /proc/sys is the finding; reported as null it reads as an absent setting."""
+    refused = tmp_path / 'refused'
+    refused.write_text('4096 131072 6291456\n')
+    refused.chmod(0o000)
+    with pytest.raises(PermissionError):
+        _sysctl(str(refused))
