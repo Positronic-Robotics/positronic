@@ -10,3 +10,5 @@ CHECKPOINT_ID = 'checkpoint_id'
 LOCAL_STACK = 'local_stack'
 COMPRESS_IMAGES = 'compress_images'
 POSITRONIC_VERSION = 'positronic_version'
+# The id of this session, present when the server takes frames through a shared-memory ring.
+FRAME_RING = 'frame_ring'

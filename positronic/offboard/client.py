@@ -12,6 +12,8 @@ import httpx
 
 from positronic import telemetry, telemetry_keys
 
+from . import frame_ring as frames
+from . import keys as offboard_keys
 from . import protocol, wire, wires
 from .protocol import deserialise, serialise, typed_commands
 from .wire import ClientWire
@@ -28,17 +30,31 @@ DEFAULT_CONNECT_DEADLINE = 900.0
 
 
 class InferenceSession:
-    """One session over one open connection, whichever wire carries it."""
+    """One session over one open connection, whichever wire carries it.
+
+    ``uds`` is the Unix socket the session was dialled over, which says the server runs on this host.
+    A server that also declares a frame ring then gets every image through shared memory, and the
+    message carries a reference in place of each one.
+    """
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
     # still carries it.
     served_timing: Mapping[str, float] = MappingProxyType({})
 
-    def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+    def __init__(
+        self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT, uds: Path | None = None
+    ):
         self._conn = conn
         self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
+        self._frames = self._frame_writer(uds)
+
+    def _frame_writer(self, uds: Path | None) -> frames.FrameWriter | None:
+        session_id = self._metadata.get(offboard_keys.FRAME_RING)
+        if uds is None or session_id is None or not frames.SUPPORTED:
+            return None
+        return frames.FrameWriter(frames.channel_path(uds), session_id)
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -81,7 +97,7 @@ class InferenceSession:
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
         self.served_timing = {}
-        serialised = serialise(obs)
+        serialised = serialise(obs if self._frames is None else self._frames.pack(obs))
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
@@ -109,6 +125,8 @@ class InferenceSession:
         return typed_commands(response[protocol.RESULT])
 
     def close(self):
+        if self._frames is not None:
+            self._frames.close()
         logger.info('InferenceSession.close: %s', self._conn.close())
 
 
@@ -273,7 +291,7 @@ class InferenceClient:
         """
         conn = self._wire.dial(self._address, self.headers, self.open_timeout)
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout)
+            return InferenceSession(conn, infer_timeout=self.infer_timeout, uds=self._address.uds)
         except BaseException:
             conn.close()
             raise
