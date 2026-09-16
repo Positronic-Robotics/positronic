@@ -20,7 +20,7 @@ from starlette.datastructures import QueryParams
 
 from positronic import keys
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder, Session
+from positronic.policy import Codec, Policy, Recorder, Session
 from positronic.policy.base import Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -272,10 +272,12 @@ class PolicyServer:
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, _, _ = split(self._pipeline)
+        local, _, remote_half = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
         _declared_stack(local)
+        # What builds the observation a ``warm`` runs. A remote half that is not a codec encodes nothing.
+        self._server_codec = remote_half if isinstance(remote_half, Codec) else None
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
@@ -369,9 +371,9 @@ class PolicyServer:
         if policy is None:
             logger.error('Nothing to warm: the model slot is empty')
             return
-        obs = self._source.warm_observation(policy, task)
+        obs = self._server_codec.warm_observation(task) if self._server_codec is not None else None
         if obs is None:
-            logger.info('This model source builds no warm observation; the checkpoint warms at load alone')
+            logger.info('This pipeline builds no warm observation; the checkpoint warms at load alone')
             return
         # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
         async with self._infer_lock:

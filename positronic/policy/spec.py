@@ -99,13 +99,6 @@ class ModelSource(abc.ABC):
         """Static per-model handshake facts (model type, config name, ...)."""
         return {}
 
-    def warm_observation(self, policy: Policy, task: str) -> dict[str, Any] | None:
-        """One observation ``policy`` answers, carrying ``task`` as its prompt.
-
-        ``None`` where this source builds none, and then the server warms nothing.
-        """
-        return None
-
     def __eq__(self, other):
         return type(self) is type(other) and self.__dict__ == other.__dict__
 

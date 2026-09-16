@@ -1,17 +1,17 @@
 import threading
 from collections.abc import Callable, Generator, Mapping
-from typing import Any, NamedTuple
+from typing import NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
 
-from positronic import keys
 from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.spec import ModelSource, PolicySource, remote
+from positronic.policy.observation import ObservationCodec
+from positronic.policy.spec import ModelSource, Pipeline, PolicySource, remote
 
 
 class Served(NamedTuple):
@@ -124,11 +124,15 @@ class DictSource(ModelSource):
         return self._policies[model_id]
 
 
-class WarmSource(PolicySource):
-    """A ready policy, plus the observation a warm runs on, which ``PolicySource`` alone cannot build."""
+# Where the warm pipeline's codec puts the prompt. Deliberately not ``keys.TASK``: a test that reads the
+# task back under this name proves the codec placed it, rather than the value travelling unchanged.
+WARM_PROMPT_FIELD = 'prompt'
 
-    def warm_observation(self, policy: Policy, task: str) -> dict[str, Any]:
-        return {keys.TASK: task}
+
+def warm_pipeline(policy: Policy) -> Pipeline:
+    """A served pipeline whose server-side codec builds the observation a warm runs on."""
+    codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
+    return ChunkedSchedule() | remote | codec | PolicySource(policy)
 
 
 @pytest.fixture

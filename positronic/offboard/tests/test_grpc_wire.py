@@ -23,12 +23,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 from cryptography.x509.oid import NameOID
 
-from positronic import keys
 from positronic.offboard import grpc_wire, protocol, wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, bearer
-from positronic.offboard.tests.conftest import DictSource, Served, StartServer, WarmSource
+from positronic.offboard.tests.conftest import WARM_PROMPT_FIELD, DictSource, Served, StartServer, warm_pipeline
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, remote
@@ -74,10 +73,10 @@ def test_both_wires_answer_the_readiness_verb_alike(both_wires):
 
 def test_a_grpc_warm_starts_one_inference(start_server, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(ChunkedSchedule() | remote | WarmSource(policy), grpc=True)
+    served = start_server(warm_pipeline(policy), grpc=True)
     client = InferenceClient.from_url(grpc_url(served))
     assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
-    policy._mock_session.assert_called_once_with({keys.TASK: 'stack the cubes'}, ANY)
+    policy._mock_session.assert_called_once_with({WARM_PROMPT_FIELD: 'stack the cubes'}, ANY)
 
 
 def test_a_server_that_does_not_answer_the_verb_says_so(both_wires, monkeypatch):

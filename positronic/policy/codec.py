@@ -75,6 +75,20 @@ class Codec(Layer):
     def encode(self, data: dict) -> dict:
         return {}
 
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        """The rig-side observation a warm is built from, zero-filled, carrying ``task`` as the prompt.
+
+        ``None`` where this codec encodes no observation. One entry of a chain declares these inputs and
+        the whole chain encodes them, so a warm pays the encode a served observation pays and the task
+        lands where this codec's model reads it.
+        """
+        return None
+
+    def warm_observation(self, task: str) -> dict[str, Any] | None:
+        """The encoded observation a warm runs, or ``None`` where this chain declares no warm inputs."""
+        inputs = self.warm_inputs(task)
+        return None if inputs is None else self.encode(inputs)
+
     def decode(self, data):
         if isinstance(data, list):
             return [self.decode(d) for d in data]
@@ -165,6 +179,12 @@ def _merged_meta(left: dict, right: dict) -> dict:
     return result
 
 
+def _declared_warm_inputs(left: Codec, right: Codec, task: str) -> dict[str, Any] | None:
+    """The warm inputs of whichever half declares them; at most one entry of a chain encodes observations."""
+    declared = left.warm_inputs(task)
+    return declared if declared is not None else right.warm_inputs(task)
+
+
 class _ComposedCodec(Codec):
     """Two codecs composed via ``|``. Encodes left-to-right, decodes right-to-left."""
 
@@ -174,6 +194,9 @@ class _ComposedCodec(Codec):
 
     def encode(self, data):
         return self._right.encode(self._left.encode(data))
+
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        return _declared_warm_inputs(self._left, self._right, task)
 
     def decode(self, data):
         return self._left.decode(self._right.decode(data))
@@ -208,6 +231,9 @@ class _ParallelCodec(Codec):
 
     def encode(self, data):
         return {**self._left.encode(data), **self._right.encode(data)}
+
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        return _declared_warm_inputs(self._left, self._right, task)
 
     def decode(self, data):
         left_out = self._left.decode(data)

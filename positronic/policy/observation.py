@@ -60,6 +60,15 @@ class ObservationCodec(Codec):
     def _decode_single(self, data: dict) -> dict:
         return {}
 
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """Zero-filled inputs under the rig-side names this codec reads, at the widths it declares."""
+        inputs: dict[str, Any] = {keys.TASK: task}
+        for input_key, (width, height) in self._image_configs.values():
+            inputs[input_key] = np.zeros((height, width, 3), dtype=np.uint8)
+        for features in self._state.values():
+            inputs.update({name: np.zeros(dim, dtype=np.float32) for name, dim in features.items()})
+        return inputs
+
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 

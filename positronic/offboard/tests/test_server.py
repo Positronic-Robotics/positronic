@@ -26,7 +26,7 @@ from positronic.offboard.client import InferenceClient, InferenceSession, _Conne
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.tests.conftest import WarmSource, round_trip
+from positronic.offboard.tests.conftest import WARM_PROMPT_FIELD, round_trip, warm_pipeline
 from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
@@ -951,23 +951,25 @@ class TestReadinessVerbs:
         assert loaded.checkpoint_id == 'other'
         assert loaded.inferences == 0, 'a checkpoint that has just loaded has answered nothing'
 
-    def test_warm_answers_at_once_and_the_count_moves_after_it(self, start_server, make_mock_policy):
+    def test_warm_runs_one_inference_on_the_observation_the_codec_builds(self, start_server, make_mock_policy):
         policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-        host, port, *_ = start_server(ChunkedSchedule() | remote | WarmSource(policy))
+        host, port, *_ = start_server(warm_pipeline(policy))
         client = InferenceClient.from_url(f'{host}:{port}')
         started = client.warm('pick up the red cube')
         assert started.inferences == 0, 'warm reports the state it answers in, not the state it will reach'
         assert _warmed(client).inferences == 1
-        policy._mock_session.assert_called_once_with({keys.TASK: 'pick up the red cube'}, ANY)
+        # The codec put the task under its own field, so the model answered the prompt a session would carry.
+        policy._mock_session.assert_called_once_with({WARM_PROMPT_FIELD: 'pick up the red cube'}, ANY)
         policy._mock_session.close.assert_called_once()
 
     def test_warm_waits_for_the_count_when_asked_to(self, start_server, make_mock_policy):
         policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-        host, port, *_ = start_server(ChunkedSchedule() | remote | WarmSource(policy))
+        host, port, *_ = start_server(warm_pipeline(policy))
         client = InferenceClient.from_url(f'{host}:{port}')
         assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
 
-    def test_a_source_that_builds_no_warm_observation_warms_nothing(self, stub_server):
+    def test_a_pipeline_whose_server_half_encodes_nothing_warms_nothing(self, stub_server):
+        """``stub_server`` closes the marker with the source alone, so no codec builds a warm observation."""
         host, port, _server, policy = stub_server
         client = InferenceClient.from_url(f'{host}:{port}')
         assert client.warm('stack the cubes').status is protocol.ServerStatus.READY
@@ -977,10 +979,9 @@ class TestReadinessVerbs:
 
     def test_a_second_warm_joins_the_one_already_running(self, start_server, make_mock_policy):
         policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-        source = WarmSource(policy)
         held = threading.Event()
         policy._mock_session.side_effect = lambda obs, time_ns: held.wait(timeout=10.0) and [{'action': [1]}]
-        host, port, *_ = start_server(ChunkedSchedule() | remote | source)
+        host, port, *_ = start_server(warm_pipeline(policy))
         client = InferenceClient.from_url(f'{host}:{port}')
         client.warm('stack the cubes')
         client.warm('stack the cubes')

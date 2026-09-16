@@ -67,6 +67,36 @@ def test_observation_encode_task():
     assert obs_keys.TASK not in obs_no_task
 
 
+def test_warm_observation_carries_the_task_at_the_widths_the_codec_declares():
+    enc = ObservationCodec(
+        state={'observation.state': {'a': 2, 'b': 1}},
+        images={'observation.images.left': ('left.image', (8, 6))},
+        task_field='prompt',
+    )
+
+    obs = enc.warm_observation('pick up the red cube')
+
+    assert obs is not None, 'the codec declares warm inputs, so it builds an observation from them'
+    assert obs['prompt'] == 'pick up the red cube'
+    assert obs['observation.state'].shape == (3,)
+    assert obs['observation.images.left'].shape == (6, 8, 3)
+
+
+def test_a_chain_encodes_the_warm_inputs_its_observation_encoder_declares():
+    """The serving shape: the encoder sits inside a parallel pair under a timestamp codec."""
+    enc = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field='prompt')
+    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip')
+
+    obs = (ActionTimestamp(fps=15.0) | (enc & action)).warm_observation('stack the cubes')
+
+    assert obs == {'prompt': 'stack the cubes', 'observation.state': pytest.approx(np.zeros(1))}
+
+
+def test_a_codec_that_encodes_no_observation_builds_no_warm_observation():
+    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip')
+    assert (ActionTimestamp(fps=15.0) | action).warm_observation('stack the cubes') is None
+
+
 def test_absolute_position_action_encode_decode_quat():
     # Identity rotation, known translation/grip
     ts = [1000, 2000]
