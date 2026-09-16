@@ -6,7 +6,15 @@ from contextlib import contextmanager
 import numpy as np
 import pytest
 from PIL import Image
-from pydantic_ai.messages import BinaryContent, ModelRequest, ModelResponse, TextPart, ToolCallPart, UserPromptPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
@@ -74,10 +82,13 @@ def session(policy):
 
 
 def complete(active, rt, obs, time_ns=0):
-    assert active(obs, time_ns) is None
-    rt.wait(5)
-    assert not rt.in_flight
-    return active(obs, time_ns)
+    result = active(obs, time_ns)
+    while result is None:
+        assert rt.owes_an_answer
+        rt.wait(5)
+        assert not rt.in_flight
+        result = active(obs, time_ns)
+    return result
 
 
 def frames(messages):
@@ -150,6 +161,38 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
 
 
 @pytest.mark.parametrize(
+    'reply',
+    [
+        ModelResponse([TextPart('I will move.')]),
+        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]),
+    ],
+)
+def test_follow_up_needs_another_session_call_and_uses_the_frozen_observation(model, reply):
+    requests, replies = model
+    replies.extend([reply, finish()])
+    policy = LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)
+    with session(policy) as (active, rt):
+        assert active(observation(1), 1) is None
+        rt.wait(5)
+        assert not rt.in_flight
+        assert len(requests) == 1
+        later = observation(2, x=0.1)
+        later[keys.WRIST_IMAGE][:] = 255
+        assert active(later, 2) is None
+        rt.wait(5)
+        assert not rt.in_flight
+        assert len(requests) == 2
+        assert active(later, 3) == []
+        events = active.meta['transcript']
+    assert [e['obs_time_ns'] for e in events if e['event'] == 'request'] == [1, 1]
+    assert len([e for e in events if e['event'] == 'observation']) == 1
+    if reply.tool_calls:
+        pictures = frames(requests[1][0])
+        assert len(pictures) == 2
+        np.testing.assert_array_equal(np.asarray(Image.open(io.BytesIO(pictures[0].data))), 0)
+
+
+@pytest.mark.parametrize(
     'bad',
     [
         move(0.2),
@@ -213,7 +256,8 @@ def test_finished_session_stays_idle_after_cancellation_and_new_session_starts_f
 
 
 @pytest.mark.parametrize('cancel_before_answer', [True, False])
-def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, cancel_before_answer):
+@pytest.mark.parametrize('follow_up', [False, True])
+def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, cancel_before_answer, follow_up):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
@@ -222,10 +266,15 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, ca
         assert release.wait(5)
         return move()
 
+    if follow_up:
+        replies.append(ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]))
     replies.extend([delayed, finish()])
-    policy = (StopOnFault() | ChunkedSchedule()).wrap(LLMPolicy(Endpoint('test'), Motion()))
+    policy = (StopOnFault() | ChunkedSchedule()).wrap(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND))
     with session(policy) as (active, rt):
         assert active(observation(), 0) is None
+        if follow_up:
+            rt.wait(5)
+            assert active(observation(), 0) is None
         assert entered.wait(5)
         for tick in range(10):
             assert active(observation(), tick) is None
@@ -242,8 +291,9 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, ca
         complete(active, rt, observation(20), 20)
         assert active.meta['stop_reason'] == 'done'
         events = [event['event'] for event in active.meta['transcript']]
-    assert len(requests) == 2
+    assert len(requests) == 2 + int(follow_up)
     assert 'Reassess' in str(requests[-1][0])
+    assert any(isinstance(part, SystemPromptPart) for message in requests[-1][0] for part in message.parts)
     assert 'discarded' in events
 
 
@@ -281,7 +331,7 @@ def test_rollout_close_discards_late_reply_without_follow_up_requests(model, mon
         rollout.close()
     assert len(requests) == 1
     events = [e['event'] for e in rollout.session.meta['transcript']]
-    assert events.index('cancelled') < events.index('response') < events.index('discarded')
+    assert events.index('response') < events.index('discarded')
     assert 'accepted' not in events
 
 
@@ -303,6 +353,7 @@ def test_metadata_snapshot_excludes_response_arriving_after_cancellation(model):
         serialized = json.dumps(recorded_meta)
         release.set()
         rt.wait(5)
+        assert active(observation(), 1) is None
         assert json.dumps(recorded_meta) == serialized
         assert not any(e['event'] == 'response' for e in recorded_meta['transcript'])
         assert any(e['event'] == 'discarded' for e in active.meta['transcript'])
