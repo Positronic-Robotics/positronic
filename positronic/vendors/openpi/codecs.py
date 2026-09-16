@@ -128,8 +128,7 @@ ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP:
 
 
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
-# prompt under `prompt` (see openpi `droid_policy.DroidInputs`), lowercased — the checkpoints were
-# trained on lowercased language and MolmoSpaces' Pi baseline normalizes the same way.
+# prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
 droid_obs = cfn.Config(
     GenericObservationCodec,
     state={openpi.JOINT_POSITION: {keys.JOINTS: 7}, openpi.GRIPPER_POSITION: {keys.GRIP: 1}},
@@ -138,7 +137,6 @@ droid_obs = cfn.Config(
         openpi.EXTERIOR_IMAGE_LEFT: (keys.EXTERIOR_IMAGE, (224, 224)),
     },
     task_field=openpi.PROMPT,
-    lowercase_task=True,
 )
 
 ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
