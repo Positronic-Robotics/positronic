@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
+from configuronic.cli import CommandTree
 
 from pimm.logging import init_logging
 
@@ -344,7 +345,7 @@ def facts(peer: str | None):
     print(json.dumps(network_facts(peer), indent=1))
 
 
-COMMANDS = {'sink': sink, 'source': source, 'watch': watch, 'facts': facts}
+COMMANDS: CommandTree = {'sink': sink, 'source': source, 'watch': watch, 'facts': facts}
 
 
 if __name__ == '__main__':
