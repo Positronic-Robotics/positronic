@@ -320,14 +320,14 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
         print(f'per-sample rows -> {out}')
 
 
-def _sysctl(path: str) -> str | None:
+def _sysctl(path: Path) -> str | None:
     """One kernel setting, or ``None`` where this kernel has no such file.
 
     Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
     namespace, and this is the tool that reports those.
     """
     try:
-        return Path(path).read_text().strip()
+        return path.read_text().strip()
     except FileNotFoundError:
         return None
 
@@ -341,16 +341,16 @@ def network_facts(peer: str | None) -> dict[str, Any]:
     """
     interfaces = {}
     for entry in sorted(Path('/sys/class/net').iterdir()):
-        interfaces[entry.name] = {'mtu': _sysctl(f'{entry}/mtu'), 'operstate': _sysctl(f'{entry}/operstate')}
+        interfaces[entry.name] = {'mtu': _sysctl(entry / 'mtu'), 'operstate': _sysctl(entry / 'operstate')}
     facts: dict[str, Any] = {
         'net_namespace': Path('/proc/self/ns/net').readlink().name,
         'interfaces': interfaces,
-        'tcp_rmem': _sysctl('/proc/sys/net/ipv4/tcp_rmem'),
-        'tcp_wmem': _sysctl('/proc/sys/net/ipv4/tcp_wmem'),
-        'rmem_max': _sysctl('/proc/sys/net/core/rmem_max'),
-        'wmem_max': _sysctl('/proc/sys/net/core/wmem_max'),
-        'tcp_congestion_control': _sysctl('/proc/sys/net/ipv4/tcp_congestion_control'),
-        'tcp_slow_start_after_idle': _sysctl('/proc/sys/net/ipv4/tcp_slow_start_after_idle'),
+        'tcp_rmem': _sysctl(Path('/proc/sys/net/ipv4/tcp_rmem')),
+        'tcp_wmem': _sysctl(Path('/proc/sys/net/ipv4/tcp_wmem')),
+        'rmem_max': _sysctl(Path('/proc/sys/net/core/rmem_max')),
+        'wmem_max': _sysctl(Path('/proc/sys/net/core/wmem_max')),
+        'tcp_congestion_control': _sysctl(Path('/proc/sys/net/ipv4/tcp_congestion_control')),
+        'tcp_slow_start_after_idle': _sysctl(Path('/proc/sys/net/ipv4/tcp_slow_start_after_idle')),
     }
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         facts['default_so_rcvbuf'] = probe.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
