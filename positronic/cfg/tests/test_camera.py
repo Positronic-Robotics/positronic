@@ -8,7 +8,7 @@ def _serials(cameras: dict) -> dict[str, int]:
     return {name: cfg.kwargs['serial_number'] for name, cfg in cameras.items()}
 
 
-def test_each_sided_droid_carries_both_sideviews_and_the_wrist():
+def test_each_sided_droid_declares_the_three_camera_observation_keys():
     """A sided set binds three cameras, so one run serves a policy that reads the second exterior
     beside one that does not."""
     three = {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2}
