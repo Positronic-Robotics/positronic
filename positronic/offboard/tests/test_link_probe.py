@@ -98,7 +98,7 @@ def test_the_namespace_reports_its_own_interfaces_and_buffers():
     assert reported['net_namespace'].startswith('net:[')
     assert reported['interfaces']['lo']['mtu'] is not None
     assert reported['default_so_rcvbuf'] > 0
-    json.dumps(reported)  # the window reads this off a terminal in a container
+    json.dumps(reported)
 
 
 def test_the_summary_skips_a_column_that_is_not_a_number():

@@ -122,6 +122,25 @@ class GilHog:
             thread.join(timeout=1.0)
 
 
+def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None:
+    """Read transfers off one connection until the peer goes, reporting each back to its sender."""
+    try:
+        while True:
+            report = receive_one(conn, read_bytes)
+            report['read_bytes'] = read_bytes
+            report['busy_threads'] = busy_threads
+            _send_framed(conn, json.dumps(report).encode())
+            print(
+                f'  {report["bytes"] / 1024:.0f} KiB in {report["read_span_ms"]:.1f} ms over '
+                f'{report["reads"]} read(s), {report["mib_per_sec"]:.1f} MiB/s',
+                flush=True,
+            )
+    except (ConnectionError, OSError, ValueError) as e:
+        print(f'  peer gone: {e}', flush=True)
+    finally:
+        conn.close()
+
+
 @cfn.config(host='0.0.0.0', port=9100, read_bytes=READ_BYTES, busy_threads=0)
 def sink(host: str, port: int, read_bytes: int, busy_threads: int):
     """Read transfers and report each one. Runs where the receiver runs, and answers one peer at a time.
@@ -140,21 +159,7 @@ def sink(host: str, port: int, read_bytes: int, busy_threads: int):
             conn, peer = listener.accept()
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             print(f'peer {peer[0]}:{peer[1]}', flush=True)
-            try:
-                while True:
-                    report = receive_one(conn, read_bytes)
-                    report['read_bytes'] = read_bytes
-                    report['busy_threads'] = busy_threads
-                    _send_framed(conn, json.dumps(report).encode())
-                    print(
-                        f'  {report["bytes"] / 1024:.0f} KiB in {report["read_span_ms"]:.1f} ms over '
-                        f'{report["reads"]} read(s), {report["mib_per_sec"]:.1f} MiB/s',
-                        flush=True,
-                    )
-            except (ConnectionError, OSError, ValueError) as e:
-                print(f'  peer gone: {e}', flush=True)
-            finally:
-                conn.close()
+            _serve_peer(conn, read_bytes, busy_threads)
     except KeyboardInterrupt:
         print('sink stopped', flush=True)
     finally:
@@ -216,30 +221,30 @@ def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: st
 def _proc_queues(port: int) -> list[dict[str, Any]]:
     """Every established socket on ``port``, with its queues, from ``/proc/net/tcp``.
 
-    The kernel's own table, so it answers in an image that carries no tooling at all. ``ss`` reads the
-    same queues and carries the connection's TCP state beside them; this is what is left without it.
+    The kernel's own table, so it answers in an image that carries no tooling at all.
     """
+    lines = Path('/proc/net/tcp').read_text().splitlines()[1:]
+    try:
+        lines += Path('/proc/net/tcp6').read_text().splitlines()[1:]
+    except FileNotFoundError:
+        # A namespace with IPv6 off carries no tcp6 table, and then the tcp one is the whole answer.
+        pass
     rows = []
-    for name in ('tcp', 'tcp6'):
-        try:
-            lines = Path(f'/proc/net/{name}').read_text().splitlines()[1:]
-        except OSError:
+    for line in lines:
+        fields = line.split()
+        local, state, queues = fields[1], fields[3], fields[4]
+        # `01` is ESTABLISHED; a listener's queues count backlog, not bytes.
+        if state != '01' or int(local.rsplit(':', 1)[1], 16) != port:
             continue
-        for line in lines:
-            fields = line.split()
-            local, state, queues = fields[1], fields[3], fields[4]
-            # `01` is ESTABLISHED; a listener's queues count backlog, not bytes.
-            if state != '01' or int(local.rsplit(':', 1)[1], 16) != port:
-                continue
-            send_q, recv_q = (int(part, 16) for part in queues.split(':'))
-            rows.append({'local': local, 'recv_q': recv_q, 'send_q': send_q})
+        send_q, recv_q = (int(part, 16) for part in queues.split(':'))
+        rows.append({'local': local, 'recv_q': recv_q, 'send_q': send_q})
     return rows
 
 
 def _ss_queues(port: int) -> list[dict[str, Any]] | None:
     """The same queues through ``ss -tim``, with the TCP info it prints under each socket.
 
-    ``None`` when ``ss`` is not installed or refuses, which is what sends a caller to ``/proc/net/tcp``.
+    ``None`` when ``ss`` is not installed or refuses.
     """
     try:
         done = subprocess.run(
