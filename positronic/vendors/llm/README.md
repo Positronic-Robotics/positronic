@@ -1,6 +1,6 @@
 # Direct API robot policy
 
-`LLMPolicy` runs on the rig and calls a public model API on a worker thread. There is no Positronic inference server. Pydantic AI supplies native request and message adapters; the policy owns the conversation, tools, validation, and episode lifecycle.
+`LLMPolicy` runs on the rig and calls a public model API on a worker thread. There is no Positronic inference server. Pydantic AI supplies native request and message adapters; the policy owns the conversation, tools, and validation. The runner owns episode boundaries.
 
 ## Run in simulation
 
@@ -37,13 +37,15 @@ Only the task instruction, measured hand pose/gripper, and selected labelled RGB
 | Tool | Arguments / effect |
 | --- | --- |
 | `move_to` | Absolute `x`, `y`, `z`, `roll`, `pitch`, `yaw`, `gripper`, and a short `note` |
-| `done` | `reason` and `hindsight`; end the attempt |
-| `give_up` | `reason` and `hindsight`; end the attempt |
+| `done` | `reason` and `hindsight`; stop issuing actions for this episode |
+| `give_up` | `reason` and `hindsight`; stop issuing actions for this episode |
 | `take_pic` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
-The model must return exactly one tool call. Oversized moves, malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Three consecutive invalid replies raise an error. API errors and timeouts surface immediately; SDK retries are disabled. The episode has a budget of 100 calls, including pictures and corrections; exhaustion requests a normal policy end.
+The model must return exactly one tool call. Oversized moves, malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Three consecutive invalid replies raise an error. API errors and timeouts surface immediately; SDK retries are disabled. The episode has a budget of 100 calls, including pictures and corrections; exhaustion stops further actions and API calls.
 
-`done` and `give_up` set `eval.ended_by=policy`, never a success label. Hindsight is recorded for inspection and is not loaded into other episodes. There are no code-execution, crop, VLA, or skill-selection tools.
+After `done`, `give_up`, or call-budget exhaustion, the session returns an empty trajectory on every call and makes no further API requests. Queued commands are cleared; drivers retain their last commanded target. The episode and recording continue until the simulator or operator ends it, or its timeout expires. An episode without a timeout requires external completion. Cancellation does not restart a finished session; each new episode gets a fresh session.
+
+The policy's stop reason and hindsight are recorded for inspection, without setting a success label or carrying advice into other episodes. There are no code-execution, crop, VLA, or skill-selection tools.
 
 ### Motion and images
 
