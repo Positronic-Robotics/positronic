@@ -4,9 +4,10 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
-from positronic.offboard.serving_cost import InstantChunk, against_server, capture, replay, rig_stack
+from positronic.offboard.serving_cost import InstantChunk, against_server, capture, observations, replay, rig_stack
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.spec import PolicySource, remote
@@ -112,3 +113,22 @@ def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
     with against_server(f'ws://{host}:{port}') as measured:
         with pytest.raises(ValueError, match="asks for 'grip'"):
             capture(gripless, measured.stack, model, requests=1)
+
+
+def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
+    """A declared stack can ask for a channel no whitelist here knows, and a drop reports a false absence."""
+    period_ns = int(1e9 / 15.0)
+    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
+        for tick in range(3):
+            at = tick * period_ns
+            # A bimanual rig records a suffixed state channel, which no fixed key list here would name.
+            writer.append('robot_state.left.q', np.zeros(7), at)
+            writer.append(keys.GRIP, 0.0, at)
+            writer.append(keys.WRIST_IMAGE, np.zeros((48, 64, 3), np.uint8), at)
+
+    handed = list(observations(DiskEpisode(tmp_path / 'episode'), rate_hz=15.0))
+
+    assert handed, 'the episode spans three ticks'
+    for obs in handed:
+        assert 'robot_state.left.q' in obs, 'a suffixed state channel was dropped'
+        assert keys.GRIP in obs and keys.WRIST_IMAGE in obs
