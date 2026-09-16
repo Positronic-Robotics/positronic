@@ -1,9 +1,8 @@
 """Where one inference's time goes, divided by the phases the server reports.
 
-Replays a recorded episode against a server and reports, per request, what the round trip cost
-beside what the server says it spent. Two servers answer: the one ``--server_url`` names, whose
-handshake declares the stack; or a ``PolicyServer`` on loopback, built from the flags below, whose
-model answers a fixed chunk instantly. Each run prints the stack it used and where it came from.
+Replays a recorded episode against a server and reports what each round trip cost beside what the
+server says it spent. Each run prints the stack it sent through: the one the ``--server_url``
+server declares in its handshake, or the one the flags below build for the loopback server.
 
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
