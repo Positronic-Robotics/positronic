@@ -101,3 +101,14 @@ def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
     for row in rows:
         assert row[protocol.TIMING_SERVED] >= 0.0
         assert row[SEND_MS] >= 0.0 and row[RECV_MS] >= 0.0
+
+
+def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
+    """A key error from inside a layer names nothing a reader can act on; the capture names the key."""
+    model = InstantChunk(rows=2, period_s=1 / 15.0)
+    host, port, *_ = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model))
+    gripless = ({key: value for key, value in obs.items() if key != keys.GRIP} for obs in _ticks(12))
+
+    with against_server(f'ws://{host}:{port}') as measured:
+        with pytest.raises(ValueError, match="asks for 'grip'"):
+            capture(gripless, measured.stack, model, requests=1)
