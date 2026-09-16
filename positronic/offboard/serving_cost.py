@@ -106,23 +106,15 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
 
 # What a rig observation carries beside its cameras. The episode holds much more — the arm's URDF, its
 # meshes, every recorded command — and none of that crosses the wire.
-STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
-
-
 def observations(episode: Episode, rate_hz: float) -> Iterator[dict[str, Any]]:
     """The episode as the harness hands it to the stack: one observation per control tick.
 
-    Every camera the episode recorded goes in. The harness names none either: which of them a request
+    Every signal the episode recorded goes in. The harness names none either: which of them a request
     carries, and at what size, is the stack's to decide.
     """
     period_ns = int(1e9 / rate_hz)
     for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
-        sample = episode.time[ts]
-        obs = {key: sample[key] for key in STATE_KEYS if key in sample}
-        obs.update({key: value for key, value in sample.items() if key.startswith(keys.IMAGE_PREFIX)})
-        if keys.TASK in sample:
-            obs[keys.TASK] = sample[keys.TASK]
-        yield {**obs, keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
+        yield {**episode.time[ts], keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
 
 
 def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, requests: int) -> list[dict[str, Any]]:
