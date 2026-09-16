@@ -119,7 +119,8 @@ Each run prints the stack it rebuilt from the handshake. Read it: the rig sends 
 
 Read `wire_kib` before anything else. The observation came to that on the wire, and if it is not
 close to what the rig sends in production, the episode is not standing in for the rig and no figure
-under it compares to one. `round_trip_ms - pack_ms - served_ms` is the link and the receiver, and `send_ms` against `recv_ms` says which half of the wire holds it.
+under it compares to one. `round_trip_ms - pack_ms - served_ms` is the link and the receiver, and
+`send_ms` against `recv_ms` says which half of the wire holds it.
 
 ## 6. Test the countermeasures the readings point at
 
