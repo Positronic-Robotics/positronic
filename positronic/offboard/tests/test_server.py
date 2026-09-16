@@ -29,15 +29,15 @@ from positronic.offboard import client, frame_ring, protocol, websocket_wire, wi
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise, serialise
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, _declared_stack, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.base import Runtime
+from positronic.policy.base import SEQ, Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
-from positronic.policy.spec import ModelSource, PolicySource, inline, remote
+from positronic.policy.spec import ModelSource, PolicySource, inline, remote, split
 
 
 class _StubSource(ModelSource):
@@ -743,11 +743,12 @@ def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mo
         assert live.accept()[0].close() is None
 
 
-def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
-    """Nothing left of the marker leaves the rig nothing to run, so the server refuses to serve it."""
+def test_pipeline_with_no_rig_side_half_declares_an_empty_stack(make_mock_policy):
+    """Nothing left of the marker is a border left of every layer, and the rig is told to run nothing."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    with pytest.raises(ValueError, match='no rig-side stack'):
-        PolicyServer(remote | _StubSource(stub))
+    server = PolicyServer(remote | _StubSource(stub))
+    _local, _border, _remote_half = split(server._pipeline)
+    assert _declared_stack(_local) == {SEQ: []}
 
 
 _INFER = 'infer'
