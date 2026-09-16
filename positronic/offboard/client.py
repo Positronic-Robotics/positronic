@@ -95,7 +95,7 @@ class InferenceSession:
         try:
             self._conn.send(serialised)
         finally:
-            # A send that raises is the one worth timing, so the span is recorded on the way out too.
+            # A send that raises gets timed too, so the span is recorded on the way out.
             sent = time.time_ns()
             telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
         try:
