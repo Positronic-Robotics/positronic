@@ -65,11 +65,6 @@ def _read_exactly(conn: socket.socket, count: int) -> bytes:
     return b''.join(chunks)
 
 
-def _incompressible(count: int) -> bytes:
-    """``count`` bytes nothing along the path can shrink, so the wire carries what the caller asked for."""
-    return os.urandom(count)
-
-
 def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
     """Read one transfer, and report the read: the span the bytes took, and every ``recv`` inside it.
 
@@ -127,18 +122,6 @@ class GilHog:
             thread.join(timeout=1.0)
 
 
-def _numeric_summary(rows: list[dict[str, Any]]) -> str:
-    """Median, p95 and max of every numeric column in ``rows``, one column per line."""
-    columns = [name for name, value in rows[0].items() if isinstance(value, int | float)]
-    width = max(len(name) for name in columns)
-    lines = [f'{"":<{width}}  {"median":>10}  {"p95":>10}  {"max":>10}']
-    for name in columns:
-        values = sorted(float(row[name]) for row in rows)
-        p95 = values[min(int(0.95 * len(values)), len(values) - 1)]
-        lines.append(f'{name:<{width}}  {statistics.median(values):10.1f}  {p95:10.1f}  {max(values):10.1f}')
-    return '\n'.join(lines)
-
-
 @cfn.config(host='0.0.0.0', port=9100, read_bytes=READ_BYTES, busy_threads=0)
 def sink(host: str, port: int, read_bytes: int, busy_threads: int):
     """Read transfers and report each one. Runs where the receiver runs, and answers one peer at a time.
@@ -177,6 +160,23 @@ def sink(host: str, port: int, read_bytes: int, busy_threads: int):
     finally:
         hog.close()
         listener.close()
+
+
+def _incompressible(count: int) -> bytes:
+    """``count`` bytes nothing along the path can shrink, so the wire carries what the caller asked for."""
+    return os.urandom(count)
+
+
+def _numeric_summary(rows: list[dict[str, Any]]) -> str:
+    """Median, p95 and max of every numeric column in ``rows``, one column per line."""
+    columns = [name for name, value in rows[0].items() if isinstance(value, int | float)]
+    width = max(len(name) for name in columns)
+    lines = [f'{"":<{width}}  {"median":>10}  {"p95":>10}  {"max":>10}']
+    for name in columns:
+        values = sorted(float(row[name]) for row in rows)
+        p95 = values[min(int(0.95 * len(values)), len(values) - 1)]
+        lines.append(f'{name:<{width}}  {statistics.median(values):10.1f}  {p95:10.1f}  {max(values):10.1f}')
+    return '\n'.join(lines)
 
 
 @cfn.config(host='127.0.0.1', port=9100, kib=750, transfers=5, warmups=1, out=None)
