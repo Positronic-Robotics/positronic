@@ -191,13 +191,8 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
 
 
 def test_the_spans_sidecar_lands_where_the_episodes_upload_from(tmp_path, monkeypatch):
-    """`pos3.sync` mirrors the whole local directory, so a sidecar inside it uploads with the episodes.
-    Every binary that records resolves its output directory here, so each one gets that without being
-    told: the eval sweep, `positronic.inference`, and the rig and sim binaries that import this.
-
-    Read inside the scope every run of this process holds, so the read is of what a run sees and the
-    assertion leaves the process as it found it.
-    """
+    """Every binary that records resolves its output directory here, so each one writes its spans where
+    `pos3.sync` mirrors them without being told."""
     monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
         with scoped_telemetry_dir():
@@ -206,12 +201,10 @@ def test_the_spans_sidecar_lands_where_the_episodes_upload_from(tmp_path, monkey
 
     assert local_dir is not None
     assert pointed_at == str(local_dir / telemetry.TELEMETRY_SUBDIR)
-    assert ENV_TELEMETRY_DIR not in os.environ
 
 
 def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monkeypatch):
-    """The directory has one owner, in both directions: a run with no output dir writes no spans, and never
-    into the directory an earlier run in this process named."""
+    """A run recording nowhere has nowhere to put spans, and takes no earlier run's directory."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'an-earlier-run' / 'telemetry'))
 
     assert prepare_output_dir(None) is None
@@ -219,23 +212,18 @@ def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monk
 
 
 def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):
-    """The destination must not outlive the run. Left set, it binds a harness the next run in this process
-    never asked to record, into the previous run's directory — and the exporter thread that binding starts
-    deadlocks a World that forks a background control system."""
+    """A destination that outlives its run reaches a later `Harness` in the same process."""
     monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
 
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
         with scoped_telemetry_dir():
             prepare_output_dir(tmp_path / 'episodes')
-            during = os.environ[ENV_TELEMETRY_DIR]
 
-    assert during.endswith(telemetry.TELEMETRY_SUBDIR)
     assert ENV_TELEMETRY_DIR not in os.environ
 
 
 def test_the_scope_gives_back_a_directory_its_caller_set(tmp_path, monkeypatch):
-    """The scope restores, it does not clear: a process that named its own directory still has it after a
-    run, so the scope cannot reach past the value `prepare_output_dir` wrote."""
+    """The scope restores rather than clears, so it cannot reach past the value it replaced."""
     monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'mine'))
 
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
