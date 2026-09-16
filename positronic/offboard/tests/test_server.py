@@ -242,6 +242,31 @@ def test_full_inference_cycle(stub_server):
         session.close()
 
 
+def test_a_zero_observation_stamp_is_the_anchor(stub_server):
+    host, port, _server, policy = stub_server
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({keys.OBS_TIME_NS: 0})
+    finally:
+        session.close()
+
+    assert policy._mock_session.call_args.args[1] == 0
+
+
+def test_an_observation_with_no_stamp_anchors_on_this_server(stub_server):
+    host, port, _server, policy = stub_server
+    before = time.time_ns()
+
+    session = InferenceClient.from_url(f'{host}:{port}').new_session()
+    try:
+        session.infer({'image': 'test'})
+    finally:
+        session.close()
+
+    assert before <= policy._mock_session.call_args.args[1] <= time.time_ns()
+
+
 def test_no_codec(stub_server):
     host, port, _server, _policy = stub_server
     client = InferenceClient.from_url(f'{host}:{port}')

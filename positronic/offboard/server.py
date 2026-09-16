@@ -355,7 +355,8 @@ class PolicyServer:
                             # A scheduling layer anchors a chunk here and tests its end against the
                             # observation's own stamp, so both must read the rig's clock. An observation
                             # with no stamp has no control loop behind it.
-                            anchor = raw_obs.get(keys.OBS_TIME_NS) or time.time_ns()
+                            stamp = raw_obs.get(keys.OBS_TIME_NS)
+                            anchor = time.time_ns() if stamp is None else stamp
                             actions = await asyncio.to_thread(session, raw_obs, anchor)
                     except asyncio.CancelledError:
                         # A cancelled await does not stop the worker, and the session close runs beside a live
