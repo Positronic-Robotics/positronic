@@ -5,18 +5,34 @@ import pytest
 
 from positronic import keys
 from positronic.offboard import protocol
-from positronic.offboard.client import InferenceClient
-from positronic.offboard.serving_cost import InstantChunk, capture, replay, rig_stack
+from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
+from positronic.offboard.serving_cost import InstantChunk, against_server, capture, replay, rig_stack
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.spec import PolicySource, remote
 
 CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 
+# A stack shaped like the one a video-conditioned server declares: four strided frames per camera,
+# bounded well under what this probe's own flags default to.
+DECLARED_OFFSETS_SEC = (-23 / 15, -16 / 15, -8 / 15, 0.0)
+DECLARED_WIDTH, DECLARED_HEIGHT = 320, 176
 
-def _ticks(count: int, period_ns: int = 66_666_666):
+
+def _declared_stack():
+    return (
+        StopOnFault()
+        | TemporalStack(keys=(*CAMERAS, keys.EE_POSE, keys.GRIP), offsets_sec=DECLARED_OFFSETS_SEC)
+        | ChunkedSchedule()
+        | RestrictImageSize(width=DECLARED_WIDTH, height=DECLARED_HEIGHT)
+    )
+
+
+def _ticks(count: int, period_ns: int = 66_666_666, size: tuple[int, int] = (48, 64)):
     """A stand-in for the harness: one moving frame per camera per control tick."""
     rng = np.random.default_rng(0)
     for tick in range(count):
-        frame = rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)
+        frame = rng.integers(0, 255, (*size, 3), dtype=np.uint8)
         yield {
             keys.EE_POSE: np.zeros(7),
             keys.GRIP: 0.0,
@@ -64,3 +80,24 @@ def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
     with pytest.raises(ValueError, match='message limit'):
         replay(session, [oversized], compress_images=False)
     session.infer.assert_not_called()
+
+
+def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
+    """The probe sends what the server's handshake declares, not what its own flags would build."""
+    model = InstantChunk(rows=2, period_s=1 / 15.0)
+    served = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model))
+
+    with against_server('websocket', served.host, served.port, '', '') as measured:
+        assert measured.compress_images, 'the wire setting comes from the handshake too'
+        payloads = capture(_ticks(40, size=(360, 640)), measured.stack, model, requests=2)
+        rows = replay(measured.session, payloads, measured.compress_images)
+
+    sent = payloads[0]
+    for camera in CAMERAS:
+        # Four frames, not the 25 the flags default to; 176 high, not the 288 their bound would give.
+        assert sent[camera].shape == (len(DECLARED_OFFSETS_SEC), DECLARED_HEIGHT, 312, 3)
+    assert sent[keys.EE_POSE].shape == (len(DECLARED_OFFSETS_SEC), 7)
+    assert len(rows) == len(payloads)
+    for row in rows:
+        assert row[protocol.TIMING_SERVED] >= 0.0
+        assert row[SEND_MS] >= 0.0 and row[RECV_MS] >= 0.0
