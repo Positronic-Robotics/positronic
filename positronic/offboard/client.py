@@ -91,9 +91,12 @@ class InferenceSession:
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
-        self._conn.send(serialised)
-        sent = time.time_ns()
-        telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+        try:
+            self._conn.send(serialised)
+        finally:
+            # A send that raises is the one worth timing, so the span is recorded on the way out too.
+            sent = time.time_ns()
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
         try:
             received = self._conn.recv(timeout=self._infer_timeout)
         except TimeoutError:
@@ -104,8 +107,9 @@ class InferenceSession:
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
-        answered = time.time_ns()
-        telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
+        finally:
+            answered = time.time_ns()
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
         self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
         response = deserialise(received)
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
