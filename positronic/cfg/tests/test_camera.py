@@ -45,7 +45,6 @@ def test_an_at_reference_overrides_cameras_and_leaves_a_sibling_override_standin
     def embodiment(robot_arm, cameras):
         return robot_arm, cameras
 
-    # Not derived from `camera.__name__`: a derived reference follows a rename instead of failing.
     right_sideview_ref = '@positronic.cfg.hardware.camera.droid_right'
 
     pinned = embodiment.override(robot_arm=arm.override(brake_after_idle_s=600.0))

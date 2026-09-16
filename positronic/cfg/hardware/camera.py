@@ -36,7 +36,6 @@ zed_2i = zed.override(serial_number=39567055)
 zed_2i_second = zed.override(serial_number=39058547)
 
 # The station's two sideviews, by side, read off the rig (Positronic-Robotics/internal#1131).
-# Correct these two lines and every sided config follows.
 sideview_left = zed_2i
 sideview_right = zed_2i_second
 
