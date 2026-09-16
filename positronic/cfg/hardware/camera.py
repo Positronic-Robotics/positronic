@@ -35,9 +35,8 @@ zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
 zed_2i_second = zed.override(serial_number=39058547)
 
-# The station's two sideviews, by side. 39567055 is the camera the rig kept when the second sideview
-# was replaced, and it is the left one (Positronic-Robotics/internal#1131). Correct these two lines
-# and every sided config follows.
+# The station's two sideviews, by side, read off the rig (Positronic-Robotics/internal#1131).
+# Correct these two lines and every sided config follows.
 sideview_left = zed_2i
 sideview_right = zed_2i_second
 
@@ -50,9 +49,8 @@ droid = {
 
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
 
-# Both sideviews, by side: the task's own side takes `exterior` and the other takes `exterior_2`.
-# FOOTGUN: the two sideviews exchange keys between a left-sided and a right-sided task, so a
-# checkpoint trained on one fixed arrangement sees them the other way round on one of the two sides.
+# Both sideviews, by side: the task's side takes `exterior`, the other `exterior_2`.
+# FOOTGUN: that swaps the pair between sides, so a fixed-arrangement checkpoint sees them exchanged.
 droid_left = droid_3cam  # the unsided three-camera set already binds the left sideview as `exterior`
 droid_right = {
     **droid_3cam,
