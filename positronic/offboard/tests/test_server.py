@@ -1166,6 +1166,7 @@ def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
         session.close()
 
 
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
 def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_unix_server, socket_path, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     directory = pathlib.Path(socket_path).parent
