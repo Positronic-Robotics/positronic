@@ -36,8 +36,7 @@ class InferenceSession:
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
     # still carries it.
     served_timing: Mapping[str, float] = MappingProxyType({})
-    # This client's own halves of the last round trip, under ``SEND_MS`` and ``RECV_MS``. Same stamps the
-    # wire spans carry, readable without a telemetry sidecar.
+    # This client's own halves of the last round trip, under ``SEND_MS`` and ``RECV_MS``.
     wire_timing: Mapping[str, float] = MappingProxyType({})
 
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
@@ -90,7 +89,6 @@ class InferenceSession:
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
-        # One pair of stamps feeds both the sidecar and ``wire_timing``, so the two cannot disagree.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
         self._conn.send(serialised)
