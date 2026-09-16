@@ -1,13 +1,9 @@
 """Where the bytes of one transfer go, timed at both ends of the link.
 
-A session's round trip divides into what the server reports spending and what it does not. This
-measures the rest: the link, and whether the receiver drains it. It carries no policy and no model,
-so it answers before a model is loaded, and it runs wherever the receiver runs — a container's
-network namespace is not its host's.
-
 ``sink`` times the read, ``source`` times the write, ``watch`` samples the receive queue while
-either runs, and ``facts`` reports the namespace. Each command's own docstring says what it reports;
-``measuring_latency.md`` is the order to run them in.
+either runs, and ``facts`` reports the namespace. It imports the standard library and configuronic
+only, so it runs in a vendor image beside the server; ``measuring_latency.md`` is the order to run
+the four in.
 
 Usage
     # In the container, before anything else is up:
@@ -332,9 +328,8 @@ def _sysctl(path: Path) -> str | None:
 def network_facts(peer: str | None) -> dict[str, Any]:
     """What this namespace does to a transfer: its interfaces, its buffers, its congestion control.
 
-    A container has a namespace of its own, so none of this is the host's. The MTU is the figure to
-    read first: an overlay or a tunnel carries less than an ethernet link, and a sender that does not
-    learn it retransmits its way through every transfer.
+    The MTU is the figure to read first: an overlay or a tunnel carries less than an ethernet link,
+    and a sender that does not learn it retransmits its way through every transfer.
     """
     interfaces = {}
     for entry in sorted(Path('/sys/class/net').iterdir()):
