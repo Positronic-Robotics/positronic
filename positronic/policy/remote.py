@@ -158,7 +158,9 @@ class RemotePolicy(Policy):
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
     ``remote`` marker. The declared layers are built here, once, and every session runs through
-    them; a handshake that declares no stack is an error.
+    them. An empty declaration is a stack: a server whose marker sits left of every layer runs the
+    whole chain itself and takes a call per rig tick. A handshake carrying no declaration at all is an
+    error.
 
     ``recording_dir`` taps the raw and wire boundaries around the stack.
     """
@@ -175,28 +177,28 @@ class RemotePolicy(Policy):
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
 
-    def _resolve_stack(self) -> Layer:
+    def _resolve_stack(self) -> Layer | None:
         meta = self._endpoint.server_meta()
         version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
         declared = meta.get(offboard_keys.LOCAL_STACK)
-        try:
-            stack = from_spec(declared) if declared is not None else None
-        except Exception as e:
-            raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None:
+        if declared is None:
             raise ValueError(
                 f'Server declares no rig-side stack (server positronic {version}); the rig runs what the '
                 f'handshake declares and nothing else, so serve it from a pipeline that declares one'
             )
-        return stack
+        try:
+            return from_spec(declared)
+        except Exception as e:
+            raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
 
     def _policy(self) -> Policy:
         if self._stacked is None:
             stack = self._resolve_stack()
             if self._recording_dir is not None:
                 rec = Recorder(self._recording_dir)
-                stack = rec.tap('raw') | stack | rec.tap('server')
-            self._stacked = stack.wrap(self._endpoint)
+                raw = rec.tap('raw') if stack is None else rec.tap('raw') | stack
+                stack = raw | rec.tap('server')
+            self._stacked = self._endpoint if stack is None else stack.wrap(self._endpoint)
         return self._stacked
 
     def new_session(self, context=None, rt=None) -> Session:

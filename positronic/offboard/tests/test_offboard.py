@@ -346,6 +346,42 @@ def test_an_observation_with_no_image_creates_no_ring(frame_writer):
 
 
 @pytestmark_ring
+def test_a_frame_the_ring_already_holds_is_not_written_again(frame_channel, frame_writer):
+    """A slot is keyed on the pixels it holds, so a caller asking faster than the cameras costs no write."""
+    obs = {'image.left': _image(), keys.GRIP: 0.5}
+    first = frame_writer.pack(obs)['image.left']
+
+    for _ in range(frame_ring.SLOTS * 3):
+        again = frame_writer.pack(obs)['image.left']
+        assert (again[frame_ring._SLOT], again[frame_ring._SEQ]) == (first[frame_ring._SLOT], first[frame_ring._SEQ])
+
+    # A write per call would have rotated through the slots and torn this reference several times over.
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire({'image.left': first}))
+    np.testing.assert_array_equal(served['image.left'], obs['image.left'])
+
+
+@pytestmark_ring
+def test_a_changed_frame_never_reads_back_as_the_one_before_it(frame_channel, frame_writer):
+    """The guard on the keying, in the two shapes that would serve a stale frame as a fresh one.
+
+    A camera handing back one buffer with new pixels in it defeats a test of the caller's arrays, and a
+    frame differing only in its last byte defeats a test of anything short of the whole frame.
+    """
+    buffer = _image()
+    held = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': buffer})))
+    np.testing.assert_array_equal(held['image.left'], buffer)
+
+    buffer[:] = _image()
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': buffer})))
+    np.testing.assert_array_equal(served['image.left'], buffer)
+
+    tail = buffer.copy()
+    tail[-1, -1, -1] ^= 0xFF
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': tail})))
+    np.testing.assert_array_equal(served['image.left'], tail)
+
+
+@pytestmark_ring
 def test_a_sealed_ring_refuses_a_write_a_resize_and_a_hole():
     ring = frame_ring.FrameRing(1024, slots=2)
     try:

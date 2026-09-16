@@ -133,10 +133,13 @@ A client that ignores the declaration keeps sending whole images, and so does ev
   path it dialled. Each side builds that path from the socket path it already holds, so a bind mount that gives
   the two processes different names for one directory still lands them on the same socket. The client sends the
   descriptor with `SCM_RIGHTS`, names the session id from the handshake, and waits for the server to map it.
-- **A ring holds four slots.** One round trip is in flight at a time, so the writer returns to a slot four
-  inferences later, and a server that still reads an earlier observation reads the bytes written for it. Each
-  slot carries a sequence number before its payload and one after it; a reader that finds either one different
-  from the reference refuses that observation rather than serving other pixels under it.
+- **A ring holds four slots, and a slot is keyed on the pixels it holds.** The writer compares a frame
+  against the slot it last filled and sends the same reference where the ring already holds it, so it
+  returns to a slot four *distinct* frames later rather than four calls later. A rig that asks faster
+  than its cameras produce frames — one polling a server-side schedule does — therefore neither copies
+  a frame twice nor rotates a slot out from under a server still reading it. Each slot carries a
+  sequence number before its payload and one after it; a reader that finds either one different from
+  the reference refuses that observation rather than serving other pixels under it.
 - **A larger frame grows the ring.** The client creates a bigger one and hands it over before it sends any
   reference to it. The server holds the newest mapping alone, and a view it built earlier keeps its own
   mapping alive for as long as that view lives, so the view stays readable.

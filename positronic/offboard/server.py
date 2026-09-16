@@ -19,10 +19,11 @@ import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
+from positronic import keys
 from positronic.offboard import frame_ring as frames
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import Policy, Recorder, Session
-from positronic.policy.base import Layer, timings_to
+from positronic.policy.base import SEQ, Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
@@ -168,13 +169,13 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
 
 
 def _declared_stack(local: Layer | None) -> dict[str, Any]:
-    """The rig-side spec a served pipeline must publish."""
-    if local is None:
-        raise ValueError(
-            'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
-            'layers the rig runs there, starting with a scheduler such as ChunkedSchedule'
-        )
-    return local.to_spec()
+    """The rig-side spec a served pipeline publishes; an empty chain for a border left of every layer.
+
+    A pipeline that puts its scheduler right of the marker runs the vendor's own timing in this process
+    and asks the rig to forward every tick, which is what a schedule with a lead needs to be asked
+    before the chunk it is extending runs out.
+    """
+    return {SEQ: []} if local is None else local.to_spec()
 
 
 class _ServedTiming:
@@ -351,8 +352,12 @@ class PolicyServer:
                         await self._infer_lock.acquire()
                     try:
                         with timing.phase(protocol.TIMING_INFER):
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                            # A scheduling layer anchors a chunk here and tests its end against the
+                            # observation's own stamp, so both must read the rig's clock. An observation
+                            # with no stamp has no control loop behind it.
+                            stamp = raw_obs.get(keys.OBS_TIME_NS)
+                            anchor = time.time_ns() if stamp is None else stamp
+                            actions = await asyncio.to_thread(session, raw_obs, anchor)
                     except asyncio.CancelledError:
                         # A cancelled await does not stop the worker, and the session close runs beside a live
                         # inference. The log gives a later wrong answer a cause.
