@@ -2,7 +2,6 @@
 
 import io
 import json
-import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -70,7 +69,7 @@ class _Observation:
     grip: float
     task: str
     time_ns: int
-    images: dict[str, BinaryContent]
+    images: dict[str, np.ndarray]
 
     @staticmethod
     def measured_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
@@ -84,7 +83,7 @@ class _Observation:
         return geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT)
 
     @classmethod
-    def read(cls, obs: Mapping[str, Any], camera_keys: tuple[str, ...], image_size: int) -> '_Observation':
+    def read(cls, obs: Mapping[str, Any], camera_keys: tuple[str, ...]) -> '_Observation':
         pose = cls.measured_pose(obs)
         grip = float(obs[keys.GRIP])
         if not np.isfinite(grip) or not 0 <= grip <= 1:
@@ -94,11 +93,7 @@ class _Observation:
             frame = np.asarray(obs[name])
             if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
                 raise ValueError(f'{name} must be an RGB uint8 image')
-            image = Image.fromarray(frame)
-            image.thumbnail((image_size, image_size))
-            data = io.BytesIO()
-            image.save(data, format='PNG')
-            images[name] = BinaryContent(data.getvalue(), media_type='image/png')
+            images[name] = frame
         return cls(pose, grip, str(obs[keys.TASK]), int(obs[keys.OBS_TIME_NS]), images)
 
     def state(self, target: MoveTo | None) -> dict[str, Any]:
@@ -116,10 +111,17 @@ class _Observation:
             state['previous_target'] = target.model_dump()
         return state
 
-    def frames(self, cameras: list[str]) -> ModelRequest:
+    def frames(self, cameras: list[str], image_size: int) -> ModelRequest:
         content: list[str | BinaryContent] = []
         for camera in cameras:
-            content.extend([f'Camera {camera}, observation {self.time_ns} ns:', self.images[camera]])
+            image = Image.fromarray(self.images[camera])
+            image.thumbnail((image_size, image_size))
+            data = io.BytesIO()
+            image.save(data, format='PNG')
+            content.extend([
+                f'Camera {camera}, observation {self.time_ns} ns:',
+                BinaryContent(data.getvalue(), media_type='image/png'),
+            ])
         return ModelRequest([UserPromptPart(content)], metadata={keys.OBS_TIME_NS: self.time_ns})
 
 
@@ -140,19 +142,106 @@ _SCHEMAS: dict[Tool, type[BaseModel]] = {
 
 
 class _Conversation:
-    """Worker-owned call budget. Only accepted decisions commit their messages to the session."""
+    """One frozen observation and its uncommitted replies, pictures, and corrections."""
 
-    def __init__(self, policy: 'LLMPolicy', transcript: Transcript):
+    def _initial(self) -> ModelRequest:
+        prompt = (
+            'Control one robot arm through exactly one tool call per response. '
+            'Use absolute hand targets in the coordinate frame of the measured pose. '
+            'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
+            'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
+            'Moves play before the next observation; actual arrival must be checked from the measured state. '
+            'Camera frames remain fixed during a decision. '
+            'take_pic only reveals a frame; it does not move a camera. '
+            'A note should briefly describe what you see and why you chose the motion. '
+            'Use done when you believe the task is complete, or give_up when you cannot continue. '
+            'Both stop further actions and model calls; the episode continues until external completion or timeout. '
+            'Both require hindsight for inspection; no advice is carried into another episode. '
+            f'Motion limits: {json.dumps(asdict(self.policy.motion))}. '
+            f'API call budget, including corrections and pictures: {self.policy.max_calls}.'
+        )
+        self.transcript.write(
+            'instructions', prompt=prompt, tools={tool.name: tool.parameters_json_schema for tool in self.policy._tools}
+        )
+        return ModelRequest([SystemPromptPart(prompt)])
+
+    def __init__(
+        self,
+        policy: 'LLMPolicy',
+        transcript: Transcript,
+        raw: Mapping[str, Any],
+        history: list[ModelMessage],
+        target: MoveTo | None,
+    ):
         self.policy = policy
         self.transcript = transcript
-        self.calls = 0
-        self.tools = [
-            ToolDefinition(
-                name=tool.value, description=schema.__doc__ or '', parameters_json_schema=schema.model_json_schema()
-            )
-            for tool, schema in _SCHEMAS.items()
-            if tool is not Tool.TAKE_PIC or policy.images is Images.ON_DEMAND
-        ]
+        self.obs = _Observation.read(raw, policy.camera_keys)
+        self.messages = list(history)
+        if not any(isinstance(part, SystemPromptPart) for message in self.messages for part in message.parts):
+            self.messages.insert(0, self._initial())
+        state = self.obs.state(target)
+        self.transcript.write('observation', **state)
+        self.messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
+        self._pictures = list(self.obs.images) if policy.images is Images.ALWAYS else []
+        self._revealed = set(self._pictures)
+        self._failures = 0
+
+    def _tool(self, call: ToolCallPart) -> _Decision | None:
+        tool = Tool(call.tool_name)
+        data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
+        match data:
+            case MoveTo():
+                duration = self.policy.motion.duration(self.obs.pose, data.pose)
+                result = (
+                    f'Target accepted for a move lasting at least {duration:.3f} seconds. Check the next observation.'
+                )
+                self.messages.append(ModelRequest([ToolReturnPart(tool.value, result, tool_call_id=call.tool_call_id)]))
+                return _Decision(self.messages, target=data)
+            case Finish():
+                self.messages.append(
+                    ModelRequest([ToolReturnPart(tool.value, 'No further actions.', tool_call_id=call.tool_call_id)])
+                )
+                return _Decision(self.messages, stop_reason=tool.value, hindsight=data.hindsight)
+            case TakePic():
+                if self.policy.images is not Images.ON_DEMAND:
+                    raise ValueError('take_pic is available only with images=on_demand')
+                cameras = data.cameras if data.cameras else list(self.obs.images)
+                if (
+                    len(set(cameras)) != len(cameras)
+                    or set(cameras) - self.obs.images.keys()
+                    or set(cameras) & self._revealed
+                ):
+                    raise ValueError('Choose available cameras not already revealed in this observation')
+                self._revealed.update(cameras)
+                self._pictures = cameras
+                self.messages.append(
+                    ModelRequest([ToolReturnPart(tool.value, 'Frames attached.', tool_call_id=call.tool_call_id)])
+                )
+                return None
+        raise ValueError(f'Unsupported tool: {tool}')
+
+    def _reject(self, calls: list[ToolCallPart], error: str) -> None:
+        parts = [ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id) for call in calls]
+        self.messages.append(
+            ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')])
+        )
+
+    def respond(self, response: ModelResponse, call: int) -> _Decision | None:
+        self.messages.append(response)
+        calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
+        try:
+            if len(calls) != 1 or response.finish_reason in ('length', 'content_filter', 'error'):
+                raise ValueError('Expected exactly one complete tool call')
+            decision = self._tool(calls[0])
+        except ValueError as exc:
+            self._reject(calls, str(exc))
+            self.transcript.write('rejected', call=call, reason=str(exc))
+            self._failures += 1
+            if self._failures >= self.policy.max_invalid:
+                raise RuntimeError(f'Model produced {self._failures} consecutive invalid replies') from exc
+            return None
+        self._failures = 0
+        return decision
 
     @staticmethod
     def _has_images(message: ModelRequest) -> bool:
@@ -163,17 +252,17 @@ class _Conversation:
             for part in message.parts
         )
 
-    def _outgoing(self, messages: list[ModelMessage]) -> list[ModelMessage]:
+    def _outgoing(self) -> list[ModelMessage]:
         observations = list(
             dict.fromkeys(
                 message.metadata[keys.OBS_TIME_NS]
-                for message in messages
+                for message in self.messages
                 if isinstance(message, ModelRequest) and message.metadata is not None and self._has_images(message)
             )
         )
         retained = set(observations[-self.policy.image_horizon :])
         outgoing = []
-        for message in messages:
+        for message in self.messages:
             if (
                 not isinstance(message, ModelRequest)
                 or message.metadata is None
@@ -196,85 +285,16 @@ class _Conversation:
             outgoing.append(replace(message, parts=parts))
         return outgoing
 
-    def _initial(self) -> ModelRequest:
-        prompt = (
-            'Control one robot arm through exactly one tool call per response. '
-            'Use absolute hand targets in the coordinate frame of the measured pose. '
-            'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
-            'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
-            'Moves play before the next observation; actual arrival must be checked from the measured state. '
-            'Camera frames remain fixed during a decision. '
-            'take_pic only reveals a frame; it does not move a camera. '
-            'A note should briefly describe what you see and why you chose the motion. '
-            'Use done when you believe the task is complete, or give_up when you cannot continue. '
-            'Both stop further actions and model calls; the episode continues until external completion or timeout. '
-            'Both require hindsight for inspection; no advice is carried into another episode. '
-            f'Motion limits: {json.dumps(asdict(self.policy.motion))}. '
-            f'API call budget, including corrections and pictures: {self.policy.max_calls}.'
-        )
-        self.transcript.write(
-            'instructions', prompt=prompt, tools={tool.name: tool.parameters_json_schema for tool in self.tools}
-        )
-        return ModelRequest([SystemPromptPart(prompt)])
-
-    @staticmethod
-    def _reject(messages: list[ModelMessage], calls: list[ToolCallPart], error: str) -> None:
-        parts = [ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id) for call in calls]
-        messages.append(ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')]))
-
-    def _tool(
-        self, call: ToolCallPart, messages: list[ModelMessage], obs: _Observation, revealed: set[str]
-    ) -> _Decision | None:
-        tool = Tool(call.tool_name)
-        data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
-        result: Any
-        match data:
-            case MoveTo():
-                duration = self.policy.motion.duration(obs.pose, data.pose)
-                result = (
-                    f'Target accepted for a move lasting at least {duration:.3f} seconds. Check the next observation.'
-                )
-                messages.append(ModelRequest([ToolReturnPart(tool.value, result, tool_call_id=call.tool_call_id)]))
-                return _Decision(messages, target=data)
-            case Finish():
-                messages.append(
-                    ModelRequest([ToolReturnPart(tool.value, 'No further actions.', tool_call_id=call.tool_call_id)])
-                )
-                return _Decision(messages, stop_reason=tool.value, hindsight=data.hindsight)
-            case TakePic():
-                if self.policy.images is not Images.ON_DEMAND:
-                    raise ValueError('take_pic is available only with images=on_demand')
-                cameras = data.cameras if data.cameras else list(obs.images)
-                if len(set(cameras)) != len(cameras) or set(cameras) - obs.images.keys() or set(cameras) & revealed:
-                    raise ValueError('Choose available cameras not already revealed in this observation')
-                revealed.update(cameras)
-                messages.append(
-                    ModelRequest([ToolReturnPart(tool.value, 'Frames attached.', tool_call_id=call.tool_call_id)])
-                )
-                messages.append(obs.frames(cameras))
-                return None
-        raise ValueError(f'Unsupported tool: {tool}')
-
-    def _turn(
-        self, response: ModelResponse, messages: list[ModelMessage], obs: _Observation, revealed: set[str]
-    ) -> _Decision | None:
-        calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
-        try:
-            if len(calls) != 1 or response.finish_reason in ('length', 'content_filter', 'error'):
-                raise ValueError('Expected exactly one complete tool call')
-            return self._tool(calls[0], messages, obs, revealed)
-        except ValueError as exc:
-            self._reject(messages, calls, str(exc))
-            self.transcript.write('rejected', call=self.calls, reason=str(exc))
-            raise
-
-    def _request(self, messages: list[ModelMessage], obs_time_ns: int, cameras: set[str]) -> ModelResponse:
-        self.calls += 1
-        self.transcript.write('request', call=self.calls, obs_time_ns=obs_time_ns, cameras=sorted(cameras))
-        response = self.policy.endpoint.request(self._outgoing(messages), self.tools)
+    @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
+    def request(self, call: int) -> ModelResponse:
+        if self._pictures:
+            self.messages.append(self.obs.frames(self._pictures, self.policy.image_size))
+            self._pictures = []
+        self.transcript.write('request', call=call, obs_time_ns=self.obs.time_ns, cameras=sorted(self._revealed))
+        response = self.policy.endpoint.request(self._outgoing(), self.policy._tools)
         self.transcript.write(
             'response',
-            call=self.calls,
+            call=call,
             model=response.model_name,
             finish_reason=response.finish_reason,
             usage=asdict(response.usage),
@@ -287,62 +307,29 @@ class _Conversation:
         )
         return response
 
-    @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
-    def advance(
-        self, history: list[ModelMessage], target: MoveTo | None, raw: Mapping[str, Any], cancelled: threading.Event
-    ) -> _Decision | None:
-        obs = _Observation.read(raw, self.policy.camera_keys, self.policy.image_size)
-        messages: list[ModelMessage] = list(history) if history else [self._initial()]
-        state = obs.state(target)
-        self.transcript.write('observation', **state)
-        messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
-        revealed: set[str] = set()
-        if self.policy.images is Images.ALWAYS:
-            messages.append(obs.frames(list(obs.images)))
-            revealed.update(obs.images)
-        failures = 0
-        while not cancelled.is_set():
-            if self.calls >= self.policy.max_calls:
-                self.transcript.write('budget_exhausted', calls=self.calls)
-                return _Decision(messages, stop_reason='call_budget')
-            response = self._request(messages, obs.time_ns, revealed)
-            if cancelled.is_set():
-                self.transcript.write('discarded', call=self.calls)
-                return None
-            messages.append(response)
-            try:
-                decision = self._turn(response, messages, obs, revealed)
-            except ValueError as exc:
-                failures += 1
-                if failures >= self.policy.max_invalid:
-                    raise RuntimeError(f'Model produced {failures} consecutive invalid replies') from exc
-                continue
-            failures = 0
-            if decision is not None:
-                return decision
-        return None
-
 
 class LLMPolicy(Policy):
     """An API-backed, single-arm Cartesian policy with independent episode conversations."""
 
-    _ADVANCE = 'llm.advance'
+    _REQUEST = 'llm.request'
 
     class _Session(Session):
         def __init__(self, policy: 'LLMPolicy', rt: Runtime):
+            self._policy = policy
             self._rt = rt
             self._transcript = Transcript()
-            self._conversation = _Conversation(policy, self._transcript)
+            self._conversation: _Conversation | None = None
+            self._calls = 0
             self._history: list[ModelMessage] = []
             self._target: MoveTo | None = None
             self._answer: Answer | None = None
-            self._cancelled = threading.Event()
+            self._cancelled = False
             self._stop_reason: str | None = None
             self._hindsight: str | None = None
 
         @property
         def meta(self) -> dict[str, Any]:
-            policy = self._conversation.policy
+            policy = self._policy
             meta: dict[str, Any] = {
                 policy_keys.TYPE: 'llm',
                 'model': policy.endpoint.model,
@@ -366,31 +353,15 @@ class LLMPolicy(Policy):
                 meta['hindsight'] = self._hindsight
             return meta
 
-        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict] | None:
-            if self._stop_reason is not None:
-                return []
-            if self._answer is None:
-                self._cancelled = threading.Event()
-                self._answer = self._rt.fns[LLMPolicy._ADVANCE](
-                    self._conversation, list(self._history), self._target, obs, self._cancelled
-                )
-                return None
-            if not self._answer.done():
-                return None
-            answer, self._answer = self._answer, None
-            decision = answer.result()
-            if decision is None:
-                return None
-            if self._cancelled.is_set():
-                self._transcript.write('discarded', call=self._conversation.calls)
-                return None
+        def _accept(self, decision: _Decision, obs: Mapping[str, Any], time_ns: int) -> list[dict]:
+            self._conversation = None
             self._history, self._target = decision.messages, decision.target
             self._stop_reason, self._hindsight = decision.stop_reason, decision.hindsight
             trajectory = []
             if self._target is not None:
                 start = _Observation.measured_pose(obs)
                 try:
-                    trajectory = self._conversation.policy.motion.trajectory(start, self._target)
+                    trajectory = self._policy.motion.trajectory(start, self._target)
                 except ValueError as exc:
                     self._target = None
                     self._history.append(
@@ -399,16 +370,42 @@ class LLMPolicy(Policy):
                             'Reassess the next observation.'
                         )
                     )
-                    self._transcript.write('discarded', call=self._conversation.calls, reason=str(exc))
+                    self._transcript.write('discarded', call=self._calls, reason=str(exc))
                     return []
-            self._transcript.write(
-                'accepted', call=self._conversation.calls, time_ns=time_ns, stop_reason=self._stop_reason
-            )
+            self._transcript.write('accepted', call=self._calls, time_ns=time_ns, stop_reason=self._stop_reason)
             return trajectory
 
+        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict] | None:
+            if self._stop_reason is not None:
+                return []
+            if self._answer is not None:
+                if not self._answer.done():
+                    return None
+                answer, cancelled = self._answer, self._cancelled
+                self._answer, self._cancelled = None, False
+                if cancelled:
+                    self._conversation = None
+                response = answer.result()
+                if cancelled:
+                    self._transcript.write('discarded', call=self._calls)
+                    return None
+                assert self._conversation is not None
+                decision = self._conversation.respond(response, self._calls)
+                if decision is not None:
+                    return self._accept(decision, obs, time_ns)
+            if self._calls >= self._policy.max_calls:
+                self._transcript.write('budget_exhausted', calls=self._calls)
+                messages = self._conversation.messages if self._conversation is not None else self._history
+                return self._accept(_Decision(messages, stop_reason='call_budget'), obs, time_ns)
+            if self._conversation is None:
+                self._conversation = _Conversation(self._policy, self._transcript, obs, self._history, self._target)
+            self._calls += 1
+            self._answer = self._rt.fns[LLMPolicy._REQUEST](self._conversation, self._calls)
+            return None
+
         def cancel(self):
-            if (self._answer is not None or self._target is not None) and not self._cancelled.is_set():
-                self._cancelled.set()
+            if (self._answer is not None or self._target is not None) and not self._cancelled:
+                self._cancelled = self._answer is not None
                 self._target = None
                 self._history.append(
                     ModelRequest.user_text_prompt(
@@ -422,7 +419,8 @@ class LLMPolicy(Policy):
                 raise RuntimeError('Close the runtime before closing the LLM session')
             self.cancel()
             if self._answer is not None:
-                self._transcript.write('discarded', call=self._conversation.calls)
+                self._transcript.write('discarded', call=self._calls)
+            self._answer, self._conversation = None, None
 
     def __init__(
         self,
@@ -443,10 +441,17 @@ class LLMPolicy(Policy):
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid = max_calls, max_invalid
+        self._tools = [
+            ToolDefinition(
+                name=tool.value, description=schema.__doc__ or '', parameters_json_schema=schema.model_json_schema()
+            )
+            for tool, schema in _SCHEMAS.items()
+            if tool is not Tool.TAKE_PIC or images is Images.ON_DEMAND
+        ]
 
     @property
     def functions(self):
-        return {self._ADVANCE: _Conversation.advance}
+        return {self._REQUEST: _Conversation.request}
 
     def new_session(self, context=None, rt=None):
         if rt is None:

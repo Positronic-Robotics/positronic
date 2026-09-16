@@ -30,7 +30,7 @@ Select a provider with `--policy.api=anthropic --policy.model=...`, for example.
 
 ## Control contract
 
-The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. It requests a move, the scheduled waypoints play, and the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
+The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. Each worker job encodes any requested images and makes one API request. The session processes the reply on a later control-loop call and decides whether to request a correction or picture, play a move, or remain idle. Picture and correction requests share the decision's frozen observation. Once the scheduled waypoints play, the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
@@ -77,7 +77,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one request can be in flight. Faults and rollout closure invalidate pending decisions; a late response cannot command motion. Closing a rollout cancels the decision before waiting for its current API request, preventing follow-up picture or correction requests during that wait. The runtime waits for the request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
+Only one request can be in flight. Faults mark its reply for discard. Follow-up requests start only when the control loop calls the session, so an ended episode starts no further requests and a late response cannot command motion. The runtime waits for the current request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
 
 ## Supervised hardware
 
