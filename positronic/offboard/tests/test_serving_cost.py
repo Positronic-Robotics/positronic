@@ -121,7 +121,8 @@ def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'episode') as writer:
         for tick in range(3):
             at = tick * period_ns
-            # A bimanual rig records a suffixed state channel, which no fixed key list here would name.
+            # rules-allow: hardcoded-keys — the test needs a channel `positronic.keys` does not name, and
+            # a constant for it would defeat the point. The other sites spelling it are unrelated tests.
             writer.append('robot_state.left.q', np.zeros(7), at)
             writer.append(keys.GRIP, 0.0, at)
             writer.append(keys.WRIST_IMAGE, np.zeros((48, 64, 3), np.uint8), at)
