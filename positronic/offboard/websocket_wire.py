@@ -232,12 +232,14 @@ def _is_stale_socket(path: Path) -> bool:
 
 
 def claim_socket_path(path: Path) -> socket.socket:
-    """Bind and listen on ``path``, and return the socket, or refuse a path something already holds.
+    """Bind and listen on ``path``, and return the socket, or refuse a path a live server holds.
 
-    The bind is the claim for a live path: it precedes any probe, so the loser fails on ``EADDRINUSE``.
-    A stale file is unlinked and rebound, and two starters racing one stale path can both get through
-    that branch. This flow gives each socket path one starter. Serve the returned socket by its
-    descriptor: a server handed the path instead binds again, and unlinks this claim.
+    A live path is refused: the bind precedes any probe, so the loser fails on ``EADDRINUSE`` and the
+    probe reads the holder as live. An absent or a stale path holds no such claim. A socket is bound
+    before it listens, and a probe in that window reads the binder as stale. Two starters on one path
+    can then both unlink and rebind, and the first serves a socket nothing links to. Give each path
+    one starter. Serve the returned socket by its descriptor: a server handed the path instead binds
+    again, and unlinks this claim.
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:

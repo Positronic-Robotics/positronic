@@ -79,7 +79,8 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
 
-Each wire from the table above takes the same path; only the scheme and the port change.
+Every wire in the table above takes the same session path. The scheme and the bound address
+change: a host and a port, or a Unix socket path.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
