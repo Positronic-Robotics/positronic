@@ -5,8 +5,11 @@ A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
 
 import abc
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar, NamedTuple
+from urllib.parse import unquote
 
 from starlette.datastructures import QueryParams
 
@@ -16,6 +19,8 @@ SESSION_PATH = f'{API_PATH}/session'
 # The model catalogue, served under the HTTP API.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
+# The scheme that names a Unix socket path in place of a host. The websocket wire carries it.
+UNIX_SCHEME = 'unix'
 
 
 def default_port(secure: bool) -> int:
@@ -28,14 +33,32 @@ def bracket_ipv6(host: str) -> str:
     return f'[{host}]' if ':' in host else host
 
 
-class SessionAddress(NamedTuple):
-    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax."""
+@dataclass(frozen=True)
+class SessionAddress:
+    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
+
+    ``uds`` is the Unix socket path to dial, decoded, and it alone decides that a session goes over a
+    socket rather than the network. ``uds_as_written`` is that path as a URL spelt it, kept so the URL
+    names the socket back unchanged; an address built in code leaves it unset. ``uds`` is ``None`` over
+    a network, where ``host`` and ``port`` are the address.
+    """
 
     host: str
     port: int
     path: str
     query: str
     secure: bool
+    uds: Path | None = None
+    uds_as_written: str | None = None
+
+    def __post_init__(self) -> None:
+        # FOOTGUN: one address, one socket. A spelling that decodes to another path would name a socket
+        # nobody dials, and a client rebuilt from that URL would reach it.
+        if self.uds_as_written is not None and Path(unquote(self.uds_as_written)) != self.uds:
+            raise ValueError(f'{self.uds_as_written!r} spells a different socket from the one dialled, {self.uds!r}')
+        # A relative path reads back as the authority of a ``unix://`` URL, so the URL would name no socket.
+        if self.uds is not None and not self.uds.is_absolute():
+            raise ValueError(f'{self.uds!r} is a relative socket path; a session URL can only name an absolute one')
 
     @property
     def netloc(self) -> str:
@@ -75,10 +98,11 @@ class ConnectRefused(Exception):
 
 
 class Endpoint(NamedTuple):
-    """Where a wire serves."""
+    """Where a wire serves. A wire bound to a Unix socket names its path in ``uds``, and its port is 0."""
 
     host: str
     port: int
+    uds: Path | None = None
 
 
 class Scheme(NamedTuple):
