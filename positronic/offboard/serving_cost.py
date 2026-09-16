@@ -140,6 +140,11 @@ def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, reques
             session(obs, obs[keys.OBS_TIME_NS])
             if len(wire.sent) >= requests:
                 break
+    except KeyError as missing:
+        raise ValueError(
+            f'the stack asks for {missing.args[0]!r} and the episode does not record it, so this episode '
+            f'cannot stand in for what the rig sends; replay one recorded on the rig the server serves'
+        ) from missing
     finally:
         session.close()
     return wire.sent
