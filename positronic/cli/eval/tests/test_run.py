@@ -193,13 +193,20 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
 def test_the_spans_sidecar_lands_where_the_episodes_upload_from(tmp_path, monkeypatch):
     """`pos3.sync` mirrors the whole local directory, so a sidecar inside it uploads with the episodes.
     Every binary that records resolves its output directory here, so each one gets that without being
-    told: the eval sweep, `positronic.inference`, and the rig and sim binaries that import this."""
+    told: the eval sweep, `positronic.inference`, and the rig and sim binaries that import this.
+
+    Read inside the scope every run of this process holds, so the read is of what a run sees and the
+    assertion leaves the process as it found it.
+    """
     monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
-        local_dir = prepare_output_dir(tmp_path / 'episodes')
+        with scoped_telemetry_dir():
+            local_dir = prepare_output_dir(tmp_path / 'episodes')
+            pointed_at = os.environ[ENV_TELEMETRY_DIR]
 
     assert local_dir is not None
-    assert os.environ[ENV_TELEMETRY_DIR] == str(local_dir / telemetry.TELEMETRY_SUBDIR)
+    assert pointed_at == str(local_dir / telemetry.TELEMETRY_SUBDIR)
+    assert ENV_TELEMETRY_DIR not in os.environ
 
 
 def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monkeypatch):

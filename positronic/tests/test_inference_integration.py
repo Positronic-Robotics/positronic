@@ -262,11 +262,15 @@ def test_an_untimed_sweep_writes_the_harness_sidecar_under_the_output_dir(tmp_pa
 
 
 @pytest.mark.timeout(30.0)
-def test_timing_writes_telemetry_sidecars(tmp_path):
+def test_timing_writes_telemetry_sidecars(tmp_path, monkeypatch):
     """[harness + recorder + sim] under ``--timing``: the sweep writes the harness telemetry sidecars, the
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
+    # Deleted rather than assumed absent: the assertions below are that the run RESTORES them, and a
+    # process that had them set restores them set.
+    monkeypatch.delenv(env_telemetry.ENV_TELEMETRY_DIR, raising=False)
+    monkeypatch.delenv(env_telemetry.ENV_RUN_ID, raising=False)
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
     task = next(iter(ev.tasks()))
     trials = number_trials([(task, {}), (task, {})])
