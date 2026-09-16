@@ -321,9 +321,14 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
 
 
 def _sysctl(path: str) -> str | None:
+    """One kernel setting, or ``None`` where this kernel has no such file.
+
+    Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
+    namespace, and this is the tool that reports those.
+    """
     try:
         return Path(path).read_text().strip()
-    except OSError:
+    except FileNotFoundError:
         return None
 
 
