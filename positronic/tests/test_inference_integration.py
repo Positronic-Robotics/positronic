@@ -267,8 +267,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path, monkeypatch):
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
-    # Deleted rather than assumed absent: the assertions below are that the run RESTORES them, and a
-    # process that had them set restores them set.
+    # A run restores these, so absence afterwards is only an assertion while they start absent.
     monkeypatch.delenv(env_telemetry.ENV_TELEMETRY_DIR, raising=False)
     monkeypatch.delenv(env_telemetry.ENV_RUN_ID, raising=False)
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
