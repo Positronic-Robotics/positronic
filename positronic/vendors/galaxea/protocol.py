@@ -23,6 +23,10 @@ DUMMY_WRIST_RIGHT = 'dummy_wrist_right'
 RIGHT_ARM = 'right_arm'
 RIGHT_GRIPPER = 'right_gripper'
 
+# The (width, height) the model's processor resizes every view to, and the DROID arm it serves.
+IMAGE_SIZE = (224, 224)
+NUM_JOINTS = 7
+
 
 def chunk_response(actions: dict[str, np.ndarray]) -> dict:
     """Serialize every predicted step. Each part is an unbatched (time, dimensions) array."""

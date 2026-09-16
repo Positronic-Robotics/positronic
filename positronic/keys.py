@@ -31,11 +31,23 @@ def is_robot_command(name: str) -> bool:
 ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
-EE_POSE = f'{ROBOT_STATE}.ee_pose'
+EE_POSE_SUFFIX = '.ee_pose'
+EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
 # The arm's ``RobotStatus``. The suffix is named on its own because a consumer picks the entry out by it on a
 # rig whose arms are ``robot_state.{side}``.
 STATUS_SUFFIX = '.status'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
+
+
+def is_ee_pose(name: str) -> bool:
+    """Whether ``name`` carries an end-effector pose: ``EE_POSE``, or an arm's ``robot_state.{side}.ee_pose``.
+
+    A pose is the one state a zero vector cannot stand in for: its rotation is a quaternion, and
+    ``geom`` refuses a zero one.
+    """
+    return name.startswith(f'{ROBOT_STATE}.') and name.endswith(EE_POSE_SUFFIX)
+
+
 GRIP = 'grip'
 TASK = 'task'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.

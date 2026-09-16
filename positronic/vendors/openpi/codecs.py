@@ -29,7 +29,15 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import (
+    ACTION,
+    LEROBOT_FEATURES,
+    Codec,
+    lerobot_image,
+    lerobot_state,
+    warm_image,
+    warm_state,
+)
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 from positronic.vendors import openpi
 
@@ -77,14 +85,13 @@ class ObservationCodec(Codec):
         return {}
 
     def warm_inputs(self, task: str) -> dict[str, Any]:
-        """Zero-filled inputs under the rig-side names this codec reads, at the widths it declares."""
-        width, height = self._image_size
-        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        """Zero-valued inputs under the rig-side names this codec reads, at the widths it declares."""
+        frame = warm_image(*self._image_size)
         return {
             keys.TASK: task,
             self._wrist_camera: frame,
             self._exterior_camera: frame,
-            **{key: np.zeros(dim, dtype=np.float32) for key, dim in self._state_features.items()},
+            **{key: warm_state(key, dim) for key, dim in self._state_features.items()},
         }
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -253,6 +260,18 @@ class LiberoObservationCodec(Codec):
         if keys.TASK in inputs:
             obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """Zero-valued inputs under the rig-side names this codec reads, at the widths it declares."""
+        frame = warm_image(*self._image_size)
+        return {
+            keys.TASK: task,
+            self._wrist_camera: frame,
+            self._exterior_camera: frame,
+            keys.EE_POSE: warm_state(keys.EE_POSE, 7),
+            # A closure scalar, which is what the env reports and ``_libero_state`` reads.
+            keys.GRIP: np.float32(0.0),
+        }
 
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
         ee_pose = np.asarray(inputs[keys.EE_POSE], dtype=float)

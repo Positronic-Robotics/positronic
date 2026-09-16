@@ -6,7 +6,7 @@ from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation
+from positronic.geom import Rotation, Transform3D
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import (
@@ -15,8 +15,10 @@ from positronic.policy.codec import (
     ActionTiming,
     BinarizeGripInference,
     BinarizeGripTraining,
+    ChangeEEFrame,
     Codec,
     FlipGrip,
+    warm_state,
 )
 from positronic.policy.observation import ObservationCodec
 
@@ -90,6 +92,23 @@ def test_a_chain_encodes_the_warm_inputs_its_observation_encoder_declares():
     obs = (ActionTimestamp(fps=15.0) | (enc & action)).warm_observation('stack the cubes')
 
     assert obs == {'prompt': 'stack the cubes', 'observation.state': pytest.approx(np.zeros(1))}
+
+
+def test_a_warm_pose_is_the_identity_transform_so_a_chain_that_recodes_it_encodes():
+    """``geom`` refuses a zero quaternion, so a zero-filled pose raises the moment a chain moves frames."""
+    enc = ObservationCodec(
+        state={'observation.state': {obs_keys.EE_POSE: 7, obs_keys.GRIP: 1}}, images={}, task_field='prompt'
+    )
+
+    obs = (ChangeEEFrame(Transform3D(), keys=(obs_keys.EE_POSE,)) | enc).warm_observation('pick up the cube')
+
+    assert obs is not None
+    assert obs['observation.state'] == pytest.approx([0, 0, 0, 1, 0, 0, 0, 0])
+
+
+def test_a_warm_state_that_is_not_a_pose_is_zeros():
+    assert warm_state(obs_keys.JOINTS, 7) == pytest.approx(np.zeros(7))
+    assert warm_state('observation.state', 7) == pytest.approx(np.zeros(7))
 
 
 def test_a_codec_that_encodes_no_observation_builds_no_warm_observation():

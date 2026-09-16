@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from positronic import keys
 from positronic.eval import keys as eval_keys
 from positronic.simulator.libero import keys as libero_keys
@@ -80,3 +82,17 @@ def test_keys_modules_import_nothing():
         if isinstance(node, (ast.Import, ast.ImportFrom))
     ]
     assert not imports, 'A keys module must import nothing (dependency-free leaf module):\n' + '\n'.join(imports)
+
+
+@pytest.mark.parametrize(
+    'name, expected',
+    [
+        (keys.EE_POSE, True),
+        (f'{keys.ROBOT_STATE}.left{keys.EE_POSE_SUFFIX}', True),
+        (keys.JOINTS, False),
+        (keys.TARGET_EE_POSE, False),
+        ('ee_pose', False),
+    ],
+)
+def test_is_ee_pose_names_the_state_channel_pose_on_one_arm_and_on_many(name, expected):
+    assert keys.is_ee_pose(name) is expected

@@ -56,6 +56,24 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
+def warm_image(width: int, height: int) -> np.ndarray:
+    """A black frame at a codec's declared width, in the uint8 HWC RGB a rig camera produces."""
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def warm_state(key: str, dim: int) -> np.ndarray:
+    """The zero-valued rig-side vector a warm carries under ``key``, ``dim`` wide.
+
+    A pose is the identity transform rather than zeros: its rotation is a quaternion, and a codec that
+    recodes one raises on a zero.
+    """
+    if not obs_keys.is_ee_pose(key):
+        return np.zeros(dim, dtype=np.float32)
+    pose = geom.Transform3D().as_vector(geom.Rotation.Representation.QUAT).astype(np.float32)
+    assert pose.shape == (dim,), f"'{key}' is a pose, which is {pose.shape[0]} wide on the wire, not {dim}"
+    return pose
+
+
 class Codec(Layer):
     """Base class for observation/action codecs.
 
