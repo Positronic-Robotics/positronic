@@ -152,6 +152,26 @@ class FrameRing:
         counters[1] = self._seq
         return references
 
+    def holds(self, references: Sequence[Mapping[bytes, Any]], arrays: Sequence[np.ndarray]) -> bool:
+        """Whether the slots ``references`` name still hold exactly ``arrays``, pixel for pixel.
+
+        The comparison reads the ring back rather than the arrays last written, because a camera that
+        reuses one buffer hands back the same object with new pixels in it; an identity test over the
+        caller's arrays would call that unchanged and serve the frame under it as fresh.
+        """
+        if len(references) != len(arrays):
+            return False
+        for reference, array in zip(references, arrays, strict=True):
+            if reference[_SEQ] != self._seq:
+                return False
+            if list(array.shape) != reference[_SHAPE] or array.dtype.str != reference[_DTYPE]:
+                return False
+            offset = reference[_SLOT] * self._stride + _HEADER_BYTES + reference[_OFFSET]
+            held = np.ndarray(array.shape, dtype=array.dtype, buffer=self._map, offset=offset)
+            if not np.array_equal(held, array):
+                return False
+        return True
+
     def close(self) -> None:
         self._map.close()
         os.close(self.fd)
@@ -184,6 +204,7 @@ class FrameWriter:
         self._channel = channel
         self._session_id = session_id
         self._ring: FrameRing | None = None
+        self._written: list[dict[bytes, Any]] | None = None
 
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         found: list[tuple[dict[bytes, Any], np.ndarray]] = []
@@ -191,10 +212,22 @@ class FrameWriter:
         if not found:
             return packed
         arrays = [array for _reference, array in found]
-        ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
-        for (reference, _array), written in zip(found, ring.write(arrays), strict=True):
+        for (reference, _array), written in zip(found, self._references_for(arrays), strict=True):
             reference.update(written)
         return packed
+
+    def _references_for(self, arrays: Sequence[np.ndarray]) -> list[dict[bytes, Any]]:
+        """References to ``arrays``, writing a slot only where the ring does not already hold them.
+
+        A slot is keyed on what it holds rather than on the call that filled it, so a caller asking
+        faster than the frames change costs a comparison instead of a write. A write per call would
+        copy the frame again and rotate a slot out from under a server still reading it.
+        """
+        if self._ring is not None and self._written is not None and self._ring.holds(self._written, arrays):
+            return self._written
+        ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
+        self._written = ring.write(arrays)
+        return self._written
 
     def _ring_for(self, slot_bytes: int) -> FrameRing:
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
@@ -221,6 +254,7 @@ class FrameWriter:
                 raise RuntimeError(f'The server at {self._channel} did not map the frame ring it was handed')
 
     def close(self) -> None:
+        self._written = None
         if self._ring is not None:
             self._ring.close()
             self._ring = None

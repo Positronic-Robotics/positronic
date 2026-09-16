@@ -630,11 +630,16 @@ def test_missing_declaration_fails_before_motion():
         policy.new_session()
 
 
-def test_empty_declaration_fails_before_motion():
-    """An empty stack declares nothing to build, so it is refused like an absent one."""
-    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
-    with pytest.raises(ValueError, match='declares no rig-side stack'):
-        policy.new_session()
+def test_an_empty_declaration_forwards_each_tick_untouched(open_session):
+    """A border left of every layer: the rig runs nothing in front of the connection.
+
+    The answer comes back as the server sent it, where a declared ``chunked_schedule`` would have
+    re-anchored its timestamps on the rig.
+    """
+    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}}, infer_return=[{'a': 1, 'timestamp': 4.0}])
+    session, rt = open_session(policy)
+
+    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 4.0}]
 
 
 def test_declared_stack_built_at_session_open(open_session):
