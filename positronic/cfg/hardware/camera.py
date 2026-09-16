@@ -35,8 +35,9 @@ zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
 zed_2i_second = zed.override(serial_number=39058547)
 
-# The station's two sideviews, by side, UNVERIFIED against the rig: correct these two lines and every
-# sided config follows. The two vantages differ optically: the cameras are different models.
+# The station's two sideviews, by side. 39567055 is the camera the rig kept when the second sideview
+# was replaced, and it is the left one (Positronic-Robotics/internal#1131). Correct these two lines
+# and every sided config follows.
 sideview_left = zed_2i
 sideview_right = zed_2i_second
 
@@ -49,9 +50,15 @@ droid = {
 
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
 
-# One exterior each, by side. Same keys as `droid`, so only the vantage moves.
-droid_left = droid  # the unsided default already binds the left sideview
-droid_right = {**droid, keys.EXTERIOR_IMAGE: sideview_right.override(**_DROID_STREAM)}
+# Both sideviews, by side: the task's own side takes `exterior` and the other takes `exterior_2`.
+# FOOTGUN: the two sideviews exchange keys between a left-sided and a right-sided task, so a
+# checkpoint trained on one fixed arrangement sees them the other way round on one of the two sides.
+droid_left = droid_3cam  # the unsided three-camera set already binds the left sideview as `exterior`
+droid_right = {
+    **droid_3cam,
+    keys.EXTERIOR_IMAGE: sideview_right.override(**_DROID_STREAM),
+    keys.EXTERIOR_IMAGE_2: sideview_left.override(**_DROID_STREAM),
+}
 
 # YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
 zed_x_top = zed.override(serial_number=48953814)

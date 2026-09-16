@@ -8,9 +8,13 @@ def _serials(cameras: dict) -> dict[str, int]:
     return {name: cfg.kwargs['serial_number'] for name, cfg in cameras.items()}
 
 
-def test_each_sided_droid_keeps_the_observation_keys_of_the_unsided_one():
-    assert set(camera.droid_left) == set(camera.droid) == {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE}
-    assert set(camera.droid_right) == set(camera.droid)
+def test_each_sided_droid_carries_both_sideviews_and_the_wrist():
+    """A sided set binds three cameras, so one run serves a policy that reads the second exterior
+    beside one that does not."""
+    three = {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2}
+
+    assert set(camera.droid_left) == set(camera.droid_3cam) == three
+    assert set(camera.droid_right) == three
 
 
 def test_the_two_sides_bind_different_sideviews_and_share_the_wrist():
@@ -20,9 +24,15 @@ def test_the_two_sides_bind_different_sideviews_and_share_the_wrist():
     assert left[keys.WRIST_IMAGE] == right[keys.WRIST_IMAGE]
 
 
-def test_each_side_binds_the_sideview_the_station_declares_for_it():
-    assert _serials(camera.droid_left)[keys.EXTERIOR_IMAGE] == camera.sideview_left.kwargs['serial_number']
-    assert _serials(camera.droid_right)[keys.EXTERIOR_IMAGE] == camera.sideview_right.kwargs['serial_number']
+def test_each_side_takes_its_own_sideview_first_and_the_other_second():
+    """The exchange the sided sets make: a side's own sideview is `exterior` and the other one is
+    `exterior_2`, so the pair swaps keys between the two sides."""
+    left, right = _serials(camera.droid_left), _serials(camera.droid_right)
+    declared_left = camera.sideview_left.kwargs['serial_number']
+    declared_right = camera.sideview_right.kwargs['serial_number']
+
+    assert (left[keys.EXTERIOR_IMAGE], left[keys.EXTERIOR_IMAGE_2]) == (declared_left, declared_right)
+    assert (right[keys.EXTERIOR_IMAGE], right[keys.EXTERIOR_IMAGE_2]) == (declared_right, declared_left)
 
 
 def test_an_at_reference_overrides_cameras_and_leaves_a_sibling_override_standing():
