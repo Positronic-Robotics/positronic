@@ -31,6 +31,7 @@ import struct
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -241,19 +242,18 @@ def _proc_queues(port: int) -> list[dict[str, Any]]:
     return rows
 
 
-def _ss_queues(port: int) -> list[dict[str, Any]] | None:
+def _ss_queues(port: int) -> list[dict[str, Any]]:
     """The same queues through ``ss -tim``, with the TCP info it prints under each socket.
 
-    ``None`` when ``ss`` is not installed or refuses.
+    Raises when ``ss`` is absent or refuses, carrying what it said.
     """
-    try:
-        done = subprocess.run(
-            ['ss', '-tim', f'( sport = :{port} or dport = :{port} )'], capture_output=True, text=True, timeout=5.0
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
-        return None
+    done = subprocess.run(
+        ['ss', '-tim', f'( sport = :{port} or dport = :{port} )'],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=True,
+    )
     rows = []
     for line in done.stdout.splitlines()[1:]:
         fields = line.split()
@@ -269,6 +269,21 @@ def _ss_queues(port: int) -> list[dict[str, Any]] | None:
     return rows
 
 
+def _queue_reader(port: int) -> Callable[[int], list[dict[str, Any]]]:
+    """``ss`` where it answers, and the kernel's own table where it does not.
+
+    Chosen once, by running ``ss``, and the refusal is printed. A failure after the choice raises
+    rather than reading as an empty queue for that sample.
+    """
+    try:
+        _ss_queues(port)
+    except (OSError, subprocess.SubprocessError) as refused:
+        print(f'ss refused ({refused}); reading /proc/net/tcp instead', flush=True)
+        return _proc_queues
+    print('reading queues through ss', flush=True)
+    return _ss_queues
+
+
 @cfn.config(port=9100, interval_ms=20, seconds=60.0, out=None)
 def watch(port: int, interval_ms: int, seconds: float, out: str | None):
     """Sample the receive queue of every established socket on ``port``, for ``seconds``.
@@ -278,15 +293,15 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
     sender blocks means the bytes are not arriving. Run it in the receiver's namespace, against the
     sink's port or the policy server's.
     """
-    reader = 'ss' if _ss_queues(port) is not None else '/proc/net/tcp'
-    print(f'watching port {port} every {interval_ms} ms for {seconds:.0f}s, queues from {reader}', flush=True)
+    reader = _queue_reader(port)
+    print(f'watching port {port} every {interval_ms} ms for {seconds:.0f}s', flush=True)
     samples: list[dict[str, Any]] = []
     started = time.perf_counter_ns()
     deadline = started + int(seconds * 1e9)
     while time.perf_counter_ns() < deadline:
-        rows = _ss_queues(port) if reader == 'ss' else _proc_queues(port)
+        rows = reader(port)
         at_ms = (time.perf_counter_ns() - started) / 1e6
-        samples.extend({'at_ms': at_ms, **row} for row in rows or ())
+        samples.extend({'at_ms': at_ms, **row} for row in rows)
         time.sleep(interval_ms / 1000.0)
     if not samples:
         print(f'no established socket on port {port} in the whole window', flush=True)
