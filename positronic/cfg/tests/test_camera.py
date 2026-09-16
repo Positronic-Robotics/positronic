@@ -9,8 +9,6 @@ def _serials(cameras: dict) -> dict[str, int]:
 
 
 def test_each_sided_droid_declares_the_three_camera_observation_keys():
-    """A sided set binds three cameras, so one run serves a policy that reads the second exterior
-    beside one that does not."""
     three = {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2}
 
     assert set(camera.droid_left) == set(camera.droid_3cam) == three
@@ -25,8 +23,8 @@ def test_the_two_sides_bind_different_sideviews_and_share_the_wrist():
 
 
 def test_each_side_takes_its_own_sideview_first_and_the_other_second():
-    """The exchange the sided sets make: a side's own sideview is `exterior` and the other one is
-    `exterior_2`, so the pair swaps keys between the two sides."""
+    """`exterior` holds the named side and `exterior_2` the other, so the two dicts hold them
+    swapped."""
     left, right = _serials(camera.droid_left), _serials(camera.droid_right)
     declared_left = camera.sideview_left.kwargs['serial_number']
     declared_right = camera.sideview_right.kwargs['serial_number']
@@ -47,8 +45,7 @@ def test_an_at_reference_overrides_cameras_and_leaves_a_sibling_override_standin
     def embodiment(robot_arm, cameras):
         return robot_arm, cameras
 
-    # Written out rather than derived from `camera.__name__`: the dotted path is this module's
-    # public name, so a derived reference would follow a rename instead of failing on one.
+    # Not derived from `camera.__name__`: a derived reference follows a rename instead of failing.
     right_sideview_ref = '@positronic.cfg.hardware.camera.droid_right'
 
     pinned = embodiment.override(robot_arm=arm.override(brake_after_idle_s=600.0))

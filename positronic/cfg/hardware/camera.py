@@ -49,8 +49,8 @@ droid = {
 
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
 
-# Both sideviews, by side: the task's side takes `exterior`, the other `exterior_2`.
-# FOOTGUN: that swaps the pair between sides, so a fixed-arrangement checkpoint sees them exchanged.
+# `droid_left` holds `sideview_left` under `exterior`; `droid_right` holds `sideview_right` there.
+# FOOTGUN: `exterior` and `exterior_2` hold opposite sideviews in the two dicts.
 droid_left = droid_3cam  # the unsided three-camera set already binds the left sideview as `exterior`
 droid_right = {
     **droid_3cam,
