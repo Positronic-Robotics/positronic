@@ -10,7 +10,7 @@ When writing a new sim/rig adapter, check this table before adding any transform
 | Layer | Owns | Examples |
 |---|---|---|
 | **Adapter** (per sim/rig, e.g. `simulator/molmo_spaces/adapter.py`) | Rig semantics ONLY: mapping the rig's observation/action vocabulary onto positronic's raw keys | Camera-key mapping, gripper qpos → `[0, 1]` closure, decoded commands → the rig's action format |
-| **Codec** (per model family, `policy/codec.py` subclasses) | Model preprocessing: everything the checkpoint's input distribution requires | Resize-with-pad to model resolution, prompt normalization (e.g. DROID lowercasing), state assembly |
+| **Codec** (per model family, `policy/codec.py` subclasses) | Model preprocessing: everything the checkpoint's input distribution requires | Resize-with-pad to model resolution, prompt normalization, state assembly |
 | **Wire client** (`InferenceClient` / `RemotePolicy`) | Transport optimization, negotiated — never semantics | Downscaling frames to the server-advertised `image_sizes` (aspect-preserving, never upscaling), optional JPEG compression |
 
 Consequences:
