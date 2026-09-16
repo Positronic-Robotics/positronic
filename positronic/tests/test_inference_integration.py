@@ -280,9 +280,9 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
             timing=True,
         )
 
-    # `timed_pass` owns the run id and restores it; `prepare_output_dir` owns the directory and leaves it set.
+    # Neither outlives the run: `timed_pass` restores the run id and `scoped_telemetry_dir` the directory.
     assert env_telemetry.ENV_RUN_ID not in os.environ
-    assert os.environ[env_telemetry.ENV_TELEMETRY_DIR] == str(tmp_path / telemetry.TELEMETRY_SUBDIR)
+    assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert {rec.process for rec in spans} == {telemetry_keys.HARNESS_PROCESS}

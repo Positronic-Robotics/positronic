@@ -12,7 +12,7 @@ import pytest
 import pimm
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
-from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, timed_pass
+from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_telemetry_dir, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, Session
@@ -209,3 +209,30 @@ def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monk
 
     assert prepare_output_dir(None) is None
     assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):
+    """The destination must not outlive the run. Left set, it binds a harness the next run in this process
+    never asked to record, into the previous run's directory — and the exporter thread that binding starts
+    deadlocks a World that forks a background control system."""
+    monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_telemetry_dir():
+            prepare_output_dir(tmp_path / 'episodes')
+            during = os.environ[ENV_TELEMETRY_DIR]
+
+    assert during.endswith(telemetry.TELEMETRY_SUBDIR)
+    assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_the_scope_gives_back_a_directory_its_caller_set(tmp_path, monkeypatch):
+    """The scope restores, it does not clear: a process that named its own directory still has it after a
+    run, so the scope cannot reach past the value `prepare_output_dir` wrote."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'mine'))
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_telemetry_dir():
+            prepare_output_dir(tmp_path / 'episodes')
+
+    assert os.environ[ENV_TELEMETRY_DIR] == str(tmp_path / 'mine')

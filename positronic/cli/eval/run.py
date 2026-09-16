@@ -49,6 +49,25 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     return local_dir
 
 
+@contextmanager
+def scoped_telemetry_dir() -> Iterator[None]:
+    """Restore ``ENV_TELEMETRY_DIR`` on exit, so the destination `prepare_output_dir` set does not outlive the
+    run that set it.
+
+    FOOTGUN: left set, it binds a harness the next run never asked to record — into the previous run's
+    directory. Binding adds an exporter thread, and a World forking a background control system deadlocks on
+    one, so the residue hangs the process rather than mislabelling a file.
+    """
+    previous = os.environ.get(ENV_TELEMETRY_DIR)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(ENV_TELEMETRY_DIR, None)
+        else:
+            os.environ[ENV_TELEMETRY_DIR] = previous
+
+
 class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
@@ -211,13 +230,16 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     logger.info('Warming up policy endpoints')
     # The session runs no inference, but a session that serves its model on a runtime needs one to open.
     blocking(policy).new_session().close()
-    output_path = prepare_output_dir(output_dir)
 
     try:
-        with timed_pass(output_path, timing, policy):
-            for ev in evals:
-                driver = TaskDriver(ev.tasks, policy, output_path)
-                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
+        with scoped_telemetry_dir():
+            output_path = prepare_output_dir(output_dir)
+            with timed_pass(output_path, timing, policy):
+                for ev in evals:
+                    driver = TaskDriver(ev.tasks, policy, output_path)
+                    run_world(
+                        ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done
+                    )
     finally:
         policy.close()
 
