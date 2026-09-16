@@ -2,7 +2,7 @@
 
 ``sink`` times the read, ``source`` times the write, ``watch`` samples the receive queue while
 either runs, and ``facts`` reports the namespace. It imports the standard library and configuronic
-only, so it runs in a vendor image beside the server; ``measuring_latency.md`` is the order to run
+only, so it runs in a vendor image beside the server; ``measuring_latency.md`` gives the order to run
 the four in.
 
 Usage
