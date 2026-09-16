@@ -124,8 +124,8 @@ class DictSource(ModelSource):
         return self._policies[model_id]
 
 
-# Where the warm pipeline's codec puts the prompt. Deliberately not ``keys.TASK``: a test that reads the
-# task back under this name proves the codec placed it, rather than the value travelling unchanged.
+# The warm pipeline's codec writes the prompt under this name. The task arrives under ``keys.TASK``, so a
+# test that reads it back here reads what the codec wrote.
 WARM_PROMPT_FIELD = 'prompt'
 
 

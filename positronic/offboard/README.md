@@ -113,10 +113,9 @@ inference count moves. A second call while a warm runs starts no second one.
 
 How a server warms is its own business, and the protocol fixes only the states and the verbs. This server
 runs one real inference on the loaded checkpoint, which is the work a first episode would otherwise do. The
-observation it runs comes from the pipeline's server-side codec: the codec declares a zero-filled rig-side
-observation at the widths it reads (`Codec.warm_inputs`) and the whole server half encodes it, so the warm
-pays the encode a served observation pays and the task lands where the model reads it. A pipeline whose
-server half encodes no observation runs nothing, and the count says so by staying at zero.
+observation it runs comes from the pipeline's server-side codec (`Codec.warm_inputs`), encoded by the whole
+server half, so it carries the task the call named. A pipeline whose server half encodes no observation
+runs nothing, and the count says so by staying at zero.
 
 #### A server that answers neither verb
 
