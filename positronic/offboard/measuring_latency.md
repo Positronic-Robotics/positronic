@@ -119,8 +119,8 @@ Each run prints the stack it rebuilt from the handshake. Read it: the rig sends 
 
 Read `wire_kib` before anything else. The observation came to that on the wire, and if it is not
 close to what the rig sends in production, the episode is not standing in for the rig and no figure
-under it compares to one. `round_trip_ms - pack_ms - served_ms` is the cost this whole procedure is
-about, and `send_ms` against `recv_ms` says which half of the wire holds it.
+under it compares to one. `round_trip_ms - pack_ms - served_ms` measures what this whole procedure
+is about, and `send_ms` against `recv_ms` says which half of the wire holds it.
 
 ## 6. Test the countermeasures the readings point at
 
@@ -158,5 +158,5 @@ count, because a stopped container is not a deleted box and a deleted box can le
 Every probe here runs on one box over loopback, which is worth doing before the window and proves the
 commands work. It does not reproduce the reading: loopback buffers absorb a 750 KiB payload whole, so a
 reader that stalls shows up in `read_span_ms` and never in `write_ms`. A link with a smaller
-bandwidth-delay product pushes the same stall back to the sender, and that is the reading this
-procedure exists to divide.
+bandwidth-delay product pushes the same stall back to the sender, and this procedure exists to
+divide that reading.
