@@ -926,6 +926,56 @@ def test_a_move_a_safe_input_stopped_fails_rather_than_going_again(desk):
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a triggered safe input was answered with a recovery'
 
 
+def test_a_move_clears_a_fault_the_arm_holds_and_lands(desk):
+    """A latched reflex rejects every move and sets no error flag, so the refused goal is what the driver reads."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    driving = _arm(driver, clock)
+    driving.note_refusals(REFUSED)  # the arm rejected the last goal and still holds the fault
+
+    _drive(driving.move_to(JOGGED, None), clock)
+
+    np.testing.assert_allclose(arm.q, JOGGED)
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 1
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'the move went out once, into an arm that takes it'
+
+
+def test_a_fault_the_recovery_cannot_clear_says_what_the_operator_must_do(desk):
+    """Nothing here can lift such a fault, so the move fails naming the state rather than a missed target."""
+    arm = FakeArm(PARK)
+    arm.error = 1  # the recovery runs and reports the fault still there
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    driving = _arm(driver, clock)
+    driving.note_refusals(REFUSED)
+
+    with pytest.raises(RuntimeError, match='clear the error in Desk'):
+        _drive(driving.move_to(JOGGED, None), clock)
+
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 0, 'the move went out into an arm that rejects it'
+
+
+def test_a_fault_a_triggered_safe_input_holds_is_left_for_the_person_to_clear(desk):
+    """A safe input trips on a hand as much as on a reflex, so the driver clears nothing until the person does."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = _safe_inputs(driver)
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()
+    driving = driver._arm(StopFlag(), clock, watch)
+    driving.note_refusals(REFUSED)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _drive(driving.move_to(JOGGED, None), clock)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0
+
+
 def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
     """The move that fails logs the refusal itself."""
     arm = FakeArm(PARK)
