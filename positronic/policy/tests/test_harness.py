@@ -1733,7 +1733,7 @@ def test_a_round_that_overtakes_waypoints_counts_them_dropped():
 
     _play_round(harness, due_ms=[0, 10, 20], now_ms=25)
 
-    assert _emitted_commands(recorder) == ['waypoint@20ms']
+    assert _emitted_values(recorder) == ['waypoint@20ms']
     account = _schedule_account(harness, keys.ROBOT_COMMAND)
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.SCHEDULED)] == 3
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.EMITTED)] == 1
@@ -1747,7 +1747,7 @@ def test_a_round_that_finds_one_waypoint_due_counts_no_drop():
 
     _play_round(harness, due_ms=[0, 10, 20], now_ms=5)
 
-    assert _emitted_commands(recorder) == ['waypoint@0ms']
+    assert _emitted_values(recorder) == ['waypoint@0ms']
     account = _schedule_account(harness, keys.ROBOT_COMMAND)
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.EMITTED)] == 1
     assert account[_schedule_key(keys.ROBOT_COMMAND, eval_keys.DROPPED)] == 0
@@ -1817,7 +1817,7 @@ def test_a_fresh_chunk_counts_the_waypoints_it_replaced_after_their_time():
     account = _schedule_account(harness, channel)
     assert account[_schedule_key(channel, eval_keys.DROPPED)] == 3  # 0, 10 and 20 ms; the 30 ms one was early
     assert account[_schedule_key(channel, eval_keys.SCHEDULED)] == 5
-    assert not _emitted_commands(recorder)
+    assert not _emitted_values(recorder)
 
 
 @pytest.mark.timeout(3.0)
