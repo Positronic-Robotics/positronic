@@ -10,7 +10,9 @@ from pydantic_ai.messages import BinaryContent, ModelRequest, ModelResponse, Tex
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import Task
 from positronic.policy.executor import Executor
+from positronic.policy.harness import Rollout
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
@@ -243,6 +245,44 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, ca
     assert len(requests) == 2
     assert 'Reassess' in str(requests[-1][0])
     assert 'discarded' in events
+
+
+@pytest.mark.parametrize(
+    'late_response',
+    [
+        move(),
+        ModelResponse([TextPart('I will move.')]),
+        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]),
+    ],
+)
+def test_rollout_close_discards_late_reply_without_follow_up_requests(model, monkeypatch, late_response):
+    requests, replies = model
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed():
+        entered.set()
+        assert release.wait(5)
+        return late_response
+
+    replies.extend([delayed, finish()])
+    policy = LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)
+    rollout = Rollout(Task(instruction_source='test', timeout_sec=None), policy, None)
+    close_runtime = rollout.rt.close
+
+    def release_then_close():
+        release.set()
+        close_runtime()
+
+    monkeypatch.setattr(rollout.rt, 'close', release_then_close)
+    try:
+        assert rollout.session(observation(), 0) is None
+        assert entered.wait(5)
+    finally:
+        rollout.close()
+    assert len(requests) == 1
+    events = [e['event'] for e in rollout.session.meta['transcript']]
+    assert events.index('cancelled') < events.index('response') < events.index('discarded')
+    assert 'accepted' not in events
 
 
 def test_metadata_snapshot_excludes_response_arriving_after_cancellation(model):
