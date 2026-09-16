@@ -49,7 +49,7 @@ class Tool(StrEnum):
 
 
 class Finish(BaseModel):
-    """End this attempt, giving a reason and hindsight for the recorded transcript."""
+    """Stop issuing actions for this episode, giving a reason and hindsight for the recorded transcript."""
 
     model_config = ConfigDict(extra='forbid', strict=True)
     reason: Annotated[str, Field(min_length=1)]
@@ -207,6 +207,7 @@ class _Conversation:
             'take_pic only reveals a frame; it does not move a camera. '
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete, or give_up when you cannot continue. '
+            'Both stop further actions and model calls; the episode continues until external completion or timeout. '
             'Both require hindsight for inspection; no advice is carried into another episode. '
             f'Motion limits: {json.dumps(asdict(self.policy.motion))}. '
             f'API call budget, including corrections and pictures: {self.policy.max_calls}.'
@@ -237,7 +238,7 @@ class _Conversation:
                 return _Decision(messages, target=data)
             case Finish():
                 messages.append(
-                    ModelRequest([ToolReturnPart(tool.value, 'Attempt ended.', tool_call_id=call.tool_call_id)])
+                    ModelRequest([ToolReturnPart(tool.value, 'No further actions.', tool_call_id=call.tool_call_id)])
                 )
                 return _Decision(messages, stop_reason=tool.value, hindsight=data.hindsight)
             case TakePic():
@@ -340,10 +341,6 @@ class LLMPolicy(Policy):
             self._hindsight: str | None = None
 
         @property
-        def stop_requested(self) -> bool:
-            return self._stop_reason is not None
-
-        @property
         def meta(self) -> dict[str, Any]:
             policy = self._conversation.policy
             meta: dict[str, Any] = {
@@ -370,7 +367,7 @@ class LLMPolicy(Policy):
             return meta
 
         def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict] | None:
-            if self.stop_requested:
+            if self._stop_reason is not None:
                 return []
             if self._answer is None:
                 self._cancelled = threading.Event()

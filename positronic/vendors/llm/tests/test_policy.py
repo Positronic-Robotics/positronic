@@ -100,7 +100,7 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
         first_serialized = json.dumps(first_meta)
         complete(active, rt, observation(2))
         assert complete(active, rt, observation(3)) == []
-        assert active.stop_requested
+        assert active.meta['stop_reason'] == 'done'
         assert active.meta['hindsight'] == 'Inspect the final image.'
         events = active.meta['transcript']
         assert json.dumps(first_meta) == first_serialized
@@ -174,8 +174,40 @@ def test_call_budget_includes_picture_requests(model):
     policy = LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND, max_calls=1)
     with session(policy) as (active, rt):
         assert complete(active, rt, observation()) == []
-        assert active.stop_requested and active.meta['stop_reason'] == 'call_budget'
+        assert active.meta['stop_reason'] == 'call_budget'
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize('ending', ['done', 'give_up', 'call_budget'])
+def test_finished_session_stays_idle_after_cancellation_and_new_session_starts_fresh(model, ending):
+    requests, replies = model
+    replies.append(
+        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})])
+        if ending == 'call_budget'
+        else finish(ending)
+    )
+    policy = (StopOnFault() | ChunkedSchedule()).wrap(
+        LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND, max_calls=1)
+    )
+    with session(policy) as (active, rt):
+        assert complete(active, rt, observation()) == []
+        meta = active.meta
+        assert meta['stop_reason'] == ending
+        for tick in range(1, 4):
+            assert active(observation(tick), tick) == []
+        active.cancel()
+        assert active(observation(4) | {keys.ROBOT_STATUS: RobotStatus.ERROR}, 4) == []
+        assert active(observation(5), 5) == []
+        assert not rt.in_flight
+        assert active.meta == meta
+    assert len(requests) == 1
+    replies.append(finish())
+    with session(policy) as (fresh, rt):
+        assert 'stop_reason' not in fresh.meta
+        assert fresh.meta['transcript'] == []
+        assert complete(fresh, rt, observation(6)) == []
+        assert [e['call'] for e in fresh.meta['transcript'] if e['event'] == 'request'] == [1]
+    assert len(requests) == 2
 
 
 @pytest.mark.parametrize('cancel_before_answer', [True, False])
@@ -206,7 +238,7 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, ca
         if cancel_before_answer:
             assert active(observation(), 12) is None
         complete(active, rt, observation(20), 20)
-        assert active.stop_requested
+        assert active.meta['stop_reason'] == 'done'
         events = [event['event'] for event in active.meta['transcript']]
     assert len(requests) == 2
     assert 'Reassess' in str(requests[-1][0])
@@ -279,5 +311,5 @@ def test_config_builds_a_local_policy_with_scheduling(model):
     policy = llm(model='test')
     with session(policy) as (active, rt):
         complete(active, rt, observation())
-        assert active.stop_requested
+        assert active.meta['stop_reason'] == 'done'
         assert active.meta['api'] == 'openai-responses'

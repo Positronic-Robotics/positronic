@@ -35,7 +35,7 @@ class Camera(pimm.ControlSystem):
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize('ending', ['done', 'give_up'])
 @pytest.mark.parametrize('charge', [False, True])
-def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, ending, charge):
+def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_path, ending, charge):
     states = []
 
     def request(endpoint, messages, tools):
@@ -104,9 +104,10 @@ def test_move_then_policy_stop_commits_real_dataset(monkeypatch, tmp_path, endin
     assert not list(tmp_path.rglob('*.jsonl'))
     for index, episode in enumerate(dataset):
         assert isinstance(episode, Episode)
-        assert episode[eval_keys.TERMINATED] is True
-        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert episode[eval_keys.TERMINATED] is False
+        assert eval_keys.ENDED_BY not in episode
         assert eval_keys.SUCCESS not in episode
+        assert episode.duration_ns / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
         assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
         assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']

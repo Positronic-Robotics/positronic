@@ -107,7 +107,7 @@ Something has to say when an episode starts and when it finishes. There are two 
 
 **Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
 
-A policy can also request an end through `Session.stop_requested`. The harness records `eval.ended_by=policy` without setting `eval.success`. An external terminal or an expired deadline takes precedence. Ending clears scheduled commands and cancels outstanding inference before the runtime and session close.
+A policy can return an empty trajectory to clear queued commands. The episode and its recording continue until an external terminal arrives or the task's timeout expires. Ending clears scheduled commands and cancels outstanding inference before the runtime and session close.
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the session the episode runs on and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 

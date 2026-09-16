@@ -82,11 +82,6 @@ class Session(ABC):
         """What this session reports about its model and its episode."""
         return {}
 
-    @property
-    def stop_requested(self) -> bool:
-        """Whether the policy asks to end the episode. This makes no claim about task success."""
-        return False
-
     def cancel(self):
         """Drop any in-flight trajectory state. Layers that buffer/schedule a
         trajectory (e.g. ``ChunkedSchedule``) should reset so the next call
@@ -111,10 +106,6 @@ class DelegatingSession(Session):
     @property
     def meta(self):
         return self._inner.meta
-
-    @property
-    def stop_requested(self) -> bool:
-        return self._inner.stop_requested
 
     def cancel(self):
         self._inner.cancel()

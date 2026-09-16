@@ -76,10 +76,6 @@ class _EpisodeInference:
     def meta(self) -> dict[str, Any]:
         return self._rollout.session.meta
 
-    @property
-    def stop_requested(self) -> bool:
-        return self._rollout.session.stop_requested
-
     def cancel(self) -> None:
         self._rollout.session.cancel()
 
@@ -378,9 +374,7 @@ class Harness(pimm.ControlSystem):
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
         trajectory = inference(obs)
-        if inference.stop_requested:
-            self._reschedule([], clock)
-        elif trajectory is not None:
+        if trajectory is not None:
             self._reschedule(trajectory, clock)
         inference.wait(should_stop)
 
@@ -426,8 +420,6 @@ class Harness(pimm.ControlSystem):
             return {**done.data, eval_keys.TERMINATED: True}
         if deadline_ns is not None and clock.now_ns() >= deadline_ns:
             return {eval_keys.TERMINATED: False}
-        if self._inference is not None and self._inference.stop_requested:
-            return {eval_keys.TERMINATED: True, eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY}
         return None
 
     def _guarded(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
