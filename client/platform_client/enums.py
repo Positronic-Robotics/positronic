@@ -153,8 +153,7 @@ class EndpointKind(IntEnum):
 
 @unique
 class Wire(IntEnum):
-    """The transport a served policy is dialled over. One server carries both, on two ports, so the
-    wire moves without moving the model, the card or the checkpoint."""
+    """The transport a served policy is dialled over."""
 
     INVALID = 0
     websocket = 1

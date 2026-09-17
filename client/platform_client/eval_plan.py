@@ -105,9 +105,7 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    # Which transport a SERVED entry is dialled over; the platform serves the WebSocket where none is
-    # stated. A `url` states its own wire in its scheme, so the other kinds refuse this field rather
-    # than carry a second answer.
+    # Which transport a SERVED entry is dialled over; unset is the WebSocket.
     wire: Slugged[Wire] | None = None
 
     @model_validator(mode='before')

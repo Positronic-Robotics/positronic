@@ -204,8 +204,8 @@ def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
 
 
 def test_a_kind_that_states_its_own_wire_refuses_the_field():
-    """The other side of the same admission. A url carries its wire in its scheme and an image is
-    served on the one the platform picks, so a second answer here could only disagree with them."""
+    """A url carries its wire in its scheme and an image is served on the port the platform opens,
+    so a wire stated on either kind could only disagree with the address itself."""
     with pytest.raises(ValidationError, match='only a served entry carries'):
         Endpoint(name='baseline', url='wss://baseline.example/ws', wire=Wire.grpc)
     with pytest.raises(ValidationError, match='only a served entry carries'):
@@ -223,9 +223,8 @@ def test_the_wire_rides_the_json_as_its_slug():
     assert Endpoint.model_validate(sent) == entry
 
 
-def test_a_plan_written_before_the_wire_existed_still_reads():
-    """An endpoint that names no wire is every plan filed until now, and it keeps meaning what it
-    meant: the platform serves it over the transport it always did."""
+def test_an_endpoint_naming_no_wire_takes_the_websocket():
+    """`None` is a served entry's answer too, and it means the WebSocket."""
     assert Endpoint.model_validate({'name': 'candidate', 'kind': 'served', 'spec': 'dreamzero'}).wire is None
 
 
