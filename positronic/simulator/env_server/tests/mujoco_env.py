@@ -24,6 +24,7 @@ from positronic.eval import Eval, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
+from positronic.simulator.env_server.protocol import COMMAND_DELTA, COMMAND_JOINT_POS, COMMAND_JOINT_VEL, COMMAND_POSE
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
@@ -137,17 +138,13 @@ class MujocoEnv(EnvProtocol):
             case protocol.HOLD:
                 cmd = None
             case protocol.JOINT_POS:
-                q = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float64)
-                cmd = roboarm_command.JointPosition(q)
+                cmd = roboarm_command.JointPosition(np.asarray(command[COMMAND_JOINT_POS], dtype=np.float64))
             case protocol.JOINT_VEL:
-                dq = np.asarray(command[protocol.COMMAND_JOINT_VEL], dtype=np.float64)
-                cmd = roboarm_command.JointDelta(dq)
+                cmd = roboarm_command.JointDelta(np.asarray(command[COMMAND_JOINT_VEL], dtype=np.float64))
             case protocol.CARTESIAN:
-                pose = geom.Transform3D.from_vector(command[protocol.COMMAND_POSE], _ROTMAT)
-                cmd = roboarm_command.CartesianPosition(pose)
+                cmd = roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command[COMMAND_POSE], _ROTMAT))
             case protocol.CARTESIAN_DELTA:
-                delta = geom.Transform3D.from_vector(command[protocol.COMMAND_DELTA], _ROTMAT)
-                cmd = roboarm_command.CartesianDelta(delta)
+                cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command[COMMAND_DELTA], _ROTMAT))
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
         if cmd is not None:
