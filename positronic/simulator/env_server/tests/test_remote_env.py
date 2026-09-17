@@ -270,7 +270,7 @@ _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protoc
 
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
-    """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
+    """Apply the action once, hold for ``steps`` ticks, and return the settled end-effector position."""
     out = env.step(action)
     for _ in range(steps):
         out = env.step(_HOLD)
@@ -634,14 +634,12 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     ],
 )
 def test_server_failure_crosses_as_error_frame(env_server, message):
-    """A command the env rejects comes back as an error the client re-raises — the connection survives
-    rather than dying on the server-side exception, and the next command still works."""
+    """Rejected commands must reach the client as errors while leaving the connection usable."""
     host, port = env_server
     conn = EnvConnection(host, port)
     conn.reset(7)
     with pytest.raises(RuntimeError, match='bogus'):
         conn._request(message)
-    # The socket is still usable after a delivered failure.
     joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(7)}
     assert protocol.FRAME_OBS in conn.step({protocol.ACTION_COMMAND: joints, protocol.ACTION_GRIP: 0.0})
     conn.close()

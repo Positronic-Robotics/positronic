@@ -185,9 +185,8 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
     """The bundled real franka arm + Robotiq 2F-85 for the 3D viewer: the FR3 URDF and its collision
     meshes with the 2F-85 grafted onto the flange, plus the canonical joint names and control frame.
 
-    Backfills real-robot datasets recorded before they stored their own model. ``default_frame_at`` names the
-    link ``DEFAULT_FRAME`` is declared on: a rig that measures and drives at the gripper's grasp point passes
-    ``GRASP_SITE_LINK``, so it publishes poses in the frame it drives rather than at the franka EE.
+    Backfills real-robot datasets recorded before they stored their own model.
+    ``default_frame_at`` names the link where ``DEFAULT_FRAME`` is declared.
     """
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())

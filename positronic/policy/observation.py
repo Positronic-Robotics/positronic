@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from functools import partial
 from typing import Any
 
@@ -23,7 +22,7 @@ class ObservationCodec(Codec):
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
-        task_field: output key carrying the language prompt at inference; training always emits ``TASK_FIELD``.
+        task_field: output key carrying the language prompt at inference.
     """
 
     WIRE_NAME = 'observation_codec'
@@ -38,9 +37,7 @@ class ObservationCodec(Codec):
         self._image_configs = images
         self._task_field = task_field
 
-        self._derive_transforms: dict[str, Callable[[Episode], Any]] = {
-            k: partial(self._derive_state, k) for k in state.keys()
-        }
+        self._derive_transforms: dict[str, Any] = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
 
