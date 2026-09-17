@@ -296,9 +296,10 @@ class InferenceClient:
     def readiness(self) -> protocol.Readiness:
         """What the server says about itself now. Raises ``wire.VerbUnsupported`` where the server serves
         sessions but not the verb."""
-        return protocol.Readiness.from_wire(
-            self._wire.call(self._address, wire.READY, {}, self.headers, self.verb_timeout)
-        )
+        return self._readiness(self.verb_timeout)
+
+    def _readiness(self, timeout: float) -> protocol.Readiness:
+        return protocol.Readiness.from_wire(self._wire.call(self._address, wire.READY, {}, self.headers, timeout))
 
     def warm(self, task: str, wait_deadline: float = 0.0) -> protocol.Readiness:
         """Ask the server to pay the first inference on ``task``, and answer what it says now.
@@ -317,9 +318,17 @@ class InferenceClient:
         answered_before = started.inferences
         deadline = time.monotonic() + wait_deadline
         latest = started
-        while latest.inferences <= answered_before and time.monotonic() < deadline:
-            time.sleep(WARM_POLL_SEC)
-            latest = self.readiness()
+        while latest.inferences <= answered_before:
+            # Both waits are the caller's to spend: a poll interval and a verb timeout that outlast the
+            # deadline are what make `wait_deadline` a number this returns well after.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(WARM_POLL_SEC, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            latest = self._readiness(min(self.verb_timeout, remaining))
         return latest
 
     def list_models(self) -> list[str]:

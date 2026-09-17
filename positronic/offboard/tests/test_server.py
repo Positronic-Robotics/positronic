@@ -22,7 +22,7 @@ from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, websocket_wire, wire
-from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
+from positronic.offboard.client import WARM_POLL_SEC, InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
@@ -1051,6 +1051,18 @@ class TestReadinessVerbs:
         assert client.readiness().status is protocol.ServerStatus.READY, 'the watchdog stopped a server mid-warm'
         held.set()
         assert _warmed(client).inferences == 1
+
+    def test_a_short_warm_deadline_is_not_overrun_by_the_poll_interval(self, stub_server):
+        """``wait_deadline`` is the caller's budget; a poll interval longer than it is not theirs to spend."""
+        host, port, _server, _policy = stub_server
+        client = InferenceClient.from_url(f'{host}:{port}')
+
+        started = time.monotonic()
+        state = client.warm('stack the cubes', wait_deadline=0.3)
+        elapsed = time.monotonic() - started
+
+        assert state.inferences == 0, 'this pipeline warms nothing, so the count never moves'
+        assert elapsed < WARM_POLL_SEC, f'a 0.3s deadline waited {elapsed:.1f}s'
 
     def test_a_pipeline_whose_server_half_encodes_nothing_warms_nothing(self, stub_server):
         """``stub_server`` closes the marker with the source alone, so no codec builds a warm observation."""
