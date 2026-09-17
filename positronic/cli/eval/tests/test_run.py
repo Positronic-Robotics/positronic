@@ -94,8 +94,8 @@ run_module = importlib.import_module('positronic.cli.eval.run')
 
 @pytest.mark.parametrize('states, charged', [({}, True), ({'charge_inference_time': False}, False)])
 def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: bool):
-    """A local run charges inference time unless it states otherwise, and the answer reaches every task the
-    eval makes rather than the first."""
+    """A local run charges inference time unless it states otherwise, and stamps that on every task the
+    eval makes."""
     made = [Task(instruction_source='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
