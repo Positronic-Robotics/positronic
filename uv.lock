@@ -5217,7 +5217,16 @@ lerobot-0-3-3 = [
     { name = "torch" },
 ]
 llm = [
-    { name = "pydantic-ai-slim", extra = ["anthropic", "google", "openai"] },
+    { name = "pydantic-ai-slim" },
+]
+llm-anthropic = [
+    { name = "pydantic-ai-slim", extra = ["anthropic"] },
+]
+llm-google = [
+    { name = "pydantic-ai-slim", extra = ["google"] },
+]
+llm-openai = [
+    { name = "pydantic-ai-slim", extra = ["openai"] },
 ]
 molmoact2 = [
     { name = "accelerate" },
@@ -5295,6 +5304,9 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
+    { name = "positronic", extras = ["llm"], marker = "extra == 'llm-anthropic'" },
+    { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
+    { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "positronic-platform-client", editable = "client" },
     { name = "positronic-wire", editable = "wire" },
@@ -5303,7 +5315,10 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
     { name = "pydantic" },
-    { name = "pydantic-ai-slim", extras = ["anthropic", "google", "openai"], marker = "extra == 'llm'", specifier = ">=1.107.1,<2" },
+    { name = "pydantic-ai-slim", marker = "extra == 'llm'", specifier = ">=1.107.1,<2" },
+    { name = "pydantic-ai-slim", extras = ["anthropic"], marker = "extra == 'llm-anthropic'" },
+    { name = "pydantic-ai-slim", extras = ["google"], marker = "extra == 'llm-google'" },
+    { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'llm-openai'" },
     { name = "pylance", marker = "extra == 'lance'" },
     { name = "pymodbus", marker = "extra == 'hardware'" },
     { name = "pyserial", marker = "extra == 'hardware'" },
@@ -5329,7 +5344,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
 
 [package.metadata.requires-dev]
 dev = [

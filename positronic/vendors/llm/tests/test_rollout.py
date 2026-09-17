@@ -93,7 +93,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         simulated=True,
     )
     policy = (StopOnFault() | ChunkedSchedule()).wrap(
-        LLMPolicy(Endpoint('mock'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
+        LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
     )
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, tmp_path))
