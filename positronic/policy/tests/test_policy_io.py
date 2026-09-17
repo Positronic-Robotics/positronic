@@ -60,8 +60,8 @@ def test_observation_encode_missing_state_inputs_raise():
 
 def test_observation_encode_task():
     enc = ObservationCodec(state={'observation.state': ['a']}, images={})
-    obs = enc.encode({'a': 1.0, obs_keys.TASK: 'Pick up the Red Cup'})
-    assert obs[obs_keys.TASK] == 'Pick up the Red Cup'
+    obs = enc.encode({'a': 1.0, obs_keys.TASK: 'test_task'})
+    assert obs[obs_keys.TASK] == 'test_task'
 
     obs_no_task = enc.encode({'a': 1.0})
     assert obs_keys.TASK not in obs_no_task

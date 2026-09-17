@@ -277,8 +277,8 @@ exclude = [
     "**/node_modules",
     "positronic/vendors",
 ]
-# `exclude` only drops these as analysis roots; a checked module that imports them still pulls their
-# diagnostics. `ignore` suppresses those transitive errors too.
+# `exclude` only drops vendors as analysis roots; a checked module that imports them
+# still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
 ignore = ["positronic/vendors"]
 
 # ``robolab/env.py`` runs in RoboLab's isolated interpreter with the env-server modules (``server``,
