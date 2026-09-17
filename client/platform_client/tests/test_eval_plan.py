@@ -195,7 +195,7 @@ def test_an_image_endpoint_names_the_image_and_nothing_else():
 
 
 def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
-    """The platform picks a served entry's address, so the plan is where its transport is stated."""
+    """The plan states a served entry's transport: the platform picks its address, not the caller."""
     entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
 
     assert entry.wire is Wire.grpc
@@ -211,8 +211,8 @@ def test_a_kind_that_states_its_own_wire_refuses_the_field():
 
 
 def test_the_wire_rides_the_json_as_its_slug():
-    """`Slugged` is how every closed set crosses the wire, and a plan read back from its own dump
-    must be the plan that was dumped."""
+    """Every closed set crosses the wire as its slug, and a plan read back from its own dump must be
+    the plan that was dumped."""
     entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
 
     sent = entry.model_dump(mode='json')

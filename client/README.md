@@ -85,8 +85,8 @@ external_cameras: {side: random}         # per mount, by the task's name for it
 
 An endpoint says where its policy comes from. A `remote` one carries the `url` to dial, whose
 scheme picks the transport. A `served` one names the `spec` the platform brings up, and the caller
-never sees that address until the run records it — so only a served entry may state the `wire` it
-wants, `websocket` or `grpc`, and stating none takes the WebSocket. An `image` one names the
+never sees that address until the run records it. Only a served entry may therefore state the
+`wire` it wants, `websocket` or `grpc`, and stating none takes the WebSocket. An `image` one names the
 container the platform runs. The kinds refuse each other's fields, so an entry cannot carry two
 answers to the same question.
 
