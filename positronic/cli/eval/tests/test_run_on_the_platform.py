@@ -152,8 +152,8 @@ def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, s
 
 @pytest.mark.parametrize('already_so', [{'timing': False}, {'charge_inference_time': True}])
 def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(platform, run_command, already_so: dict):
-    # The boundary of the refusal above: a switch reads the same whether it was left at its default
-    # or stated there, and either way asks for what the platform already does, so it refuses neither.
+    # A switch reads the same whether it was left at its default or stated there, and either way asks
+    # for what the platform already does, so it refuses neither.
     platform.answer({'submission_id': ID, 'status': 'pending'})
 
     created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **already_so)

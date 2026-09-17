@@ -315,8 +315,8 @@ def run(
     """
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
-    # A switch stated at what every other place already does asks for nothing, so it normalises to
-    # unstated. Every place charges inference time, so the local-only ask is to switch that off.
+    # A switch stated at what every place already does asks for nothing, so it normalises to unstated;
+    # every place charges inference time, so the local-only ask is `--charge-inference-time=False`.
     # Only a switch normalises: `--episodes=False` stays a value, and is refused like `--episodes=0`.
     local_only = {
         '--output-dir': output_dir,
