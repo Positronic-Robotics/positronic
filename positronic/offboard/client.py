@@ -311,11 +311,13 @@ class InferenceClient:
         started = protocol.Readiness.from_wire(
             self._wire.call(self._address, wire.WARM, payload, self.headers, self.verb_timeout)
         )
-        if wait_deadline <= 0 or started.inferences > 0:
+        if wait_deadline <= 0:
             return started
+        # The count this warm has to pass: a server that answered earlier inferences does not start at zero.
+        answered_before = started.inferences
         deadline = time.monotonic() + wait_deadline
         latest = started
-        while latest.inferences == 0 and time.monotonic() < deadline:
+        while latest.inferences <= answered_before and time.monotonic() < deadline:
             time.sleep(WARM_POLL_SEC)
             latest = self.readiness()
         return latest

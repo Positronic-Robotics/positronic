@@ -32,6 +32,7 @@ from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.observation import ObservationCodec
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
 
@@ -967,6 +968,72 @@ class TestReadinessVerbs:
         host, port, *_ = start_server(warm_pipeline(policy))
         client = InferenceClient.from_url(f'{host}:{port}')
         assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+
+    def test_warm_waits_for_a_count_past_the_one_an_earlier_warm_left(self, start_server, make_mock_policy):
+        """The second task's warm is waited for too, though the count no longer starts at zero."""
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        host, port, *_ = start_server(warm_pipeline(policy))
+        client = InferenceClient.from_url(f'{host}:{port}')
+        assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+
+        held = threading.Event()
+        policy._mock_session.side_effect = lambda obs, time_ns: held.wait(timeout=10.0) and [{'action': [1]}]
+        threading.Timer(0.3, held.set).start()
+        assert client.warm('pick up the red cube', wait_deadline=10.0).inferences == 2
+
+    def test_a_load_in_flight_does_not_answer_ready_with_the_old_checkpoints_evidence(
+        self, start_server, make_mock_policy
+    ):
+        source = _HeldSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
+        source.release.set()
+        host, port, *_ = start_server(ChunkedSchedule() | remote | source)
+        client = InferenceClient.from_url(f'{host}:{port}')
+        session = client.new_session()
+        try:
+            session.infer({'obs': 'data'})
+        finally:
+            session.close()
+        assert client.readiness().inferences == 1
+
+        source.release.clear()
+        source.loading.clear()
+        switching = threading.Thread(
+            target=lambda: InferenceClient.from_url(f'{host}:{port}/api/v1/session/other').new_session().close(),
+            daemon=True,
+        )
+        switching.start()
+        try:
+            assert source.loading.wait(timeout=10.0), 'the switch never reached the load'
+            loading = client.readiness()
+            assert loading.status is protocol.ServerStatus.LOADING
+            assert loading.inferences == 0, "a checkpoint still loading answered with the old one's count"
+            assert not loading.timing, "a checkpoint still loading answered with the old one's timing"
+        finally:
+            source.release.set()
+        switching.join(timeout=10.0)
+
+    def test_a_checkpoint_switch_waits_for_a_warm_already_running(self, start_server, make_mock_policy):
+        """A switch closes the policy it replaces, so it must not reach one an inference is running on."""
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        held = threading.Event()
+        policy._mock_session.side_effect = lambda obs, time_ns: held.wait(timeout=10.0) and [{'action': [1]}]
+        codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
+        host, port, *_ = start_server(ChunkedSchedule() | remote | codec | _StubSource(policy))
+        client = InferenceClient.from_url(f'{host}:{port}')
+        client.warm('stack the cubes')
+
+        switched = threading.Event()
+        threading.Thread(
+            target=lambda: (
+                InferenceClient.from_url(f'{host}:{port}/api/v1/session/other').new_session().close(),
+                switched.set(),
+            ),
+            daemon=True,
+        ).start()
+        assert not switched.wait(timeout=1.0), 'the switch ran while the warm was still on the policy'
+        policy.close.assert_not_called()
+        held.set()
+        assert switched.wait(timeout=10.0), 'the switch never finished once the warm was done'
 
     def test_a_pipeline_whose_server_half_encodes_nothing_warms_nothing(self, stub_server):
         """``stub_server`` closes the marker with the source alone, so no codec builds a warm observation."""

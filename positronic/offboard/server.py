@@ -7,8 +7,8 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from importlib.metadata import version as _pkg_version
 from types import MappingProxyType
 from typing import Any, NamedTuple
@@ -114,6 +114,10 @@ class PolicyManager:
                     # Empty the slot first: a failed load must not leave the closed policy under the old id.
                     self.current_policy = None
                     self.current_checkpoint_id = None
+                # Clear the evidence before the load: a slow or failed one must not answer `ready` with a
+                # count and timing the checkpoint now loading never earned.
+                self.inferences = 0
+                self.last_timing = MappingProxyType({})
 
                 await self._announce(protocol.ServerStatus.LOADING, f'Loading checkpoint {checkpoint_id}...', conn)
                 on_progress = self._progress_callback(conn)
@@ -123,8 +127,6 @@ class PolicyManager:
                     self.state = SlotState(protocol.ServerStatus.ERROR, f'Loading {checkpoint_id} failed: {e}')
                     raise
                 self.current_checkpoint_id = checkpoint_id
-                self.inferences = 0
-                self.last_timing = MappingProxyType({})
                 self.state = SlotState(protocol.ServerStatus.READY, f'Serving checkpoint {checkpoint_id}')
 
             assert self.current_policy is not None
@@ -158,10 +160,22 @@ class PolicyManager:
 
         return on_progress
 
-    async def loaded_policy(self) -> Policy | None:
-        """What the slot holds once a load in flight has finished, or ``None`` where a load left it empty."""
+    @asynccontextmanager
+    async def leased_policy(self) -> AsyncIterator[Policy | None]:
+        """What the slot holds, held against a checkpoint switch until the caller is done with it.
+
+        A switch waits for the lease as it waits for a session, so the policy cannot be closed and
+        replaced under an inference already running on it.
+        """
         async with self._lock:
-            return self.current_policy
+            policy = self.current_policy
+            if policy is not None:
+                self.active_sessions += 1
+        try:
+            yield policy
+        finally:
+            if policy is not None:
+                await self.release_session()
 
     async def release_session(self):
         async with self._lock:
@@ -367,19 +381,19 @@ class PolicyServer:
 
     async def _warm_loaded_checkpoint(self, task: str) -> None:
         """Answer one observation on the loaded checkpoint, so a scored episode does not pay the first one."""
-        policy = await self._manager.loaded_policy()
-        if policy is None:
-            logger.error('Nothing to warm: the model slot is empty')
-            return
-        obs = self._server_codec.warm_observation(task) if self._server_codec is not None else None
-        if obs is None:
-            logger.info('This pipeline builds no warm observation; the checkpoint warms at load alone')
-            return
-        # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
-        async with self._infer_lock:
-            timing = await asyncio.to_thread(self._warm_once, policy, obs)
-        self._manager.record_inference(timing)
-        logger.info(f'Warmed {self._manager.current_checkpoint_id} in {timing[protocol.TIMING_SERVED]:.0f}ms')
+        async with self._manager.leased_policy() as policy:
+            if policy is None:
+                logger.error('Nothing to warm: the model slot is empty')
+                return
+            obs = self._server_codec.warm_observation(task) if self._server_codec is not None else None
+            if obs is None:
+                logger.info('This pipeline builds no warm observation; the checkpoint warms at load alone')
+                return
+            # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
+            async with self._infer_lock:
+                timing = await asyncio.to_thread(self._warm_once, policy, obs)
+            self._manager.record_inference(timing)
+            logger.info(f'Warmed {self._manager.current_checkpoint_id} in {timing[protocol.TIMING_SERVED]:.0f}ms')
 
     @staticmethod
     def _warm_once(policy: Policy, obs: dict[str, Any]) -> dict[str, float]:
