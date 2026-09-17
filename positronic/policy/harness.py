@@ -1,6 +1,5 @@
 import logging
-import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,8 +15,8 @@ from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, PolicyRun
-from positronic.policy.executor import Executor
+from positronic.policy.base import Answer, Obs, Policy, PolicyRun
+from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
 # Harness wake-up intervals on the world's clock.
@@ -87,7 +86,10 @@ class Harness(pimm.ControlSystem):
     """Run episode lifecycles and emit each policy step's commands immediately.
 
     The policy sets the next wake-up time, clamped to 5 ms–1 s from the policy call's start. Without a
-    policy step, the harness polls every 100 ms. Both intervals use the world's clock in simulation and on a real rig.
+    policy step, a real rig polls every 100 ms. Simulation checks deadlines and preparation on simulator
+    ticks. Every newly available answer can call the policy before its requested wake-up time.
+    Real execution polls for completions at most every 5 ms while work is pending. Uncharged simulation
+    handles completions before advancing time, including unrestricted chains of calls at one instant.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
     Its answer carries the terminal payload. Between episodes, manual commands pass through.
@@ -99,6 +101,7 @@ class Harness(pimm.ControlSystem):
         self._call: pimm.calls.Call[Rollout, dict[str, Any]] | None = None
         self._runtime: Executor | None = None
         self._policy_run: PolicyRun | None = None
+        self._obs_by_signal: dict[str, dict[str, Any]] = {}
         self._deadline_ns: int | None = None
         self._telemetry = _EpisodeTelemetry()
 
@@ -122,6 +125,10 @@ class Harness(pimm.ControlSystem):
     def _charges_wall_time(self) -> bool:
         return self._task.charge_inference_time or not self._embodiment.simulated
 
+    def _sleep(self, delay_sec: float = POLL_PERIOD_SEC) -> pimm.Command:
+        """Yield one simulator tick, or sleep for ``delay_sec`` on a real rig."""
+        return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(delay_sec)
+
     def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Iterator[pimm.Command]:
         """Prepare the named devices and wait for all of them, unless shutdown interrupts the wait."""
         unknown = sorted(set(args) - set(self.prepare))
@@ -130,7 +137,7 @@ class Harness(pimm.ControlSystem):
             raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
         ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
-            yield pimm.Sleep(POLL_PERIOD_SEC)
+            yield self._sleep()
         if ready.done():
             ready.result()
 
@@ -158,7 +165,7 @@ class Harness(pimm.ControlSystem):
         if should_stop.value:
             return
         self._runtime = Executor(
-            clock, simulated=self._embodiment.simulated, charge_inference_time=self._charges_wall_time
+            clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=self._charges_wall_time
         )
         self._policy_run = self._runtime.start(call.request.policy)
         budget = self._task.timeout_sec
@@ -195,6 +202,7 @@ class Harness(pimm.ControlSystem):
             self._policy_run.close()
             self._policy_run = None
             logging.info('Policy closed')
+        self._obs_by_signal.clear()
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any] | None = None
@@ -205,7 +213,7 @@ class Harness(pimm.ControlSystem):
         self._close_policy()
         virtual_now = clock.now()
         # Let the recorder consume STOP while its flush still belongs to the episode span.
-        yield pimm.Sleep(POLL_PERIOD_SEC)
+        yield self._sleep()
         self._telemetry.end(virtual_now)
 
         if payload is None:
@@ -220,11 +228,11 @@ class Harness(pimm.ControlSystem):
         self._call.set_result(payload)
         self._call = None
 
-    def _step(self, clock: pimm.Clock) -> int | None:
-        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time.
+    def _read_obs(self) -> Obs | None:
+        """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
-        Copies arrays because a device may reuse its buffer while submitted inference still reads it.
-        Missing observations defer the policy call.
+        Copy updated arrays because devices may reuse their buffers while inference still reads them.
+        Return ``None`` if any required observation is unavailable.
         """
         inputs: dict[str, Any] = {}
         try:
@@ -233,23 +241,32 @@ class Harness(pimm.ControlSystem):
                 message = self.observations[name].read()
                 if message is None:
                     return None
-                value = message.data
-                if obs.serializer is not None:
-                    value = obs.serializer(value)
-                for full_name, entry in expand_suffixed(name, value):
-                    if entry is not None:
-                        inputs[full_name] = entry.copy() if isinstance(entry, np.ndarray) else entry
+                if message.updated or name not in self._obs_by_signal:
+                    self._obs_by_signal.pop(name, None)
+                    value = message.data
+                    if obs.serializer is not None:
+                        value = obs.serializer(value)
+                    self._obs_by_signal[name] = {
+                        full_name: entry.copy() if isinstance(entry, np.ndarray) else entry
+                        for full_name, entry in expand_suffixed(name, value)
+                        if entry is not None
+                    }
+                inputs.update(self._obs_by_signal[name])
             inputs[keys.TASK] = self._task.instruction
-            inputs[keys.WALL_TIME_NS] = time.time_ns()
-            inputs[keys.OBS_TIME_NS] = clock.now_ns()
             inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         except pimm.NoValueException:
             return None
+        return frozen_view(inputs)
 
+    def _step(self, clock: pimm.Clock) -> int | None:
+        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time."""
+        obs = self._read_obs()
+        if obs is None:
+            return None
         assert self._runtime is not None and self._policy_run is not None, 'only a live episode calls the policy'
         self._runtime.start_tick()
         started_at_ns = clock.now_ns()
-        step = self._policy_run.send(frozen_view(inputs))
+        step = self._policy_run.send(obs)
         assert step is not None, 'a policy must yield a Step for each observation'
         self._telemetry.step()
         for name, value in step.commands.items():
@@ -269,23 +286,36 @@ class Harness(pimm.ControlSystem):
 
     def _wait_for_next_tick(
         self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, resume_at_ns: int | None
-    ) -> Iterator[pimm.Command]:
-        """Let async work reach the next tick before advancing simulated time; sleep on the world's clock."""
+    ) -> Generator[pimm.Command, None, tuple[Answer[Any], ...]]:
+        """Return completions before advancing time; otherwise follow simulator ticks or poll real time."""
+        if self._runtime is not None:
+            while not should_stop.value:
+                result = self._runtime.wait(timeout_sec=POLL_PERIOD_SEC)
+                match result.status:
+                    case WaitStatus.ANSWERS_READY:
+                        return result.completed
+                    case WaitStatus.CAN_ADVANCE:
+                        break
+                    case WaitStatus.TIMED_OUT:
+                        continue
+        if should_stop.value:
+            return ()
         if resume_at_ns is None:
             resume_at_ns = clock.now_ns() + round(POLL_PERIOD_SEC * 1e9)
-        if self._runtime is not None:
-            self._runtime.wait(resume_at_ns, should_stop)
-        if not should_stop.value:
-            # A positive sleep gives this loop its own wake-up; Yield would follow other loops' timers.
-            delay_ns = max(1, resume_at_ns - clock.now_ns())
-            yield pimm.Sleep(delay_ns / 1e9)
+        # A positive real-time sleep gives this loop its own wake-up, independent of other loops' timers.
+        delay_ns = max(1, resume_at_ns - clock.now_ns())
+        if self._runtime is not None and self._runtime.has_pending:
+            delay_ns = min(delay_ns, round(MIN_POLL_PERIOD_SEC * 1e9))
+        yield self._sleep(delay_ns / 1e9)
+        return self._runtime.take_completed() if self._runtime is not None else ()
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         # Episode spans must end before leaving the scope that closes the telemetry provider.
         with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
             try:
+                resume_at_ns = None
+                completed = ()
                 while not should_stop.value:
-                    resume_at_ns = None
                     call = next(self.perform_task.incoming(), None)
                     # Consume idle done signals and in-episode manual commands so neither leaks into a later state.
                     manual = pimm.value_updated(self.manual_command)
@@ -298,13 +328,16 @@ class Harness(pimm.ControlSystem):
                             yield from self._end_episode(clock, should_stop, terminal)
                     elif call is not None:
                         yield from self._begin_episode(clock, should_stop, call)
+                        resume_at_ns = None
                     elif manual is not None:
                         for name, value in manual.items():
                             self.commands[name].emit(value)
 
-                    if self._policy_run is not None:
+                    if self._policy_run is None:
+                        resume_at_ns = None
+                    elif completed or resume_at_ns is None or clock.now_ns() >= resume_at_ns:
                         resume_at_ns = self._step(clock)
-                    yield from self._wait_for_next_tick(should_stop, clock, resume_at_ns)
+                    completed = yield from self._wait_for_next_tick(should_stop, clock, resume_at_ns)
 
                 if self._policy_run is not None:
                     yield from self._end_episode(clock, should_stop)

@@ -16,6 +16,7 @@ Describe a local stack without creating episode state::
 
 from collections import deque
 from collections.abc import Callable, Sequence
+from math import isfinite
 from typing import Any, TypeVar
 
 import numpy as np
@@ -69,46 +70,59 @@ class ChunkedSchedule(Policy):
 
     ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
     command is due when the completed answer is read; subsequent commands are spaced by ``1 / fps``.
-    At most one call is pending, and another starts once the current chunk has been emitted.
+    A chunk of K commands covers K periods, including the final command's execution period.
+    ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
+    At most one call is pending, and another starts when the current chunk's duration ends.
     """
 
     WIRE_NAME = 'chunked_schedule'
 
-    def __init__(self, fps: float) -> None:
+    def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
+        if not isfinite(fps) or fps <= 0:
+            raise ValueError('fps must be finite and positive')
+        if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
+            raise ValueError('horizon_sec must be finite and positive')
         self._fps = fps
+        self._horizon_sec = horizon_sec
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
-        tick_ns = int(1e9 / self._fps)
+        period_sec = 1 / self._fps
         answer: Answer[Sequence[Commands]] | None = None
-        commands: dict[str, Any] = {}
+        trajectory: deque[tuple[Commands, int]] = deque()
+        end_ns = 0
         obs = yield
-        now_ns = runtime.time_ns
         try:
             while True:
-                answer = runtime.submit(infer, obs)
-                obs = yield Step(commands, now_ns + tick_ns)
                 now_ns = runtime.time_ns
-                while not answer.done():
-                    obs = yield Step({}, now_ns + tick_ns)
-                    now_ns = runtime.time_ns
+                if answer is None and now_ns >= end_ns:
+                    answer = runtime.submit(infer, obs)
+                if answer is not None and answer.done():
+                    chunk, answer = answer.result(), None
+                    duration_sec = len(chunk) * period_sec
+                    if self._horizon_sec is not None:
+                        duration_sec = min(duration_sec, self._horizon_sec)
+                    end_ns = now_ns + round(duration_sec * 1e9)
+                    trajectory = deque(
+                        (waypoint, now_ns + round(i * period_sec * 1e9))
+                        for i, waypoint in enumerate(chunk)
+                        if i * period_sec < duration_sec
+                    )
 
-                trajectory = deque((waypoint, now_ns + i * tick_ns) for i, waypoint in enumerate(answer.result()))
-                answer = None
-                commands = {}
-                while trajectory:
-                    commands = {}
-                    while trajectory and trajectory[0][1] <= now_ns:
-                        commands.update(trajectory.popleft()[0])
-                    if not trajectory:
-                        break
-                    obs = yield Step(commands, now_ns + tick_ns)
-                    now_ns = runtime.time_ns
+                commands: dict[str, Any] = {}
+                while trajectory and trajectory[0][1] <= now_ns:
+                    commands.update(trajectory.popleft()[0])
+                resume_at_ns = trajectory[0][1] if trajectory else end_ns
+                # Pending inference asks for the earliest allowed poll; action cadence is independent.
+                obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:
                 answer.cancel()
 
     def to_spec(self) -> dict[str, Any]:
-        return {'name': self.WIRE_NAME, 'args': {'fps': self._fps}}
+        args = {'fps': self._fps}
+        if self._horizon_sec is not None:
+            args['horizon_sec'] = self._horizon_sec
+        return {'name': self.WIRE_NAME, 'args': args}
 
 
 class _StackBuffer:
