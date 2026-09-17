@@ -152,13 +152,17 @@ class _ConnectWaits:
         self._client = client
         self._answers_ready = True
 
-    def line(self, not_ready: BaseException) -> str:
+    def line(self, not_ready: BaseException, budget: float) -> str:
+        """The line one wait writes. ``budget`` is what is left of the connect deadline, and the probe
+        spends no more than that: a verb timeout outlasting the connect is not the caller's to give."""
         if self._answers_ready:
+            if budget <= 0:
+                return f'Server not ready: {not_ready}'
             try:
-                state = self._client.readiness()
+                state = self._client._readiness(min(self._client.verb_timeout, budget))
             except wire.VerbUnsupported:
                 self._answers_ready = False
-            except (wire.ConnectRefused, OSError):
+            except (wire.ConnectRefused, OSError, TimeoutError):
                 # The probe adds nothing here: ``not_ready`` already says the server answers nothing.
                 return f'Server not ready: {not_ready}'
             else:
@@ -289,7 +293,7 @@ class InferenceClient:
                 raise not_ready
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
-            logger.info('%s; retrying in %.0fs', waits.line(not_ready), backoff)
+            logger.info('%s; retrying in %.0fs', waits.line(not_ready, deadline - time.monotonic()), backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
 

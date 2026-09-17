@@ -35,6 +35,7 @@ class _FakeWire(wire.ClientWire):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
         self.calls: list[wire.Verb] = []
+        self.call_timeouts: list[float] = []
         # What ``call`` answers; ``None`` stands for a server too old to answer the verb at all.
         self.readiness: Mapping[str, Any] | None = None
 
@@ -50,6 +51,7 @@ class _FakeWire(wire.ClientWire):
 
     def call(self, address, verb, payload, headers, timeout):
         self.calls.append(verb)
+        self.call_timeouts.append(timeout)
         if self.readiness is None:
             raise wire.VerbUnsupported('this wire answers sessions alone')
         return self.readiness
@@ -312,6 +314,23 @@ class TestNewSessionRetriesRefusedConnects:
             InferenceClient(fake, _ADDRESS, connect_deadline=60.0).new_session()
 
         assert fake.calls == [wire.READY] * 3
+
+    def test_a_readiness_probe_takes_no_more_than_the_connect_deadline_leaves(self):
+        """The probe is the caller's time to spend: a verb timeout outlasting the connect is not theirs."""
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 3)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint'}
+        client = InferenceClient(fake, _ADDRESS, connect_deadline=0.2)
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            client.new_session()
+
+        assert fake.call_timeouts, 'no wait probed the server'
+        worst = max(fake.call_timeouts)
+        assert worst <= 0.2, f'a 0.2s connect deadline gave the probe {worst}s'
 
     def test_a_cold_refusal_retries_to_the_deadline(self):
         fake = _FakeWire(_refused(wire.Refusal.COLD))
