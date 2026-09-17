@@ -223,6 +223,7 @@ class InferenceClient:
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        verb_timeout: float = DEFAULT_VERB_TIMEOUT,
     ) -> Self:
         """The client one URL names.
 
@@ -255,6 +256,7 @@ class InferenceClient:
             open_timeout=open_timeout,
             connect_deadline=connect_deadline,
             infer_timeout=infer_timeout,
+            verb_timeout=verb_timeout,
         )
 
     def _open_session(self) -> InferenceSession:
@@ -323,8 +325,9 @@ class InferenceClient:
         started = protocol.Readiness.from_wire(
             self._wire.call(self._address, wire.WARM, payload, self.headers, min(self.verb_timeout, wait_deadline))
         )
-        # The count this warm has to pass: a server that answered earlier inferences does not start at zero.
-        answered_before = started.inferences
+        # The count this warm has to pass, and whose count it is: a load resets it, so a threshold held
+        # across a checkpoint switch would be another checkpoint's and would outlast this warm.
+        answered_before, counted_for = started.inferences, started.checkpoint_id
         latest = started
         while latest.inferences <= answered_before:
             # A poll interval and a verb timeout that outlast the deadline make `wait_deadline` return
@@ -337,6 +340,8 @@ class InferenceClient:
             if remaining <= 0:
                 break
             latest = self._readiness(min(self.verb_timeout, remaining))
+            if latest.checkpoint_id != counted_for:
+                answered_before, counted_for = 0, latest.checkpoint_id
         return latest
 
     def list_models(self) -> list[str]:

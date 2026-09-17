@@ -39,6 +39,8 @@ class _FakeWire(wire.ClientWire):
         self.call_timeouts: list[float] = []
         # What ``call`` answers; ``None`` stands for a server too old to answer the verb at all.
         self.readiness: Mapping[str, Any] | None = None
+        # One answer per call, in order, for a test that needs the server's record to change under it.
+        self.readiness_answers: list[Mapping[str, Any]] = []
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'http://{address.netloc}{wire.API_PATH}'
@@ -53,6 +55,8 @@ class _FakeWire(wire.ClientWire):
     def call(self, address, verb, payload, headers, timeout):
         self.calls.append(verb)
         self.call_timeouts.append(timeout)
+        if self.readiness_answers:
+            return self.readiness_answers.pop(0)
         if self.readiness is None:
             raise wire.VerbUnsupported('this wire answers sessions alone')
         return self.readiness
@@ -705,6 +709,22 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
         given = fake.call_timeouts[0]
         assert given <= budget, f'a {budget}s wait deadline gave the warm request {given}s'
 
+    def test_a_checkpoint_switch_under_a_warm_restarts_the_count_it_waits_for(self):
+        """A load resets the count, so a threshold from before the switch is another checkpoint's."""
+        fake = _FakeWire()
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness_answers = [
+            {'status': 'ready', 'message': '', 'checkpoint_id': 'a', 'inferences': 3},
+            {'status': 'ready', 'message': '', 'checkpoint_id': 'b', 'inferences': 1},
+        ]
+
+        with patch('positronic.offboard.client.time.sleep'):
+            answered = InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=10.0)
+
+        assert answered.checkpoint_id == 'b'
+        assert answered.inferences == 1, "the new checkpoint's first inference is what this warm waited for"
+        assert fake.calls == [wire.WARM, wire.READY], 'the wait went on past the switch'
+
     def test_the_websocket_wire_divides_its_budget_across_the_phases_httpx_times(self):
         budget = 8.0
         address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
@@ -748,3 +768,10 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
 
         assert slept, 'the loop never backed off'
         assert max(slept) <= deadline, f'a {deadline}s connect deadline slept {max(slept)}s in one wait'
+
+
+def test_from_url_carries_the_verb_timeout_like_the_other_settings():
+    """`from_url` is the documented path, so a setting it cannot pass is a setting URL callers lack."""
+    client = InferenceClient.from_url('localhost:8000', verb_timeout=5.0)
+
+    assert client.verb_timeout == 5.0
