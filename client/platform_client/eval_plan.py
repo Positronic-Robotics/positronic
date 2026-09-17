@@ -93,8 +93,7 @@ class Endpoint(Cascade):
     `image` endpoint names the container image the platform runs the policy from. An entry on a task
     carrying no locator at all names one of the plan's endpoints.
 
-    A served entry may name the `wire` it is dialled over, which is the one kind whose address the
-    caller never writes.
+    A served entry may name the `wire` it is dialled over; the other kinds refuse it.
     """
 
     name: str = Field(min_length=1)

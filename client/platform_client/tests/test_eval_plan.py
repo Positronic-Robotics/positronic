@@ -195,8 +195,7 @@ def test_an_image_endpoint_names_the_image_and_nothing_else():
 
 
 def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
-    """The one kind whose address the caller never writes: the platform picks it, so the plan is the
-    only place that can say which transport it wants."""
+    """The platform picks a served entry's address, so the plan is where its transport is stated."""
     entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
 
     assert entry.wire is Wire.grpc
@@ -204,8 +203,7 @@ def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
 
 
 def test_a_kind_that_states_its_own_wire_refuses_the_field():
-    """A url carries its wire in its scheme and an image is served on the port the platform opens,
-    so a wire stated on either kind could only disagree with the address itself."""
+    """A wire stated on these kinds could only disagree with the address they already carry."""
     with pytest.raises(ValidationError, match='only a served entry carries'):
         Endpoint(name='baseline', url='wss://baseline.example/ws', wire=Wire.grpc)
     with pytest.raises(ValidationError, match='only a served entry carries'):
