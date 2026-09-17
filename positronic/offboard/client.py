@@ -319,8 +319,8 @@ class InferenceClient:
         deadline = time.monotonic() + wait_deadline
         latest = started
         while latest.inferences <= answered_before:
-            # Both waits are the caller's to spend: a poll interval and a verb timeout that outlast the
-            # deadline are what make `wait_deadline` a number this returns well after.
+            # A poll interval and a verb timeout that outlast the deadline make `wait_deadline` return
+            # well after it. Both waits are the caller's to spend.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
