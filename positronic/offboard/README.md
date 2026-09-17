@@ -122,7 +122,8 @@ runs nothing, and the count says so by staying at zero.
 A server that serves sessions but not these verbs answers `UNIMPLEMENTED` on the gRPC wire and `404` on the
 HTTP one. The client reads either as the verb's absence and raises `wire.VerbUnsupported`. `new_session`
 opens the session and says once in its log that how warm the server is is unknown. A `404` from an address
-whose model catalogue does not answer either is a refusal rather than a server without the verb.
+whose model catalogue does not answer either raises `wire.ConnectRefused`: the catalogue is on every
+positronic server, so an address without one is not a positronic server.
 
 #### `/api/v1/session`
 Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).

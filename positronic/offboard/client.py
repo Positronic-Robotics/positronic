@@ -294,7 +294,7 @@ class InferenceClient:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
             logger.info('%s; retrying in %.0fs', waits.line(not_ready, deadline - time.monotonic()), backoff)
-            time.sleep(backoff)
+            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
             backoff = min(backoff * 2, 30.0)
 
     def readiness(self) -> protocol.Readiness:

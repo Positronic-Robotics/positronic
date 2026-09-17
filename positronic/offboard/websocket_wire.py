@@ -2,6 +2,7 @@
 
 import socket
 import ssl
+import time
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -63,6 +64,16 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
+def _phase_share(timeout: float) -> httpx.Timeout:
+    """``timeout`` split across the four phases httpx times separately.
+
+    A bare float gives connect, write, read and pool that value each, so a caller's budget buys four of
+    them. A quarter apiece is the same budget spent once.
+    """
+    share = max(0.0, timeout) / 4
+    return httpx.Timeout(share, connect=share, read=share, write=share, pool=share)
+
+
 def _answers_model_catalogue(api_url: str, headers: Mapping[str, str] | None, timeout: float) -> bool:
     """Whether the model catalogue answers on ``api_url``.
 
@@ -70,7 +81,7 @@ def _answers_model_catalogue(api_url: str, headers: Mapping[str, str] | None, ti
     catalogue is on every positronic server and tells the two apart.
     """
     try:
-        answer = httpx.get(f'{api_url}/{wire.MODELS_ROUTE}', headers=dict(headers or {}), timeout=timeout)
+        answer = httpx.get(f'{api_url}/{wire.MODELS_ROUTE}', headers=dict(headers or {}), timeout=_phase_share(timeout))
     except httpx.HTTPError:
         return False
     return answer.status_code != HTTPStatus.NOT_FOUND
@@ -126,18 +137,19 @@ class WebsocketClientWire(wire.ClientWire):
         """
         api_url = self.api_url(address)
         url = f'{api_url}/{verb.name}'
+        deadline = time.monotonic() + timeout
         try:
             answer = httpx.request(
                 verb.http_method,
                 url,
                 json=dict(payload) if payload else None,
                 headers=dict(headers or {}),
-                timeout=timeout,
+                timeout=_phase_share(timeout),
             )
         except httpx.HTTPError as e:
             raise wire.ConnectRefused(wire.Refusal.COLD, f'{e} (calling {url})') from e
         if answer.status_code == HTTPStatus.NOT_FOUND:
-            if _answers_model_catalogue(api_url, headers, timeout):
+            if _answers_model_catalogue(api_url, headers, max(0.0, deadline - time.monotonic())):
                 raise wire.VerbUnsupported(f'{url} answers 404; this server serves sessions but not {verb.name}')
             raise wire.ConnectRefused(wire.Refusal.FINAL, f'{url} answers 404, and so does the model catalogue')
         if answer.status_code != HTTPStatus.OK:

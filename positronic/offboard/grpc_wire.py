@@ -287,14 +287,17 @@ class GrpcClientWire(wire.ClientWire):
     ) -> Mapping[str, Any]:
         """What the server answers ``verb`` with, over a unary call on its own channel.
 
-        ``timeout`` bounds the channel and the call, one after the other.
+        ``timeout`` bounds the two phases together: the channel takes what it needs and the call takes
+        what is left, so the caller's budget is spent once rather than once per phase.
         """
         target = _target(address.host, address.port)
+        deadline = time.monotonic() + timeout
         channel = _ready_channel(target, address.secure, timeout)
         try:
             path = f'/{SERVICE}/{verb.grpc_method}'
             unary = channel.unary_unary(path, request_serializer=None, response_deserializer=None)
-            answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=timeout)
+            remaining = max(0.0, deadline - time.monotonic())
+            answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=remaining)
         except grpc.RpcError as e:
             if e.code() is grpc.StatusCode.UNIMPLEMENTED:
                 raise wire.VerbUnsupported(f'{target} serves sessions but not {verb.name}') from e

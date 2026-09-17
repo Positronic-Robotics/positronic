@@ -1,3 +1,4 @@
+import importlib
 import threading
 import time
 from collections.abc import Mapping
@@ -9,8 +10,8 @@ import pytest
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
@@ -657,3 +658,80 @@ def test_remote_session_meta(inference_server, open_session):
     assert meta['server.model_name'] == 'test_model'
 
     session.close()
+
+
+def _shipped_client_wires() -> list[type[wire.ClientWire]]:
+    """Every client wire this package ships, discovered rather than listed.
+
+    The wire modules are imported here so every shipped subclass exists before they are enumerated.
+
+    A wire added later is covered by the budget test below without anyone remembering to add it; a fake
+    defined in a test module is not a shipped wire and is left out.
+    """
+    importlib.import_module('positronic.offboard.grpc_wire')
+    importlib.import_module('positronic.offboard.websocket_wire')
+    return sorted(
+        (
+            cls
+            for cls in wire.ClientWire.__subclasses__()
+            if cls.__module__.startswith('positronic.offboard.') and '.tests.' not in cls.__module__
+        ),
+        key=lambda cls: cls.__name__,
+    )
+
+
+class TestEveryWireSpendsTheCallersBudgetOnce:
+    """A caller's timeout is one budget, whatever the transport underneath divides it into.
+
+    Both wires used to restart it per phase: gRPC gave it to the channel and again to the unary call, and
+    httpx gives a bare float to each of connect, write, read and pool. Each test below reads the value the
+    transport was handed, so it fails on a budget spent twice rather than on a slow machine.
+    """
+
+    def test_the_package_ships_the_wires_these_cover(self):
+        """The enumeration itself: a wire added later fails here until its budget is covered too."""
+        assert {cls.__name__ for cls in _shipped_client_wires()} == {'GrpcClientWire', 'WebsocketClientWire'}
+
+    def test_the_websocket_wire_divides_its_budget_across_the_phases_httpx_times(self):
+        budget = 8.0
+        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+        with patch('positronic.offboard.websocket_wire.httpx.request') as request:
+            request.return_value = MagicMock(status_code=200, **{'json.return_value': {}})
+            websocket_wire.WebsocketClientWire().call(address, wire.READY, {}, None, budget)
+
+        sent = request.call_args.kwargs['timeout']
+        total = sent.connect + sent.write + sent.read + sent.pool
+        assert total <= budget, f'four phases of {sent.connect}s buy {total}s of a {budget}s budget'
+
+    def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
+        budget, on_the_channel = 4.0, 1.0
+        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+        unary = MagicMock(return_value=b'{}')
+        channel = MagicMock(**{'unary_unary.return_value': unary})
+
+        def a_channel_that_took_its_time(*_args, **_kwargs):
+            time.sleep(on_the_channel)
+            return channel
+
+        with patch('positronic.offboard.grpc_wire._ready_channel', side_effect=a_channel_that_took_its_time):
+            grpc_wire.GrpcClientWire().call(address, wire.READY, {}, None, budget)
+
+        given = unary.call_args.kwargs['timeout']
+        assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'
+
+    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
+        """The loop checks the deadline and then sleeps; the sleep is the caller's time to spend too."""
+        deadline = 0.5
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint'}
+        slept: list[float] = []
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep', side_effect=slept.append),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert slept, 'the loop never backed off'
+        assert max(slept) <= deadline, f'a {deadline}s connect deadline slept {max(slept)}s in one wait'
