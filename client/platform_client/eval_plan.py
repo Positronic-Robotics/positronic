@@ -9,11 +9,11 @@ from collections import Counter
 from typing import Self
 
 import httpx
-from platform_client.enums import CameraVantage, EndpointKind, Placement
+from platform_client.enums import CameraVantage, EndpointKind, Placement, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
-from platform_client.slug import Slugged
+from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -81,7 +81,7 @@ def _absolute_url(url: str, whose: str) -> None:
 
 
 # A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
-_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
+_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'wire', 'episodes_per_endpoint'})
 
 
 class Endpoint(Cascade):
@@ -92,6 +92,9 @@ class Endpoint(Cascade):
     names what starts it, and the platform derives one from `spec` when the entry names none. An
     `image` endpoint names the container image the platform runs the policy from. An entry on a task
     carrying no locator at all names one of the plan's endpoints.
+
+    A served entry may name the `wire` it is dialled over, which is the one kind whose address the
+    caller never writes.
     """
 
     name: str = Field(min_length=1)
@@ -102,6 +105,10 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
+    # Which transport a SERVED entry is dialled over; the platform serves the WebSocket where none is
+    # stated. A `url` states its own wire in its scheme, so the other kinds refuse this field rather
+    # than carry a second answer.
+    wire: Slugged[Wire] | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -119,7 +126,13 @@ class Endpoint(Cascade):
                 )
             if self.image is not None:
                 raise ValueError(f'served endpoint {self.name!r} names an image, which only an image endpoint carries')
-        elif self.kind is EndpointKind.image:
+            return self
+        if self.wire is not None:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} names a wire, which only a served entry carries: a url '
+                'states its wire in its scheme, and the platform picks the one an image is served on'
+            )
+        if self.kind is EndpointKind.image:
             if self.url is not None or self.provider is not None or self.spec is not None:
                 raise ValueError(
                     f'image endpoint {self.name!r} names a url, a provider or a spec; the platform runs the image'

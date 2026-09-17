@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from platform_client.enums import EndpointKind, Placement
+from platform_client.enums import EndpointKind, Placement, Wire
 from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
@@ -192,6 +192,41 @@ def test_an_image_endpoint_names_the_image_and_nothing_else():
         Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/p:v1'), url='wss://h/ws')
     with pytest.raises(ValidationError, match='only an image endpoint carries'):
         Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', image=PolicyImage('org/p:v1'))
+
+
+def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
+    """The one kind whose address the caller never writes: the platform picks it, so the plan is the
+    only place that can say which transport it wants."""
+    entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
+
+    assert entry.wire is Wire.grpc
+    assert Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero').wire is None
+
+
+def test_a_kind_that_states_its_own_wire_refuses_the_field():
+    """The other side of the same admission. A url carries its wire in its scheme and an image is
+    served on the one the platform picks, so a second answer here could only disagree with them."""
+    with pytest.raises(ValidationError, match='only a served entry carries'):
+        Endpoint(name='baseline', url='wss://baseline.example/ws', wire=Wire.grpc)
+    with pytest.raises(ValidationError, match='only a served entry carries'):
+        Endpoint(name='baseline', kind=EndpointKind.image, image=PolicyImage('org/policy:v1'), wire=Wire.grpc)
+
+
+def test_the_wire_rides_the_json_as_its_slug():
+    """`Slugged` is how every closed set crosses the wire, and a plan read back from its own dump
+    must be the plan that was dumped."""
+    entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
+
+    sent = entry.model_dump(mode='json')
+
+    assert sent['wire'] == 'grpc' and sent['kind'] == 'served'
+    assert Endpoint.model_validate(sent) == entry
+
+
+def test_a_plan_written_before_the_wire_existed_still_reads():
+    """An endpoint that names no wire is every plan filed until now, and it keeps meaning what it
+    meant: the platform serves it over the transport it always did."""
+    assert Endpoint.model_validate({'name': 'candidate', 'kind': 'served', 'spec': 'dreamzero'}).wire is None
 
 
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():

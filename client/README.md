@@ -71,7 +71,9 @@ endpoints:
   - name: baseline
     url: wss://baseline.example/ws
   - name: candidate
-    url: wss://candidate.example/ws
+    kind: served                         # the platform brings this one up
+    spec: dreamzero
+    wire: grpc                           # websocket | grpc; served entries only
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -80,6 +82,13 @@ policy_preset: example_candidate
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
+
+An endpoint says where its policy comes from. A `remote` one carries the `url` to dial, whose
+scheme picks the transport. A `served` one names the `spec` the platform brings up, and the caller
+never sees that address until the run records it — so a served entry is the one that may state the
+`wire` it wants, `websocket` or `grpc`; stating none takes the WebSocket. An `image` one names the
+container the platform runs. The kinds refuse each other's fields, so an entry cannot carry two
+answers to the same question.
 
 `positronic eval run` files that plan with `submissions.create`. `--from-file` names the file, and
 no other option does: an `--eval` value is a name. The same flags state a plan
