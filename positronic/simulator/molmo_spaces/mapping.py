@@ -4,7 +4,7 @@ Imported from two interpreters: the client-side ``MolmoAdapter`` (positronic) re
 the reset token with it, and the molmo-venv ``env.py`` builds that payload and decodes wire commands with it. It
 imports numpy plus the positronic-free ``protocol`` (which owns the wire command tags), so it loads under a
 bare pytest and inside the molmo venv alike — the fixture tests exercise it without either framework. The
-MuJoCo reads that need the live model (joint velocities, the end-effector world pose) stay in ``env.py``;
+MuJoCo reads that need the live model (joint velocities, the end-effector pose) stay in ``env.py``;
 only the framework-independent arithmetic lives here.
 """
 
@@ -154,10 +154,12 @@ def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
     return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
 
 
-def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
-    """The absolute pose a world-frame ``cartesian_delta`` targets from a measured pose.
+def compose_reference_delta(
+    cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any
+) -> tuple[np.ndarray, np.ndarray]:
+    """The absolute pose a reference-frame ``cartesian_delta`` targets from a measured pose.
 
-    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(delta) @ ee_ori``) — the
+    Translation adds in the reference frame and rotation left-multiplies (``goal_ori = R(delta) @ ee_ori``) — the
     convention positronic's ``apply_cartesian_delta`` and LIBERO's own delta bridging both use.
     """
     return (
@@ -181,7 +183,7 @@ def wire_command_to_arm_action(
     ``q + dq``), and ``hold`` re-commands the measured joints.
 
     The Cartesian pair needs the live model, which this module deliberately does not hold: ``env.py`` supplies
-    ``ik`` (an absolute world target ``(pos, rot)`` -> joint targets) and the measured ``current_eef`` pose a
+    ``ik`` (an absolute target ``(pos, rot)`` -> joint targets) and the measured ``current_eef`` pose a
     delta composes onto.
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
@@ -199,7 +201,7 @@ def wire_command_to_arm_action(
             target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
+            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(

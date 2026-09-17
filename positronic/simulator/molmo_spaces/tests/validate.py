@@ -68,16 +68,19 @@ def _ori_error(target_rot: np.ndarray, rot: np.ndarray) -> float:
 
 
 def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The grasp-site world pose a candidate arm configuration reaches — the inverse of the rig's ``_ik``.
+    """The grasp-site robot-frame pose a candidate arm configuration reaches — the inverse of the rig's ``_ik``.
 
     Runs on the rig's own scratch ``MjData``, seeded from the live scene, so the checks below probe candidate
-    joints without perturbing the sim.
+    joints without perturbing the sim. ``_leaf_pose`` reads MuJoCo, which is world, so this converts through
+    the rig's own base transform — the same one ``_ik`` converts back through.
     """
     arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
     data = sim_env._scratch_data(arm)
     data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
     mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
-    return env._leaf_pose(arm, data)
+    pos, rot = env._leaf_pose(arm, data)
+    t, r = sim_env._robot_to_world()
+    return r.T @ (pos - t), r.T @ rot
 
 
 def _check_fk_identity(sim_env) -> None:
