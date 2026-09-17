@@ -256,8 +256,8 @@ def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_comman
 
 @pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': True}])
 def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_command, switch: dict):
-    # A switch stated at what a rig run already does reads as one left at its default rather than as
-    # a value the rig has no flag for.
+    # A switch stated at what a rig run already does reads as one left at its default, so the rig
+    # takes it.
     platform.answer(FILED)
 
     run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)
