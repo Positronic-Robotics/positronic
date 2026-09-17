@@ -164,16 +164,31 @@ synchronously — a plain function call, repeated:
 
 - One call: `(observations, time) -> (commands, resume_at)` — the current
   observations and time in, the commands to execute now (possibly none) out.
-- Observations are the freshest the framework has at the moment of the call.
+- Observations contain the latest available sensor values, task, and rig descriptor.
+  Each signal's `updated` flag controls whether its serialized fields need refreshing.
+  Arrays are copied on update so later device writes cannot change an earlier observation.
+  Current time comes from `runtime.time_ns`, not from observation fields.
 - Returned commands are emitted towards the robot driver immediately.
 - Observations and commands are named channels. A channel value can be
   of any type, structured or unstructured (a robot command, an image).
-- The `time` argument is the only clock a session has. The framework sets
-  it, and it strictly grows from call to call.
+- The episode clock never goes backwards. A completion can cause another
+  call at the same time, with the same `runtime.tick` but any newly received sensor values.
 - `resume_at` is how the session paces itself: the instant at which it wants
-  to be called next, absolute on the clock of `time`, strictly in the future.
+  to be called next, absolute on the episode clock.
 - The framework calls best-effort at `resume_at`: it may be earlier or later,
   and the session reads the actual moment from `time`.
+
+Every newly available inference answer also schedules a call through the whole
+policy stack. A completion is delivered once, independently of whether its
+result has been read. In charged simulation, availability includes the elapsed
+inference time. In uncharged simulation, completions are handled before the
+clock advances, without a limit on chains of calls at the same instant.
+
+The harness drives policy generators and handles control-system signals. The
+executor receives a clock function, reports completions, and provides bounded
+waits; it has no dependency on the control-system framework.
+
+TODO: Let a policy select which answers may wake it early with `wake_on`.
 
 ### Async inference
 

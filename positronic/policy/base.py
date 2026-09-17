@@ -45,6 +45,12 @@ Commands = Mapping[str, Any]
 
 @dataclass
 class Step:
+    """Commands to emit now and the next requested call time.
+
+    Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
+    """
+
+    # TODO: Allow selecting which answers can wake the policy early, alongside its time deadline.
     commands: Commands
     resume_at_ns: int
 
