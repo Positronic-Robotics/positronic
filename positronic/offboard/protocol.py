@@ -57,6 +57,7 @@ class ServerStatus(StrEnum):
 
 
 # How many inferences the loaded checkpoint has answered, in the record the unary verbs return.
+# Any inference counts, a served one as much as a warm, so the count is the checkpoint's, not a task's.
 INFERENCES = 'inferences'
 
 

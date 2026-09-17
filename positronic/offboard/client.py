@@ -310,7 +310,8 @@ class InferenceClient:
 
         The server starts the warm and does not wait for it, so the record comes back cold. A
         ``wait_deadline`` above zero reads the count again until it moves, and gives up at that many
-        seconds. Raises ``wire.VerbUnsupported`` where the server does not answer the verb.
+        seconds. Any inference the loaded checkpoint answers moves that count, so a served one ends this
+        wait as a warm does. Raises ``wire.VerbUnsupported`` where the server does not answer the verb.
         """
         payload = {keys.TASK: task}
         started = protocol.Readiness.from_wire(
