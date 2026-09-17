@@ -299,6 +299,7 @@ class PolicyServer:
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
+        self._warms_in_flight = 0
         self._last_activity = time.monotonic()
         # Backend calls run in a worker thread, so the event loop keeps servicing other connections, but are
         # serialized here: sessions may share one backend client, which concurrent calls would corrupt.
@@ -362,6 +363,7 @@ class PolicyServer:
         """Answer one unary call with the state at the moment it answers. ``WARM`` does not wait for the
         warm it starts."""
         if verb is wire.WARM:
+            self._last_activity = time.monotonic()
             self._start_warming(str(payload.get(keys.TASK) or ''))
         return self.readiness().to_wire()
 
@@ -373,11 +375,17 @@ class PolicyServer:
 
     async def _warm(self, task: str) -> None:
         """The warm a ``WARM`` call starts. Nothing awaits it, so a failure is reported and not raised."""
+        # A warm is activity: a cold checkpoint's first inference outlasts a short idle timeout, and the
+        # watchdog would otherwise shut the server down in the middle of the call that asked for it.
+        self._warms_in_flight += 1
         try:
             await self._warm_loaded_checkpoint(task)
         except Exception as e:
             # The checkpoint stays loaded and answers sessions, and the inference count stays at zero.
             logger.error(f'Warming failed: {e}', exc_info=True)
+        finally:
+            self._warms_in_flight = max(0, self._warms_in_flight - 1)
+            self._last_activity = time.monotonic()
 
     async def _warm_loaded_checkpoint(self, task: str) -> None:
         """Answer one observation on the loaded checkpoint, so a scored episode does not pay the first one."""
@@ -546,7 +554,7 @@ class PolicyServer:
         poll = min(timeout_s, 30)
         while True:
             await asyncio.sleep(poll)
-            if self._active_sessions > 0:
+            if self._active_sessions > 0 or self._warms_in_flight > 0:
                 continue
             idle = time.monotonic() - self._last_activity
             if idle >= timeout_s:

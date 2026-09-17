@@ -111,6 +111,15 @@ def test_a_warm_state_that_is_not_a_pose_is_zeros():
     assert warm_state('observation.state', 7) == pytest.approx(np.zeros(7))
 
 
+def test_two_codecs_that_both_declare_warm_inputs_refuse_to_compose_a_warm():
+    """Neither declaration names what the pair warms on, so the composition says so instead of picking one."""
+    left = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field='prompt')
+    right = ObservationCodec(state={'observation.other': {'b': 1}}, images={}, task_field='prompt')
+
+    with pytest.raises(ValueError, match='both composed codecs declare warm inputs'):
+        (left & right).warm_observation('stack the cubes')
+
+
 def test_a_codec_that_encodes_no_observation_builds_no_warm_observation():
     action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip')
     assert (ActionTimestamp(fps=15.0) | action).warm_observation('stack the cubes') is None

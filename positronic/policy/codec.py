@@ -198,9 +198,19 @@ def _merged_meta(left: dict, right: dict) -> dict:
 
 
 def _declared_warm_inputs(left: Codec, right: Codec, task: str) -> dict[str, Any] | None:
-    """The warm inputs of whichever half declares them; at most one entry of a chain encodes observations."""
-    declared = left.warm_inputs(task)
-    return declared if declared is not None else right.warm_inputs(task)
+    """The warm inputs of whichever half declares them; at most one entry of a chain encodes observations.
+
+    Both halves declaring breaks that: under ``&`` each half encodes the same input, so a warm built from
+    one half's declaration reaches the other half's encoder short of what it reads. Neither side names the
+    observation the composition warms on, so this says so rather than picking one.
+    """
+    declared, other = left.warm_inputs(task), right.warm_inputs(task)
+    if declared is not None and other is not None:
+        raise ValueError(
+            'both composed codecs declare warm inputs, so neither names the observation the composition '
+            'warms on; one entry of a chain encodes observations'
+        )
+    return declared if declared is not None else other
 
 
 class _ComposedCodec(Codec):

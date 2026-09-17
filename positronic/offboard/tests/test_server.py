@@ -1035,6 +1035,23 @@ class TestReadinessVerbs:
         held.set()
         assert switched.wait(timeout=10.0), 'the switch never finished once the warm was done'
 
+    def test_a_warm_in_flight_holds_off_the_idle_watchdog(self, start_server, make_mock_policy):
+        """A cold checkpoint's first inference outlasts a short idle timeout, and must not be cut off by it."""
+        policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        held = threading.Event()
+        policy._mock_session.side_effect = lambda obs, time_ns: held.wait(timeout=10.0) and [{'action': [1]}]
+        codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
+        host, port, *_ = start_server(
+            ChunkedSchedule() | remote | codec | _StubSource(policy), idle_timeout_min=_A_MOMENT_IDLE / 60
+        )
+        client = InferenceClient.from_url(f'{host}:{port}')
+        client.warm('stack the cubes')
+
+        time.sleep(_A_MOMENT_IDLE * 5)
+        assert client.readiness().status is protocol.ServerStatus.READY, 'the watchdog stopped a server mid-warm'
+        held.set()
+        assert _warmed(client).inferences == 1
+
     def test_a_pipeline_whose_server_half_encodes_nothing_warms_nothing(self, stub_server):
         """``stub_server`` closes the marker with the source alone, so no codec builds a warm observation."""
         host, port, _server, policy = stub_server
