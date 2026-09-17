@@ -122,7 +122,6 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     recorded.update({f'{parity_record.CAM_HASH_PREFIX}{name}': np.array(cam_hashes[name]) for name in camera_names})
     recorded[parity_record.CAMERA_NAMES] = np.array(camera_names)
     recorded[parity_record.HORIZON_STEPS] = native_horizon
-    recorded[parity_record.HORIZON_SEC] = native_horizon * (cfg.policy_dt_ms / 1000.0)  # env.py reports this at reset
     recorded[parity_record.TERMINATION_STEP] = step
     recorded[parity_record.FINAL_SUCCESS] = success
     # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).

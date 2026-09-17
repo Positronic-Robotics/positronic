@@ -147,7 +147,6 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
-        self._horizon_sec: float | None = None
         self._meta: dict[str, Any] | None = None
         self._camera_names: list[str] = []
         # Scratch ``MjData`` the IK probes run on: a Cartesian policy solves IK every control step, so the
@@ -182,7 +181,6 @@ class MolmoSpacesEnv(EnvProtocol):
         _assert_measures_at_grasp_site(self._robot_view)
         self._scratch = None  # sized by this episode's model; allocated on the first probe
         self._control_dt = cfg.policy_dt_ms / 1000.0
-        self._horizon_sec = cfg.task_horizon * self._control_dt
         # The authoritative benchmark prompt, straight from the episode spec — not
         # ``task.get_task_description()``, which upstream reconstructs per task type (e.g. OpeningTask emits
         # "Open the ..." even for a close episode), so a reconstruction could diverge from the benchmark goal.
@@ -233,7 +231,6 @@ class MolmoSpacesEnv(EnvProtocol):
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self._control_dt,
-            protocol.FRAME_HORIZON: self._horizon_sec,
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:

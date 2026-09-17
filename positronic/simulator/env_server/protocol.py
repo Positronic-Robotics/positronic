@@ -59,13 +59,11 @@ OPT_PORT = '--port'
 
 # The frames an env reports back. ``reset`` carries the observation, the scene meta, the robot model identity
 # and the control period; ``step`` carries the observation, the terminal, the control period, and — where the
-# env judges one — its success. ``horizon`` is the episode limit the env enforces itself, in sim-seconds,
-# absent when the env enforces none.
+# env judges one — its success.
 FRAME_OBS = 'obs'
 FRAME_META = 'meta'
 FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
-FRAME_HORIZON = 'horizon'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
 

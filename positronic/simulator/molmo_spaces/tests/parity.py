@@ -62,7 +62,6 @@ def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: in
         try:
             token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed}
             frame = conn.reset(token)
-            reported_horizon = frame[protocol.FRAME_HORIZON]
             camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
             cam_hashes = {name: [] for name in camera_names}
             record(frame[protocol.FRAME_OBS])
@@ -79,7 +78,6 @@ def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: in
         mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
         parity_record.CAMERA_NAMES: camera_names,
         'cam_hashes': cam_hashes,
-        'reported_horizon': reported_horizon,
         parity_record.TERMINATION_STEP: step,
         parity_record.FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
     }
@@ -131,11 +129,6 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
     )
     assert not bool(native[parity_record.FINAL_SUCCESS]) and not positronic[parity_record.FINAL_SUCCESS], (
         'a held arm must not score success'
-    )
-    # The env reports its horizon at reset (in sim-seconds); it must match native's and equal timeout's yardstick.
-    n_horizon = float(native[parity_record.HORIZON_SEC])
-    assert n_horizon == positronic['reported_horizon'], (
-        f'reported horizon differs: native {n_horizon}s, positronic {positronic["reported_horizon"]}s'
     )
 
     assert list(native[parity_record.CAMERA_NAMES]) == positronic[parity_record.CAMERA_NAMES], (
