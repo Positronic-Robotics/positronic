@@ -22,6 +22,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
@@ -30,7 +31,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Policy, Runtime, Session
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 
-from .client import API, Endpoint
+from .client import Endpoint
 from .motion import Motion, MoveTo
 from .recording import Transcript
 
@@ -332,8 +333,7 @@ class LLMPolicy(Policy):
             policy = self._policy
             meta: dict[str, Any] = {
                 policy_keys.TYPE: 'llm',
-                'model': policy.endpoint.model,
-                'api': policy.endpoint.api.value,
+                'model': policy.endpoint.model.model_id,
                 'settings': dict(policy.endpoint.settings),
                 'motion': asdict(policy.motion),
                 'max_calls': policy.max_calls,
@@ -345,8 +345,8 @@ class LLMPolicy(Policy):
                 'image_horizon': policy.image_horizon,
                 'transcript': self._transcript.snapshot(),
             }
-            if policy.endpoint.base_url is not None:
-                meta['base_url'] = policy.endpoint.base_url
+            if policy.endpoint.model.base_url is not None:
+                meta['base_url'] = policy.endpoint.model.base_url
             if self._stop_reason is not None:
                 meta['stop_reason'] = self._stop_reason
             if self._hindsight is not None:
@@ -460,9 +460,6 @@ class LLMPolicy(Policy):
 
 
 @cfn.config(
-    api=API.OPENAI_RESPONSES.value,
-    base_url=None,
-    api_key_env=None,
     timeout=120.0,
     settings={},
     motion=cfn.Config(Motion),
@@ -474,10 +471,7 @@ class LLMPolicy(Policy):
     max_invalid=3,
 )
 def llm(
-    model: str,
-    api: str,
-    base_url: str | None,
-    api_key_env: str | None,
+    model: str | Model,
     timeout: float,
     settings: ModelSettings,
     motion: Motion,
@@ -490,7 +484,7 @@ def llm(
 ) -> Policy:
     """Direct API policy, with fault handling and trajectory scheduling on the rig."""
     policy = LLMPolicy(
-        Endpoint(model, API(api), base_url, api_key_env, timeout, settings),
+        Endpoint(model, timeout=timeout, settings=settings),
         motion,
         images=Images(images),
         camera_keys=tuple(camera_keys),

@@ -403,4 +403,4 @@ def test_config_builds_a_local_policy_with_scheduling(model):
     with session(policy) as (active, rt):
         complete(active, rt, observation())
         assert active.meta['stop_reason'] == 'done'
-        assert active.meta['api'] == 'openai-responses'
+        assert active.meta['model'] == 'test:test'

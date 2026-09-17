@@ -1,36 +1,63 @@
 # Direct API robot policy
 
-`LLMPolicy` runs on the rig and calls a public model API on a worker thread. There is no Positronic inference server. Pydantic AI supplies native request and message adapters; the policy owns the conversation, tools, and validation. The runner owns episode boundaries.
+`LLMPolicy` runs on the rig and calls a public model API on a worker thread. There is no Positronic inference server. Pydantic AI selects the provider and manages its client, native messages, and SDK defaults; the policy owns the conversation, tools, and validation. The runner owns episode boundaries.
 
 ## Run in simulation
 
 Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the rig's environment. Choose a model that accepts images and function calls.
 
 ```bash
-uv sync --extra llm
-uv run --extra llm positronic eval run \
+uv sync --extra llm-openai
+uv run --extra llm-openai positronic eval run \
   --eval=.sim.positronic.stack_cubes --eval.timeout=300 \
   --policy=@positronic.vendors.llm.policy.llm \
-  --policy.model="$OPENAI_MODEL" \
+  --policy.model="openai-responses:$OPENAI_MODEL" \
+  --policy.settings="{'openai_store': False}" \
   --output_dir=~/datasets/llm-policy/sim
 ```
 
 Add `--charge_inference_time=True` to count API latency against simulated trial time. The default pauses simulated time while waiting for inference. Hardware always pays wall time. Use separate output directories when comparing the two modes.
 
-| `--policy.api` | Native API | Default key environment variable |
+### Models and dependencies
+
+`--policy.model` takes Pydantic AI's `provider:model` identifier. Pydantic AI loads the selected provider and reads its standard credential environment variables. MysteryBox can populate those variables before starting the rig.
+
+| Model prefix | Install extra | Credential environment variable |
 | --- | --- | --- |
-| `openai-responses` (default) | OpenAI Responses | `OPENAI_API_KEY` |
-| `anthropic` | Anthropic Messages | `ANTHROPIC_API_KEY` |
-| `google` | Google generateContent | `GEMINI_API_KEY` |
-| `openai-chat` | OpenAI Chat Completions, including compatible services | `OPENAI_API_KEY` |
+| `openai-responses:` or `openai-chat:` | `llm-openai` | `OPENAI_API_KEY` |
+| `anthropic:` | `llm-anthropic` | `ANTHROPIC_API_KEY` |
+| `google:` | `llm-google` | `GOOGLE_API_KEY` (also accepts `GEMINI_API_KEY`) |
 
-Select a provider with `--policy.api=anthropic --policy.model=...`, for example. For compatible services, also set `--policy.base_url=https://your-provider.example/v1`; `--policy.api_key_env=YOUR_KEY_VARIABLE` selects a different credential variable. Google's custom base URL is the API root, without `/v1beta`.
+The `llm` extra installs only the Pydantic AI core. Each provider extra adds only that provider's SDK dependencies. Other [Pydantic AI providers](https://ai.pydantic.dev/models/overview/) work without policy changes when their dependencies are installed. Choose a model that supports images and function calls; incompatible models raise errors.
 
-`--policy.settings` accepts a dictionary of [Pydantic AI model settings](https://ai.pydantic.dev/api/settings/), including native provider settings. OpenAI Responses uses local message history with `store=False`. Transport overrides and server-side conversation IDs are rejected. Provider capabilities still depend on the chosen model; an incompatible model raises an error.
+Use provider environment variables for supported endpoint overrides, such as `OPENAI_BASE_URL` for an OpenAI-compatible service. For further customization, a Python config can pass an already configured Pydantic AI `Model` to `llm(model=...)`. For example:
+
+```python
+import os
+
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from positronic.vendors.llm.policy import llm
+
+policy = llm(
+    model=OpenAIChatModel(
+        os.environ['LLM_MODEL'],
+        provider=OpenAIProvider(
+            base_url='https://your-provider.example/v1',
+            api_key=os.environ['YOUR_KEY_VARIABLE'],
+        ),
+    ),
+)
+```
+
+`--policy.settings` accepts [Pydantic AI model settings](https://ai.pydantic.dev/api/settings/), including provider-specific options. These override defaults on a configured model and are recorded with the episode. Put authentication and transport configuration on the provider, not in these recorded settings. Model URLs containing credentials or query parameters are rejected.
+
+Provider-specific behavior follows the library defaults. The example explicitly sets `openai_store=False` to disable OpenAI response storage. Conversation history belongs to the session; do not configure server-side conversation IDs shared across episodes.
 
 ## Control contract
 
-The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. Each worker job encodes any requested images and makes one API request. The session processes the reply on a later control-loop call and decides whether to request a correction or picture, play a move, or remain idle. Picture and correction requests share the decision's frozen observation. Once the scheduled waypoints play, the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
+The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. Each worker job encodes any requested images and makes one model invocation, which may include SDK network retries. The session processes the reply on a later control-loop call and decides whether to request a correction or picture, play a move, or remain idle. Picture and correction requests share the decision's frozen observation. Once the scheduled waypoints play, the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
@@ -41,7 +68,7 @@ Only the task instruction, measured hand pose/gripper, and selected labelled RGB
 | `give_up` | `reason` and `hindsight`; stop issuing actions for this episode |
 | `take_pic` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
-The model must return exactly one tool call. Oversized moves, malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Three consecutive invalid replies raise an error. API errors and timeouts surface immediately; SDK retries are disabled. The episode has a budget of 100 calls, including pictures and corrections; exhaustion stops further actions and API calls.
+The model must return exactly one tool call. Oversized moves, malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion stops further actions and model invocations.
 
 After `done`, `give_up`, or call-budget exhaustion, the session returns an empty trajectory on every call and makes no further API requests. Queued commands are cleared; drivers retain their last commanded target. The episode and recording continue until the simulator or operator ends it, or its timeout expires. An episode without a timeout requires external completion. Cancellation does not restart a finished session; each new episode gets a fresh session.
 
@@ -58,7 +85,7 @@ Defaults are experimental bounds for supervised testing:
 | `motion.linear_speed` | 0.05 m/s |
 | `motion.angular_speed` | 0.5236 rad/s (30°/s) |
 | `motion.fps` | 25 waypoints/s |
-| `timeout` | 120 seconds per API call |
+| `timeout` | 120 seconds per model invocation, including retries |
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
@@ -77,7 +104,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one request can be in flight. Faults mark its reply for discard. Follow-up requests start only when the control loop calls the session, so an ended episode starts no further requests and a late response cannot command motion. The runtime waits for the current request to finish before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
+Only one model invocation can be in flight. Faults mark its reply for discard. Follow-up invocations start only when the control loop calls the session. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including any SDK retries within its timeout, before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
 
 ## Supervised hardware
 
@@ -87,6 +114,7 @@ After validating the task in simulation, use the same policy with `positronic-in
 
 ```bash
 uv run --extra llm pytest positronic/vendors/llm/tests
+uv run --extra llm-openai --extra llm-anthropic --extra llm-google pytest positronic/vendors/llm/tests
 ```
 
-Tests mock the actual provider HTTP boundary, check native reasoning/image replay, validate motion and cancellation, and run the full harness/recorder with a deterministic robot. They need no API credentials or hardware.
+The core suite runs without provider SDKs. Provider integration tests skip when their SDK is absent; installing all three extras exercises every HTTP adapter. Tests mock HTTP, check native reasoning/image replay and client cleanup, validate retries, deadlines, motion and cancellation, and run the full harness/recorder with a deterministic robot. They need no API credentials or hardware.
