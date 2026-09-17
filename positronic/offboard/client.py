@@ -310,18 +310,21 @@ class InferenceClient:
 
         The server starts the warm and does not wait for it, so the record comes back cold. A
         ``wait_deadline`` above zero reads the count again until it moves, and gives up at that many
-        seconds. Any inference the loaded checkpoint answers moves that count, so a served one ends this
-        wait as a warm does. Raises ``wire.VerbUnsupported`` where the server does not answer the verb.
+        seconds, the request that starts the warm included. Any inference the loaded checkpoint answers
+        moves that count, so a served one ends this wait as a warm does. Raises ``wire.VerbUnsupported``
+        where the server does not answer the verb.
         """
         payload = {keys.TASK: task}
-        started = protocol.Readiness.from_wire(
-            self._wire.call(self._address, wire.WARM, payload, self.headers, self.verb_timeout)
-        )
         if wait_deadline <= 0:
-            return started
+            return protocol.Readiness.from_wire(
+                self._wire.call(self._address, wire.WARM, payload, self.headers, self.verb_timeout)
+            )
+        deadline = time.monotonic() + wait_deadline
+        started = protocol.Readiness.from_wire(
+            self._wire.call(self._address, wire.WARM, payload, self.headers, min(self.verb_timeout, wait_deadline))
+        )
         # The count this warm has to pass: a server that answered earlier inferences does not start at zero.
         answered_before = started.inferences
-        deadline = time.monotonic() + wait_deadline
         latest = started
         while latest.inferences <= answered_before:
             # A poll interval and a verb timeout that outlast the deadline make `wait_deadline` return
@@ -340,6 +343,6 @@ class InferenceClient:
         """List available models from the server."""
         if self.api_url is None:
             raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
+        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers, timeout=self.verb_timeout)
         response.raise_for_status()
         return response.json()['models']

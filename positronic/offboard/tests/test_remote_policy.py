@@ -683,14 +683,27 @@ def _shipped_client_wires() -> list[type[wire.ClientWire]]:
 class TestEveryWireSpendsTheCallersBudgetOnce:
     """A caller's timeout is one budget, whatever the transport underneath divides it into.
 
-    Both wires used to restart it per phase: gRPC gave it to the channel and again to the unary call, and
-    httpx gives a bare float to each of connect, write, read and pool. Each test below reads the value the
-    transport was handed, so it fails on a budget spent twice rather than on a slow machine.
+    Every spend the budget covers takes what is left of it: the request that opens the call, each phase a
+    transport times on its own, and each wait between them. Each test reads the value the transport was
+    handed rather than the clock, so it fails on a budget spent twice and not on a slow machine.
     """
 
     def test_the_package_ships_the_wires_these_cover(self):
         """The enumeration itself: a wire added later fails here until its budget is covered too."""
         assert {cls.__name__ for cls in _shipped_client_wires()} == {'GrpcClientWire', 'WebsocketClientWire'}
+
+    def test_the_request_that_starts_a_warm_is_inside_the_wait_deadline(self):
+        """The call that starts the warm is a spend the caller's budget covers, like the polls after it."""
+        budget = 0.3
+        fake = _FakeWire()
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'ready', 'message': '', 'inferences': 1}
+
+        InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=budget)
+
+        assert fake.calls[0] is wire.WARM, 'the first call is the one that starts the warm'
+        given = fake.call_timeouts[0]
+        assert given <= budget, f'a {budget}s wait deadline gave the warm request {given}s'
 
     def test_the_websocket_wire_divides_its_budget_across_the_phases_httpx_times(self):
         budget = 8.0
