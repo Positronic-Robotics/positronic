@@ -8,14 +8,15 @@ DOF, normalized 0=closed/1=open — the inverse of positronic's grip convention 
 both directions.
 
 Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
-(``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, physical gripper
+(``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, the gravity
+compensation each joint needs (``gravity_comp_factor``), physical gripper
 polarity and joint-range check, mount pose survey (``base_pose``), teleop latency, and the chain going limp
 on close (``zero_torque_mode``).
 """
 
 import contextlib
 import logging
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from typing import Any
 
 import mujoco as mj
@@ -59,9 +60,15 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
     return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
 
 
-def _connect(channel: str, sim: bool):
+def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
-    return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
+    return get_yam_robot(
+        channel,
+        gripper_type=GripperType.LINEAR_4310,
+        zero_gravity_mode=False,
+        sim=sim,
+        gravity_comp_factor=gravity_comp_factor,
+    )
 
 
 class YamState(State, pimm.shared_memory.NumpySMAdapter):
@@ -307,9 +314,14 @@ class _Chain(DriverRun[command.CommandType]):
 
 
 @contextlib.contextmanager
-def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Iterator[Any]:
+def _opened(
+    connect: Callable[[str, bool, np.ndarray | None], Any],
+    channel: str,
+    sim: bool,
+    gravity_comp_factor: np.ndarray | None,
+) -> Iterator[Any]:
     """The chain, left limp and its handle given back however the run ends — including one that never starts."""
-    vendor = connect(channel, sim)
+    vendor = connect(channel, sim, gravity_comp_factor)
     try:
         yield vendor
     finally:
@@ -334,17 +346,23 @@ class Robot(pimm.ControlSystem):
         *,
         base_pose: geom.Transform3D | None = None,
         sim: bool = False,
+        gravity_comp_factor: Sequence[float] | None = None,
         connect: Callable = _connect,
     ) -> None:
         """
         :param channel: SocketCAN interface of the chain (e.g. ``can0``). Ignored in sim mode.
         :param base_pose: Arm-base mount pose in the world frame; None keeps everything in the arm-base frame.
         :param sim: Run against i2rt's own MuJoCo sim instead of hardware.
-        :param connect: ``(channel, sim) -> i2rt Robot`` factory; the fake-mode smoke injects ``_FakeYam``.
+        :param gravity_comp_factor: One factor per arm joint, scaling the gravity torque i2rt compensates.
+            None keeps i2rt's own. A joint that reads a steady offset below where it was sent is under-
+            compensated, and the offset is what it carries divided by its position gain.
+        :param connect: ``(channel, sim, gravity_comp_factor) -> i2rt Robot`` factory; the fake-mode smoke
+            injects ``_FakeYam``.
         """
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
+        self._gravity_comp_factor = None if gravity_comp_factor is None else np.asarray(gravity_comp_factor, float)
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
@@ -359,7 +377,7 @@ class Robot(pimm.ControlSystem):
         return _Chain(vendor, self.sync_move, self.commands, self.state, self.grip, self._base_pose, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with _opened(self._connect, self._channel, self._sim) as vendor:
+        with _opened(self._connect, self._channel, self._sim, self._gravity_comp_factor) as vendor:
             chain = self._chain(vendor, should_stop, clock)
             meta = {
                 'robot': 'i2rt_yam',
@@ -437,7 +455,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     fake = _FakeYam() if args.fake else None
-    robot = Robot(args.channel, sim=args.sim, connect=(lambda channel, sim: fake) if args.fake else _connect)
+    fake_connect = (lambda channel, sim, gravity_comp_factor: fake) if args.fake else _connect
+    robot = Robot(args.channel, sim=args.sim, connect=fake_connect)
 
     with pimm.World() as world:
         # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
