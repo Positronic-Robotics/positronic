@@ -1,10 +1,9 @@
 """Validate the MolmoSpaces rig's command transforms against the live sim.
 
 MolmoSpaces' Franka runs a joint-position controller, so every other command reaches it only through the
-conversions in ``mapping``, the Cartesian pair among them through the differential IK in ``env.py``. That
-solver is arithmetic over the live MuJoCo model, which no unit test can reach (``mapping``'s tests cover the
-routing with a stub solver, not the kinematics), so it is checked here against a real benchmark scene — the
-same shape of check ``simulator/libero/validate.py`` runs for the LIBERO rig.
+conversions in ``mapping``, the Cartesian pair through MolmoSpaces' IK. The solver uses a separate robot
+model, so its results are checked against the grasp site in a real benchmark scene (``mapping``'s unit tests
+cover the routing with a stub solver).
 
 Four properties. The kinematic three read the arm's grasp site (the frame the env observes in, so command and
 observation share a frame); the fourth is the adoption's coverage of the command contract:
@@ -39,8 +38,7 @@ import os
 from pathlib import Path
 
 # env.py sets MUJOCO_GL and installs the CGL stub at import, GL-safely pulling in the molmo_spaces stack — so
-# import it before any other molmo_spaces import. Reaching into its private ``_fk``/``_ik`` is the point: this
-# validates that exact solver, not a re-derivation of it.
+# import it before any other molmo_spaces import.
 import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
@@ -51,7 +49,6 @@ import protocol  # pyright: ignore[reportMissingImports] -- flat on PYTHONPATH b
 # work to do, near enough that every target stays reachable and away from the limits.
 _JOINT_JITTER = 0.1
 _IK_SAMPLES = 16
-# The solver iterates to _IK_TOL on the 6-vector error; these are the per-component budgets that implies.
 _POS_ATOL = 1e-3  # metres
 _ORI_ATOL = 1e-2  # radians
 # The live site is read after the sim has stepped, so it carries residual motion the scratch recompute of the
@@ -63,21 +60,18 @@ _DELTA_POS = 0.01  # metres
 _DELTA_Q = 0.01  # radians
 
 
-def _ori_error(target_rot: np.ndarray, rot: np.ndarray) -> float:
-    return float(np.linalg.norm(env._pose_error(np.zeros(3), target_rot, np.zeros(3), rot)[3:]))
-
-
 def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The grasp-site world pose a candidate arm configuration reaches — the inverse of the rig's ``_ik``.
 
-    Runs on the rig's own scratch ``MjData``, seeded from the live scene, so the checks below probe candidate
+    Runs on a copy of the live scene's ``MjData``, so the checks below probe candidate
     joints without perturbing the sim.
     """
     arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    data = sim_env._scratch_data(arm)
+    data = mujoco.MjData(arm.mj_model)  # pyright: ignore[reportAttributeAccessIssue]
+    mujoco.mj_copyData(data, arm.mj_model, arm.mj_data)  # pyright: ignore[reportAttributeAccessIssue]
     data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
     mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
-    return env._leaf_pose(arm, data)
+    return data.site_xpos[arm.leaf_frame_id].copy(), data.site_xmat[arm.leaf_frame_id].reshape(3, 3).copy()
 
 
 def _check_fk_identity(sim_env) -> None:
@@ -94,7 +88,7 @@ def _check_ik_roundtrip(sim_env) -> None:
         jitter = np.random.uniform(-_JOINT_JITTER, _JOINT_JITTER, measured.size)
         target_pos, target_rot = _fk(sim_env, measured + jitter)
         pos, rot = _fk(sim_env, sim_env._ik(target_pos, target_rot))
-        ang = _ori_error(target_rot, rot)
+        ang = float(np.arccos(np.clip((np.trace(target_rot @ rot.T) - 1) / 2, -1, 1)))
         assert np.allclose(pos, target_pos, atol=_POS_ATOL), f'ik pos off by {pos - target_pos}'
         assert ang < _ORI_ATOL, f'ik orientation off by {ang} rad'
     print(f'  ik round-trip: OK ({_IK_SAMPLES} reachable targets, pos<{_POS_ATOL} m, ori<{_ORI_ATOL} rad)')
