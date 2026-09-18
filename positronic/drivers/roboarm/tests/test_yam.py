@@ -1051,3 +1051,32 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
     assert 'Publishing the arm state failed during shutdown' in caplog.text
+
+
+STATION_GRAVITY_COMP = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]
+
+
+def _connected_with(**kwargs) -> dict:
+    """Start a ``Robot`` built with ``kwargs`` and return what it asked its vendor factory for."""
+    seen = {}
+
+    def connect(channel, sim, gravity_comp_factor):
+        seen.update(channel=channel, sim=sim, gravity_comp_factor=gravity_comp_factor)
+        return FakeYam()
+
+    loop = yam.Robot('can0', connect=connect, **kwargs).run(StopFlag(), MockClock())
+    next(loop)  # the chain is opened before the driver yields for the first time
+    loop.close()
+    return seen
+
+
+def test_a_station_hands_its_gravity_compensation_to_the_chain():
+    """i2rt holds a joint against a gravity model of its own, and a joint that model reads short settles below
+    where it is sent. The factors a station measured are no use to it unless the driver passes them on."""
+    passed = _connected_with(gravity_comp_factor=STATION_GRAVITY_COMP)['gravity_comp_factor']
+    np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_a_station_that_measured_none_leaves_the_vendor_its_own():
+    """A station that names no factors keeps i2rt's own. A vector of ones would switch the compensation off."""
+    assert _connected_with()['gravity_comp_factor'] is None
