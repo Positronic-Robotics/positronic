@@ -2352,9 +2352,13 @@ def _run_episode(
     perform_task = EpisodeCaller(world, harness, wrapped)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    stated = {} if charge_inference_time is None else {'charge_inference_time': charge_inference_time}
+    task = (
+        Task(instruction_source='t', timeout_sec=None)
+        if charge_inference_time is None
+        else Task(instruction_source='t', timeout_sec=None, charge_inference_time=charge_inference_time)
+    )
     driver = ManualDriver([
-        (partial(perform_task, Task(instruction_source='t', timeout_sec=None, **stated)), 0.0),
+        (partial(perform_task, task), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
