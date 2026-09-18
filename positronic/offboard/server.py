@@ -9,6 +9,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -17,7 +18,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
-from positronic.policy.codec import Codec
+from positronic.policy.base import Obs
 from positronic.policy.spec import Model, ModelSource, Pipeline
 
 from . import grpc_wire, protocol, websocket_wire, wire
@@ -160,6 +161,8 @@ class _ServedTiming:
     in that answer.
     """
 
+    _current: ContextVar['_ServedTiming'] = ContextVar('served_timing')
+
     def __init__(self) -> None:
         self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
@@ -180,15 +183,23 @@ class _ServedTiming:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
-    def infer(self, model: Model, codec: Codec | None, obs: dict) -> Any:
-        """Measure the model separately from its surrounding data conversions."""
+    def infer(self, function: Callable[[Obs], Any], obs: Obs) -> Any:
+        """Bind this request's timing for the duration of the call."""
+        token = self._current.set(self)
+        try:
+            return function(obs)
+        finally:
+            self._current.reset(token)
 
-        def predict(encoded: dict) -> Any:
-            with self.phase(protocol.TIMING_MODEL):
-                return model(encoded)
+    @classmethod
+    def wrap_model(cls, model: Model) -> Callable[[Obs], Any]:
+        """Time the model alone within the request bound by ``infer``."""
 
-        infer = codec.wrap(predict) if codec is not None else predict
-        return infer(obs)
+        def predict(obs: Obs) -> Any:
+            with cls._current.get().phase(protocol.TIMING_MODEL):
+                return model(obs)
+
+        return predict
 
 
 class PolicyServer:
@@ -281,7 +292,7 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def _answer_observations(self, conn: wire.ServerConnection, model: Model, codec: Codec | None) -> None:
+    async def _answer_observations(self, conn: wire.ServerConnection, infer: Callable[[Obs], Any]) -> None:
         """Answer every observation the client sends, until it disconnects."""
         while True:
             message = await conn.receive()
@@ -296,7 +307,7 @@ class PolicyServer:
                     await self._infer_lock.acquire()
                 try:
                     with timing.phase(protocol.TIMING_INFER):
-                        actions = await asyncio.to_thread(timing.infer, model, codec, raw_obs)
+                        actions = await asyncio.to_thread(timing.infer, infer, raw_obs)
                 except asyncio.CancelledError:
                     # A cancelled await does not stop the worker, and the session close runs beside a live
                     # inference. The log gives a later wrong answer a cause.
@@ -343,9 +354,12 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            infer = _ServedTiming.wrap_model(model)
+            if pipeline.codec is not None:
+                infer = pipeline.codec.wrap(infer)
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
             try:
-                await self._answer_observations(conn, model, pipeline.codec)
+                await self._answer_observations(conn, infer)
             except wire.PeerDisconnected:
                 logger.info('Client disconnected')
 

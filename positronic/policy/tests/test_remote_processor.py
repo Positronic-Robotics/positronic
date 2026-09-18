@@ -152,6 +152,41 @@ def test_server_codec_wraps_model_and_errors_leave_connection_usable(served, tra
         session.close()
 
 
+def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, monkeypatch):
+    now_ns = 0
+    monkeypatch.setattr('positronic.offboard.server.time.time_ns', lambda: now_ns)
+
+    class TimedModel(FixedModel):
+        def __call__(self, obs: Obs):
+            nonlocal now_ns
+            now_ns += obs['duration_ns']
+            return super().__call__(obs)
+
+    class TimedCodec(Codec):
+        def encode(self, data):
+            nonlocal now_ns
+            now_ns += 3_000_000
+            return data
+
+        def decode(self, data):
+            nonlocal now_ns
+            now_ns += 5_000_000
+            return data
+
+    url, _, _ = served(model=TimedModel(), codec=TimedCodec())
+    session = InferenceClient.from_url(url).new_session()
+    try:
+        for model_ms in (2, 7):
+            assert session.infer({'duration_ns': model_ms * 1_000_000}) == [{'value': index} for index in range(4)]
+            assert session.served_timing[protocol.TIMING_MODEL] == model_ms
+            assert session.served_timing[protocol.TIMING_INFER] == model_ms + 8
+            with pytest.raises(RuntimeError, match='model failed'):
+                session.infer({'duration_ns': 11_000_000, 'fail': True})
+            assert session.served_timing == {}
+    finally:
+        session.close()
+
+
 def test_codec_work_is_inside_submit():
     caller_thread = threading.get_ident()
     threads = []
