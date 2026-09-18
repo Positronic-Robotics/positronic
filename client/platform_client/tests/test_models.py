@@ -450,7 +450,6 @@ def test_artifact_refs_never_come_without_a_result():
 
 
 def test_a_finished_run_links_the_log_its_policy_printed():
-    # The text is the submitter's own, so a run that scored delivers it as a failed one does.
     payload = {
         'id': '1f',
         'scores': {'primary': 0.75},
@@ -474,7 +473,6 @@ def test_a_failed_run_links_its_record_and_its_log_together():
 
 
 def test_a_run_whose_container_printed_nothing_links_no_log():
-    # A run refused before it started a container has no text to deliver. Absence is None.
     refs = ArtifactRefs(result=RESULT_URL)
     assert refs.policy_log is None
     assert 'policy_log' in refs.model_dump(mode='json')

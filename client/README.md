@@ -192,11 +192,11 @@ of them.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the
-records the run wrote: `result` is its outcome, `diagnostics` says why its policy failed, and
-`policy_log` is what the policy container printed. Every terminal run carries `policy_log`, because
-the text is the submitter's own. Each link is a signed URL, because the submitter holds no
-credential for the bucket. `artifacts` is absent on a run that wrote nothing, `diagnostics` on a run
-whose record was not written, and `policy_log` on a run whose container printed nothing.
+records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed.
+`policy_log` is what the policy container printed, and every terminal run carries it. Each link is
+a signed URL, because the submitter holds no credential for the bucket. `artifacts` is absent on a
+run that wrote nothing, `diagnostics` on a run whose record was not written, and `policy_log` on a
+run whose container printed nothing.
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package
