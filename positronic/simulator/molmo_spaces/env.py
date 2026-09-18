@@ -36,10 +36,8 @@ from typing import Any  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
-import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH  # pyright: ignore[reportMissingImports]
-
-# The type checker resolves a different ``server`` module outside the isolated interpreter.
-from server import EnvProtocol, EnvServer  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
+import protocol  # noqa: E402
+from server import EnvProtocol, EnvServer  # noqa: E402
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]

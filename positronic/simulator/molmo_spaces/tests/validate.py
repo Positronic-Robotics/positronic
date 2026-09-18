@@ -20,11 +20,11 @@ import os
 from pathlib import Path
 
 # env.py installs the CGL stub before loading MolmoSpaces; import it before any other molmo_spaces import.
-import env  # noqa: E402
-import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
-import mujoco  # noqa: E402
+import env
+import mapping
+import mujoco
 import numpy as np
-import protocol  # pyright: ignore[reportMissingImports] -- flat on PYTHONPATH beside ``server``, see ``launcher``
+import protocol
 
 _JOINT_JITTER = 0.1  # radians
 _IK_SAMPLES = 16

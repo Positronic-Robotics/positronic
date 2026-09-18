@@ -9,7 +9,7 @@ import numpy as np
 if __package__:
     from positronic.simulator.env_server import protocol
 else:
-    import protocol  # pyright: ignore[reportMissingImports] -- supplied on the isolated server's PYTHONPATH.
+    import protocol
 
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'

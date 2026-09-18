@@ -9,19 +9,20 @@ import hashlib
 from pathlib import Path
 
 # env.py installs the CGL stub before loading MolmoSpaces; import it before any other molmo_spaces import.
-import env  # noqa: E402
-import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
-import mujoco  # noqa: E402
-import numpy as np  # noqa: E402
-import parity_record  # noqa: E402 -- the record's field names, on PYTHONPATH beside this file
+import env
+import mapping
+import mujoco
+import numpy as np
+import parity_record
 
-from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+# MolmoSpaces is installed only in the server's isolated environment.
+from molmo_spaces.evaluation.benchmark_schema import (  # pyright: ignore[reportMissingImports]
     load_all_episodes,
 )
-from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.evaluation.eval_main import (  # pyright: ignore[reportMissingImports]
     determine_task_horizon,
 )
-from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.tasks.json_eval_task_sampler import (  # pyright: ignore[reportMissingImports]
     JsonEvalTaskSampler,
 )
 
