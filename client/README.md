@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.8.1"
+uv add "positronic-platform-client==0.8.2"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -189,6 +189,12 @@ as slugs. A non-2xx response raises `PlatformError`, which carries the parsed er
 for a program, `message` for a human, `reason_code` where a terminal caller fault has one, `quota`
 where a 429 names the rule that refused the request, and `evals` where the eval asked for is not one
 of them.
+
+`submissions.get` answers one model per status. A finished run reads its score off `scores` and its
+outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the
+records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed. Each
+link is a signed URL, because the submitter holds no credential for the bucket. `artifacts` is
+absent on a run that wrote nothing, and `diagnostics` on a run whose record was not written.
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package

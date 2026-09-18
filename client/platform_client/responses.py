@@ -63,9 +63,14 @@ class QuotaLimit(BaseModel):
 
 
 class ArtifactRefs(BaseModel):
-    """Where a finished submission's outputs are readable."""
+    """Where one submission's outputs are readable.
+
+    `diagnostics` is why a failed run's policy failed. It is absent on a run that succeeded, and on
+    a failed run whose record was not written.
+    """
 
     result: str
+    diagnostics: str | None = None
 
 
 class EpisodeCounts(BaseModel):
@@ -229,11 +234,16 @@ class RunningSubmissionView(_TaggedView):
 
 
 class ErroredSubmissionView(_TaggedView):
-    """Terminal failure. `reason_code` is the machine-readable taxonomy; `reason` is for humans."""
+    """Terminal failure. `reason_code` is the machine-readable taxonomy; `reason` is for humans.
+
+    `artifacts` reads the run's own records, which say more than a reason code can. It is absent
+    where the run wrote none.
+    """
 
     id: SubmissionId
     reason_code: Slugged[ReasonCode] | None = None
     reason: str | None = None
+    artifacts: ArtifactRefs | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.errored
 
 
