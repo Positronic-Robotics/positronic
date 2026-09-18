@@ -59,8 +59,8 @@ ROOT_MANIFEST = 'pyproject.toml'
 
 RELEASE_WORKFLOW = '.github/workflows/release.yaml'
 
-# The job that uploads the root distribution. It is the one that must WAIT for every member's
-# job, since an install of the root resolves the members it requires.
+# The job that uploads the root distribution. It waits for every member's job, since an install of
+# the root resolves the members it requires.
 ROOT_PUBLISH_JOB = 'publish-pypi'
 
 # The distributions the root must pin exactly, canonicalized so a manifest spelling the same name
@@ -169,8 +169,8 @@ def pinned_version(text: str, distribution: str) -> str | None:
 def changed_paths(base: str) -> list[str] | None:
     """Every path this change touches against `base` — working tree, index, and new files.
 
-    A brand-new module is what a `diff` alone misses, and it is exactly what a wire change looks
-    like: until it is staged, git reports it only as untracked.
+    A `diff` alone misses a brand-new module, which is the shape a wire change takes: until it is
+    staged, git reports it only as untracked.
     """
     tracked = run_git('diff', '--name-only', base, '--')
     if tracked is None:
