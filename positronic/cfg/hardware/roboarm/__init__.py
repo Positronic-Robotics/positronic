@@ -87,6 +87,7 @@ yam_move_tuning = cfn.Config(SettleTuning, **dataclasses.asdict(MOVE_SETTLE))
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
+    gravity_comp_factor=None,
 )
 def yam(
     channel: str,
@@ -95,6 +96,7 @@ def yam(
     park_after_idle_s: float | None,
     park_tuning: SettleTuning,
     move_tuning: SettleTuning,
+    gravity_comp_factor,
 ):
     from positronic.drivers.roboarm.yam import Robot
 
@@ -105,4 +107,5 @@ def yam(
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
+        gravity_comp_factor=gravity_comp_factor,
     )
