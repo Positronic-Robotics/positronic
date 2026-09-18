@@ -236,8 +236,7 @@ class RunningSubmissionView(_TaggedView):
 class ErroredSubmissionView(_TaggedView):
     """Terminal failure. `reason_code` is the machine-readable taxonomy; `reason` is for humans.
 
-    `artifacts` reads the run's own records, which say more than a reason code can. It is absent
-    where the run wrote none.
+    `artifacts` reads the run's own records. It is absent where the run wrote none.
     """
 
     id: SubmissionId
