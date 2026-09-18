@@ -158,13 +158,14 @@ class MolmoSpacesEnv(EnvProtocol):
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
         return {
-            protocol.FRAME_OBS: self._observe(env_obs),
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs)}],
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        (action,) = actions  # MolmoSpaces runs one scene per server, so this server serves one slot
         arm = mapping.wire_command_to_arm_action(
             action[protocol.ACTION_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
         )
@@ -176,9 +177,9 @@ class MolmoSpacesEnv(EnvProtocol):
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {
-            protocol.FRAME_OBS: self._observe(obs[0]),
-            protocol.FRAME_DONE: done,
-            protocol.FRAME_SUCCESS: success,
+            protocol.SLOTS: [
+                {protocol.FRAME_OBS: self._observe(obs[0]), protocol.FRAME_DONE: done, protocol.FRAME_SUCCESS: success}
+            ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 

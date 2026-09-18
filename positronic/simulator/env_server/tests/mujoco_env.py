@@ -125,14 +125,15 @@ class MujocoEnv(EnvProtocol):
         # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
         # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
         return {
-            protocol.FRAME_OBS: self._read_obs(),
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._read_obs()}],
             protocol.FRAME_META: {},
             protocol.FRAME_ROBOT_META: dict(robot_meta.data),
             protocol.FRAME_CONTROL_DT: self._timestep,
         }
 
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
+        (action,) = actions  # one scene, so one slot
         command = action[protocol.ACTION_COMMAND]
         match command[protocol.COMMAND_TYPE]:
             case protocol.HOLD:
@@ -152,8 +153,7 @@ class MujocoEnv(EnvProtocol):
         self._grip_emit.emit(float(action[protocol.ACTION_GRIP]))
         self._advance(self._timestep)
         return {
-            protocol.FRAME_OBS: self._read_obs(),
-            protocol.FRAME_DONE: False,
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._read_obs(), protocol.FRAME_DONE: False}],
             protocol.FRAME_CONTROL_DT: self._timestep,
         }
 
