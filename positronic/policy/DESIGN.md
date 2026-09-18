@@ -393,6 +393,10 @@ closes what it made itself. `close` never travels through the chain.
 
 ## Deferred, not to decide now
 
+- TODO: Restore automatic component timing from PR #748 for processor calls,
+  complete codec calls, and the harness's `policy.call`. Export component spans
+  to telemetry and server component durations in inference responses, without
+  requiring instrumentation in each component.
 - The shape of the robot description, and a server's ability to refuse one.
 - The exact wire protocol a server must support — the handshake that
   delivers the description, the inference calls, and the versioning that
