@@ -62,6 +62,14 @@ zed_x_top = zed.override(serial_number=48953814)
 zed_x_one_left = zed.override(serial_number=309745677, mono=True)
 zed_x_one_right = zed.override(serial_number=303714482, mono=True)
 
+# YAM station (yambox): the same rig as brunello, with the cameras this station carries.
+# Which wrist camera sits on which arm comes from what each one sees, against the overhead view: 309151692
+# looks at the half of the room that the arm on the left of the overhead frame reaches, and 301008060 at the
+# other half. TODO: confirm it by a move, which names the arm instead of the scene around it.
+yambox_zed_x_top = zed.override(serial_number=47582904)
+yambox_zed_x_one_left = zed.override(serial_number=309151692, mono=True)
+yambox_zed_x_one_right = zed.override(serial_number=301008060, mono=True)
+
 
 @cfn.config()
 def luxonis(**kwargs):
