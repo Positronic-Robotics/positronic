@@ -210,6 +210,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
     logger.info('Warming up policy endpoints')
+    # Reading remote metadata waits for model loading and warmup, keeping startup outside the timed sweep.
     policy.meta()
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
