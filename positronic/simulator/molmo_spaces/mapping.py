@@ -8,7 +8,6 @@ MuJoCo reads that need the live model (joint velocities, the end-effector world 
 only the framework-independent arithmetic lives here.
 """
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -86,12 +85,6 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
         raise ValueError(f'no benchmark matches {pinned}; available under {ASSETS_BENCHMARKS_DIR}/: {available}')
     return selected
 
-
-# MuJoCo's backend selector, and the backend this adoption asks for. MuJoCo validates the value against the
-# host platform and raises on one it does not offer there, so the default follows the platform: EGL is the
-# headless-GPU path on Linux, CGL the only context macOS has. A GPU-less Linux box overrides with osmesa.
-GL_BACKEND_ENV = 'MUJOCO_GL'
-GL_BACKEND_DEFAULT = 'cgl' if sys.platform == 'darwin' else 'egl'
 
 # The reset token: the benchmark under ``BenchmarkPath._fields``, the episode within it, and the seed overriding
 # the episode spec's own.

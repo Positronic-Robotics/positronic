@@ -15,6 +15,7 @@ GPU-less Linux box overrides with ``MUJOCO_GL=osmesa`` for CPU software renderin
 import fcntl
 import os
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
@@ -82,6 +83,9 @@ def ensure_molmo_venv() -> Path:
     return venv / 'bin' / 'python'
 
 
+_GL_BACKEND_ENV = 'MUJOCO_GL'
+
+
 def molmo_subprocess_env() -> dict[str, str]:
     """The environment a molmo-venv script runs under: the positronic-free ``env_server``/``mapping`` on
     PYTHONPATH and a GL backend. GPU OpenGL by default; a GPU-less box exports MUJOCO_GL=osmesa, or relies on
@@ -89,7 +93,7 @@ def molmo_subprocess_env() -> dict[str, str]:
     return {
         **os.environ,
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
-        mapping.GL_BACKEND_ENV: os.environ.get(mapping.GL_BACKEND_ENV, mapping.GL_BACKEND_DEFAULT),
+        _GL_BACKEND_ENV: os.environ.get(_GL_BACKEND_ENV, 'cgl' if sys.platform == 'darwin' else 'egl'),
     }
 
 

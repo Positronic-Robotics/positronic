@@ -27,8 +27,7 @@ import argparse
 import hashlib
 from pathlib import Path
 
-# env.py (imported flat off PYTHONPATH, like mapping/server) sets MUJOCO_GL and installs the CGL stub at import,
-# GL-safely pulling in the molmo_spaces stack — so import it before any other molmo_spaces import.
+# env.py installs the CGL stub before loading MolmoSpaces; import it before any other molmo_spaces import.
 import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402

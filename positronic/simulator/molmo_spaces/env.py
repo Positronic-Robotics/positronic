@@ -19,14 +19,6 @@ import os
 import sys
 import types
 
-import mapping  # positronic-free wire mappings, on PYTHONPATH; numpy only, so it pulls in no GL
-
-# GL backend must be selected before any mujoco/molmo_spaces import.
-# !!!! This module should not care about convinience of tests, tests should take care of this
-# !!!! This leaks this knowledge in the env, which is not its problem. Ideally we should remove it
-os.environ.setdefault(mapping.GL_BACKEND_ENV, mapping.GL_BACKEND_DEFAULT)
-
-
 # MolmoSpaces' renderer module, which the stub below stands in for on Linux.
 _CGL_PACKAGE = 'mujoco.cgl'
 _CGL_MODULE = f'{_CGL_PACKAGE}.cgl'
@@ -55,6 +47,7 @@ _install_cgl_noop_stub()
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH  # pyright: ignore[reportMissingImports]
