@@ -1450,22 +1450,6 @@ class _HeldInferenceSession(_FakeInferenceSession):
         return super().infer(obs)
 
 
-class _HeldPolicy(ServedPolicy):
-    """A served policy carrying the function the test ends, so a trial cannot wait on a session it is not
-    running."""
-
-    def __init__(self, action: list[dict[str, Any]]) -> None:
-        self._held = _HeldInferenceSession(action)
-        super().__init__(self._held)
-
-    @property
-    def entered(self) -> threading.Event:
-        return self._held.entered
-
-    def release(self) -> None:
-        self._held.release()
-
-
 class _FrameWatchingSession(_HeldInferenceSession):
     """Reads its camera frame at both ends of a function the test releases, so a rewrite underneath it shows
     up as a difference."""
@@ -2372,6 +2356,22 @@ class _TimedRecorder(pimm.SignalEmitter):
 
     def emit(self, data, ts: int = -1):
         self.emitted.append((self._clock.now(), data))
+
+
+class _HeldPolicy(ServedPolicy):
+    """A served policy carrying the function the test ends, so a trial cannot wait on a session it is not
+    running."""
+
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        self._held = _HeldInferenceSession(action)
+        super().__init__(self._held)
+
+    @property
+    def entered(self) -> threading.Event:
+        return self._held.entered
+
+    def release(self) -> None:
+        self._held.release()
 
 
 def _run_episode(
