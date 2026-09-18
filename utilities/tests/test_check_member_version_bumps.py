@@ -1,4 +1,5 @@
-"""The gate that keeps the client's code, its version, and the root's pin on it in step."""
+"""The gate that keeps every workspace member's code, its version, the root's pin on it, and
+the release that publishes it in step."""
 
 import pytest
 from packaging.utils import canonicalize_name
@@ -159,3 +160,60 @@ def test_a_member_spelled_another_way_is_still_held_to_its_pin():
 
 def test_a_workspace_declaring_no_members_reads_as_none():
     assert gate.workspace_members('[project]\nname = "positronic"\n') == []
+
+
+RELEASE = """
+jobs:
+  publish-client-pypi:
+    steps:
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: client/dist
+  publish-vocabulary-pypi:
+    steps:
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: vocabulary/dist
+  publish-pypi:
+    needs: [publish-client-pypi, publish-vocabulary-pypi]
+    steps:
+      - uses: pypa/gh-action-pypi-publish@release/v1
+"""
+
+
+def test_a_member_nothing_uploads_is_a_failure():
+    """The gate demands a bump for every member the root declares, so a member with no publish job
+    is bumped forever and published never."""
+    failures = gate.release_failures(['client', 'vocabulary', 'widgets'], RELEASE)
+
+    assert len(failures) == 1
+    assert 'uploads no widgets/dist' in failures[0]
+
+
+def test_a_member_the_root_does_not_wait_for_is_a_failure():
+    """An install of the root resolves the members it requires, so the root's upload must follow
+    theirs."""
+    release = RELEASE.replace('needs: [publish-client-pypi, publish-vocabulary-pypi]', 'needs: [publish-client-pypi]')
+
+    failures = gate.release_failures(['client', 'vocabulary'], release)
+
+    assert len(failures) == 1
+    assert 'does not need `publish-vocabulary-pypi`' in failures[0]
+
+
+def test_a_member_published_and_waited_for_passes():
+    """The boundary the two failures above are measured from: neither fires on the shape the
+    workflow already has, and the root's own upload names no member, so it is not read as one."""
+    assert gate.release_failures(['client', 'vocabulary'], RELEASE) == []
+    assert gate.publishing_jobs(gate.release_jobs(RELEASE)) == {
+        'client': 'publish-client-pypi',
+        'vocabulary': 'publish-vocabulary-pypi',
+    }
+
+
+def test_this_repository_publishes_every_member_it_gates():
+    """The one that binds: the workflow this repository ships covers the members it declares."""
+    root = (gate.REPO_ROOT / gate.ROOT_MANIFEST).read_text()
+    workflow = (gate.REPO_ROOT / gate.RELEASE_WORKFLOW).read_text()
+
+    assert gate.release_failures(gate.workspace_members(root), workflow) == []

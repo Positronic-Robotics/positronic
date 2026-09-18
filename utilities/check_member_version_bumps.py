@@ -1,4 +1,5 @@
-"""Keep each published workspace member, its version, and the root's pin on it in step.
+"""Keep each published workspace member, its version, the root's pin on it, and the release that
+publishes it in step.
 
 The release workflow publishes every member before the root, with `skip-existing`. That flag is what
 makes republishing an unchanged member a no-op rather than a failed release, and it is also the
@@ -45,6 +46,7 @@ import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
+import yaml
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
@@ -54,6 +56,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE_REV_ENV = 'RATCHET_BASE'
 
 ROOT_MANIFEST = 'pyproject.toml'
+
+RELEASE_WORKFLOW = '.github/workflows/release.yaml'
+
+# The job that uploads the root distribution. It is the one that must WAIT for every member's
+# job, since an install of the root resolves the members it requires.
+ROOT_PUBLISH_JOB = 'publish-pypi'
 
 # The distributions the root must pin exactly, canonicalized so a manifest spelling the same name
 # another way is still held to it. A member the root depends on by a FLOOR is deliberate and is not
@@ -292,6 +300,70 @@ def check_member(base: str, member: Member, paths: list[str] | None) -> list[str
     return failures + bump_failures(base, member, edited) if edited else failures
 
 
+def release_jobs(text: str) -> dict[str, dict]:
+    """The release workflow's jobs, by name. A workflow that declares none publishes nothing, which
+    is a corrupt guarded file rather than an absence, so it raises."""
+    try:
+        workflow = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise SystemExit(f'ERROR - {RELEASE_WORKFLOW} is not readable YAML: {exc}') from exc
+    jobs = workflow.get('jobs') if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict):
+        raise SystemExit(f'ERROR - {RELEASE_WORKFLOW} declares no `jobs`, so the gate cannot judge it.')
+    return {name: job for name, job in jobs.items() if isinstance(job, dict)}
+
+
+def publishing_jobs(jobs: dict[str, dict]) -> dict[str, str]:
+    """Each member directory the release uploads, and the job that uploads it.
+
+    A member's job names `packages-dir: <member>/dist`; the root's own upload names no
+    `packages-dir` at all, so it is never read as a member's.
+    """
+    published: dict[str, str] = {}
+    for name, job in jobs.items():
+        for step in job.get('steps') or []:
+            options = step.get('with') if isinstance(step, dict) else None
+            directory = options.get('packages-dir') if isinstance(options, dict) else None
+            if isinstance(directory, str) and directory.endswith('/dist'):
+                published[directory.removesuffix('/dist')] = name
+    return published
+
+
+def job_needs(job: dict) -> list[str]:
+    """The jobs this one waits for. GitHub takes one name or a list, so both read the same here."""
+    needs = job.get('needs') or []
+    return [needs] if isinstance(needs, str) else [n for n in needs if isinstance(n, str)]
+
+
+def release_failures(members: list[str], text: str) -> list[str]:
+    """Why the release would not put a member on the index before the root that requires it.
+
+    The version half above demands a bump for every member the root declares. A member nothing
+    uploads is then bumped forever and published never, and one the root does not wait for can
+    reach the index after the release that requires it.
+    """
+    jobs = release_jobs(text)
+    root = jobs.get(ROOT_PUBLISH_JOB)
+    if root is None:
+        raise SystemExit(f'ERROR - {RELEASE_WORKFLOW} declares no `{ROOT_PUBLISH_JOB}`, so nothing publishes the root.')
+    published, needs = publishing_jobs(jobs), job_needs(root)
+    failures = []
+    for member in members:
+        job = published.get(member)
+        if job is None:
+            failures.append(
+                f'{RELEASE_WORKFLOW} uploads no {member}/dist, so a change under {member}/ is gated on a '
+                f'version bump that no release publishes. Add a job that publishes it, and name that job '
+                f'in `{ROOT_PUBLISH_JOB}`.'
+            )
+        elif job not in needs:
+            failures.append(
+                f'`{ROOT_PUBLISH_JOB}` does not need `{job}`, so the root can reach the index before the '
+                f'{member} version it requires. Add `{job}` to its `needs`.'
+            )
+    return failures
+
+
 def check(base: str) -> list[str]:
     """Every way this change leaves a published member out of step, over every member."""
     members = workspace_members((REPO_ROOT / ROOT_MANIFEST).read_text())
@@ -300,7 +372,8 @@ def check(base: str) -> list[str]:
     paths = changed_paths(base)
     if paths is None:
         print(f'NOTE - could not diff against {base}; skipping the version-bump half of the gate.', file=sys.stderr)
-    return [failure for name in members for failure in check_member(base, read_member(name), paths)]
+    failures = [failure for name in members for failure in check_member(base, read_member(name), paths)]
+    return failures + release_failures(members, (REPO_ROOT / RELEASE_WORKFLOW).read_text())
 
 
 def main(argv: list[str] | None = None) -> int:
