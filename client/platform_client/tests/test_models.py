@@ -66,6 +66,9 @@ USER = UserId(0xA0)
 
 SCORES = Scores(primary=0.75)
 
+RESULT_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/result.json?X-Amz-Signature=beef'
+DIAGNOSTICS_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/diagnostics.json?X-Amz-Signature=cafe'
+
 DAILY = QuotaLimit(
     key=QUOTA_SUBMISSIONS_DAY,
     meter='submissions',
@@ -132,6 +135,7 @@ MODELS: list[BaseModel] = [
     DAILY,
     CREDITS,
     ArtifactRefs(result='s3://pp-artifacts/users/a0/submissions/1f/result.json'),
+    ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     RegisterRequest(credential='token', alias='demo', rotate=True),
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
@@ -165,6 +169,12 @@ MODELS: list[BaseModel] = [
     PendingSubmissionView(id=SUB, alias='demo', received_at=AT, queued_at=AT, queue_position=1),
     RunningSubmissionView(id=SUB, running_since=AT, stage='evaluating', stage_detail='task 2/10'),
     ErroredSubmissionView(id=SUB, reason_code=ReasonCode.policy_oom, reason='policy ran out of memory'),
+    ErroredSubmissionView(
+        id=SUB,
+        reason_code=ReasonCode.policy_oom,
+        reason='policy ran out of memory',
+        artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
+    ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
@@ -339,12 +349,16 @@ def test_an_empty_transaction_key_is_a_client_bug_not_an_absent_one():
         ({'id': '1f', 'running_since': AT, 'stage': 'evaluating', 'status': 'running'}, RunningSubmissionView),
         ({'id': '1f', 'reason_code': 'policy_oom', 'reason': 'oom', 'status': 'errored'}, ErroredSubmissionView),
         (
+            {'id': '1f', 'reason_code': 'policy_oom', 'artifacts': {'result': RESULT_URL}, 'status': 'errored'},
+            ErroredSubmissionView,
+        ),
+        (
             {'id': '1f', 'scores': {}, 'artifacts': {'result': 's3://b/result.json'}, 'status': 'finished'},
             FinishedSubmissionView,
         ),
         ({'id': '1f', 'cancelled_at': AT, 'status': 'cancelled'}, CancelledSubmissionView),
     ],
-    ids=['pending', 'running', 'errored', 'finished', 'cancelled'],
+    ids=['pending', 'running', 'errored', 'errored-with-artifacts', 'finished', 'cancelled'],
 )
 def test_the_status_slug_selects_the_view_variant(payload: dict, expected: type[BaseModel]):
     assert type(SUBMISSION_VIEWS.validate_python(payload)) is expected
@@ -394,6 +408,43 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
     assert {get_args(variant)[1].tag for variant in variants} == {
         slug_of(status) for status in SubmissionStatus if status not in internal
     }
+
+
+def test_a_failed_run_carries_a_link_to_each_of_its_records():
+    payload = {
+        'id': '1f',
+        'reason_code': 'policy_setup_crash',
+        'reason': 'the container exited',
+        'artifacts': {'result': RESULT_URL, 'diagnostics': DIAGNOSTICS_URL},
+        'status': 'errored',
+    }
+    view = SUBMISSION_VIEWS.validate_python(payload)
+    assert isinstance(view, ErroredSubmissionView)
+    assert view.artifacts is not None
+    assert view.artifacts.result == RESULT_URL
+    assert view.artifacts.diagnostics == DIAGNOSTICS_URL
+
+
+def test_a_failed_run_that_wrote_no_record_carries_no_link():
+    # A plan the lab rig never ran wrote nothing to link to. Absence is None.
+    view = ErroredSubmissionView(id=SUB, reason='the rig is not ready')
+    assert view.artifacts is None
+    assert 'artifacts' in view.model_dump(mode='json')
+
+
+def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result():
+    # The two records are written apart, and the second write may be refused, so the pair is not
+    # all-or-nothing.
+    view = ErroredSubmissionView(
+        id=SUB, reason_code=ReasonCode.internal_error, artifacts=ArtifactRefs(result=RESULT_URL)
+    )
+    assert view.artifacts is not None
+    assert view.artifacts.diagnostics is None
+
+
+def test_artifact_refs_never_come_without_a_result():
+    with pytest.raises(ValidationError):
+        ArtifactRefs.model_validate({'diagnostics': DIAGNOSTICS_URL})
 
 
 def test_a_minted_outcome_without_its_key_is_refused():
