@@ -10,17 +10,18 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 from pimm.logging import init_logging
+from positronic import keys
+from positronic.cfg import codecs
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.spec import Model, ModelSource, Pipeline
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
-from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
-from positronic.vendors.lerobot_0_3_3.policy import LerobotPolicy, _detect_device, warm_observation
+from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, _detect_device, warm_observation
 
 register_all()
 
@@ -61,7 +62,7 @@ class LerobotSource(ModelSource):
     def resolve(self, model_id: str | None) -> str:
         return resolve_checkpoint(self._checkpoints_dir, self._checkpoint, model_id)
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         checkpoint_path = f'{self._checkpoints_dir}/{model_id}/{PRETRAINED_MODEL_DIR}'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         local = run_with_progress(
@@ -69,32 +70,44 @@ class LerobotSource(ModelSource):
         )
         backbone = self._policy_factory(str(local))
         meta = {policy_keys.TYPE: self._model_type, policy_keys.CHECKPOINT_PATH: checkpoint_path}
-        policy = LerobotPolicy(backbone, self._device, extra_meta=meta)
-        warmup(policy, warm_observation(backbone.config), on_progress)
-        return policy
+        model = LerobotModel(backbone, self._device, extra_meta=meta)
+        warmup(model, warm_observation(backbone.config), on_progress)
+        return model
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'device': self._device, policy_keys.EXPERIMENT_NAME: self._experiment_name}
 
 
 lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
+ee_codec = codecs.compose_data.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
 
 
 # No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
 # so none has a transform to declare.
-@cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipeline(codec: Codec, source: ModelSource):
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
+@cfn.config(codec=ee_codec, source=lerobot_source, fps=15.0, horizon_sec=1.0)
+def pipeline(codec: Codec, source: ModelSource, fps: float, horizon_sec: float | None):
+    return Pipeline(
+        source=source,
+        local=Sequential(StopOnFault(), ChunkedSchedule(fps=fps, horizon_sec=horizon_sec)),
+        local_codec=RestrictImageSize(224, 224),
+        codec=codec,
+    )
 
 
 ee = pipeline
-joints = pipeline.override(codec=lerobot_codecs.joints)
-ee_traj = pipeline.override(codec=lerobot_codecs.ee_traj)
-joints_traj = pipeline.override(codec=lerobot_codecs.joints_traj)
-joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
-joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+joints = pipeline.override(codec=ee_codec.override(obs=codecs.joints_obs))
+ee_traj = pipeline.override(codec=ee_codec.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,)))
+joints_traj = pipeline.override(
+    codec=ee_codec.override(
+        obs=codecs.joints_obs,
+        action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
+        binarize_grip=(keys.GRIP,),
+    )
+)
+joints_ik = pipeline.override(codec=ee_codec.override(obs=codecs.joints_obs, action=codecs.ik_joints_action))
+joints_ik_sim = joints_ik.override(**{'codec.action.solver': 'lm'})
 # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
-ee_flip = pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True))
+ee_flip = pipeline.override(codec=ee_codec.override(flip_grip=True))
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
@@ -110,7 +123,7 @@ COMMANDS = {
     'ee_flip': serve.override(pipeline=ee_flip),
     'phail': serve.override(
         pipeline=ee.override(
-            codec=lerobot_codecs.phail_v1,
+            codec=ee_codec.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action)),
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'},
         ),
         recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',

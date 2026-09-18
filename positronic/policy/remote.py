@@ -1,10 +1,9 @@
 import collections.abc as cabc
-import logging
 import time
+from functools import partial
 from typing import Any
 
 import numpy as np
-import pos3
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
@@ -13,14 +12,9 @@ from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Answer, Layer, Policy, Runtime, Session
-from .recording import Recorder
+from .base import Policy, PolicyRun, Processor, Runtime
+from .codec import Codec
 from .spec import from_spec
-
-logger = logging.getLogger(__name__)
-
-# The name the wire round trip is served under. A policy whose sessions are ``RemoteSession``s declares it.
-INFER = 'infer'
 
 
 def _prepare_value(value: Any) -> Any:
@@ -61,108 +55,11 @@ def round_trip(
         telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns(), **served)
 
 
-class RemoteSession(Session):
-    """Per-episode session that forwards observations to a remote inference server.
-
-    One round trip is in flight at a time. The call that starts it answers ``None``, and so does every
-    call until the round trip comes back. The call that finds it answered returns its trajectory, or drops
-    that trajectory after a ``cancel``.
-
-    ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
-    """
-
-    def __init__(self, session: InferenceSession, rt: Runtime, compress_images: bool = False):
-        self._session = session
-        self._rt = rt
-        self._compress_images = compress_images
-        self._answer: Answer | None = None
-        self._cancelled = False
-
-    def __call__(self, obs: cabc.Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-        """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
-
-        A server answer of one action becomes a 1-element list, which is the form ``Session.__call__``
-        returns.
-        """
-        if self._answer is None:
-            self._answer = self._rt.fns[INFER](self._session, obs, self._compress_images)
-            return None
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # The answer and the flag are cleared before the read, because ``result`` raises what the round
-        # trip raised. A cancel then ends with the answer it was made against, and never drops the next
-        # chunk.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        if cancelled:
-            return None
-        return [result] if isinstance(result, dict) else result
-
-    def cancel(self):
-        # The cancel says the world the chunk applies to has gone. The session still reads the round trip
-        # for its failure, and drops the chunk that comes with it.
-        self._cancelled = self._answer is not None
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._session.metadata})
-
-    def close(self):
-        in_flight = self._answer is not None and not self._answer.done()
-        logger.info('RemoteSession.close: answer_in_flight=%s', in_flight)
-        assert not in_flight, (
-            'close the runtime serving this session first: the round trip in flight uses the connection this closes'
-        )
-        self._session.close()
-        logger.info('RemoteSession.close: session closed')
-
-
-class _Endpoint(Policy):
-    """The wire connection to one inference server: sessions forward observations under the border's settings.
-
-    ``InferenceClient`` reads the server, the model, and the session params off the URL.
-    """
-
-    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
-        self._client = InferenceClient.from_url(url, headers=headers, infer_timeout=infer_timeout)
-        # Filled on first contact, through a session opened for it alone.
-        self._server_meta: dict[str, Any] | None = None
-
-    def server_meta(self) -> dict[str, Any]:
-        if self._server_meta is None:
-            session = self._client.new_session()
-            try:
-                self._server_meta = dict(session.metadata)
-            finally:
-                session.close()
-        return self._server_meta
-
-    def new_session(self, context=None, rt=None) -> RemoteSession:
-        if rt is None:
-            raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
-        compress = bool(self.server_meta().get(offboard_keys.COMPRESS_IMAGES))
-        session = self._client.new_session()
-        return RemoteSession(session, rt, compress_images=compress)
-
-    @property
-    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
-        return {INFER: round_trip}
-
-
 class RemotePolicy(Policy):
-    """Policy running against a remote inference server, owning the stack in front of the connection.
+    """Run the server-declared client stack around an ordinary remote inference call.
 
-    One URL names the server, the model, and the session params — see ``InferenceClient`` for the forms
-    it takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
-    around should not.
-
-    The server's ``ready`` handshake declares the local half of its policy pipeline (the
-    ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
-    ``remote`` marker. The declared layers are built here, once, and every session runs through
-    them; a handshake that declares no stack is an error.
-
-    ``recording_dir`` taps the raw and wire boundaries around the stack.
+    Each episode owns its connection. Submitted calls finish before the harness closes the generator
+    and its connection. Codecs wrap the remote callable, so their work is included in submission time.
     """
 
     def __init__(
@@ -173,40 +70,38 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout)
-        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
-        self._stacked: Policy | None = None
+        # TODO: Integrate boundary recording with processor runs and explicit clocks.
+        if recording_dir is not None:
+            raise NotImplementedError('Processor boundary recording is not implemented')
+        self._client = InferenceClient.from_url(url, headers=headers, infer_timeout=infer_timeout)
+        self._server_meta: dict[str, Any] | None = None
 
-    def _resolve_stack(self) -> Layer:
-        meta = self._endpoint.server_meta()
-        version = meta.get(offboard_keys.POSITRONIC_VERSION, 'unknown')
-        declared = meta.get(offboard_keys.LOCAL_STACK)
+    def meta(self) -> dict[str, Any]:
+        if self._server_meta is None:
+            session = self._client.new_session()
+            try:
+                self._server_meta = dict(session.metadata)
+            finally:
+                session.close()
+        return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta})
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        session = self._client.new_session()
         try:
-            stack = from_spec(declared) if declared is not None else None
-        except Exception as e:
-            raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None:
-            raise ValueError(
-                f'Server declares no rig-side stack (server positronic {version}); the rig runs what the '
-                f'handshake declares and nothing else, so serve it from a pipeline that declares one'
-            )
-        return stack
-
-    def _policy(self) -> Policy:
-        if self._stacked is None:
-            stack = self._resolve_stack()
-            if self._recording_dir is not None:
-                rec = Recorder(self._recording_dir)
-                stack = rec.tap('raw') | stack | rec.tap('server')
-            self._stacked = stack.wrap(self._endpoint)
-        return self._stacked
-
-    def new_session(self, context=None, rt=None) -> Session:
-        return self._policy().new_session(context, rt)
-
-    @property
-    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
-        return self._policy().functions
-
-    def close(self):
-        self._endpoint.close()
+            meta = session.metadata
+            self._server_meta = dict(meta)
+            declared = meta.get(offboard_keys.LOCAL_STACK)
+            if declared is None:
+                raise ValueError('Server declares no client processor stack')
+            stack = from_spec(declared)
+            if not isinstance(stack, Processor):
+                raise ValueError('The declared client stack must be a processor')
+            infer = partial(round_trip, session, compress_images=bool(meta.get(offboard_keys.COMPRESS_IMAGES)))
+            if (codec_spec := meta.get(offboard_keys.LOCAL_CODEC)) is not None:
+                codec = from_spec(codec_spec)
+                if not isinstance(codec, Codec):
+                    raise ValueError('The declared client codec must be a codec')
+                infer = codec.wrap(infer)
+            yield from stack.run(runtime, infer)
+        finally:
+            session.close()

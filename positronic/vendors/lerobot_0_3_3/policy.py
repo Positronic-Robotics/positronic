@@ -1,5 +1,3 @@
-from collections.abc import Callable, Mapping
-from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -12,13 +10,10 @@ from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.cfg import codecs
-from positronic.policy import Codec, Policy, Session
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Runtime
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.base import Obs
 from positronic.policy.observation import TASK_FIELD
-from positronic.policy.spec import PolicySource, inline
+from positronic.policy.spec import Model
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 
@@ -61,7 +56,7 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     return obs
 
 
-def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
+def _infer(policy: PreTrainedPolicy, device: str, obs: Obs) -> list[dict[str, Any]]:
     """One model call: an observation in, an action chunk out."""
     obs_int = {}
     for key, val in obs.items():
@@ -80,62 +75,27 @@ def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[d
     return [{'action': a} for a in action]
 
 
-class LerobotPolicy(Policy):
-    _INFER = 'infer'
-
-    class _Session(Session):
-        """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
-
-        def __init__(self, rt: Runtime, meta: dict[str, Any]):
-            self._rt = rt
-            self._meta = meta
-            self._answer: Answer | None = None
-            self._cancelled = False
-
-        def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-            if self._answer is None:
-                self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
-                return None
-            if not self._answer.done():
-                return None
-            answer, cancelled = self._answer, self._cancelled
-            # The answer and the flag are cleared before the read, because ``result`` raises what the model
-            # call raised. A cancel then ends with the answer it was made against, and never drops the next
-            # chunk.
-            self._answer, self._cancelled = None, False
-            result = answer.result()
-            return None if cancelled else result
-
-        def cancel(self):
-            # The cancel says the world the chunk applies to has gone. The session still reads the model call
-            # for its failure, and drops the chunk that comes with it.
-            self._cancelled = self._answer is not None
-
-        @property
-        def meta(self) -> dict[str, Any]:
-            return self._meta
+class LerobotModel(Model):
+    """A loaded LeRobot model accepting encoded observations and returning action chunks."""
 
     def __init__(self, policy: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
-    def new_session(self, context=None, rt=None):
-        if rt is None:
-            raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
+    def __call__(self, obs: Obs) -> list[dict[str, Any]]:
+        return _infer(self._policy, self._device, obs)
+
+    def reset(self) -> None:
         self._policy.reset()
-        return LerobotPolicy._Session(rt, self._meta)
 
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {self._INFER: partial(_infer, self._policy, self._device)}
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
-    def close(self):
-        if self._policy is not None:
-            del self._policy
-            self._policy = None
-            if self._device.startswith('cuda'):
-                torch.cuda.empty_cache()
+    def close(self) -> None:
+        del self._policy
+        if self._device.startswith('cuda'):
+            torch.cuda.empty_cache()
 
 
 @cfn.config(checkpoint=None)
@@ -149,14 +109,9 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     if n_action_steps is not None:
         policy.config.n_action_steps = n_action_steps
 
-    return LerobotPolicy(
+    return LerobotModel(
         policy, device, extra_meta={policy_keys.TYPE: 'act', policy_keys.CHECKPOINT_PATH: checkpoint_dir}
     )
 
 
-@cfn.config(
-    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
-)
-def act_absolute(base: Policy, codec: Codec):
-    """ACT with the absolute-position codec, composed in-process."""
-    return inline(StopOnFault() | ChunkedSchedule() | codec | PolicySource(base))
+# TODO: Bind local model ownership to processor runs before adding an in-process ACT policy config.

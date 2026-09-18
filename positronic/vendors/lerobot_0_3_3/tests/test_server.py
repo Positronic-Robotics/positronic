@@ -6,11 +6,11 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard import websocket_wire, wire
 from positronic.offboard.protocol import deserialise
-from positronic.policy.executor import blocking
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.spec import remote
+from positronic.policy.spec import Pipeline
 
 pytest.importorskip('torch')
+pytest.importorskip('lerobot')
 
 from lerobot.configs.types import FeatureType, PolicyFeature  # noqa: E402
 from lerobot.policies.act.configuration_act import ACTConfig  # noqa: E402
@@ -70,16 +70,16 @@ def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
         policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
         checkpoints_dir='s3://bucket/exp',
     )
-    session = blocking(source.load('42')).new_session()
-    assert session.meta == {'type': 'act', 'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model'}
-    session.close()
+    model = source.load('42')
+    assert model.meta() == {'type': 'act', 'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model'}
+    model.close()
 
 
 def _make_server(checkpoint: str | None) -> PolicyServer:
     source = lerobot_server.LerobotSource(
         policy_factory=lambda _checkpoint: MagicMock(), checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint
     )
-    return PolicyServer(ChunkedSchedule() | remote | source)
+    return PolicyServer(Pipeline(source=source, local=ChunkedSchedule(fps=15)))
 
 
 @pytest.mark.asyncio
@@ -90,13 +90,13 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     requested = {}
 
-    async def fake_get_policy(checkpoint_id: str, websocket=None):
+    async def fake_get_model(checkpoint_id: str, conn=None):
         requested['checkpoint_id'] = checkpoint_id
-        policy = MagicMock()
-        policy.new_session.return_value.meta = {}
-        return policy
+        model = MagicMock()
+        model.meta.return_value = {}
+        return model
 
-    server._manager.get_policy = fake_get_policy
+    server._manager.get_model = fake_get_model
     server._manager.release_session = AsyncMock()
 
     await server._startup()
@@ -115,14 +115,14 @@ async def test_lerobot_server_rejects_missing_configured_checkpoint_at_startup(m
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41'])
 
     server = _make_server(checkpoint='42')
-    server._manager.get_policy = AsyncMock()
+    server._manager.get_model = AsyncMock()
 
     with pytest.raises(ValueError) as excinfo:
         await server._startup()
 
     assert 'Configured checkpoint not found: 42' in str(excinfo.value)
     assert "Available: ['41']" in str(excinfo.value)
-    server._manager.get_policy.assert_not_called()
+    server._manager.get_model.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -132,11 +132,11 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.get_latest_checkpoint', lambda _path: '41')
 
     server = _make_server(checkpoint=None)
-    server._manager.get_policy = AsyncMock(return_value=MagicMock())
+    server._manager.get_model = AsyncMock(return_value=MagicMock())
     server._manager.release_session = AsyncMock()
 
     await server._startup()
-    server._manager.get_policy.reset_mock()
+    server._manager.get_model.reset_mock()
 
     websocket = _DummyWebSocket()
     await server._serve_session(websocket.as_connection(), '42')
@@ -147,7 +147,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     assert error_response['status'] == 'error'
     assert 'Checkpoint not found: 42' in error_response['error']
     assert "Available: ['41']" in error_response['error']
-    server._manager.get_policy.assert_not_called()
+    server._manager.get_model.assert_not_called()
     server._manager.release_session.assert_not_called()
 
 
@@ -155,6 +155,6 @@ def test_warmup_observation_matches_the_features_the_policy_declares():
     obs = warm_observation(_act_config())
 
     assert obs[STATE_FEATURE].shape == (8,)
-    # Declared channels-first, handed over channels-last the way a session takes it.
+    # The model callable accepts channels-last images.
     assert obs[CAMERA_FEATURE].shape == (224, 320, 3)
     assert obs[TASK_FIELD] == ''

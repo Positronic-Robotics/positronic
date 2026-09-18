@@ -4,7 +4,10 @@ This package implements the protocol and utilities for offboard policy inference
 
 ## Protocol v1
 
-The protocol connects any hardware to any model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement it, so a single `.remote` policy client works across all vendors.
+The protocol connects clients to callable models. ACT uses a server-declared processor stack on the
+client, with codecs configured separately on either side of the connection.
+
+TODO: Migrate the remaining vendor configurations to callable models and explicit `Pipeline` arguments.
 
 ### Wires
 
@@ -90,7 +93,7 @@ so `s3://bucket/ckpt-1` is requested as `s3%3A//bucket/ckpt-1` and arrives as th
 Query params on the session URL tune the served policy pipeline for that one session. Each key is a dotted path into the server's pipeline config — any argument at any depth — applied as a config override before the session is built:
 
 ```
-ws://localhost:8000/api/v1/session?codec.fps=10&local.pad_start=false
+ws://localhost:8000/api/v1/session?fps=10&horizon_sec=1.0
 ```
 
 Rules:
@@ -98,14 +101,14 @@ Rules:
 - **Values are JSON literals.** The server parses each value as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. The query travels verbatim — `InferenceClient` forwards whatever the URL already says — so a caller who means the string `true` rather than the boolean writes the quoted literal itself, percent-encoded: `?tag=%22true%22`.
 - **Imports are rejected.** Overrides are applied with `Config.override_data`, so a value that configuronic would read as an import — `@module.path.Object`, or a leading-dot path relative to the argument's current value — is refused at any nesting depth, and the error names the offending key. Params can tune the pipeline's arguments, never swap its components. A leading-dot string on an argument that gives imports no base to resolve against (a number, a flag, a plain string) is ordinary data and passes through, so `?tag=./data` works.
 - **Duplicate keys are rejected.**
-- **Params never name a model.** The path does that, and only the path: `/api/v1/session/20000?codec.fps=10` serves model `20000` with that override. A `?model_id=...` param is an ordinary unknown key and is rejected.
+- **Params never name a model.** The path does that, and only the path: `/api/v1/session/20000?fps=10` serves model `20000` with that override. A `?model_id=...` param is an ordinary unknown key and is rejected.
 - **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is the path.
 - **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipeline rejects every param.
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
 One string is a complete endpoint description, because the whole session configuration fits in the URL:
-`--policy=.remote --policy.url='gpu-host:8000?codec.fps=10'` accepts `host`, `host:port`, and full
+`--policy=.remote --policy.url='gpu-host:8000?fps=10'` accepts `host`, `host:port`, and full
 `http(s)`/`ws(s)`/`grpc(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the query string verbatim.
 Credentials are the exception and stay a separate `headers` argument, so the URL itself is safe to hand around.
 
@@ -127,9 +130,10 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "chunked_schedule"},
-      {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
+      {"name": "stop_on_fault"},
+      {"name": "chunked_schedule", "args": {"fps": 15.0, "horizon_sec": 1.0}}
     ]},
+    "local_codec": {"name": "restrict_image_size", "args": {"width": 224, "height": 224}},
     "compress_images": false,
     "positronic_version": "0.2.1"
   }
@@ -141,16 +145,16 @@ The client ignores all messages until it sees `status == "ready"` (status update
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
-- Codec metadata (`image_sizes` — the geometry the codec encodes to, `action_fps` and `action_horizon_sec` for timing)
-- `local_stack` — the declared local half of the policy pipeline: a spec tree of `{"name", "args"}`
-  leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
-  this stack in front of the connection, resolving names only against the closed vocabulary in
-  `positronic.policy.spec.WIRE_LAYERS` — an unknown entry fails at connect, before the robot moves.
-  Never empty and never absent: a pipeline with nothing left of the marker is refused when the server
-  starts, and a handshake declaring nothing is refused by the client. In practice it names at least a
-  `chunked_schedule`, which turns the chunk-relative timestamps a codec stamps into times on the rig's
-  clock — a stack that fails to leaves the harness rejecting the chunk at the first inference.
-- `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
+- Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
+- `local_stack` — processor definitions composed by `"seq"`, with the first outermost.
+  `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
+  `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
+  the chunk's execution horizon. The harness emits each step's commands immediately.
+- `local_codec` — optional data conversions around the remote callable. These run inside submitted
+  work, including image resizing. Codec specs support `"seq"` and `"par"` composition.
+  Processor and codec names are resolved only through `WIRE_PROCESSORS` and `WIRE_CODECS` in
+  `positronic.policy.spec`; an unknown name fails before the policy emits commands.
+- `compress_images` — whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
@@ -182,21 +186,22 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
   "grip": 0.04,
   "image.wrist": "<uint8 (H, W, 3)>",
   "image.exterior": "<uint8 (H, W, 3)>",
-  "obs_time_ns": 1737000000000000000,
   "task": "pick up the red cube"
 }
 ```
 
 **Server → Client (Actions):**
 
-`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions). `timestamp` is seconds from the start of the chunk; `robot_command` carries the control command, and a rig with more than one arm names the channel per arm (`robot_command.left`):
+For ACT, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
+scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel.
+`robot_command` carries the control command, and a rig with more than one arm names the channel per arm
+(`robot_command.left`):
 
 ```json
 {
   "result": [{
     "robot_command": {"type": "cartesian_pos", "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]},
-    "target_grip": 0.02,
-    "timestamp": 0.0
+    "target_grip": 0.02
   }]
 }
 ```
@@ -244,15 +249,25 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 ## Classes
 
 ### `server.PolicyServer`
-The one server implementation behind every vendor. It serves a **policy pipeline** (see `positronic.policy.spec`): a layer chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status messages.
+Serves a `Pipeline` with explicit `source`, `local`, `codec`, and `local_codec` arguments.
+`ModelSource.get_models()` backs the catalogue, `resolve()` selects a checkpoint, and `load()` returns
+a callable `Model` that owns the loaded resources. The server resets that model at session start.
+Server codecs wrap its call; the client receives the processor and local-codec specs in the handshake.
 
 ```python
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.websocket_wire import WebsocketWire
-from positronic.policy.spec import PolicySource, remote
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy import Sequential
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.spec import Pipeline
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 
-pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
+pipeline = Pipeline(
+    source=my_model_source,
+    local=Sequential(StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0)),
+    local_codec=RestrictImageSize(224, 224),
+    codec=my_model_codec,
+)
 server = PolicyServer(pipeline)
 server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
@@ -263,7 +278,10 @@ to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`,
 and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
 names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire took.
 
-`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
+Passing a `cfn.Config` that builds the pipeline enables [session parameters](#session-parameters);
+an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the server after that
+many minutes without activity. Boundary recording through `recording_dir` is not implemented for
+callable models or processor runs; passing it raises. Harness episode recording remains available.
 
 ### `server.serve`
 The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
@@ -280,7 +298,7 @@ from positronic.offboard.client import InferenceClient
 # The server's pinned checkpoint, with no session params
 client = InferenceClient.from_url('localhost:8000')
 # A named model, tuned for every session this client opens
-# client = InferenceClient.from_url('localhost:8000/api/v1/session/model_a?codec.fps=10')
+# client = InferenceClient.from_url('localhost:8000/api/v1/session/model_a?fps=10')
 # The same session on the gRPC wire, on a LAN and behind a TLS edge
 # client = InferenceClient.from_url('grpc://localhost:9000/api/v1/session/model_a')
 # client = InferenceClient.from_url('grpcs://gpu-host:443/api/v1/session/model_a')

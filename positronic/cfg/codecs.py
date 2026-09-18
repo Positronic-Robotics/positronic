@@ -54,6 +54,29 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
+@cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
+def compose_data(
+    obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: geom.Transform3D | None
+):
+    """Compose observation and action conversions, with optional grip and frame conversions.
+
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
+    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
+    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
+    the pipeline instead, so leave it unset there.
+
+    """
+    result = obs & action
+    if ee_frame is not None:
+        result = ChangeEEFrame(ee_frame) | result
+    if flip_grip:
+        result = FlipGrip() | result
+    if binarize_grip:
+        result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
+    return result
+
+
+# TODO: Move training cadence metadata out of timing codecs and migrate the remaining vendor configs.
 @cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False, ee_frame=None)
 def compose(
     obs,
@@ -64,25 +87,8 @@ def compose(
     flip_grip: bool,
     ee_frame: geom.Transform3D | None,
 ):
-    """Compose observation and action codecs with timing and optional grip binarization.
-
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
-    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
-    the pipeline instead, so leave it unset there.
-
-    Layout::
-
-        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference]
-            | [FlipGrip] | [ChangeEEFrame] | obs & action
-    """
-    result = obs & action
-    if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame) | result
-    if flip_grip:
-        result = FlipGrip() | result
-    if binarize_grip:
-        result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
+    """Data conversions with action timestamps, a horizon, and training cadence metadata."""
+    result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)
     result = ActionTimestamp(fps=fps) | result
     if horizon is not None:
         result = ActionHorizon(horizon) | result

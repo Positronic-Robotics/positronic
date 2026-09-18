@@ -4,7 +4,7 @@ from pathlib import Path
 
 import configuronic as cfn
 
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
+from positronic.offboard.protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
 from positronic.utils import nebius
 
