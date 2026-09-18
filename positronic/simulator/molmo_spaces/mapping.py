@@ -6,11 +6,10 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-# Clients use the package import; the isolated server has protocol.py on PYTHONPATH.
-try:
+if __package__:
     from positronic.simulator.env_server import protocol
-except ImportError:
-    import protocol  # pyright: ignore[reportMissingImports]
+else:
+    import protocol  # pyright: ignore[reportMissingImports] -- supplied on the isolated server's PYTHONPATH.
 
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
@@ -70,6 +69,10 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
 
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
+
+SELECT_EPISODES = 'episodes'
+TASK_NAME = 'name'
+TASK_HORIZON_SEC = 'task_horizon_sec'
 
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
@@ -133,8 +136,8 @@ def wire_command_to_arm_action(
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
             target = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float32).reshape(-1)
-        case protocol.JOINT_VEL:
-            dq = np.asarray(command[protocol.COMMAND_JOINT_VEL], dtype=np.float32).reshape(-1)
+        case protocol.JOINT_DELTA:
+            dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
             if dq.shape[0] != current.shape[0]:
                 raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
             target = current + dq

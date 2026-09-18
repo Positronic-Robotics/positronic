@@ -73,19 +73,6 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
 
 
-_SITE_FRAME = 'site'
-
-
-def _assert_measures_at_grasp_site(robot_view) -> None:
-    """Require arm poses to track the benchmark's gripper grasp site."""
-    arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    if arm.leaf_frame_type != _SITE_FRAME:
-        raise ValueError(f'arm move group measures at a {arm.leaf_frame_type}, not the expected site')
-    name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)
-    if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
-        raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
-
-
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode."""
 
@@ -110,6 +97,15 @@ class MolmoSpacesEnv(EnvProtocol):
             self._episodes[bench] = episodes
         return self._episodes[bench]
 
+    def _assert_measures_at_grasp_site(self) -> None:
+        """Require arm poses to track the benchmark's gripper grasp site."""
+        arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+        if arm.leaf_frame_type != 'site':
+            raise ValueError(f'arm move group measures at a {arm.leaf_frame_type}, not the expected site')
+        name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)
+        if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
+            raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
+
     def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None) -> None:
         if self._sampler is not None:
             self._sampler.close()
@@ -123,7 +119,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
-        _assert_measures_at_grasp_site(self._robot_view)
+        self._assert_measures_at_grasp_site()
         self._control_dt = cfg.policy_dt_ms / 1000.0
         self._meta = {
             # Generated task descriptions can mislabel close episodes as "Open ...".
@@ -134,7 +130,7 @@ class MolmoSpacesEnv(EnvProtocol):
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Selected episode records, with names, reset parameters and horizons in seconds."""
         cfg = _DroidEvalConfig()
-        selection = spec.get('episodes')
+        selection = spec.get(mapping.SELECT_EPISODES)
         pinned = None if selection is None else [selection] if isinstance(selection, int) else list(selection)
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
@@ -148,9 +144,9 @@ class MolmoSpacesEnv(EnvProtocol):
             records += [
                 {
                     **bench._asdict(),
-                    'episode_index': i,
-                    'name': episodes[i].language.task_description,
-                    'task_horizon_sec': horizon_sec,
+                    mapping.TOKEN_EPISODE_INDEX: i,
+                    mapping.TASK_NAME: episodes[i].language.task_description,
+                    mapping.TASK_HORIZON_SEC: horizon_sec,
                 }
                 for i in indices
             ]
@@ -254,8 +250,8 @@ class MolmoSpacesEnv(EnvProtocol):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
-    parser.add_argument(protocol.OPT_HOST, default='localhost')
-    parser.add_argument(protocol.OPT_PORT, type=int, required=True)
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', type=int, required=True)
     args = parser.parse_args()
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:

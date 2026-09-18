@@ -24,7 +24,7 @@ from positronic.eval import Eval, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
-from positronic.simulator.env_server.protocol import COMMAND_DELTA, COMMAND_JOINT_POS, COMMAND_JOINT_VEL, COMMAND_POSE
+from positronic.simulator.env_server.protocol import COMMAND_DELTA, COMMAND_JOINT_DELTA, COMMAND_JOINT_POS, COMMAND_POSE
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
@@ -139,8 +139,8 @@ class MujocoEnv(EnvProtocol):
                 cmd = None
             case protocol.JOINT_POS:
                 cmd = roboarm_command.JointPosition(np.asarray(command[COMMAND_JOINT_POS], dtype=np.float64))
-            case protocol.JOINT_VEL:
-                cmd = roboarm_command.JointDelta(np.asarray(command[COMMAND_JOINT_VEL], dtype=np.float64))
+            case protocol.JOINT_DELTA:
+                cmd = roboarm_command.JointDelta(np.asarray(command[COMMAND_JOINT_DELTA], dtype=np.float64))
             case protocol.CARTESIAN:
                 cmd = roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command[COMMAND_POSE], _ROTMAT))
             case protocol.CARTESIAN_DELTA:

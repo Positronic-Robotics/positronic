@@ -178,12 +178,12 @@ up, one on each side of the interface:
   the env's own run: a deterministic env to byte-identical outcomes (modulo wire format), a
   non-deterministic env to an identical sim/inference call sequence (same count, same order).
 
-Every sim-env adoption ships a native-vs-Positronic parity test that drives one pinned episode
-through both stacks and asserts this, re-run on every bump of the sim's pinned version.
+Each new sim-env adoption must include a native-vs-Positronic parity test that drives one pinned
+episode through both stacks and checks this contract. Re-run it when the sim's pinned version changes.
 
 The episode horizon is one case of that reproduction rather than a rule of its own: a task that
 defines a horizon has it enforced by the env, which reports expiry through the same terminal `done`
-a success uses; a task that defines none leaves nothing to reproduce. The harness `Task.timeout` is
-only a runaway-cost safety net, so the config that knows the benchmark derives the timeout from the
-horizon it declares rather than taking one on faith — a budget below the horizon would silently
-truncate valid episodes and score them as failures.
+a success uses; a task that defines none leaves nothing to reproduce. By default, the harness
+`Task.timeout` is a runaway-cost safety net derived from the benchmark horizon, with enough margin
+to observe the env's terminal signal. An explicit timeout may truncate an episode before that
+horizon; the config warns when the user overrides the default.

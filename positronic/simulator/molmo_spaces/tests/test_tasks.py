@@ -9,6 +9,7 @@ from positronic.cfg.eval.sim.molmo import _TIMEOUT_MARGIN_SEC, benchmarks
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.molmo_spaces import keys as molmo_keys
+from positronic.simulator.molmo_spaces import mapping
 
 _SUITE, _SCENE_DATASET, _TASK_CONFIG, _BENCHMARK = molmo_keys.BENCHMARK_DIMENSIONS
 _PICK = {
@@ -70,7 +71,7 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
 def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked):
     ev = benchmarks.override(suite='molmospaces-bench-v2', task_config=['A', 'B'], episodes=[0, 1]).instantiate()
     ev.tasks()
-    assert asked == [{'suite': 'molmospaces-bench-v2', 'task_config': ['A', 'B'], 'episodes': [0, 1]}]
+    assert asked == [{'suite': 'molmospaces-bench-v2', 'task_config': ['A', 'B'], mapping.SELECT_EPISODES: [0, 1]}]
 
 
 def test_an_explicit_seed_sweeps_each_episode(asked):
@@ -82,6 +83,13 @@ def test_an_explicit_seed_sweeps_each_episode(asked):
 def test_a_non_positive_trial_count_is_refused():
     with pytest.raises(ValueError, match='trial_count'):
         benchmarks.override(trial_count=0).instantiate()
+
+
+@pytest.mark.parametrize('timeout', [0.0, -1.0, float('nan'), float('inf'), -float('inf')])
+def test_invalid_timeout_fails_before_discovering_tasks(asked, timeout):
+    with pytest.raises(ValueError, match='timeout must be finite and positive'):
+        benchmarks.override(timeout=timeout).instantiate()
+    assert asked == []
 
 
 def test_timeout_defaults_to_each_benchmark_horizon_plus_a_margin(asked, caplog):

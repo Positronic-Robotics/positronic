@@ -41,10 +41,10 @@ def test_wire_command_joint_pos_passthrough():
     assert np.array_equal(out, q)
 
 
-def test_wire_command_joint_vel_integrates_onto_measured():
+def test_wire_command_joint_delta_adds_to_measured():
     current = np.arange(_JOINTS, dtype=np.float32)
     dq = np.full(_JOINTS, 0.1, dtype=np.float32)
-    out = _action({protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: dq}, current)
+    out = _action({protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: dq}, current)
     assert np.allclose(out, current + dq)
 
 
@@ -58,7 +58,7 @@ def test_wire_command_joint_count_mismatch_raises():
     current = np.zeros(_JOINTS, dtype=np.float32)
     with pytest.raises(ValueError):
         _action(
-            {protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: np.zeros(6, dtype=np.float32)},
+            {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(6, dtype=np.float32)},
             current,
         )
 
@@ -126,7 +126,7 @@ def test_every_canonical_command_type_converts_to_joint_targets(command_type):
     pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
     payload = {
         protocol.JOINT_POS: {protocol.COMMAND_JOINT_POS: np.zeros(_JOINTS)},
-        protocol.JOINT_VEL: {protocol.COMMAND_JOINT_VEL: np.zeros(_JOINTS)},
+        protocol.JOINT_DELTA: {protocol.COMMAND_JOINT_DELTA: np.zeros(_JOINTS)},
         protocol.HOLD: {},
         protocol.CARTESIAN: {protocol.COMMAND_POSE: pose},
         protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: pose},
@@ -182,7 +182,7 @@ def test_selection_pins_any_dimension_by_a_name_or_a_list_and_leaves_the_rest_op
     assert mapping.select_benchmarks(found, {'suite': 'v2'}) == [pick_v2, hard_v2]
     assert mapping.select_benchmarks(found, {'suite': 'v2', 'task_config': 'Pick'}) == [pick_v2]
     assert mapping.select_benchmarks(found, {'scene_dataset': ['objaverse', 'nowhere']}) == [hard_v2]
-    assert mapping.select_benchmarks(found, {'episodes': [0, 1]}) == found
+    assert mapping.select_benchmarks(found, {mapping.SELECT_EPISODES: [0, 1]}) == found
 
 
 def test_a_selection_matching_no_benchmark_lists_what_is_there():

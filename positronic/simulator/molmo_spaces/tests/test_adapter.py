@@ -85,7 +85,12 @@ _BENCH_PARAMS = dict(zip(molmo_keys.BENCHMARK_DIMENSIONS, _BENCH, strict=True))
 
 def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
     adapter = MolmoAdapter()
-    record = {**_BENCH._asdict(), 'name': 'put the banana in the bowl', 'episode_index': 3, 'task_horizon_sec': 30.0}
+    record = {
+        **_BENCH._asdict(),
+        mapping.TASK_NAME: 'put the banana in the bowl',
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TASK_HORIZON_SEC: 30.0,
+    }
     assert adapter.task_params([record]) == [
         {
             **_BENCH_PARAMS,

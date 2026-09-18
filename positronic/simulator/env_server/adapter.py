@@ -87,7 +87,7 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
         case roboarm_command.JointPosition(positions):
             wire = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: positions}
         case roboarm_command.JointDelta(velocities):
-            wire = {protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: velocities}
+            wire = {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: velocities}
         case roboarm_command.CartesianDelta(delta, frame):
             # The env anchors a delta on the pose it measures, which is its control frame and nowhere else, so
             # a delta still expressed somewhere else has no faithful wire form.

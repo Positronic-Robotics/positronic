@@ -63,7 +63,7 @@ def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: in
         **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
         mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
         parity_record.CAMERA_NAMES: camera_names,
-        'cam_hashes': cam_hashes,
+        **{f'{parity_record.CAM_HASH_PREFIX}{name}': hashes for name, hashes in cam_hashes.items()},
         parity_record.TERMINATION_STEP: step,
         parity_record.FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
     }
@@ -72,7 +72,7 @@ def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: in
 def _native_env() -> dict[str, str]:
     """Subprocess environment with this test directory on PYTHONPATH."""
     env = launcher.molmo_subprocess_env()
-    return {**env, 'PYTHONPATH': os.pathsep.join([env['PYTHONPATH'], str(Path(__file__).parent)])}
+    return {**env, launcher.PYTHONPATH_ENV: os.pathsep.join([env[launcher.PYTHONPATH_ENV], str(Path(__file__).parent)])}
 
 
 def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
@@ -82,15 +82,15 @@ def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max
         [
             str(python),
             str(_PARITY_NATIVE),
-            parity_record.OPT_BENCHMARK_DIR,
+            '--benchmark_dir',
             str(bench.under(Path(os.environ[mapping.ASSETS_DIR_ENV]))),
-            parity_record.OPT_EPISODE_INDEX,
+            '--episode_index',
             str(episode_index),
-            parity_record.OPT_SEED,
+            '--seed',
             str(seed),
-            parity_record.OPT_MAX_STEPS,
+            '--max_steps',
             str(max_steps),
-            parity_record.OPT_OUT,
+            '--out',
             str(out_path),
         ],
         env=_native_env(),
@@ -120,7 +120,8 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'
     for name in positronic[parity_record.CAMERA_NAMES]:
-        n_hashes, p_hashes = list(native[f'{parity_record.CAM_HASH_PREFIX}{name}']), positronic['cam_hashes'][name]
+        key = f'{parity_record.CAM_HASH_PREFIX}{name}'
+        n_hashes, p_hashes = list(native[key]), positronic[key]
         assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
 
 

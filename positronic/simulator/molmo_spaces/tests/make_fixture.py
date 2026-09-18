@@ -1,12 +1,8 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["numpy"]
-# ///
 """Generate synthetic observations for test_adapter.py, without simulator assets.
 
 Camera images have distinct colours and corner markers to expose swaps and flips.
 
-Run: uv run --no-project positronic/simulator/molmo_spaces/tests/make_fixture.py
+Run: uv run --locked python -m positronic.simulator.molmo_spaces.tests.make_fixture
 Output: droid_obs.npz next to this script (well under 100 KB)
 """
 

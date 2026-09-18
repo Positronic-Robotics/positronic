@@ -52,7 +52,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     episode = episodes[episode_index]
     cfg = env._DroidEvalConfig()
     cfg.seed = seed
-    native_horizon = determine_task_horizon([episode], None, cfg.policy_dt_ms)
+    native_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
     cfg.task_horizon = native_horizon
     sampler = JsonEvalTaskSampler(cfg, episode)
     task = sampler.sample_task(house_index=episode.house_index)
@@ -104,11 +104,11 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Native-drive MolmoSpaces reference for the parity test.')
-    parser.add_argument(parity_record.OPT_BENCHMARK_DIR, required=True)
-    parser.add_argument(parity_record.OPT_EPISODE_INDEX, type=int, default=0)
-    parser.add_argument(parity_record.OPT_SEED, type=int, required=True)
-    parser.add_argument(parity_record.OPT_MAX_STEPS, type=int, required=True)
-    parser.add_argument(parity_record.OPT_OUT, required=True, help='npz path for the recorded native rollout')
+    parser.add_argument('--benchmark_dir', required=True)
+    parser.add_argument('--episode_index', type=int, default=0)
+    parser.add_argument('--seed', type=int, required=True)
+    parser.add_argument('--max_steps', type=int, required=True)
+    parser.add_argument('--out', required=True, help='npz path for the recorded native rollout')
     args = parser.parse_args()
     _run(Path(args.benchmark_dir), args.episode_index, args.seed, args.max_steps, Path(args.out))
 

@@ -1,4 +1,5 @@
 import logging
+import math
 
 import configuronic as cfn
 
@@ -44,6 +45,8 @@ def benchmarks(
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
     proxy = RemoteEnvControlSystem(MolmoAdapter(), serve_molmo_spaces())
     embodiment = remote_franka_embodiment(
         proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
@@ -52,7 +55,11 @@ def benchmarks(
 
     def tasks() -> list[Task]:
         selection = spec(
-            suite=suite, scene_dataset=scene_dataset, task_config=task_config, benchmark=benchmark, episodes=episodes
+            suite=suite,
+            scene_dataset=scene_dataset,
+            task_config=task_config,
+            benchmark=benchmark,
+            **{mapping.SELECT_EPISODES: episodes},
         )
         if timeout is not None:
             logging.warning('--eval.timeout %ss replaces the benchmark horizon backstop', timeout)

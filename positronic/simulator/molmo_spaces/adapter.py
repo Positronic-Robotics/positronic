@@ -17,24 +17,24 @@ CAMERAS = {
     keys.EXTERIOR_IMAGE: ('droid_shoulder_light_randomization', 'exo_camera_1'),
 }
 
-_DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
-
 
 class MolmoAdapter(WireCommandAdapter):
+    _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
+
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             {
-                **{key: record[dimension] for dimension, key in _DIMENSION_KEYS.items()},
-                eval_keys.TASK: record['name'],
-                molmo_keys.EPISODE_INDEX: record['episode_index'],
-                molmo_keys.TASK_HORIZON: record['task_horizon_sec'],
+                **{key: record[dimension] for dimension, key in self._DIMENSION_KEYS.items()},
+                eval_keys.TASK: record[mapping.TASK_NAME],
+                molmo_keys.EPISODE_INDEX: record[mapping.TOKEN_EPISODE_INDEX],
+                molmo_keys.TASK_HORIZON: record[mapping.TASK_HORIZON_SEC],
             }
             for record in records
         ]
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
         return {
-            **{dimension: params[key] for dimension, key in _DIMENSION_KEYS.items()},
+            **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
         }

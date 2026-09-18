@@ -12,7 +12,6 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
-from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.molmo_spaces import mapping
 
@@ -62,13 +61,14 @@ def ensure_molmo_venv() -> Path:
 
 
 _GL_BACKEND_ENV = 'MUJOCO_GL'
+PYTHONPATH_ENV = 'PYTHONPATH'
 
 
 def molmo_subprocess_env() -> dict[str, str]:
     """Subprocess environment with the server's Python paths and GL backend."""
     return {
         **os.environ,
-        'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
+        PYTHONPATH_ENV: os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
         _GL_BACKEND_ENV: os.environ.get(_GL_BACKEND_ENV, 'cgl' if sys.platform == 'darwin' else 'egl'),
     }
 
@@ -77,7 +77,7 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
-    command = [str(python), str(_ENV_SCRIPT), protocol.OPT_HOST, host, protocol.OPT_PORT, str(port)]
+    command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 

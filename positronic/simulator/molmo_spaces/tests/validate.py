@@ -84,7 +84,7 @@ def _check_every_canonical_command_converts(sim_env) -> None:
         protocol.CARTESIAN: {protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])},
         protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: np.concatenate([np.full(3, _DELTA_POS), identity_rot])},
         protocol.JOINT_POS: {protocol.COMMAND_JOINT_POS: measured},
-        protocol.JOINT_VEL: {protocol.COMMAND_JOINT_VEL: np.full(measured.size, _DELTA_Q)},
+        protocol.JOINT_DELTA: {protocol.COMMAND_JOINT_DELTA: np.full(measured.size, _DELTA_Q)},
         protocol.HOLD: {},
     }
     unmapped = [kind for kind in protocol.CANONICAL_COMMAND_TYPES if kind not in payloads]

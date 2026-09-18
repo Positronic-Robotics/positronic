@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["numpy"]
-# ///
 """Build replay fixtures from recorded joint commands and gripper targets.
 
 State checkpoints come from replaying those commands through the integration.
