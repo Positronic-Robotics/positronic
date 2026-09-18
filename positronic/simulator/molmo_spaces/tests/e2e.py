@@ -37,8 +37,9 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
         conn = EnvConnection(host, port)
         try:
             for record in conn.tasks(bench._asdict() if bench is not None else {})[:episodes]:
-                i = record['episode_index']
-                token = {**{d: record[d] for d in mapping.BenchmarkPath._fields}, mapping.TOKEN_EPISODE_INDEX: i}
+                i = record[mapping.TOKEN_EPISODE_INDEX]
+                benchmark = mapping.BenchmarkPath(**{d: record[d] for d in mapping.BenchmarkPath._fields})
+                token = {**benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: i}
                 frame = conn.reset({**token, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
                 assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
@@ -47,7 +48,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
                 print(
-                    f'  episode {i} of {record["benchmark"]}: reset ok — '
+                    f'  episode {i} of {benchmark.relative}: reset ok — '
                     f'task={frame[protocol.FRAME_META][mapping.META_TASK]!r} grip={obs[keys.GRIP]:.3f} '
                     f'q0={q[0]:.4f} sim_state={sim_state.size}d'
                 )

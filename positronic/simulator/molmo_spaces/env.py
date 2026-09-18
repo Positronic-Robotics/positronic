@@ -20,6 +20,7 @@ def _install_cgl_noop_stub() -> None:
     # Stub the CGL lock calls there; macOS needs the real bindings.
     if sys.platform == 'darwin' or _CGL_PACKAGE in sys.modules:
         return
+    # ModuleType supports runtime attributes absent from its type definition.
     cgl = types.ModuleType(_CGL_MODULE)
     cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
     package = types.ModuleType(_CGL_PACKAGE)

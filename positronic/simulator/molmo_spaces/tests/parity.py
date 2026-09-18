@@ -31,7 +31,7 @@ _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protoc
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
-def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
+def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
     """Recorded observations and camera hashes from an env-server hold rollout."""
     fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
     camera_names: list[str] = []
@@ -99,45 +99,45 @@ def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max
     return dict(np.load(out_path, allow_pickle=False))
 
 
-def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
+def _assert_parity(native: dict, remote: dict, max_steps: int) -> None:
     horizon = int(native[parity_record.HORIZON_STEPS])
     n_term = int(native[parity_record.TERMINATION_STEP])
-    p_term = positronic[parity_record.TERMINATION_STEP]
+    p_term = remote[parity_record.TERMINATION_STEP]
     assert n_term < max_steps, f'native never terminated in {max_steps} steps — raise --max_steps above the horizon'
-    assert p_term < max_steps, f'positronic never terminated in {max_steps} steps — raise --max_steps above the horizon'
+    assert p_term < max_steps, f'env-server never terminated in {max_steps} steps — raise --max_steps above the horizon'
     assert n_term == horizon == p_term, (
-        f'terminating step differs: native {n_term}, horizon {horizon}, positronic {p_term}'
+        f'terminating step differs: native {n_term}, horizon {horizon}, env-server {p_term}'
     )
-    assert not bool(native[parity_record.FINAL_SUCCESS]) and not positronic[parity_record.FINAL_SUCCESS], (
+    assert not bool(native[parity_record.FINAL_SUCCESS]) and not remote[parity_record.FINAL_SUCCESS], (
         'a held arm must not score success'
     )
 
-    assert list(native[parity_record.CAMERA_NAMES]) == positronic[parity_record.CAMERA_NAMES], (
+    assert list(native[parity_record.CAMERA_NAMES]) == remote[parity_record.CAMERA_NAMES], (
         'camera sets differ between the stacks'
     )
     for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
-        n, p = native[field], positronic[field]
-        assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
-        assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'
-    for name in positronic[parity_record.CAMERA_NAMES]:
+        n, p = native[field], remote[field]
+        assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, env-server {p.shape}'
+        assert np.array_equal(n, p), f'{field} differs between native and env-server rollouts'
+    for name in remote[parity_record.CAMERA_NAMES]:
         key = f'{parity_record.CAM_HASH_PREFIX}{name}'
-        n_hashes, p_hashes = list(native[key]), positronic[key]
-        assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
+        n_hashes, p_hashes = list(native[key]), remote[key]
+        assert n_hashes == p_hashes, f'camera {name} frames differ between native and env-server rollouts'
 
 
 def run(bench: mapping.BenchmarkPath, *, episode_index: int = 0, seed: int = 0, max_steps: int = 1200) -> None:
     """Compare observations and terminal results for native and env-server hold rollouts."""
     with tempfile.TemporaryDirectory() as tmp:
         native = _run_native(bench, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
-        positronic = _drive_positronic(bench, episode_index, seed, max_steps)
-    _assert_parity(native, positronic, max_steps)
-    frames = positronic[parity_record.TERMINATION_STEP] + 1
+        remote = _drive_env_server(bench, episode_index, seed, max_steps)
+    _assert_parity(native, remote, max_steps)
+    frames = remote[parity_record.TERMINATION_STEP] + 1
     horizon = native[parity_record.HORIZON_STEPS]
     print(f'PARITY PASSED — episode {episode_index}: {frames} frames, terminated at horizon {horizon}')
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Native-vs-positronic parity check for MolmoSpaces.')
+    parser = argparse.ArgumentParser(description='Native-vs-env-server parity check for MolmoSpaces.')
     parser.add_argument(
         '--benchmark',
         type=mapping.BenchmarkPath.parse,

@@ -89,7 +89,9 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
 
 @pytest.mark.timeout(30.0)
 def test_serve_subprocess_reports_a_server_that_dies_before_binding():
-    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])  # noqa: E731
+    def spawn(host, port):
+        return subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])
+
     with pytest.raises(RuntimeError, match='status 3'), serve_subprocess(spawn, 'localhost'):
         pass
 
@@ -99,7 +101,10 @@ def test_serve_subprocess_yields_once_the_port_accepts():
     script = (
         'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
     )
-    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', script, str(port)])  # noqa: E731
+
+    def spawn(host, port):
+        return subprocess.Popen([sys.executable, '-c', script, str(port)])
+
     with serve_subprocess(spawn, 'localhost') as (host, port):
         with socket.create_connection((host, port), timeout=1.0):
             pass
