@@ -14,30 +14,18 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
-import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder, Session
-from positronic.policy.base import Layer, timings_to
-from positronic.policy.executor import blocking
-from positronic.policy.spec import ModelSource, Pipeline, split
+from positronic.policy.codec import Codec
+from positronic.policy.spec import Model, ModelSource, Pipeline
 
 from . import grpc_wire, protocol, server_wire, websocket_wire
-from .protocol import deserialise, serialise
+from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
 
 logger = logging.getLogger(__name__)
-
-AUTH_TOKEN_ENV = 'AUTH_TOKEN'
-
-AUTH_HEADER = 'Authorization'
-
-
-def bearer(token: str) -> str:
-    """The ``AUTH_HEADER`` value carrying ``token``."""
-    return f'Bearer {token}'
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, conn: server_wire.ServerConnection | None, message: str):
@@ -55,26 +43,26 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, conn: server_wire.ServerC
                 await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message}))
 
 
-class PolicyManager:
-    """Manages the lifecycle of the one policy ``source`` currently has loaded.
+class ModelManager:
+    """Manages the lifecycle of the one model ``source`` currently has loaded.
 
-    Ensures only one policy is loaded at a time. Waits for all active sessions
-    to finish before switching policies.
+    Ensures only one model is loaded at a time. Waits for all active sessions
+    to finish before switching models.
     """
 
     def __init__(self, source: ModelSource):
         self._source = source
         self.current_checkpoint_id: str | None = None
-        self.current_policy: Policy | None = None
+        self.current_model: Model | None = None
         self.active_sessions: int = 0
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
 
-    async def get_policy(self, checkpoint_id: str, conn: server_wire.ServerConnection | None = None) -> Policy:
+    async def get_model(self, checkpoint_id: str, conn: server_wire.ServerConnection | None = None) -> Model:
         await _acquire_with_keepalives(self._lock, conn, 'Waiting for the model slot')
         try:
             if self.current_checkpoint_id != checkpoint_id:
-                logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
+                logger.info(f'Switching model from {self.current_checkpoint_id} to {checkpoint_id}')
 
                 while self.active_sessions > 0:
                     message = f'Waiting for {self.active_sessions} active session(s) to finish...'
@@ -89,11 +77,11 @@ class PolicyManager:
                     except TimeoutError:
                         continue
 
-                if self.current_policy:
-                    logger.info('Unloading current policy')
-                    self.current_policy.close()
-                    # Empty the slot first: a failed load must not leave the closed policy under the old id.
-                    self.current_policy = None
+                if self.current_model:
+                    logger.info('Unloading current model')
+                    self.current_model.close()
+                    # Empty the slot first: a failed load must not leave the closed model under the old id.
+                    self.current_model = None
                     self.current_checkpoint_id = None
 
                 if conn:
@@ -104,15 +92,15 @@ class PolicyManager:
                         })
                     )
 
-                logger.info(f'Loading policy {checkpoint_id}')
+                logger.info(f'Loading model {checkpoint_id}')
                 on_progress = self._progress_callback(conn)
-                self.current_policy = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
+                self.current_model = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
                 self.current_checkpoint_id = checkpoint_id
 
-            assert self.current_policy is not None
+            assert self.current_model is not None
             if conn:
                 self.active_sessions += 1
-            return self.current_policy
+            return self.current_model
         finally:
             self._lock.release()
 
@@ -141,10 +129,10 @@ class PolicyManager:
                 self._condition.notify_all()
 
     def close(self):
-        """Close the loaded policy. Runs outside the event loop, at server shutdown."""
-        if self.current_policy is not None:
-            self.current_policy.close()
-            self.current_policy = None
+        """Close the loaded model. Runs outside the event loop, at server shutdown."""
+        if self.current_model is not None:
+            self.current_model.close()
+            self.current_model = None
             self.current_checkpoint_id = None
 
 
@@ -166,16 +154,6 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
     return {key: _literal_value(raw) for key, raw in items}
 
 
-def _declared_stack(local: Layer | None) -> dict[str, Any]:
-    """The rig-side spec a served pipeline must publish."""
-    if local is None:
-        raise ValueError(
-            'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
-            'layers the rig runs there, starting with a scheduler such as ChunkedSchedule'
-        )
-    return local.to_spec()
-
-
 class _ServedTiming:
     """What one inference cost the server, in milliseconds on the server's own clock.
 
@@ -185,24 +163,11 @@ class _ServedTiming:
     """
 
     def __init__(self) -> None:
-        # The wall clock: every ``TimingSink`` call is stamped on it, and one report must not mix clocks.
         self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
 
-    @classmethod
-    @contextmanager
-    def opened(cls) -> Iterator['_ServedTiming']:
-        """Open the timing of one inference. Every timed session writes to it until the block ends."""
-        timing = cls()
-        with timings_to(timing.take_timing):
-            yield timing
-
     def _record(self, key: str, start_ns: int, end_ns: int) -> None:
         self._phases[key] = (end_ns - start_ns) / 1e6
-
-    def take_timing(self, name: str, start_ns: int, end_ns: int) -> None:
-        """A ``TimingSink``: one timed session call, filed under its wire key."""
-        self._record(protocol.timing_key(name), start_ns, end_ns)
 
     @contextmanager
     def phase(self, key: str) -> Iterator[None]:
@@ -217,18 +182,23 @@ class _ServedTiming:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
+    def infer(self, model: Model, codec: Codec | None, obs: dict) -> Any:
+        """Measure the model separately from its surrounding data conversions."""
+
+        def predict(encoded: dict) -> Any:
+            with self.phase(protocol.TIMING_MODEL):
+                return model(encoded)
+
+        infer = codec.wrap(predict) if codec is not None else predict
+        return infer(obs)
+
 
 class PolicyServer:
-    """Serves a policy pipeline: one layer chain with a ``remote`` marker, closed by a ``ModelSource``
-    (see ``positronic.policy.spec``).
+    """Serve a callable model with explicit server codecs and a declared client processor stack.
 
-    The half right of the marker wraps the model here. The half left of it goes to the rig as the
-    ``local_stack`` spec in the ``ready`` handshake, with the marker's own wire settings. The source is
-    the only model loader and is fixed at launch.
-
-    A ``cfn.Config`` pipeline takes session params as dotted overrides (``?codec.fps=10``; the offboard
-    README states the rules). An instantiated ``Pipeline`` refuses every session param. The default
-    checkpoint is resolved at startup and pinned; a session that names a model id loads that one.
+    A config-launched pipeline accepts session parameters as dotted configuration overrides.
+    An instantiated Pipeline refuses session parameters. The model source is fixed at launch;
+    the default checkpoint is resolved and pinned at startup.
     """
 
     def __init__(
@@ -241,16 +211,14 @@ class PolicyServer:
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
         assert isinstance(self._pipeline, Pipeline), (
-            f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
+            f'PolicyServer requires a Pipeline, got {type(self._pipeline).__name__}'
         )
-        local, _, _ = split(self._pipeline)
-        # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
-        # The spec itself is built per session, which params may have changed.
-        _declared_stack(local)
+        self._pipeline.local.to_spec()
         self._source = self._pipeline.source
-        self._manager = PolicyManager(self._source)
-        # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
-        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
+        self._manager = ModelManager(self._source)
+        # TODO: Integrate boundary recording with callable models and explicit clocks.
+        if recording_dir is not None:
+            raise NotImplementedError('Callable model boundary recording is not implemented')
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
@@ -315,31 +283,30 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def _answer_observations(self, conn: server_wire.ServerConnection, session: Session) -> None:
+    async def _answer_observations(self, conn: server_wire.ServerConnection, model: Model, codec: Codec | None) -> None:
         """Answer every observation the client sends, until it disconnects."""
         while True:
             message = await conn.receive()
             self._last_activity = time.monotonic()
             try:
-                with _ServedTiming.opened() as timing:
-                    with timing.phase(protocol.TIMING_DECODE):
-                        raw_obs = deserialise(message)
-                    # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
-                    # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                    with timing.phase(protocol.TIMING_QUEUED):
-                        await self._infer_lock.acquire()
-                    try:
-                        with timing.phase(protocol.TIMING_INFER):
-                            # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
-                    except asyncio.CancelledError:
-                        # A cancelled await does not stop the worker, and the session close runs beside a live
-                        # inference. The log gives a later wrong answer a cause.
-                        logger.error('Cancelled mid-inference: the worker is still in the backend')
-                        raise
-                    finally:
-                        self._infer_lock.release()
-                    answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                timing = _ServedTiming()
+                with timing.phase(protocol.TIMING_DECODE):
+                    raw_obs = deserialise(message)
+                # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
+                # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
+                with timing.phase(protocol.TIMING_QUEUED):
+                    await self._infer_lock.acquire()
+                try:
+                    with timing.phase(protocol.TIMING_INFER):
+                        actions = await asyncio.to_thread(timing.infer, model, codec, raw_obs)
+                except asyncio.CancelledError:
+                    # A cancelled await does not stop the worker, and the session close runs beside a live
+                    # inference. The log gives a later wrong answer a cause.
+                    logger.error('Cancelled mid-inference: the worker is still in the backend')
+                    raise
+                finally:
+                    self._infer_lock.release()
+                answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                 await conn.send(answer)
             except wire.PeerDisconnected:
                 raise
@@ -352,50 +319,33 @@ class PolicyServer:
 
         self._active_sessions += 1
         self._last_activity = time.monotonic()
-        policy: Policy | None = None
-        session = None
+        model: Model | None = None
         try:
             pipeline = self._session_pipeline(_session_params(conn.query_params))
-            local, border, remote_half = split(pipeline)
-            local_spec = _declared_stack(local)
-
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
-            policy = await self._manager.get_policy(rid, conn)
-            # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
-            # above it sees one call per answer rather than one per call the answer took.
-            answered = blocking(policy)
-            if self._recording_dir is not None:
-                # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
-                rec = Recorder(self._recording_dir)
-                if remote_half is not None:
-                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(answered)
-                else:
-                    served = rec.tap('inference').wrap(answered)
-            else:
-                served = remote_half.wrap(answered) if remote_half is not None else answered
-            # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
-            # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
+            model = await self._manager.get_model(rid, conn)
             await _acquire_with_keepalives(self._infer_lock, conn, 'Waiting for inference slot')
             try:
-                session = await asyncio.to_thread(served.new_session)
+                await asyncio.to_thread(model.reset)
             finally:
                 self._infer_lock.release()
-            assert session is not None
-            # Later entries win: per-episode session facts over static ones, the server's own last.
             meta = {
                 **conn.served_address.meta,
                 **self._source.meta(rid),
+                **model.meta(),
+                **(pipeline.codec.meta if pipeline.codec is not None else {}),
+                **(pipeline.local_codec.meta if pipeline.local_codec is not None else {}),
+                **pipeline.local.meta(),
                 offboard_keys.CHECKPOINT_ID: rid,
-                **session.meta,
-                offboard_keys.LOCAL_STACK: local_spec,
-                offboard_keys.COMPRESS_IMAGES: border.compress_images,
+                offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
+                offboard_keys.LOCAL_CODEC: pipeline.local_codec.to_spec() if pipeline.local_codec is not None else None,
+                offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
-
             try:
-                await self._answer_observations(conn, session)
+                await self._answer_observations(conn, model, pipeline.codec)
             except wire.PeerDisconnected:
                 logger.info('Client disconnected')
 
@@ -411,21 +361,13 @@ class PolicyServer:
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
-            try:
-                if session is not None:
-                    # Both ends of a session's life touch the backend — close does a reset round-trip — so
-                    # it takes the inference lock like ``new_session`` and runs off the event loop. The
-                    # nesting keeps a failure here from swallowing the manager release.
-                    async with self._infer_lock:
-                        await asyncio.to_thread(session.close)
-            finally:
-                if policy is not None:
-                    await self._manager.release_session()
+            if model is not None:
+                await self._manager.release_session()
 
     async def _startup(self):
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
-        await self._manager.get_policy(self._default_id)
+        await self._manager.get_model(self._default_id)
 
     async def _idle_watchdog(self):
         """Return once no session has touched the server for ``idle_timeout_min``."""

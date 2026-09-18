@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, final, overload
+from typing import Any, ClassVar, final
 
 import numpy as np
 from PIL import Image as PilImage
@@ -28,7 +28,8 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, _ComposedLayer
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import PAR, SEQ, Obs
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -56,7 +57,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
-class Codec(Layer):
+class Codec:
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
@@ -71,11 +72,12 @@ class Codec(Layer):
     """
 
     IMAGE_SIZES = 'image_sizes'
+    WIRE_NAME: ClassVar[str]
 
     def encode(self, data: dict) -> dict:
         return {}
 
-    def decode(self, data):
+    def decode(self, data: Any) -> Any:
         if isinstance(data, list):
             return [self.decode(d) for d in data]
         return self._decode_single(data)
@@ -91,22 +93,24 @@ class Codec(Layer):
     def meta(self) -> dict:
         return {}
 
-    def make_session(self, inner: Session):
-        return _CodecSession(inner, self)
+    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]:
+        """Encode inputs and decode outputs around one ordinary function call."""
 
-    @overload
-    def __or__(self, other: 'Codec') -> 'Codec': ...
+        def call(obs: Obs) -> Any:
+            codec_name = {telemetry_keys.ATTR_CODEC: type(self).__name__}
+            with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
+                encoded = self.encode(dict(obs))
+            return self.decode(function(encoded))
 
-    @overload
-    def __or__(self, other: Layer) -> Layer: ...
+        return call
+
+    def to_spec(self) -> dict[str, Any]:
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
     @final
     def __or__(self, other) -> Any:
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
-        if isinstance(other, Layer):
-            # Mixed Codec | non-Codec layer → generic pipeline, not a Codec.
-            return _ComposedLayer((self, *other._layers()))
         return NotImplemented
 
     @final
@@ -114,27 +118,6 @@ class Codec(Layer):
         if isinstance(other, Codec):
             return _ParallelCodec(self, other)
         return NotImplemented
-
-
-class _CodecSession(DelegatingSession):
-    """Session wrapped with a codec: encodes observations, decodes actions."""
-
-    def __init__(self, inner: Session, codec: 'Codec'):
-        super().__init__(inner)
-        self._codec = codec
-
-    def __call__(self, obs, time_ns):
-        codec_name = {telemetry_keys.ATTR_CODEC: type(self._codec).__name__}
-        with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
-            encoded = self._codec.encode(obs)
-        action = self._inner(encoded, time_ns)
-        if action is None:
-            return None
-        return self._codec.decode(action)
-
-    @property
-    def meta(self):
-        return self._inner.meta | self._codec.meta
 
 
 def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
@@ -279,7 +262,7 @@ class ActionTimestamp(Codec):
 
     @property
     def meta(self):
-        return {'action_fps': self._fps}
+        return {policy_keys.ACTION_FPS: self._fps}
 
     def to_spec(self):
         return {'name': self.WIRE_NAME, 'args': {'fps': self._fps}}
@@ -325,7 +308,7 @@ class ActionHorizon(Codec):
 
     @property
     def meta(self):
-        return {'action_horizon_sec': self._horizon_sec}
+        return {policy_keys.ACTION_HORIZON_SEC: self._horizon_sec}
 
     def to_spec(self):
         return {'name': self.WIRE_NAME, 'args': {'horizon_sec': self._horizon_sec}}
@@ -473,9 +456,7 @@ class RestrictImageSize(Codec):
     already within it passes through untouched. This decides bandwidth, never geometry — the model's own
     codec still resizes exactly, and serving without this codec differs only in bytes on the wire.
 
-    Declared left of the ``remote`` marker, so the rig applies it before sending::
-
-        ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+    Declare it as ``Pipeline.local_codec`` to apply it before sending observations to the server.
     """
 
     WIRE_NAME = 'restrict_image_size'

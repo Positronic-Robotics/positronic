@@ -23,6 +23,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
 
 
@@ -117,6 +118,12 @@ class ChunkedSchedule(Policy):
         finally:
             if answer is not None:
                 answer.cancel()
+
+    def meta(self) -> dict[str, Any]:
+        meta = {policy_keys.ACTION_FPS: self._fps}
+        if self._horizon_sec is not None:
+            meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
+        return meta
 
     def to_spec(self) -> dict[str, Any]:
         args = {'fps': self._fps}

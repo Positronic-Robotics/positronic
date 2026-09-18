@@ -9,6 +9,8 @@ from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 from attr import dataclass
 from typing_extensions import TypeAliasType
 
+from positronic.utils import flatten_dict
+
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
 PAR = 'par'
@@ -108,7 +110,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
     """
 
     # A receiver resolves this name through its registry of installed processor classes.
-    WIRE_NAME: ClassVar[str | None] = None
+    WIRE_NAME: ClassVar[str]
 
     @abstractmethod
     def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
@@ -118,10 +120,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
         return {}
 
     def to_spec(self) -> dict[str, Any]:
-        """A registered name and plain-data constructor arguments, for deliverable processors.
-
-        TODO: Have the wire-spec loader construct processor definitions from registered names.
-        """
+        """A registered name and plain-data constructor arguments, for deliverable processors."""
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
 
@@ -156,7 +155,12 @@ class Sequential(Processor[InputT, OutputT]):
                 child.close()
 
     def meta(self) -> dict[str, Any]:
-        return self._first.meta()
+        """Combine component metadata; later components take precedence on shared keys."""
+        return {
+            key: value
+            for processor in (self._first, *self._rest)
+            for key, value in flatten_dict(processor.meta()).items()
+        }
 
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [processor.to_spec() for processor in (self._first, *self._rest)]}

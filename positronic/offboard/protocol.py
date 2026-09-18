@@ -17,6 +17,15 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.utils import serialization
 
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+AUTH_HEADER = 'Authorization'
+
+
+def bearer(token: str) -> str:
+    """The authorization header value for a bearer token."""
+    return f'Bearer {token}'
+
+
 # The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
 # and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
 STATUS = 'status'
@@ -41,7 +50,7 @@ def timing_key(name: str) -> str:
     return f'{name}_ms'
 
 
-# What a blocking session's call is timed as: the heavy work it waits out.
+# The loaded model's call, excluding codec conversions.
 MODEL_CALL = 'model'
 # Time the model's own call took, inside `INFER`.
 TIMING_MODEL = timing_key(MODEL_CALL)
