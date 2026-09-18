@@ -1429,12 +1429,33 @@ def test_an_ask_the_world_stops_before_is_answered(world):
         answer.result()
 
 
-class _FrameWatchingSession(_FakeInferenceSession):
-    """Reads its camera frame at both ends of a slow function, so a rewrite underneath it shows up as a
-    difference."""
+class _HeldInferenceSession(_FakeInferenceSession):
+    """A function the test ends: it sets ``entered`` as it begins, and answers once the test calls
+    ``release``."""
 
-    def __init__(self, wall_sec: float):
-        super().__init__([], wall_sec)
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        super().__init__(action)
+        self.entered = threading.Event()
+        self._released = threading.Event()
+
+    def release(self) -> None:
+        self._released.set()
+
+    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        self.entered.set()
+        # This bound expires inside the 10 s timeout of the tests that hold a function, so the failure
+        # names the release that never came.
+        if not self._released.wait(timeout=5.0):
+            raise AssertionError('the function was never released')
+        return super().infer(obs)
+
+
+class _FrameWatchingSession(_HeldInferenceSession):
+    """Reads its camera frame at both ends of a function the test releases, so a rewrite underneath it shows
+    up as a difference."""
+
+    def __init__(self):
+        super().__init__([])
         self.seen: list[tuple[np.ndarray, np.ndarray]] = []
 
     def infer(self, obs):
@@ -1448,7 +1469,7 @@ class _FrameWatchingSession(_FakeInferenceSession):
 def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(world):
     """A camera renders into the array behind the adapter it re-emits, and a wall-charged trial keeps the loop
     stepping while the function runs — so the observation handed to that function has to be its own copy."""
-    watcher = _FrameWatchingSession(wall_sec=0.3)
+    watcher = _FrameWatchingSession()
     policy = ServedPolicy(watcher)
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy)
@@ -1464,16 +1485,20 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
     driver = ManualDriver([
         (partial(p['perform_task'], Task(instruction_source='t', timeout_sec=None, charge_inference_time=True)), 0.0),
         (partial(emit_frame, 1), 0.01),
-        (partial(emit_frame, 9), 0.05),  # rewrites the buffer while the first call is still running
-        (None, 0.4),
+        (partial(emit_frame, 9), 0.4),  # rewrites the buffer while the first call is still running
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=60)
+    drive_until(scheduler, watcher.entered.is_set, max_steps=60)  # the function is holding the frame
+    drive_until(scheduler, lambda: frame.array[0, 0, 0] == 9, max_steps=60)  # and the producer rewrites it
+    watcher.release()
+    p['perform_task'].wait_for_functions()
 
-    assert watcher.seen, 'the policy was never called'
+    assert watcher.seen, 'the function never saw the rewrite'
+    called_on = np.full((2, 2, 3), 1, dtype=np.uint8)
     entry, exit_ = watcher.seen[0]
-    np.testing.assert_array_equal(entry, exit_, 'the observation was rewritten while the function was in flight')
+    np.testing.assert_array_equal(entry, called_on, 'the function was handed a frame the call was not made on')
+    np.testing.assert_array_equal(exit_, called_on, 'the observation was rewritten while the function was in flight')
 
 
 class _AbandonedCallPolicy(ServedPolicy):
@@ -2333,12 +2358,41 @@ class _TimedRecorder(pimm.SignalEmitter):
         self.emitted.append((self._clock.now(), data))
 
 
+class _HeldPolicy(ServedPolicy):
+    """A served policy carrying the function the test ends, so a trial cannot wait on a session it is not
+    running."""
+
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        self._held = _HeldInferenceSession(action)
+        super().__init__(self._held)
+
+    @property
+    def entered(self) -> threading.Event:
+        return self._held.entered
+
+    def release(self) -> None:
+        self._held.release()
+
+
 def _run_episode(
-    world, policy, layer, *, charge_inference_time=None, simulated=True, steps=4000, run_sec=1.5
+    world,
+    policy,
+    layer,
+    *,
+    charge_inference_time=None,
+    simulated=True,
+    steps=4000,
+    run_sec=1.5,
+    hold_sec: float | None = None,
 ) -> list[tuple[float, Any]]:
     """One trial run; ``charge_inference_time`` left out leaves the task at its own default. Returns the grip
     commands with the world time each went out at. A sim trial runs against a pacer, the sole time-master a
-    real rig doesn't need."""
+    real rig doesn't need.
+
+    ``hold_sec`` takes a ``_HeldPolicy``: its function is released that many seconds of world time after it
+    begins, and its answer is in before the world runs on, so the trial pays that duration for it whatever
+    the machine does meanwhile.
+    """
     wrapped = layer.wrap(policy)
     harness = Harness(make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
@@ -2363,7 +2417,14 @@ def _run_episode(
         (None, run_sec),
     ])
     systems = [harness, driver, _Pacer()] if simulated else [harness, driver]
-    drive_scheduler(world.start(systems), steps=steps)
+    scheduler = world.start(systems)
+    if hold_sec is not None:
+        drive_until(scheduler, policy.entered.is_set, max_steps=steps)
+        began = world.clock.now()
+        drive_until(scheduler, lambda: world.clock.now() >= began + hold_sec, max_steps=steps)
+        policy.release()
+        perform_task.wait_for_functions()
+    drive_scheduler(scheduler, steps=steps)
     return grip_recorder.emitted
 
 
@@ -2397,25 +2458,28 @@ def test_uncharged_chunks_have_no_extra_control_tick(world, wall_sec):
 
 @pytest.mark.timeout(20.0)
 @pytest.mark.parametrize('stated', [None, True], ids=['by-default', 'stated-on'])
-def test_a_charged_call_costs_its_own_wall_duration(world, stated):
-    """A sim trial charges the world what the model really took, so a slow server is scored as slow — at the
-    cost of a trace that inherits the machine's noise. A task charges whether or not it states so."""
-    policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
-    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=stated)
+def test_a_charged_call_costs_the_trial_the_time_the_model_is_out(world, stated):
+    """A sim trial keeps the loop stepping while the model is out, so the world runs on while it does. The
+    function here answers 0.2s of world time past the observation, and the chunk it returns cannot be played
+    before that. A task charges whether or not it states so."""
+    played = _run_episode(
+        world, _HeldPolicy(slow_chunk()), ChunkedSchedule(), charge_inference_time=stated, hold_sec=0.2
+    )
 
     assert played, 'no command was played'
-    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the function took'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, before the function was released'
 
 
 @pytest.mark.timeout(20.0)
 def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
     """The knob is sim-only: a real rig pays what its functions take, so a task stating
     ``charge_inference_time=False`` does not hold the world for them."""
-    policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
-    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False, simulated=False)
+    played = _run_episode(
+        world, _HeldPolicy(slow_chunk()), ChunkedSchedule(), charge_inference_time=False, simulated=False, hold_sec=0.2
+    )
 
     assert played, 'no command was played'
-    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the function took'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, before the function was released'
 
 
 class _ObservedTicks(Layer):
