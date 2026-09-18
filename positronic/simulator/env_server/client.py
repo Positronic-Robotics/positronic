@@ -52,8 +52,9 @@ class EnvConnection:
     def reset(self, token: Any) -> dict[str, Any]:
         return self._request({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token})
 
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        return self._request({protocol.CMD: protocol.Command.STEP.value, protocol.ACTION: action})
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        """Step every slot the env serves: one action per slot, in slot order."""
+        return self._request({protocol.CMD: protocol.Command.STEP.value, protocol.ACTIONS: actions})
 
     def _request(self, msg: dict[str, Any]) -> dict[str, Any]:
         self._ws.send(protocol.encode(msg))

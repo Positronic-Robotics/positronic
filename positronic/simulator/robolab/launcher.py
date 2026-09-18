@@ -67,7 +67,7 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
+def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Popen:
     with _checkout_lock():
         src = _ensure_robolab_src()
         # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
@@ -90,6 +90,8 @@ def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
         str(port),
         '--cameras',
         cameras,
+        '--num-envs',
+        str(num_envs),
         '--headless',
     ]
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
@@ -112,10 +114,13 @@ def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(cameras: str, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+def serve_robolab(cameras: str, num_envs: int = 1, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
     registered task, so one server serves one set.
+
+    ``num_envs`` is how many clones of the scene the one Isaac process steps together — the lever that fills
+    a card with more than one episode. Every per-slot wire field then carries that many entries.
     """
-    return serve_subprocess(partial(_spawn, cameras=cameras), host)
+    return serve_subprocess(partial(_spawn, cameras=cameras, num_envs=num_envs), host)

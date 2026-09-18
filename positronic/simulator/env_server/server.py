@@ -3,11 +3,21 @@
 This module must work in an isolated interpreter without Positronic installed.
 
 Protocol (msgpack frames, see ``protocol``):
-  client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
-  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
-  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
-  client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
+  client ``{'cmd': 'tasks', 'spec': ...}``      -> server ``{'tasks': [{...}, ...]}``
+  client ``{'cmd': 'reset', 'token': ...}``     -> server ``{'slots': [{'obs'}], 'meta', 'robot_meta',
+                                                            'control_dt'}``
+  client ``{'cmd': 'step', 'actions': [{...}]}``-> server ``{'slots': [{'obs', 'done'}], 'control_dt'}``
+  client ``{'cmd': 'close'}``                   -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
+
+An env serves a fixed number of slots — independent episodes it steps together. Most serve one; a benchmark
+that clones its scene serves several.
+
+* ``slots`` carries one entry per slot, in slot order. An episode's own fields live inside its entry:
+  ``obs`` from a reset, and ``obs``, ``done`` and ``success`` from a step.
+* ``meta``, ``robot_meta`` and ``control_dt`` sit beside ``slots`` and describe the whole batch.
+* ``actions`` is the mirror of ``slots``: one action per slot, same order.
+* A client reads the slot count off the width of ``slots``; nothing announces it.
 
 ``control_dt`` is the control period in seconds and can vary per step.
 ``meta`` identifies the scene; ``robot_meta`` identifies the robot model.
@@ -43,14 +53,16 @@ class EnvProtocol(ABC):
     def reset(self, token: Any) -> dict[str, Any]:
         """Construct or reuse the environment and re-randomize it from an opaque token.
 
-        Return ``obs``, scene ``meta``, ``robot_meta``, and ``control_dt`` in seconds.
-        Either metadata dict may be empty when the client supplies it.
+        Return ``slots`` (one ``{'obs': ...}`` per slot), scene ``meta``, ``robot_meta``, and ``control_dt``
+        in seconds. Either metadata dict may be empty when the client supplies it.
         """
 
     @abstractmethod
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Apply a raw action for one control period; return ``obs``, ``done``, and ``control_dt``.
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        """Apply one raw action per slot for one control period; return ``slots`` and ``control_dt``.
 
+        ``actions`` carries one entry per slot, in slot order, and ``slots`` answers with one ``{'obs',
+        'done'}`` each. An env whose slot count differs from the actions it is handed raises.
         ``control_dt`` is the wait until the next step and may vary each step.
         """
 
@@ -87,7 +99,7 @@ class EnvServer:
                     case protocol.Command.RESET:
                         result = self._env.reset(msg[protocol.TOKEN])
                     case protocol.Command.STEP:
-                        result = self._env.step(msg[protocol.ACTION])
+                        result = self._env.step(msg[protocol.ACTIONS])
             except Exception as e:
                 result = {protocol.ERROR: f'{type(e).__name__}: {e}'}
             connection.send(protocol.encode(result))
