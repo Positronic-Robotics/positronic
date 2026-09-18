@@ -54,3 +54,11 @@ ATTR_POLICY_ANSWERED = 'policy.answered'
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
+
+# One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
+# came due and went out on no round.
+ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'
+ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
+ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
+ATTR_WAYPOINTS_LATE_SUM_MS = 'episode.waypoints.late_sum_ms'
+ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'

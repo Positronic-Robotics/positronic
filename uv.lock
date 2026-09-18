@@ -74,7 +74,6 @@ members = [
 ]
 constraints = [
     { name = "cmake", specifier = "<4.3" },
-    { name = "evdev", specifier = "<1.9" },
     { name = "numpy", specifier = "<2.5" },
 ]
 overrides = [{ name = "rerun-sdk", specifier = "==0.30.0" }]
@@ -2009,9 +2008,9 @@ epath = [
 
 [[package]]
 name = "evdev"
-version = "1.8.0"
+version = "1.9.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4c/eb/b8900082a13a47bb9f69f415174d03cbf12ce95d07345722e1f4ef0e2093/evdev-1.8.0.tar.gz", hash = "sha256:45598eee1ae3876a3122ca1dc0ec8049c01931672d12478b5c610afc24e47d75", size = 32557, upload-time = "2025-01-25T17:02:19.592Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/f5/397b61091120a9ca5001041dd7bf76c385b3bfd67a0e5bcb74b852bd22a4/evdev-1.9.3.tar.gz", hash = "sha256:2c140e01ac8437758fa23fe5c871397412461f42d421aa20241dc8fe8cfccbc9", size = 32723, upload-time = "2026-02-05T21:54:24.987Z" }
 
 [[package]]
 name = "execnet"

@@ -1,3 +1,4 @@
+import importlib
 import sys
 from contextlib import contextmanager
 from functools import partial
@@ -85,6 +86,28 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
         drive_scheduler(world.start([driver, stub]), steps=200)
 
     assert stub.asked == tasks
+
+
+# `positronic.cli.eval` exports a command named `run`, which takes the attribute path to this module.
+run_module = importlib.import_module('positronic.cli.eval.run')
+
+
+@pytest.mark.parametrize('states, charged', [({}, True), ({'charge_inference_time': False}, False)])
+def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: bool):
+    """A local run charges inference time unless it states otherwise, and stamps that on every task the
+    eval makes."""
+    made = [Task(instruction_source='t', timeout_sec=1.0) for _ in range(2)]
+    seen: list[Task] = []
+
+    def capture(policy, evals, output_dir, timing):
+        seen.extend(evals[0].tasks())
+
+    monkeypatch.setattr(run_module, 'main', capture)
+    eval_cfg = Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=True)), tasks=partial(iter, made))
+
+    run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
+
+    assert [task.charge_inference_time for task in seen] == [charged, charged]
 
 
 def test_a_spec_carries_only_what_the_eval_binds():
