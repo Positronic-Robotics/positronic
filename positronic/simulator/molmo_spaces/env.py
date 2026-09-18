@@ -19,19 +19,15 @@ import os
 import sys
 import types
 
-# MolmoSpaces' renderer module, which the stub below stands in for on Linux.
+# MuJoCo's CGL package and its ctypes bindings to Apple's OpenGL framework.
 _CGL_PACKAGE = 'mujoco.cgl'
-_CGL_MODULE = f'{_CGL_PACKAGE}.cgl'
-# !!! so is it 'mujoco.cgl.cgl'???
+_CGL_MODULE = 'mujoco.cgl.cgl'
 
 
 def _install_cgl_noop_stub() -> None:
-    # HACK: MolmoSpaces' renderer hardcodes a macOS CGL context on the CPU (device_id=None) render path
-    # (opengl_rendering.py does ``from mujoco.cgl import cgl``), which dlopens Apple's OpenGL.framework and
-    # crashes at renderer init on Linux — so a CPU-rendered server (MUJOCO_GL=osmesa or mesa software EGL)
-    # dies before the first observation. CGL locking is a no-op off macOS, so stub the module: the import
-    # resolves and the (un)lock does nothing. Untouched on a GPU box, where the EGL path never imports it.
-    # macOS keeps the real module, where those locks guard an actual context.
+    # HACK: MolmoSpaces treats every device_id=None context as CGL and imports ``from mujoco.cgl import cgl``
+    # to unlock it. On Linux that import tries to load Apple's OpenGL framework, even with EGL or OSMesa.
+    # Stub the CGL lock calls there; macOS needs the real bindings.
     if sys.platform == 'darwin' or _CGL_PACKAGE in sys.modules:
         return
     cgl = types.ModuleType(_CGL_MODULE)
