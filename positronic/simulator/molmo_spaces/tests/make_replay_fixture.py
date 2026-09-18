@@ -2,33 +2,20 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy"]
 # ///
-"""Regenerate a deterministic-replay fixture from a recorded MolmoSpaces eval episode.
+"""Build replay fixtures from recorded joint commands and gripper targets.
 
-``test_replay.py`` replays a real pi05 rollout open-loop against the sim and asserts it reproduces. This
-script distils one recorded episode into the fixture that replay needs: the commanded joint targets and grip
-per step, taken from the recording, plus checkpoints of the ``sim_state`` those commands produce, taken by
-replaying them here. The commands are what the recording pins; the checkpoints pin the integration's current
-trajectory, so a later run that drifts from it fails. Regenerate them together whenever the recorded
-``sim_state`` changes shape or the pinned MolmoSpaces commit moves.
+State checkpoints come from replaying those commands through the integration.
+The fixture ends at the last recorded command because the recordings have an unrecorded tail
+(internal#130). Regenerate checkpoints when the simulator pin or state layout changes.
 
-Two properties make the distillation exact. The recorded commands are *absolute* joint targets, so the replay
-is open-loop. And the proxy applies the last command received when it steps, so sampling the command signal at
-each observation frame's timestamp reconstructs the stream the sim saw.
-
-An episode's command signals stop before its observations do (internal#130), so the fixture keeps the prefix up
-to the final recorded command and counts the rest as the recording's gap. Commands are stored as float32, the
-dtype ``env.py`` casts them to.
-
-Run (needs positronic for the dataset reader, and the MolmoSpaces assets for the replay — hence
-``--locked``, not ``--no-project``)::
+Run with the Positronic environment and MolmoSpaces assets::
 
     MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
     uv run --locked python positronic/simulator/molmo_spaces/tests/make_replay_fixture.py \
         --dataset_dir ~/.cache/positronic/s3/_/inference/molmo_battle_test/2026-07-29/sweep_jp \
         --episode_index 3 --episode_index 6
 
-Output: ``replay_ep<NN>.npz`` next to this script, one per episode (tens of KB — actions and checkpoints
-only, never the videos).
+Output: ``replay_ep<NN>.npz`` next to this script.
 """
 
 import argparse
@@ -46,7 +33,6 @@ from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import launcher, mapping
 
-# The fixture's own fields, as a distilled episode records them.
 FIELD_EPISODE_INDEX = 'episode_index'
 FIELD_BENCHMARK_PATH = 'benchmark_path'
 FIELD_TASK = 'task'
@@ -57,13 +43,11 @@ FIELD_CHECKPOINT_STEPS = 'checkpoint_steps'
 FIELD_CHECKPOINT_SIM_STATE = 'checkpoint_sim_state'
 FIELD_EXPECTED_SUCCESS = 'expected_success'
 
-# Checkpoint stride over the replayed steps: dense enough that drift is caught early rather than only at the
-# end state, sparse enough to keep the fixture small. The final step is always included on top.
 CHECKPOINT_STRIDE = 8
 
 
 def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
-    """The recorded episode directory whose spec carries ``episode_index``."""
+    """The recorded episode directory matching ``episode_index``."""
     for path in sorted(dataset_dir.rglob('static.json')):
         episode_dir = path.parent
         if DiskEpisode(episode_dir).static.get(molmo_keys.EPISODE_INDEX) == episode_index:
@@ -72,12 +56,12 @@ def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
 
 
 def benchmark_of(episode: DiskEpisode) -> mapping.BenchmarkPath:
-    """The benchmark the episode was recorded against, as its trial params name it."""
+    """The benchmark identified by the recorded trial parameters."""
     return mapping.BenchmarkPath(*(episode.static[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
 
 
 def sample_at(signal: Signal, timestamps: list[int]) -> list:
-    """The signal's value at each timestamp — the last one at or before it, a pimm receiver's semantics."""
+    """The last signal value at or before each timestamp."""
     sampled = signal.time[timestamps]
     assert isinstance(sampled, Signal)  # a sequence of timestamps samples a Signal, a single one a record
     return [value for value, _ts in sampled]
@@ -86,16 +70,12 @@ def sample_at(signal: Signal, timestamps: list[int]) -> list:
 def replay_commands(
     bench: mapping.BenchmarkPath, episode_index: int, commands: np.ndarray, grips: np.ndarray
 ) -> list[np.ndarray]:
-    """Step the commands open-loop through a MolmoSpaces env server, returning the sim state each produced.
-
-    Stops early if the sim ends the trial, so a caller can tell a full replay from a truncated one by the
-    length of what comes back.
-    """
+    """Simulation states after each command, stopping at termination or the end of the commands."""
     states: list[np.ndarray] = []
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
+            # These recordings use the benchmark's default seed.
             conn.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
             for command, grip in zip(commands, grips, strict=True):
                 action = {
@@ -118,19 +98,14 @@ def build_fixture(episode_dir: Path) -> dict[str, np.ndarray]:
     episode = DiskEpisode(episode_dir)
     bench = benchmark_of(episode)
     states = episode[mapping.OBS_SIM_STATE]
-    # rules-allow: hardcoded-keys — 'target_grip' is a canonical channel name spelled across every
-    # adoption and the eval configs; it belongs in positronic.keys, as its own sweep (internal#211).
+    # rules-allow: hardcoded-keys — 'target_grip' is a shared channel awaiting centralization (internal#211).
     commands, grips = episode[keys.TARGET_JOINTS], episode['target_grip']
-    # Frame 0 is the reset observation; every later frame is one step.
     frame_ts = [ts for _value, ts in states]
-    step_ts = frame_ts[1:]
+    step_ts = frame_ts[1:]  # The first frame is the reset observation.
     played = [np.asarray(value, dtype=np.float32) for value in sample_at(commands, step_ts)]
     grip = [float(np.asarray(value).reshape(-1)[0]) for value in sample_at(grips, step_ts)]
 
-    # The recording's command signals stop before its observations do (internal#130), so only the steps up to
-    # and including the first one that reads the final recorded command are pinned by the recording; past that
-    # the commands the run actually applied were never written, and no substitute reproduces them. Replay that
-    # prefix and report the rest as the recording's gap rather than replaying commands it does not contain.
+    # Stop at the last recorded command; later observations have no recorded commands (internal#130).
     last_command_ts = commands[len(commands) - 1][1]
     replayable = int(np.searchsorted(step_ts, last_command_ts, side='left')) + 1
 

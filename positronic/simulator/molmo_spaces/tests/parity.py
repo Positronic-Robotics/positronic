@@ -1,19 +1,6 @@
-"""Native-vs-positronic parity check for the MolmoSpaces integration.
+"""Compare native and env-server observations for one benchmark episode using hold actions.
 
-The fidelity check ``docs/architecture.md`` ("Benchmarks are native; adoptions are faithful") mandates for every
-sim-env integration, added here for MolmoSpaces. It drives one pinned benchmark episode twice — natively through
-MolmoSpaces' own stack (``parity_native.py``: ``JsonEvalTaskSampler`` -> ``reset``/``step``/``is_done``/
-``judge_success``, MolmoSpaces' native horizon) and through the positronic path (launcher -> env server -> wire ->
-the raw payload the ``MolmoAdapter`` maps) — feeding the *same* scripted actions (hold the arm, gripper open) and
-asserts they agree byte-for-byte.
-
-MolmoSpaces benchmark episodes are exact-pose deterministic, so the strong fidelity form applies: identical call
-sequence and byte-identical outcomes modulo wire format (joint positions/velocities, eef pose, gripper closure
-and success verdict equal at every step; camera frames equal by content hash). Holding the arm never succeeds,
-so the episode runs out its horizon, which exercises the horizon case too.
-
-This asserts fidelity against the pinned ``_MOLMO_COMMIT`` (``launcher.py``); re-run it on any bump of that pin
-before merge — a sim version change can silently shift the horizon or the rollout.
+The selected episode must remain unsuccessful until its horizon.
 
 Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``MUJOCO_GL``; a GPU-less box uses
 mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``), and a benchmark whose task spec carries
@@ -38,15 +25,14 @@ from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
 from positronic.simulator.molmo_spaces.tests import parity_record
 
-# parity_native.py runs only in MolmoSpaces' venv (it imports the flat, positronic-free ``env``), so reference it
-# by path — importing it into positronic's interpreter would fail on that import.
+# The native reference runs in the MolmoSpaces interpreter.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
 _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
 def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
-    """Drive one episode through launcher -> env server -> wire, holding the arm to the sim's own ``done``."""
+    """Recorded observations and camera hashes from an env-server hold rollout."""
     fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
     camera_names: list[str] = []
     cam_hashes: dict[str, list[str]] = {}
@@ -84,17 +70,13 @@ def _drive_positronic(bench: mapping.BenchmarkPath, episode_index: int, seed: in
 
 
 def _native_env() -> dict[str, str]:
-    """The molmo-venv environment plus this directory, so the reference resolves ``parity_record`` flat.
-
-    The launcher's PYTHONPATH carries what the *server* needs; ``parity_record`` is the comparison's own, so the
-    comparison adds it rather than the launcher knowing about a check.
-    """
+    """Subprocess environment with this test directory on PYTHONPATH."""
     env = launcher.molmo_subprocess_env()
     return {**env, 'PYTHONPATH': os.pathsep.join([env['PYTHONPATH'], str(Path(__file__).parent)])}
 
 
 def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
-    """Drive the native reference (``parity_native.py``) in MolmoSpaces' venv and load its recorded rollout."""
+    """Recorded observations from the native subprocess."""
     python = launcher.ensure_molmo_venv()
     subprocess.run(
         [
@@ -123,7 +105,6 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
     p_term = positronic[parity_record.TERMINATION_STEP]
     assert n_term < max_steps, f'native never terminated in {max_steps} steps — raise --max_steps above the horizon'
     assert p_term < max_steps, f'positronic never terminated in {max_steps} steps — raise --max_steps above the horizon'
-    # The horizon case: holding the arm never succeeds, so both stacks run out the native horizon and stop there.
     assert n_term == horizon == p_term, (
         f'terminating step differs: native {n_term}, horizon {horizon}, positronic {p_term}'
     )
@@ -144,7 +125,7 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
 
 
 def run(bench: mapping.BenchmarkPath, *, episode_index: int = 0, seed: int = 0, max_steps: int = 1200) -> None:
-    """Run the same episode natively and through positronic and assert byte-identical parity."""
+    """Compare observations and terminal results for native and env-server hold rollouts."""
     with tempfile.TemporaryDirectory() as tmp:
         native = _run_native(bench, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
         positronic = _drive_positronic(bench, episode_index, seed, max_steps)

@@ -1,7 +1,4 @@
-"""``MolmoAdapter``: the canonical embodiment contract <-> MolmoSpaces' raw obs/command payloads, client-side.
-
-Runs on positronic side.
-"""
+"""Client-side mapping between MolmoSpaces observations and the canonical embodiment contract."""
 
 from typing import Any
 
@@ -14,14 +11,12 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
-# The MolmoSpaces camera names each logical image reads, first present wins. Benchmarks name the same cameras
-# differently by generation; the order mirrors MolmoSpaces' own Pi policy (``policy/learned_policy/pi_policy.py``).
+# Camera aliases in MolmoSpaces Pi-policy preference order.
 CAMERAS = {
     keys.WRIST_IMAGE: ('wrist_camera_zed_mini', 'wrist_camera'),
     keys.EXTERIOR_IMAGE: ('droid_shoulder_light_randomization', 'exo_camera_1'),
 }
 
-# Each benchmark dimension's trial key: the env's records and the reset token carry the dimension names.
 _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
 
@@ -45,7 +40,6 @@ class MolmoAdapter(WireCommandAdapter):
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        # Env server reports ``eef_quat`` in wxyz format.
         ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)

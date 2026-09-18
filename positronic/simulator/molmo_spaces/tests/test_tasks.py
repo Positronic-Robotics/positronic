@@ -1,8 +1,4 @@
-"""Which episodes a MolmoSpaces eval runs: the adapter maps the env's records, the config sweeps them.
-
-``RemoteEnvControlSystem.tasks`` is stubbed, since a real episode list needs the MolmoSpaces venv;
-``tests/e2e.py`` runs the same command against the real benchmark.
-"""
+"""Benchmark selection and trial construction with the proxy's task listing stubbed."""
 
 import logging
 from typing import Any
@@ -28,7 +24,7 @@ _PLACE_HORIZON_SEC = 60.0
 
 @pytest.fixture
 def asked(monkeypatch) -> list[Any]:
-    """The specs the eval sends the proxy; every spec is answered with one episode of each of two benchmarks."""
+    """Specs sent to the proxy, which returns one episode from each of two benchmarks."""
     specs: list[Any] = []
 
     def tasks(self, selection: Any) -> list[dict[str, Any]]:
@@ -53,7 +49,6 @@ def asked(monkeypatch) -> list[Any]:
 
 
 def test_the_env_answers_which_episodes_the_sweep_runs(asked):
-    """The sweep is asked for when the run starts; an unset seed leaves the episode's own seed in force."""
     ev = benchmarks.override(trial_count=2).instantiate()
     assert asked == []
 

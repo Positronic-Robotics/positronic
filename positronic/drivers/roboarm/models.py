@@ -100,8 +100,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
 
 
 GRASP_SITE_LINK = 'gripper_grasp_site'
-# The 2F-85's grasp point — where the closed pads meet — 155mm along the flange approach axis, sharing the
-# flange's orientation.
+# The 2F-85's closed pads meet 155 mm along the flange approach axis.
 _2F85_GRASP_XYZ = '0 0 0.155'
 
 # The coupler stays fixed: given an axis, the outer link hangs 19 mm out at full grip.
@@ -182,12 +181,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
 
 @cache
 def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
-    """The bundled real franka arm + Robotiq 2F-85 for the 3D viewer: the FR3 URDF and its collision
-    meshes with the 2F-85 grafted onto the flange, plus the canonical joint names and control frame.
-
-    Backfills real-robot datasets recorded before they stored their own model.
-    ``default_frame_at`` names the link where ``DEFAULT_FRAME`` is declared.
-    """
+    """FR3 and Robotiq 2F-85 model metadata, with ``DEFAULT_FRAME`` attached at ``default_frame_at``."""
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
     mesh_dir = here.parents[2] / 'assets' / 'fr3_collision'

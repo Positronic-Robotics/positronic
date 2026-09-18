@@ -27,10 +27,9 @@ class EnvAdapter(ABC):
 
     @abstractmethod
     def reset_token(self, params: dict[str, Any]) -> Any:
-        """The trial's params -> the env's opaque reset token (an int for most, a blob for exact replay).
+        """The environment's reset token for the trial parameters.
 
-        Reads the param keys it needs (e.g. ``eval.seed``, ``libero.task_id``). Called at each trial start, so
-        it is also where the adapter clears any per-trial command state.
+        Called at each trial start; clear any per-trial command state here.
         """
 
     @abstractmethod

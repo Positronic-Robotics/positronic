@@ -1,15 +1,7 @@
-"""Launches the MolmoSpaces env server as a subprocess and owns its lifetime.
+"""Launch MolmoSpaces in an isolated Python environment.
 
-positronic starts the server: the env runs in MolmoSpaces' own interpreter — a per-checkout ``.venv`` with the
-``molmospaces[mujoco]`` stack (mujoco ~=3.5, the resource-manager asset layer, torch) installed into it, far too
-heavy and Python-version-pinned (3.11) to share positronic's venv. The positronic-free ``env_server`` package and
-this package's ``mapping`` module ride ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol`` and
-the pure wire mappings without dragging in positronic; ``molmo_spaces`` resolves from the venv.
-
-MolmoSpaces renders MuJoCo scenes, so the server needs a GL backend (``MUJOCO_GL``) and its asset packs
-(``MLSPACES_ASSETS_DIR``). Both env vars pass through from the caller; unset, ``MUJOCO_GL`` takes the backend
-the host platform offers — ``egl`` (GPU) on Linux, ``cgl`` on macOS, which has no EGL and rejects it. A
-GPU-less Linux box overrides with ``MUJOCO_GL=osmesa`` for CPU software rendering.
+``MLSPACES_ASSETS_DIR`` must point to the asset packs. ``MUJOCO_GL`` defaults to EGL on Linux and CGL on macOS;
+CPU rendering on Linux requires OSMesa or software EGL.
 """
 
 import fcntl
@@ -26,34 +18,26 @@ from positronic.simulator.molmo_spaces import mapping
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
-_MAPPING_DIR = Path(__file__).parent  # ``mapping.py`` — imported flat by env.py, positronic-free
+_MAPPING_DIR = Path(__file__).parent
 
 _MOLMO_REPO = 'https://github.com/allenai/molmospaces.git'
 _MOLMO_COMMIT = 'c2f1b583f087e1d3994e1377574843b759d9d0f8'
 _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 
-# MolmoSpaces ships no lockfile, so a bare install re-resolves every transitive dep on each fresh box. This
-# constraints file pins the full resolution (a frozen known-good venv, minus molmo-spaces' own editable line),
-# fed to the install via ``-c`` so the pinned commit always builds the same environment. Regenerate it when
-# ``_MOLMO_COMMIT`` bumps — see the file header.
+# Version constraints compensate for MolmoSpaces' missing lockfile; the file documents how to regenerate them.
 _MOLMO_CONSTRAINTS = Path(__file__).parent / 'molmo_constraints.txt'
 
-# MolmoSpaces pins Python 3.11 and installs its MuJoCo renderer stack via the ``mujoco`` extra (classic renderer,
-# mujoco ~=3.5). ``mujoco-filament`` is the alternative for bench-v2 filament scenes; the classic renderer is the
-# eval default.
+# MolmoSpaces requires Python 3.11. Filament benchmarks need the alternative mujoco-filament extra.
 _MOLMO_PYTHON = '3.11'
 _MOLMO_EXTRA = 'mujoco'
 
-# ``env.py`` imports positronic's ``env_server`` off PYTHONPATH, which needs ``websockets`` (the wire server) and
-# ``msgpack`` (the frame codec). MolmoSpaces currently pulls both, but that is incidental to its own deps — install
-# them explicitly so env_server's wire contract holds even if MolmoSpaces drops them. Constraints mirror positronic's.
+# The isolated env server requires these independently of MolmoSpaces' dependencies.
 _WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
 
 
 @contextmanager
 def _checkout_lock() -> Iterator[None]:
-    """Serialize checkout + ``uv sync`` across processes sharing the cache, so a warm-cache fan-out of eval jobs
-    mounting one ``~/.cache/positronic/molmospaces`` filesystem does not race a forced checkout against a sync."""
+    """Prevent concurrent checkout and installation in the shared cache."""
     _MOLMO_SRC.parent.mkdir(parents=True, exist_ok=True)
     with open(_MOLMO_SRC.parent / 'setup.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -61,19 +45,13 @@ def _checkout_lock() -> Iterator[None]:
 
 
 def ensure_molmo_venv() -> Path:
-    """The MolmoSpaces venv python, after ensuring the pinned checkout and its installed stack exist.
-
-    Install the stack before returning: a cold first install far exceeds any client's connect deadline, which
-    should only cover the sim's boot. Install the ``mujoco`` extra explicitly into a venv the way MolmoSpaces'
-    own image does, rather than ``uv sync`` — which also resolves the ``curobo`` extra, a CUDA build that needs a
-    GPU toolchain and is not on the eval task path. Both steps are idempotent and fast when warm. MolmoSpaces
-    ships no uv.lock, so ``molmo_constraints.txt`` pins the transitive resolution (``-c``) for a reproducible env.
-    """
+    """Return the Python executable after preparing the pinned MolmoSpaces environment."""
     venv = _MOLMO_SRC / '.venv'
     with _checkout_lock():
         src = ensure_pinned_checkout(_MOLMO_REPO, _MOLMO_COMMIT, _MOLMO_SRC)
         if not venv.exists():
             subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
+        # uv sync also resolves upstream's unused curobo extra, which requires CUDA to build.
         subprocess.run(
             ['uv', 'pip', 'install', '-c', str(_MOLMO_CONSTRAINTS), '-e', f'.[{_MOLMO_EXTRA}]', *_WIRE_DEPS],
             cwd=str(src),
@@ -87,9 +65,7 @@ _GL_BACKEND_ENV = 'MUJOCO_GL'
 
 
 def molmo_subprocess_env() -> dict[str, str]:
-    """The environment a molmo-venv script runs under: the positronic-free ``env_server``/``mapping`` on
-    PYTHONPATH and a GL backend. GPU OpenGL by default; a GPU-less box exports MUJOCO_GL=osmesa, or relies on
-    mesa's software EGL, for CPU rendering."""
+    """Subprocess environment with the server's Python paths and GL backend."""
     return {
         **os.environ,
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
@@ -98,8 +74,6 @@ def molmo_subprocess_env() -> dict[str, str]:
 
 
 def _spawn(host: str, port: int) -> subprocess.Popen:
-    # env.py exits on this before it binds the port. Check it here, where the failure can name the missing
-    # precondition instead of reaching the caller as a bare pre-bind exit status.
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
@@ -108,9 +82,5 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
 
 
 def serve_molmo_spaces(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """The MolmoSpaces env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
-
-    The server holds every benchmark under the asset packs; the reset token selects the benchmark and the
-    episode within it, so one server serves every trial.
-    """
+    """Run a MolmoSpaces server for the context's lifetime and yield its address."""
     return serve_subprocess(_spawn, host)

@@ -1,8 +1,4 @@
-"""End-to-end check that the MolmoSpaces env server works over the socket + the adapter maps its payload.
-
-The mapping/adapter unit tests exercise the transforms in-process; this drives the real boundary: the launcher
-spawns the env-server subprocess, and a client resets + steps it over the socket, then feeds the wire payload
-through ``MolmoAdapter``. A wrong obs key, quaternion order, or a broken wire codec fails the mapping.
+"""Smoke-test the MolmoSpaces socket server and observation adapter.
 
 Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``MUJOCO_GL``; a GPU-less box uses
 mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run on a box with those::
@@ -25,7 +21,7 @@ from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 
 def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
-    """The privileged full MuJoCo state must survive the wire and reach the recorder as a finite qpos+qvel vector."""
+    """Check that the privileged simulation state is a finite, nonempty vector."""
     sim_state = adapter.privileged(raw_obs)[mapping.OBS_SIM_STATE]
     assert isinstance(sim_state, np.ndarray) and sim_state.ndim == 1 and sim_state.size > 0, (
         f'privileged sim_state malformed: {type(sim_state)} shape={getattr(sim_state, "shape", None)}'
@@ -35,8 +31,7 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
 
 
 def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5) -> None:
-    """Reset + step the first ``episodes`` episodes the server lists for ``bench`` (every benchmark when
-    ``None``) over the socket, mapping each frame with the adapter."""
+    """Check the first ``episodes`` matching records over the socket, resetting and stepping each one."""
     adapter = MolmoAdapter()
     with serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
@@ -60,7 +55,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 for _ in range(steps):
                     hold = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
                     out = conn.step(hold)
-                    adapter.observations(out[protocol.FRAME_OBS])  # the mapping round-trips on step frames too
+                    adapter.observations(out[protocol.FRAME_OBS])
                     _check_sim_state(adapter, out[protocol.FRAME_OBS])
                 print(f'  episode {i}: {steps} steps ok (done={out[protocol.FRAME_DONE]})')
         finally:

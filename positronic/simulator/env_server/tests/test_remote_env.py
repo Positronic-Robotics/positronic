@@ -89,8 +89,6 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
 
 @pytest.mark.timeout(30.0)
 def test_serve_subprocess_reports_a_server_that_dies_before_binding():
-    """A server that raises during startup never binds, so its port stays closed exactly as a slow boot's
-    does."""
     spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])  # noqa: E731
     with pytest.raises(RuntimeError, match='status 3'), serve_subprocess(spawn, 'localhost'):
         pass
@@ -512,15 +510,13 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 
 
 def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
-    """``protocol`` owns the contract and ``_wire_command`` is the only thing that writes it, so pinning the two
-    against each other keeps the set an env adoption must cover equal to the set a policy can actually emit."""
     pose = geom.Transform3D(np.zeros(3), geom.Rotation.identity)
     commands = [
         roboarm_command.CartesianPosition(pose),
         roboarm_command.CartesianDelta(pose),
         roboarm_command.JointPosition(np.zeros(7)),
         roboarm_command.JointDelta(np.zeros(7)),
-        None,  # nothing held: the arm holds where it is
+        None,
     ]
     tags = {_wire_command(command)[protocol.COMMAND_TYPE] for command in commands}
     assert tags == set(protocol.CANONICAL_COMMAND_TYPES)

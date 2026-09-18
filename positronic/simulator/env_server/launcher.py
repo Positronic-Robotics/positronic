@@ -58,17 +58,13 @@ def terminate(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-# How long a server may take to bind its port, and how often the wait re-checks. The deadline must cover a
-# cold first boot, where a simulator compiles shaders and loads asset packs before serving.
+# Server startup can include shader compilation and asset loading.
 _BIND_DEADLINE = 1800.0
 _BIND_POLL_INTERVAL = 0.2
 
 
 def _await_bind(proc: subprocess.Popen, host: str, port: int, deadline: float) -> None:
-    """Block until *proc* accepts connections on *port*, raising if it exits or the deadline passes.
-
-    The server's accept loop drops a connection that never handshakes, so this probe costs it nothing.
-    """
+    """Wait for a TCP connection; raise if the process exits or ``deadline`` seconds elapse."""
     end = time.monotonic() + deadline
     while True:
         try:
@@ -88,16 +84,7 @@ def _await_bind(proc: subprocess.Popen, host: str, port: int, deadline: float) -
 def serve_subprocess(
     spawn: Callable[[str, int], subprocess.Popen], host: str, bind_deadline: float = _BIND_DEADLINE
 ) -> Iterator[tuple[str, int]]:
-    """Run an env-server subprocess for the body's lifetime, yielding its ``(host, port)`` once it is bound.
-
-    The single owner of the subprocess: ``RemoteEnvControlSystem`` enters it to tie the subprocess to the
-    World run, and a plain client (e.g. an e2e demo replay) enters it directly to talk over the socket without
-    a World. The task spec rides the reset token, so the subprocess needs only its address — it serves
-    whatever task the first reset asks for.
-
-    ``bind_deadline`` must cover a cold first boot: a heavy simulator spends minutes compiling shaders and
-    loading assets before it binds.
-    """
+    """Yield the server's (host, port) once it accepts TCP connections; terminate the process on exit."""
     port = free_port()
     proc = spawn(host, port)
     try:

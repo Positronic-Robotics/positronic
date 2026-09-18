@@ -1,24 +1,10 @@
-"""Validate the MolmoSpaces rig's command transforms against the live sim.
+"""Check command conversions against a live MolmoSpaces scene.
 
-MolmoSpaces' Franka runs a joint-position controller, so every other command reaches it only through the
-conversions in ``mapping``, the Cartesian pair through MolmoSpaces' IK. The solver uses a separate robot
-model, so its results are checked against the grasp site in a real benchmark scene (``mapping``'s unit tests
-cover the routing with a stub solver).
+Checks FK against the measured grasp-site pose, IK on reachable targets, Cartesian hold,
+and conversion of every canonical command type.
 
-Four properties. The kinematic three read the arm's grasp site (the frame the env observes in, so command and
-observation share a frame); the fourth is the adoption's coverage of the command contract:
-
-- **FK identity** — the scratch-``MjData`` recompute of the measured joints reproduces the live grasp-site read.
-- **IK round-trip** — for reachable targets sampled by perturbing the measured joints, ``_fk(_ik(pose))``
-  recovers the pose. This is the property a Cartesian policy depends on.
-- **Cartesian hold** — commanding the pose the arm already holds resolves to the joints it already holds, which
-  makes an absolute Cartesian setpoint stable when a policy re-sends it.
-- **Command contract** — every canonical command type converts to joint targets through the live IK.
-
-Runs in MolmoSpaces' venv, flat off ``PYTHONPATH`` like ``parity_native.py`` (positronic-free: ``molmo_spaces``
-plus this package's ``mapping``/``env``), so positronic's interpreter cannot import it. Needs the asset packs
-(``MLSPACES_ASSETS_DIR``) and a GL backend (``MUJOCO_GL``; a GPU-less box uses mesa software EGL). Launch it the
-way ``parity.py`` launches the native reference — the venv python under ``launcher.molmo_subprocess_env()``::
+Requires MolmoSpaces' environment, asset packs and a GL backend.
+Run with the launcher's subprocess environment::
 
     uv run --locked python -c "
     import subprocess
@@ -28,10 +14,6 @@ way ``parity.py`` launches the native reference — the venv python under ``laun
                     '--benchmark', '<suite/scene_dataset/task_config/benchmark>'],
                    env=launcher.molmo_subprocess_env(), check=True)"
 """
-
-# The flat ``protocol`` module resolves only inside MolmoSpaces' own venv, where this validation runs; pyright
-# checks it against positronic's deps, which cannot see it. That import carries its own
-# ``reportMissingImports`` suppression, so one that should resolve here still fails the check.
 
 import argparse
 import os
@@ -44,32 +26,22 @@ import mujoco  # noqa: E402
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports] -- flat on PYTHONPATH beside ``server``, see ``launcher``
 
-# Sampled targets perturb each measured joint by up to this much (radians): far enough that the solver has real
-# work to do, near enough that every target stays reachable and away from the limits.
-_JOINT_JITTER = 0.1
+_JOINT_JITTER = 0.1  # radians
 _IK_SAMPLES = 16
 _POS_ATOL = 1e-3  # metres
 _ORI_ATOL = 1e-2  # radians
-# The live site is read after the sim has stepped, so it carries residual motion the scratch recompute of the
-# same joints cannot reproduce exactly; float precision, not float64, is the right bar for the identity.
-_FK_ATOL = 1e-5
-# The step the relative commands carry: small enough that the target stays reachable from the measured
-# configuration, large enough that the conversion is not the identity.
+_FK_ATOL = 1e-5  # Measured joints are float32; FK uses float64.
 _DELTA_POS = 0.01  # metres
 _DELTA_Q = 0.01  # radians
 
 
 def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The grasp-site world pose a candidate arm configuration reaches — the inverse of the rig's ``_ik``.
-
-    Runs on a copy of the live scene's ``MjData``, so the checks below probe candidate
-    joints without perturbing the sim.
-    """
+    """The grasp-site world pose for candidate joints, computed on a copy of the scene state."""
     arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    data = mujoco.MjData(arm.mj_model)  # pyright: ignore[reportAttributeAccessIssue]
-    mujoco.mj_copyData(data, arm.mj_model, arm.mj_data)  # pyright: ignore[reportAttributeAccessIssue]
+    data = mujoco.MjData(arm.mj_model)
+    mujoco.mj_copyData(data, arm.mj_model, arm.mj_data)
     data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
-    mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    mujoco.mj_forward(arm.mj_model, data)
     return data.site_xpos[arm.leaf_frame_id].copy(), data.site_xmat[arm.leaf_frame_id].reshape(3, 3).copy()
 
 
@@ -94,8 +66,6 @@ def _check_ik_roundtrip(sim_env) -> None:
 
 
 def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
-    # Commanding the pose the arm already holds must resolve to (essentially) the joints it already holds —
-    # the property that makes an absolute Cartesian setpoint stable when a policy re-sends it.
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
     target = env.mapping.wire_command_to_arm_action(
@@ -107,14 +77,6 @@ def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
 
 
 def _check_every_canonical_command_converts(sim_env) -> None:
-    """Drive every canonical command type through the real conversion — the adoption's whole obligation.
-
-    The command contract is total: MolmoSpaces' Franka natively takes joint-position targets alone, so each
-    canonical type has to reach it as one. ``mapping``'s unit tests pin that routing against a stub solver;
-    here each type runs through the live IK and the measured pose, so a type the rig cannot actually resolve
-    fails. The iteration is over ``protocol.CANONICAL_COMMAND_TYPES`` rather than a list written here, so a
-    type added to the wire fails this check until the rig converts it.
-    """
     measured = np.asarray(sim_env._measured_arm_q(), dtype=np.float64)
     pos, rot = sim_env._measured_eef_pose()
     identity_rot = np.eye(3).reshape(-1)

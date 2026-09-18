@@ -1,10 +1,8 @@
-# Pinned transitive dependency set for the MolmoSpaces env-server venv (ensure_molmo_venv, launcher.py).
-# MolmoSpaces ships no lockfile, so a cold 'uv pip install -e .[mujoco]' re-resolves every dep afresh; this
-# constraints file (uv pip install -c ...) pins that resolution so every box builds the same env.
+# Dependency versions for the MolmoSpaces environment; upstream ships no lockfile.
 #
-# Regenerate from a known-good venv (the one the parity/e2e run validated):
+# Regenerate from an environment validated by the parity and e2e checks:
 #   VIRTUAL_ENV=<molmo .venv> uv pip freeze | grep -v '^-e ' > molmo_constraints.txt   (then re-add this header)
-# molmo-spaces itself is installed editable from source (-e .), so its freeze line is excluded here.
+# The editable MolmoSpaces source is pinned by the launcher.
 absl-py==2.5.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
