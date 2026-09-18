@@ -75,7 +75,9 @@ hardware = [
     "pyaudio; sys_platform == 'linux'",  # For SoundSystem
     "pymodbus",  # For grippers
     "pyserial", # For grippers
-    "pyzed; sys_platform == 'linux'",  # ZED camera support
+    # ZED camera support. Named per architecture, because the name on the index is a different package: an
+    # architecture that Stereolabs ships no wheel for must resolve to nothing, not to that one.
+    "pyzed; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",
@@ -188,10 +190,15 @@ positronic-franka = false
 [tool.uv.sources]
 positronic-platform-client = { workspace = true }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
+# `pyzed` links against the ZED SDK installed on the machine, so the wheel version must equal that SDK version.
+# The Jetson stations run JetPack 7 (L4T 39), which SDK 5.0 has no build for, so aarch64 takes SDK 5.4.
 pyzed = [
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl", marker = "python_full_version >= '3.12' and python_full_version < '3.13'" },
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12' and platform_machine == 'x86_64'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl", marker = "python_full_version >= '3.12' and python_full_version < '3.13' and platform_machine == 'x86_64'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13' and platform_machine == 'x86_64'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.4/whl/linux_aarch64/pyzed-5.4-cp311-cp311-linux_aarch64.whl", marker = "python_full_version < '3.12' and platform_machine == 'aarch64'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.4/whl/linux_aarch64/pyzed-5.4-cp312-cp312-linux_aarch64.whl", marker = "python_full_version >= '3.12' and python_full_version < '3.13' and platform_machine == 'aarch64'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.4/whl/linux_aarch64/pyzed-5.4-cp313-cp313-linux_aarch64.whl", marker = "python_full_version >= '3.13' and platform_machine == 'aarch64'" },
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
