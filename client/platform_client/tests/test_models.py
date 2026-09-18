@@ -66,8 +66,6 @@ USER = UserId(0xA0)
 
 SCORES = Scores(primary=0.75)
 
-# What the gateway signs for a run's own records. A participant holds no credential for the bucket,
-# so each link carries one.
 RESULT_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/result.json?X-Amz-Signature=beef'
 DIAGNOSTICS_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/diagnostics.json?X-Amz-Signature=cafe'
 
@@ -413,8 +411,6 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
 
 
 def test_a_failed_run_carries_a_link_to_each_of_its_records():
-    # The server drops a field its declared model does not name, so a link reaches a submitter only
-    # while the model below names it.
     payload = {
         'id': '1f',
         'reason_code': 'policy_setup_crash',
@@ -446,8 +442,7 @@ def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result(
     assert view.artifacts.diagnostics is None
 
 
-def test_a_finished_run_always_names_where_its_result_is():
-    # `result` is required, so a caller reads it off a finished view with no None check.
+def test_artifact_refs_never_come_without_a_result():
     with pytest.raises(ValidationError):
         ArtifactRefs.model_validate({'diagnostics': DIAGNOSTICS_URL})
 
