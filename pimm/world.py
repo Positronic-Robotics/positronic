@@ -602,7 +602,6 @@ class World:
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
 
         while ready:
-            now_ns = self._clock.now_ns()
             carried = []  # loops that yield; they run again at the next instant
             finished = False
             for i in sorted(ready):
@@ -631,7 +630,7 @@ class World:
                 )
 
             # The next instant is the nearest future wake, or now if only carried loops remain.
-            target_ns = pq[0][0] if pq else now_ns
+            target_ns = pq[0][0] if pq else self._clock.now_ns()
             ready = carried
             while pq and pq[0][0] <= target_ns:
                 ready.append(heapq.heappop(pq)[1])
