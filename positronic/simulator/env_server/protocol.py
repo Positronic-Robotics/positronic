@@ -17,7 +17,8 @@ OK = 'ok'
 TASKS = 'tasks'
 SPEC = 'spec'
 TOKEN = 'token'
-ACTION = 'action'
+ACTIONS = 'actions'
+SLOTS = 'slots'
 ERROR = 'error'
 
 
@@ -67,6 +68,15 @@ def single_arm(action: dict[str, Any]) -> dict[str, Any]:
     if extra:
         raise ValueError(f'a single-arm env cannot act on channels {sorted(extra)}')
     return action
+
+
+def one_slot(frame: dict[str, Any]) -> dict[str, Any]:
+    """A one-slot answer as a flat frame: that slot's own fields beside the ones describing the batch.
+
+    For a client of a server that runs one scene per process. A wider answer raises.
+    """
+    (slot,) = frame[SLOTS]
+    return {**{key: value for key, value in frame.items() if key != SLOTS}, **slot}
 
 
 def _pack(obj):

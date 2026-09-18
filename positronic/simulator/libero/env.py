@@ -188,9 +188,15 @@ class LiberoEnv(EnvProtocol):
                 raw, _reward, _done, _info = self._env.step(np.zeros(len(self._controller.input_max)).tolist() + [-1.0])
         # ``robot_meta`` is empty: the 3.10 server can't import positronic to emit the Panda model, so the eval
         # supplies it via ``static_meta`` (``bundled_panda_model``). ``meta`` carries the scene/task identity.
-        return {'obs': self._observe(raw), 'meta': self._meta, 'robot_meta': {}, 'control_dt': self._control_dt}
+        return {
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(raw)}],
+            protocol.FRAME_META: self._meta,
+            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        (action,) = actions  # LIBERO runs one scene per process, so this server serves one slot
         wire = protocol.single_arm(action)
         arm = self._arm_action(wire[protocol.ROBOT_COMMAND])
         # positronic grip in [0, 1] maps to robosuite's [-1, 1]; robosuite's PandaGripper opens at -1 and closes
@@ -199,7 +205,10 @@ class LiberoEnv(EnvProtocol):
         # LIBERO's ``BDDLBaseDomain.step`` overrides robosuite's horizon-based ``done`` with ``_check_success()``,
         # so ``done`` is the task-success flag (the adapter's ``eval.success``), not a step-limit timeout.
         raw, _reward, done, _info = self._env.step(np.concatenate([arm, [grip]]).tolist())
-        return {'obs': self._observe(raw), 'done': bool(done), 'control_dt': self._control_dt}
+        return {
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(raw), protocol.FRAME_DONE: bool(done)}],
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
     def _arm_action(self, command: dict[str, Any]) -> np.ndarray:  # noqa: C901
         # All-to-all: each command becomes the physical pre-scale quantity the active controller's set_goal adds to
@@ -207,36 +216,39 @@ class LiberoEnv(EnvProtocol):
         # FK/IK on the site Jacobian. ``dq`` is a per-step joint delta (positronic applies ``JointDelta`` as
         # ``q + dq``, never as a rate), so it bridges as a delta everywhere except the JOINT_VELOCITY controller,
         # which wants rad/s — there it is divided by the control period.
-        match (self._control_mode, command['type']):
-            case ('ee', 'cartesian'):  # OSC_POSE: world-frame pose error
-                physical = self._pose_error(*_unpack_pose(command['pose']))
-            case ('ee', 'cartesian_delta'):  # OSC_POSE: the world-frame delta composed onto the live eef pose
+        match (self._control_mode, command[protocol.COMMAND_TYPE]):
+            case ('ee', protocol.CARTESIAN):  # OSC_POSE: world-frame pose error
+                physical = self._pose_error(*_unpack_pose(command[protocol.COMMAND_POSE]))
+            case ('ee', protocol.CARTESIAN_DELTA):  # OSC_POSE: the world-frame delta composed onto the live eef pose
                 physical = self._pose_error(*self._delta_target(command))
-            case ('ee', 'joint_pos'):
-                physical = self._pose_error(*self._fk(command['q']))
-            case ('ee', 'joint_vel'):
-                physical = self._pose_error(*self._fk(self._cur_q() + command['dq']))
-            case ('ee', 'hold'):
+            case ('ee', protocol.JOINT_POS):
+                physical = self._pose_error(*self._fk(command[protocol.COMMAND_JOINT_POS]))
+            case ('ee', protocol.JOINT_DELTA):
+                physical = self._pose_error(*self._fk(self._cur_q() + command[protocol.COMMAND_JOINT_DELTA]))
+            case ('ee', protocol.HOLD):
                 physical = np.zeros(6)
-            case ('joint', 'joint_pos'):  # JOINT_POSITION: joint delta from current
-                physical = command['q'] - self._cur_q()
-            case ('joint', 'joint_vel'):
-                physical = command['dq']
-            case ('joint', 'cartesian'):
-                physical = self._ik(*_unpack_pose(command['pose'])) - self._cur_q()
-            case ('joint', 'cartesian_delta'):
+            case ('joint', protocol.JOINT_POS):  # JOINT_POSITION: joint delta from current
+                physical = command[protocol.COMMAND_JOINT_POS] - self._cur_q()
+            case ('joint', protocol.JOINT_DELTA):
+                physical = command[protocol.COMMAND_JOINT_DELTA]
+            case ('joint', protocol.CARTESIAN):
+                physical = self._ik(*_unpack_pose(command[protocol.COMMAND_POSE])) - self._cur_q()
+            case ('joint', protocol.CARTESIAN_DELTA):
                 physical = self._ik(*self._delta_target(command)) - self._cur_q()
-            case ('joint', 'hold'):
+            case ('joint', protocol.HOLD):
                 physical = np.zeros(len(self._qpos_idx))
-            case ('joint_delta', 'joint_vel'):  # JOINT_VELOCITY: the per-step delta as a rate over the control period
-                physical = command['dq'] / self._control_dt
-            case ('joint_delta', 'joint_pos'):
-                physical = (command['q'] - self._cur_q()) / self._control_dt
-            case ('joint_delta', 'cartesian'):
-                physical = (self._ik(*_unpack_pose(command['pose'])) - self._cur_q()) / self._control_dt
-            case ('joint_delta', 'cartesian_delta'):
+            case (
+                'joint_delta',
+                protocol.JOINT_DELTA,
+            ):  # JOINT_VELOCITY: the per-step delta as a rate over the control period
+                physical = command[protocol.COMMAND_JOINT_DELTA] / self._control_dt
+            case ('joint_delta', protocol.JOINT_POS):
+                physical = (command[protocol.COMMAND_JOINT_POS] - self._cur_q()) / self._control_dt
+            case ('joint_delta', protocol.CARTESIAN):
+                physical = (self._ik(*_unpack_pose(command[protocol.COMMAND_POSE])) - self._cur_q()) / self._control_dt
+            case ('joint_delta', protocol.CARTESIAN_DELTA):
                 physical = (self._ik(*self._delta_target(command)) - self._cur_q()) / self._control_dt
-            case ('joint_delta', 'hold'):
+            case ('joint_delta', protocol.HOLD):
                 physical = np.zeros(len(self._qpos_idx))
             case (mode, ctype):
                 raise ValueError(f'control mode {mode!r} cannot map command {ctype!r}')
@@ -264,7 +276,7 @@ class LiberoEnv(EnvProtocol):
         # onto the live eef pose (``goal_pos = ee_pos + Δpos``; ``goal_ori = R(Δrot) @ ee_ori``) — the same compose
         # each control mode then bridges, as an OSC pose error or via IK to joints.
         cur_pos, cur_rot = self._cur_pose()
-        delta_pos, delta_rot = _unpack_pose(command['delta'])
+        delta_pos, delta_rot = _unpack_pose(command[protocol.COMMAND_DELTA])
         return cur_pos + delta_pos, delta_rot @ cur_rot
 
     def _cur_pose(self) -> tuple[np.ndarray, np.ndarray]:
