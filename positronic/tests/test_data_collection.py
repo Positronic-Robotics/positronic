@@ -26,10 +26,19 @@ def world():
 
 
 def make_buttons(
-    *, trigger: float = 0.0, thumb: float = 0.0, stick: float = 0.0, A: bool = False, B: bool = False
+    *,
+    trigger: float = 0.0,
+    thumb: float = 0.0,
+    stick: float = 0.0,
+    A: bool = False,
+    B: bool = False,
+    left_stick: float = 0.0,
 ) -> dict:
     """Constructs controller buttons payload matching DataCollection mapping."""
-    return {'left': None, 'right': [trigger, thumb, 0.0, stick, 1.0 if A else 0.0, 1.0 if B else 0.0]}
+    return {
+        'left': [0.0, 0.0, 0.0, left_stick, 0.0, 0.0],
+        'right': [trigger, thumb, 0.0, stick, 1.0 if A else 0.0, 1.0 if B else 0.0],
+    }
 
 
 def assert_strictly_increasing(sig):
@@ -46,6 +55,13 @@ class DummyRobot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, _clock: pimm.Clock):
         while not should_stop.value:
             yield pimm.Sleep(0.1)
+
+
+class _StateAt:
+    """An arm state carrying joints alone, for the paths that read nothing else off it."""
+
+    def __init__(self, q: np.ndarray):
+        self.q = q
 
 
 def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict[str, object]] | None = None):
@@ -296,6 +312,65 @@ def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):
     drive_scheduler(world.start([dc, driver]), steps=400)
 
     np.testing.assert_array_equal(asked[0].request.positions, NOMINAL_JOINTS)
+
+
+STOW_JOINTS = np.zeros(7)
+
+
+def test_the_left_stick_walks_the_arm_down_onto_its_stow_pose(world):
+    """An arm held by position-PD sits above where it is sent, by the torque it carries over its gain, so one
+    move does not put it down. Each step asks for the stow pose less the gap the arm reports, walking the
+    target under the pose until the arm itself lands on it."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, (), STOW_JOINTS)
+    grips, sounds = RecordingEmitter(), RecordingEmitter()
+    dc.target_grip._bind(grips)
+    dc.sound._bind(sounds)
+    arm, buttons = world.pair(dc.sync_move), world.pair(dc.buttons_receiver)
+    state = world.pair(dc.robot_state)
+
+    held = 0.02  # the arm answers every move from the same gap above the pose, so the steps never run out
+    asked = []
+
+    def answer_moves():
+        state.emit(_StateAt(np.full(7, held)))
+        for call in arm.incoming():
+            asked.append(call)
+            call.set_result(None)
+
+    driver = ManualDriver([
+        (lambda: state.emit(_StateAt(np.full(7, held))), 0.01),
+        (lambda: buttons.emit(make_buttons(left_stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(left_stick=1.0)), 0.01),
+        *[(answer_moves, 0.01) for _ in range(DataCollectionController._STOW_STEPS + 2)],
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=800)
+
+    targets = np.array([call.request.positions for call in asked])
+    assert len(targets) == DataCollectionController._STOW_STEPS
+    # The first asks for the pose itself; every one after it goes a step lower, by the gap the arm reported.
+    np.testing.assert_array_equal(targets[0], STOW_JOINTS)
+    np.testing.assert_allclose(np.diff(targets, axis=0), -held, atol=1e-9)
+    # The arm never landed, so the operator is told rather than left to think it is down.
+    assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
+
+
+def test_a_station_with_no_stow_pose_leaves_the_left_stick_doing_nothing(world):
+    """The pose an arm can be powered down on is a station's to measure, so a station that named none has the
+    button ask for nothing rather than send the arm to a pose nobody chose."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, (), ())
+    dc.target_grip._bind(RecordingEmitter())
+    dc.sound._bind(RecordingEmitter())
+    arm, buttons = world.pair(dc.sync_move), world.pair(dc.buttons_receiver)
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(left_stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(left_stick=1.0)), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert asked == []
 
 
 def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():

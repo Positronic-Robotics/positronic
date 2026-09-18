@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -100,11 +101,18 @@ class OperatorPosition(Enum):
 
 
 class DataCollectionController(pimm.ControlSystem):
+    # Stowing takes more than one move. An arm held by position-PD sits above where it is sent, by the torque
+    # it carries over its gain, so each move closes a fraction of what is left rather than all of it.
+    _STOW_STEPS = 6
+    _STOW_TOL = 0.005  # radians; near enough to the stow pose that letting go drops the arm nowhere
+    _STOW_MAX_STEP = 0.05  # radians; the largest correction one step asks for, per joint
+
     def __init__(
         self,
         operator_position: geom.Transform3D | None,
         nominal_joints: Sequence[float] | np.ndarray,
         joints_spread: Sequence[float] | np.ndarray = (),
+        stow_joints: Sequence[float] | np.ndarray = (),
         *,
         output_path: Path | None = None,
         static_meta: dict | None = None,
@@ -116,6 +124,7 @@ class DataCollectionController(pimm.ControlSystem):
         # A station that measured no jitter sends the arm exactly to its nominal.
         spread = joints_spread if len(joints_spread) else np.zeros_like(self._nominal_joints)
         self._joints_spread = np.asarray(spread, dtype=np.float64)
+        self._stow_joints = np.asarray(stow_joints, dtype=np.float64)
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.DefaultingReceiver(self, default={})
@@ -152,6 +161,33 @@ class DataCollectionController(pimm.ControlSystem):
                 return
             yield pimm.Sleep(0.001)
         ready.result()
+
+    def _stow(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Put the arm down on its stow pose and leave it there, so the motors can be cut without it falling.
+
+        An arm that carries no brakes is held only while it is driven, and the driver gives the chain up limp,
+        so wherever the arm hangs is where it drops from. Each step asks for the stow pose less the gap the
+        arm holds above it, which walks it down onto its own stops.
+        """
+        logging.info('Stowing the arm')
+        asked = self._stow_joints.copy()
+        for _ in range(self._STOW_STEPS):
+            move = self.sync_move(roboarm.command.JointPosition(asked))
+            while not move.done():
+                if should_stop.value:
+                    return
+                yield pimm.Sleep(0.001)
+            # A step that stops short still travelled, and the next one starts from there. Only the gap the
+            # arm ends on says whether it is down, so that is what ends this rather than any one move.
+            # rules-allow: swallowed-error — a step that fell short is what the next step is for
+            with contextlib.suppress(Exception):
+                move.result()
+            hanging = np.asarray(self.robot_state.value.q, dtype=np.float64) - self._stow_joints
+            if np.all(np.abs(hanging) < self._STOW_TOL):
+                logging.info('Stowed')
+                return
+            asked = asked - np.clip(hanging, -self._STOW_MAX_STEP, self._STOW_MAX_STEP)
+        raise RuntimeError(f'the arm is still {np.abs(hanging).max():.3f} rad off the stow pose')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         sounds = Path(package_assets_path('assets/sounds'))
@@ -196,6 +232,18 @@ class DataCollectionController(pimm.ControlSystem):
                     # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
                     except Exception as e:
                         logging.error(f'The rig was not readied: {e}')
+                        self.sound.emit(error_wav_path)
+                elif button_handler.just_pressed('left_stick') and len(self._stow_joints):
+                    if recording:
+                        self.ds_agent_commands.emit(DsWriterCommand.ABORT())
+                        self.sound.emit(abort_wav_path)
+                    tracker.turn_off()  # or the next controller reading drives the arm back off its rest
+                    recording = False
+                    try:
+                        yield from self._stow(should_stop)
+                    # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+                    except Exception as e:
+                        logging.error(f'The arm was not stowed: {e}')
                         self.sound.emit(error_wav_path)
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
@@ -272,6 +320,8 @@ def main(
     # The start pose the right stick puts the arm at: drawn around ``nominal_joints``, within ``joints_spread``.
     nominal_joints: Sequence[float] = (),
     joints_spread: Sequence[float] = (),
+    # Where the left stick puts the arm to end a session: an arm left here can be powered down where it lies.
+    stow_joints: Sequence[float] = (),
     output_dir: str | None = None,
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
@@ -306,7 +356,12 @@ def main(
         output_path = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
-        operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
+        operator_position.value,
+        nominal_joints,
+        joints_spread,
+        stow_joints,
+        output_path=output_path,
+        static_meta=static_meta,
     )
 
     dataset_factory = partial(LocalDatasetWriter, video_options=video_options) if output_path is not None else None
@@ -433,6 +488,7 @@ def so101cfg(robot_arm, **kwargs):
     operator_position=OperatorPosition.BACK,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
+    stow_joints=positronic.cfg.hardware.roboarm.YAM_STOW_JOINTS,
     # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
     # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
     video_options={'preset': 'ultrafast', 'tune': 'zerolatency'},
