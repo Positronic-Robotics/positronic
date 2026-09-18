@@ -21,9 +21,9 @@ than no bump at all, since the index will keep whichever bytes got there first.
 Judged against `--base` (else `$RATCHET_BASE`, else `origin/main`), at the merge-base, so a bump that
 landed on the base side meanwhile is not this change's to claim.
 
-Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable base, or a base with no
-`client/pyproject.toml` (the client's own first commit) — so an offline commit is never blocked and
-CI, which always has the base sha, is where the gate holds. A manifest that is present and
+Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable base, or a base that
+carries no manifest for a member (that member's own first commit) — so an offline commit is never
+blocked and CI, which always has the base sha, is where the gate holds. A manifest that is present and
 unreadable fails closed: that is a corrupt guarded file, not an absence.
 
 It runs under `uv run` rather than a bare interpreter, because it reads the root's pin as a
