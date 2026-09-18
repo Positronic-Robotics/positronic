@@ -34,6 +34,7 @@ from platform_client.policy_images import PolicyImage
 from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
+    ArtifactListResponse,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -49,6 +50,7 @@ from pydantic import ValidationError
 BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
 AT = '2026-03-04T05:06:07Z'
+EPISODE_KEY = 'episodes/0000/meta.json'
 
 
 class Gateway:
@@ -231,6 +233,28 @@ def test_get_submission_sends_the_hex_id_and_resolves_the_variant():
     assert view.queue_position == 2
     assert gateway.request().url.path == routes.SUBMISSIONS_GET
     assert dict(gateway.request().url.params) == {'id': '1f'}
+
+
+def test_list_artifacts_parses_every_entry_and_its_cursor():
+    gateway = Gateway(
+        200, {'artifacts': [{'key': EPISODE_KEY, 'size': 812, 'url': f'{BASE}/signed?sig=beef'}], 'next': EPISODE_KEY}
+    )
+    response = make_client(gateway).list_artifacts(SubmissionId(0x1F))
+
+    assert isinstance(response, ArtifactListResponse)
+    assert response.artifacts[0].key == EPISODE_KEY
+    assert response.artifacts[0].size == 812
+    assert response.next == EPISODE_KEY
+    assert gateway.request().url.path == routes.SUBMISSIONS_ARTIFACTS
+    assert dict(gateway.request().url.params) == {'id': '1f'}
+
+
+def test_list_artifacts_sends_only_the_narrowing_the_caller_named():
+    # An unset narrowing is absent rather than empty: a blank `prefix` would list nothing.
+    gateway = Gateway(200, {'artifacts': [], 'next': None})
+    make_client(gateway).list_artifacts(SubmissionId(0x1F), prefix='episodes/', limit=2)
+
+    assert dict(gateway.request().url.params) == {'id': '1f', 'prefix': 'episodes/', 'limit': '2'}
 
 
 def test_a_redirect_is_a_failure_rather_than_a_body_to_parse():
@@ -434,6 +458,7 @@ def test_every_endpoint_has_exactly_one_method():
         'create_submission',
         'list_submissions',
         'get_submission',
+        'list_artifacts',
         'cancel_submission',
         'rankings',
         'list_boards',
