@@ -68,6 +68,7 @@ SCORES = Scores(primary=0.75)
 
 RESULT_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/result.json?X-Amz-Signature=beef'
 DIAGNOSTICS_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/diagnostics.json?X-Amz-Signature=cafe'
+POLICY_LOG_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/policy.log?X-Amz-Signature=f00d'
 
 DAILY = QuotaLimit(
     key=QUOTA_SUBMISSIONS_DAY,
@@ -136,6 +137,7 @@ MODELS: list[BaseModel] = [
     CREDITS,
     ArtifactRefs(result='s3://pp-artifacts/users/a0/submissions/1f/result.json'),
     ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
+    ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
     RegisterRequest(credential='token', alias='demo', rotate=True),
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
@@ -445,6 +447,37 @@ def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result(
 def test_artifact_refs_never_come_without_a_result():
     with pytest.raises(ValidationError):
         ArtifactRefs.model_validate({'diagnostics': DIAGNOSTICS_URL})
+
+
+def test_a_finished_run_links_the_log_its_policy_printed():
+    # The text is the submitter's own, so a run that scored delivers it as a failed one does.
+    payload = {
+        'id': '1f',
+        'scores': {'primary': 0.75},
+        'artifacts': {'result': RESULT_URL, 'policy_log': POLICY_LOG_URL},
+        'status': 'finished',
+    }
+    view = SUBMISSION_VIEWS.validate_python(payload)
+    assert isinstance(view, FinishedSubmissionView)
+    assert view.artifacts.policy_log == POLICY_LOG_URL
+
+
+def test_a_failed_run_links_its_record_and_its_log_together():
+    view = ErroredSubmissionView(
+        id=SUB,
+        reason_code=ReasonCode.policy_setup_crash,
+        artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
+    )
+    assert view.artifacts is not None
+    assert view.artifacts.diagnostics == DIAGNOSTICS_URL
+    assert view.artifacts.policy_log == POLICY_LOG_URL
+
+
+def test_a_run_whose_container_printed_nothing_links_no_log():
+    # A run refused before it started a container has no text to deliver. Absence is None.
+    refs = ArtifactRefs(result=RESULT_URL)
+    assert refs.policy_log is None
+    assert 'policy_log' in refs.model_dump(mode='json')
 
 
 def test_a_minted_outcome_without_its_key_is_refused():
