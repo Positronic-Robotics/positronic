@@ -171,6 +171,7 @@ class DataCollectionController(pimm.ControlSystem):
         """
         logging.info('Stowing the arm')
         asked = self._stow_joints.copy()
+        hanging = np.asarray(self.robot_state.value.q, dtype=np.float64) - self._stow_joints
         for _ in range(self._STOW_STEPS):
             move = self.sync_move(roboarm.command.JointPosition(asked))
             while not move.done():
