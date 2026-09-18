@@ -2334,10 +2334,11 @@ class _TimedRecorder(pimm.SignalEmitter):
 
 
 def _run_episode(
-    world, policy, layer, *, charge_inference_time, simulated=True, steps=4000, run_sec=1.5
+    world, policy, layer, *, charge_inference_time=None, simulated=True, steps=4000, run_sec=1.5
 ) -> list[tuple[float, Any]]:
-    """One trial run with ``charge_inference_time``; returns the grip commands with the world time each went
-    out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need."""
+    """One trial run; ``charge_inference_time`` left out leaves the task at its own default. Returns the grip
+    commands with the world time each went out at. A sim trial runs against a pacer, the sole time-master a
+    real rig doesn't need."""
     wrapped = layer.wrap(policy)
     harness = Harness(make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
@@ -2351,14 +2352,13 @@ def _run_episode(
     perform_task = EpisodeCaller(world, harness, wrapped)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    task = (
+        Task(instruction_source='t', timeout_sec=None)
+        if charge_inference_time is None
+        else Task(instruction_source='t', timeout_sec=None, charge_inference_time=charge_inference_time)
+    )
     driver = ManualDriver([
-        (
-            partial(
-                perform_task,
-                Task(instruction_source='t', timeout_sec=None, charge_inference_time=charge_inference_time),
-            ),
-            0.0,
-        ),
+        (partial(perform_task, task), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -2369,8 +2369,9 @@ def _run_episode(
 
 @pytest.mark.timeout(20.0)
 def test_an_uncharged_call_pauses_the_world(world):
-    """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
-    anchored at the observation's own instant however long the function really took."""
+    """A sim trial stating ``charge_inference_time=False`` charges nothing: the world does not advance while
+    the model runs, so the chunk is anchored at the observation's own instant however long the function
+    really took."""
     policy = RemoteStubPolicy(wall_sec=0.05, chunk=slow_chunk())
     played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False)
 
@@ -2395,11 +2396,12 @@ def test_uncharged_chunks_have_no_extra_control_tick(world, wall_sec):
 
 
 @pytest.mark.timeout(20.0)
-def test_a_charged_call_costs_its_own_wall_duration(world):
-    """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
-    as slow — at the cost of a trace that inherits the machine's noise."""
+@pytest.mark.parametrize('stated', [None, True], ids=['by-default', 'stated-on'])
+def test_a_charged_call_costs_its_own_wall_duration(world, stated):
+    """A sim trial charges the world what the model really took, so a slow server is scored as slow — at the
+    cost of a trace that inherits the machine's noise. A task charges whether or not it states so."""
     policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
-    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=True)
+    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=stated)
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the function took'
@@ -2407,8 +2409,8 @@ def test_a_charged_call_costs_its_own_wall_duration(world):
 
 @pytest.mark.timeout(20.0)
 def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
-    """The knob is sim-only: a real rig pays what its functions take, so a task leaving
-    ``charge_inference_time`` unset does not hold the world for them."""
+    """The knob is sim-only: a real rig pays what its functions take, so a task stating
+    ``charge_inference_time=False`` does not hold the world for them."""
     policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
     played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False, simulated=False)
 

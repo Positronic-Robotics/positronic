@@ -73,8 +73,8 @@ class Task:
     prepare_args: dict[str, Any] = field(default_factory=dict)
     # What the episode records as this trial's identity: its seed, its place in the sweep, its scene
     meta: dict[str, Any] = field(default_factory=dict)
-    # Sim-only: a real rig cannot pretend the time is paused when inference is run.
-    charge_inference_time: bool = False
+    # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
+    charge_inference_time: bool = True
 
     @property
     def instruction(self) -> str:

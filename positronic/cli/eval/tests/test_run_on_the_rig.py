@@ -247,17 +247,17 @@ def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_comma
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}])
+@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': False}])
-def test_a_rig_run_takes_a_switch_stated_off(platform, run_command, switch: dict):
-    # A switch off asks for what a rig run already does, so it reads as one left off rather than as
-    # a value the rig has no flag for.
+@pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': True}])
+def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_command, switch: dict):
+    # A switch stated at what a rig run already does reads as one left at its default, so the rig
+    # takes it.
     platform.answer(FILED)
 
     run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)

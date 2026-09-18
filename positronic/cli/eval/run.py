@@ -283,7 +283,7 @@ def run(
     eval: Eval | str | None,
     policy,
     output_dir=None,
-    charge_inference_time: bool = False,
+    charge_inference_time: bool = True,
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
@@ -315,11 +315,11 @@ def run(
     """
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
-    # A switch stated off asks for what every other place already does, so it normalises to unstated.
+    # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
     # Only a switch does: `--episodes=False` stays a value, and is refused like `--episodes=0`.
     local_only = {
         '--output-dir': output_dir,
-        '--charge-inference-time': charge_inference_time or None,
+        '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
     }
     rig_only = {'--policy-url': policy_url, '--tasks': tasks, '--episodes': episodes, '--cap': cap, '--preset': preset}

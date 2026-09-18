@@ -132,7 +132,7 @@ def test_a_run_cannot_be_both_here_and_there(platform, run_command):
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('local_only', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': True}])
+@pytest.mark.parametrize('local_only', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
 def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_command, local_only: dict):
     # The platform owns its own trial sweep, output and telemetry, so silently dropping these would
     # hand back a run the caller believes they configured.
@@ -150,13 +150,13 @@ def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, s
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('switched_off', [{'timing': False}, {'charge_inference_time': False}])
-def test_a_platform_run_takes_a_local_switch_stated_off(platform, run_command, switched_off: dict):
-    # The boundary of the refusal above: a switch reads `False` whether it was left off or stated
-    # off, and either way asks for what the platform already does, so it refuses neither.
+@pytest.mark.parametrize('already_so', [{'timing': False}, {'charge_inference_time': True}])
+def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(platform, run_command, already_so: dict):
+    # A switch reads the same whether it was left at its default or stated there, and either way asks
+    # for what the platform already does, so it refuses neither.
     platform.answer({'submission_id': ID, 'status': 'pending'})
 
-    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **switched_off)
+    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **already_so)
 
     assert created.submission_id == SubmissionId.parse(ID)
 
