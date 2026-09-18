@@ -122,7 +122,7 @@ class Rig:
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
-            connect=lambda channel, sim: ports['vendor'],
+            connect=lambda channel, sim, gravity_comp_factor: ports['vendor'],
             park_after_idle_s=1.0,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
@@ -598,7 +598,7 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
 
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     with pimm.World(virtual_time=True) as world:
         loop = world.start(driver)
         for _ in range(150):
@@ -610,7 +610,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     read = vendor.get_observations
     armed = []
 
@@ -904,7 +904,7 @@ def test_commands_do_not_interrupt_shutdown_parking(world, rig):
 def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
     connections = []
 
-    def connect(channel, sim):
+    def connect(channel, sim, gravity_comp_factor):
         vendor = FakeYam()
         connections.append(vendor)
         return vendor
