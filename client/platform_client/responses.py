@@ -78,6 +78,29 @@ class ArtifactRefs(BaseModel):
     policy_log: str | None = None
 
 
+class ArtifactEntry(BaseModel):
+    """One object a finished run wrote.
+
+    `key` names it under the submission's own prefix, so `episodes/0000/meta.json` reads the same
+    whichever bucket holds the run. `url` is a signed URL, because the submitter holds no
+    credential for the bucket, and it expires — mint a fresh page to fetch again.
+    """
+
+    key: str
+    size: int = Field(ge=0)
+    url: str
+
+
+class ArtifactListResponse(BaseModel):
+    """`submissions.artifacts` — one page of objects, in key order.
+
+    `next` is the key the page after it starts from, and is absent on the last page.
+    """
+
+    artifacts: list[ArtifactEntry] = Field(default_factory=list)
+    next: str | None = None
+
+
 class EpisodeCounts(BaseModel):
     """What a run asked for and where it stands.
 
