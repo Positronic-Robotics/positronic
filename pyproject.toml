@@ -68,7 +68,6 @@ openpi = [
 ]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "positronic-franka>=0.7.0; sys_platform == 'linux'",
     # "kortex_api; sys_platform == 'linux'",  # Kinova: disabled, artifactory.kinovaapps.com is unreliable
     "linuxpy",  # For Linux video capture
     "placo",
@@ -78,6 +77,11 @@ hardware = [
     # ZED camera support. Named per architecture, because the name on the index is a different package: an
     # architecture that Stereolabs ships no wheel for must resolve to nothing, not to that one.
     "pyzed; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+]
+# The Franka arm, apart from `hardware`, because `positronic-franka` ships no wheel: it builds against a
+# libfranka that the machine must already carry. A station with no Franka installs `hardware` without it.
+franka = [
+    "positronic-franka>=0.7.0; sys_platform == 'linux'",
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",

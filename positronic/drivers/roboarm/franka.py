@@ -19,7 +19,12 @@ from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_f
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
 
-with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
+with vendor_import(
+    'positronic_franka',
+    'Franka support',
+    hint='Re-run with the franka extra:\n  uv run --locked --extra franka ...\n',
+    platforms=('linux',),
+):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 
