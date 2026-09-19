@@ -1,0 +1,155 @@
+"""Compare native and env-server observations for one benchmark episode using hold actions.
+
+The selected episode must remain unsuccessful until its horizon.
+
+Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``MUJOCO_GL``; a GPU-less box uses
+mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``), and a benchmark whose task spec carries
+``task_horizon_sec`` (the horizon the sim owns). Run on a box with those::
+
+    MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
+        uv run --locked python -m positronic.simulator.molmo_spaces.tests.parity \
+            --benchmark <suite/scene_dataset/task_config/benchmark>
+"""
+
+import argparse
+import hashlib
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.molmo_spaces import launcher, mapping
+from positronic.simulator.molmo_spaces.tests import parity_record
+
+# The native reference runs in the MolmoSpaces interpreter.
+_PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
+_HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
+_ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
+
+
+def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
+    """Recorded observations and camera hashes from an env-server hold rollout."""
+    fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
+    camera_names: list[str] = []
+    cam_hashes: dict[str, list[str]] = {}
+
+    def record(obs: dict) -> None:
+        for key in fields:
+            fields[key].append(obs[key])
+        for name in camera_names:
+            cam_hashes[name].append(hashlib.sha256(np.ascontiguousarray(obs[name]).tobytes()).hexdigest())
+
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed}
+            frame = conn.reset(token)
+            camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
+            cam_hashes = {name: [] for name in camera_names}
+            record(frame[protocol.FRAME_OBS])
+            out = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
+            step = 0
+            while not out[protocol.FRAME_DONE] and step < max_steps:
+                out = conn.step(_HOLD)
+                step += 1
+                record(out[protocol.FRAME_OBS])
+        finally:
+            conn.close()
+    return {
+        **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
+        mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
+        parity_record.CAMERA_NAMES: camera_names,
+        **{f'{parity_record.CAM_HASH_PREFIX}{name}': hashes for name, hashes in cam_hashes.items()},
+        parity_record.TERMINATION_STEP: step,
+        parity_record.FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
+    }
+
+
+def _native_env() -> dict[str, str]:
+    """Subprocess environment with this test directory on PYTHONPATH."""
+    env = launcher.molmo_subprocess_env()
+    return {**env, launcher.PYTHONPATH_ENV: os.pathsep.join([env[launcher.PYTHONPATH_ENV], str(Path(__file__).parent)])}
+
+
+def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
+    """Recorded observations from the native subprocess."""
+    python = launcher.ensure_molmo_venv()
+    subprocess.run(
+        [
+            str(python),
+            str(_PARITY_NATIVE),
+            '--benchmark_dir',
+            str(bench.under(Path(os.environ[mapping.ASSETS_DIR_ENV]))),
+            '--episode_index',
+            str(episode_index),
+            '--seed',
+            str(seed),
+            '--max_steps',
+            str(max_steps),
+            '--out',
+            str(out_path),
+        ],
+        env=_native_env(),
+        check=True,
+    )
+    return dict(np.load(out_path, allow_pickle=False))
+
+
+def _assert_parity(native: dict, remote: dict, max_steps: int) -> None:
+    horizon = int(native[parity_record.HORIZON_STEPS])
+    n_term = int(native[parity_record.TERMINATION_STEP])
+    p_term = remote[parity_record.TERMINATION_STEP]
+    assert n_term < max_steps, f'native never terminated in {max_steps} steps — raise --max_steps above the horizon'
+    assert p_term < max_steps, f'env-server never terminated in {max_steps} steps — raise --max_steps above the horizon'
+    assert n_term == horizon == p_term, (
+        f'terminating step differs: native {n_term}, horizon {horizon}, env-server {p_term}'
+    )
+    assert not bool(native[parity_record.FINAL_SUCCESS]) and not remote[parity_record.FINAL_SUCCESS], (
+        'a held arm must not score success'
+    )
+
+    assert list(native[parity_record.CAMERA_NAMES]) == remote[parity_record.CAMERA_NAMES], (
+        'camera sets differ between the stacks'
+    )
+    for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
+        n, p = native[field], remote[field]
+        assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, env-server {p.shape}'
+        assert np.array_equal(n, p), f'{field} differs between native and env-server rollouts'
+    for name in remote[parity_record.CAMERA_NAMES]:
+        key = f'{parity_record.CAM_HASH_PREFIX}{name}'
+        n_hashes, p_hashes = list(native[key]), remote[key]
+        assert n_hashes == p_hashes, f'camera {name} frames differ between native and env-server rollouts'
+
+
+def run(bench: mapping.BenchmarkPath, *, episode_index: int = 0, seed: int = 0, max_steps: int = 1200) -> None:
+    """Compare observations and terminal results for native and env-server hold rollouts."""
+    with tempfile.TemporaryDirectory() as tmp:
+        native = _run_native(bench, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
+        remote = _drive_env_server(bench, episode_index, seed, max_steps)
+    _assert_parity(native, remote, max_steps)
+    frames = remote[parity_record.TERMINATION_STEP] + 1
+    horizon = native[parity_record.HORIZON_STEPS]
+    print(f'PARITY PASSED — episode {episode_index}: {frames} frames, terminated at horizon {horizon}')
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Native-vs-env-server parity check for MolmoSpaces.')
+    parser.add_argument(
+        '--benchmark',
+        type=mapping.BenchmarkPath.parse,
+        required=True,
+        help='suite/scene_dataset/task_config/benchmark under the asset packs (task_horizon_sec required)',
+    )
+    parser.add_argument('--episode_index', type=int, default=0)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--max_steps', type=int, default=1200, help='safety cap; must exceed the benchmark horizon')
+    args = parser.parse_args()
+    run(args.benchmark, episode_index=args.episode_index, seed=args.seed, max_steps=args.max_steps)
+
+
+if __name__ == '__main__':
+    main()

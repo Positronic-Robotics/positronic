@@ -23,6 +23,8 @@ from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     DROID_EEF_LINK,
     EE_LINK,
+    FLANGE_LINK,
+    GRASP_SITE_LINK,
     bundled_franka_model,
     bundled_panda_model,
 )
@@ -245,3 +247,17 @@ def test_pickle_roundtrip(solver_cls):
     q_result = restored.solve(q_start, target_pose)
     result_pose = _fk(PANDA_URDF, q_result)
     np.testing.assert_allclose(result_pose[:3], target_pose[:3], atol=1e-3)
+
+
+def test_grasp_site_sits_at_the_2f85_grasp_point():
+    """Match MolmoSpaces' ``gripper/grasp_site`` transform from the flange."""
+    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], FLANGE_LINK, GRASP_SITE_LINK)
+    np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.155], atol=1e-9)
+    np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
+
+
+def test_grasp_site_model_declares_the_frame_it_reports_in():
+    model = bundled_franka_model(GRASP_SITE_LINK)
+    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+    transform = frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK)
+    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-9)

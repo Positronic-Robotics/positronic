@@ -3,7 +3,7 @@ viewer, the sim ``robot_meta``, and offline IK, plus the Robotiq 2F-85 graft sha
 real arm and the live franka driver."""
 
 import xml.etree.ElementTree as ET
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -99,10 +99,15 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
     ]
 
 
+GRASP_SITE_LINK = 'gripper_grasp_site'
+# The 2F-85's closed pads meet 155 mm along the flange approach axis.
+_2F85_GRASP_XYZ = '0 0 0.155'
+
 # The coupler stays fixed: given an axis, the outer link hangs 19 mm out at full grip.
 _ROBOTIQ_2F85 = [
     _UrdfRow('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     _UrdfRow('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
+    _UrdfRow(GRASP_SITE_LINK, FLANGE_LINK, None, _2F85_GRASP_XYZ, '0 0 0', None, None, None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
@@ -174,19 +179,15 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     return gripper[roboarm_keys.GRIPPER]
 
 
-@lru_cache(maxsize=1)
-def bundled_franka_model() -> dict:
-    """The bundled real franka arm + Robotiq 2F-85 for the 3D viewer: the FR3 URDF and its collision
-    meshes with the 2F-85 grafted onto the flange, plus the canonical joint names and control frame.
-
-    Backfills real-robot datasets recorded before they stored their own model.
-    """
+@cache
+def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
+    """FR3 and Robotiq 2F-85 model metadata, with ``DEFAULT_FRAME`` attached at ``default_frame_at``."""
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
     mesh_dir = here.parents[2] / 'assets' / 'fr3_collision'
     meshes = {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))}
     gripper = attach_robotiq_2f85(arm_root, meshes)
-    add_default_frame(arm_root, EE_LINK)
+    add_default_frame(arm_root, default_frame_at)
     return {
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         'meshes': meshes,
