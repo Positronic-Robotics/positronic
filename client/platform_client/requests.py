@@ -40,6 +40,22 @@ class SubmissionGetQuery(BaseModel):
     id: SubmissionId
 
 
+class SubmissionArtifactsQuery(BaseModel):
+    """`submissions.artifacts` — one page of the objects a finished submission wrote.
+
+    `prefix` keeps the page to the keys under it, and is read relative to the submission's own
+    prefix: `episodes/` lists the episodes alone. `after` is the key the page before it ended on.
+    A `limit` above the gateway's cap is clamped to it.
+    """
+
+    model_config = _FORBID_EXTRA
+
+    id: SubmissionId
+    prefix: str | None = None
+    after: str | None = None
+    limit: int | None = Field(default=None, gt=0)
+
+
 class RankingsQuery(BaseModel):
     """`rankings.get` — one board by slug."""
 
