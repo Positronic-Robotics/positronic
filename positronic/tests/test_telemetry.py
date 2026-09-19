@@ -1,5 +1,6 @@
 import contextvars
 import json
+import logging
 import os
 import sys
 import threading
@@ -486,6 +487,38 @@ def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch)
     (path,) = _env_sidecars(tmp_path)
     assert _spans_by_name(path)['client'].process == HARNESS_PROCESS
     assert _run_id(path) == 'rollout-1'
+
+
+def test_bind_from_env_records_nothing_when_the_sidecar_cannot_open(tmp_path, monkeypatch, caplog):
+    """Every recording run binds from the environment, so a sidecar that refuses to open must cost its
+    timings and not the run. The warning names the path, so the loss is in the log rather than silent."""
+    blocked = tmp_path / 'blocked'
+    blocked.write_text('a file where the telemetry directory would go')
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(blocked))
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger='positronic.telemetry'):
+        with telemetry.bind_from_env(HARNESS_PROCESS):
+            with telemetry.span('client'):
+                pass
+
+    assert str(blocked) in caplog.text
+    assert blocked.read_text() == 'a file where the telemetry directory would go'
+
+
+def test_bind_from_env_without_the_telemetry_extra_runs_on(tmp_path, monkeypatch, caplog, without_telemetry_extra):
+    """An install with no SDK records no spans and still runs its episodes — the extra rides in the dev
+    group, so an image built lean is the case this meets."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger='positronic.telemetry'):
+        with telemetry.bind_from_env(HARNESS_PROCESS):
+            with telemetry.span('client'):
+                pass
+
+    assert 'telemetry extra' in caplog.text
+    assert _env_sidecars(tmp_path) == []
 
 
 def test_bind_from_env_defers_to_a_provider_already_bound(tmp_path, monkeypatch):

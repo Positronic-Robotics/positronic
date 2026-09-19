@@ -27,13 +27,10 @@ from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, E
 
 logger = logging.getLogger(__name__)
 
-# The environment a timed run hands a launched env server (read by ``env_server.telemetry.bind_from_env``);
-# snapshotted before a run and restored after it, so a later run in the same process inherits nothing.
-_ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
-
 
 def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
-    """Resolve where a run records: sync the directory and snapshot the sources into it.
+    """Resolve where a run records: sync the directory, snapshot the sources into it, and point the telemetry
+    sidecars at it.
 
     Returns the local path each episode records into, or ``None`` when the run records nothing.
 
@@ -42,10 +39,32 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     ``str`` whatever this says. A narrower annotation disagrees with the value that arrives.
     """
     if output_dir is None:
+        os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
     local_dir = pos3.sync(str(output_dir), sync_on_error=True)
     utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    # `pos3.sync` mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
+    # Pointed anywhere else the spans stay on the box that ran, and somebody copies them off by hand.
+    os.environ[ENV_TELEMETRY_DIR] = str(local_dir / telemetry.TELEMETRY_SUBDIR)
     return local_dir
+
+
+@contextmanager
+def scoped_env_var(name: str) -> Iterator[None]:
+    """Restore ``name`` on exit, so a telemetry variable a run sets does not outlive that run.
+
+    FOOTGUN: a telemetry directory left set binds a harness the next run never asked to record, into the
+    previous run's directory. Binding adds an exporter thread, and a World forking a background control system
+    deadlocks on one, so the residue hangs the process rather than mislabelling a file.
+    """
+    previous = os.environ.get(name)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 class TaskDriver(pimm.ControlSystem):
@@ -158,19 +177,15 @@ def _pass_span(**attrs) -> Generator[None, None, None]:
 @contextmanager
 def timed_pass(output_dir: str | Path | None, timing: bool, policy):
     """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
-    ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
-    ``timing``."""
+    ``eval.pass`` span, under the run id a launched env server reads. Inert without ``timing``."""
     if not timing or output_dir is None:
         yield
         return
     timed_dir = Path(output_dir)
     run_id = uuid.uuid4().hex
-    env_snapshot = {name: os.environ.get(name) for name in _ENV_TELEMETRY_VARS}
-    # Set before any world comes up: a launched env server reads them off the environment its launcher
-    # forwards to the subprocess, and writes its own sidecar under the same directory.
-    os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
-    os.environ[ENV_RUN_ID] = run_id
-    try:
+    with scoped_env_var(ENV_RUN_ID):
+        # Set before any world comes up, so a launched env server's environment carries it.
+        os.environ[ENV_RUN_ID] = run_id
         # Built outside the pass: the constructor initialises NVML, enumerates its handles and primes the CPU
         # counters, and that setup is not eval wall — charging it to W_pass depresses the real-time factor.
         sampler = telemetry.StatsSampler(telemetry.stats_path(timed_dir, telemetry_keys.HARNESS_PROCESS))
@@ -185,12 +200,6 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
             sampler,
         ):
             yield
-    finally:
-        for name, value in env_snapshot.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
 
 
 def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False):
@@ -213,13 +222,16 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     logger.info('Warming up policy endpoints')
     # The session runs no inference, but a session that serves its model on a runtime needs one to open.
     blocking(policy).new_session().close()
-    output_path = prepare_output_dir(output_dir)
 
     try:
-        with timed_pass(output_path, timing, policy):
-            for ev in evals:
-                driver = TaskDriver(ev.tasks, policy, output_path)
-                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            output_path = prepare_output_dir(output_dir)
+            with timed_pass(output_path, timing, policy):
+                for ev in evals:
+                    driver = TaskDriver(ev.tasks, policy, output_path)
+                    run_world(
+                        ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done
+                    )
     finally:
         policy.close()
 
