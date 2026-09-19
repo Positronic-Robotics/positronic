@@ -10,7 +10,8 @@ from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.spec import ModelSource, PolicySource, remote
+from positronic.policy.observation import ObservationCodec
+from positronic.policy.spec import ModelSource, Pipeline, PolicySource, remote
 
 
 class Served(NamedTuple):
@@ -121,6 +122,17 @@ class DictSource(ModelSource):
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         return self._policies[model_id]
+
+
+# The warm pipeline's codec writes the prompt under this name. The task arrives under ``keys.TASK``, so a
+# test that reads it back here reads what the codec wrote.
+WARM_PROMPT_FIELD = 'prompt'
+
+
+def warm_pipeline(policy: Policy) -> Pipeline:
+    """A served pipeline whose server-side codec builds the observation a warm runs on."""
+    codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
+    return ChunkedSchedule() | remote | codec | PolicySource(policy)
 
 
 @pytest.fixture

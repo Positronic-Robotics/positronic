@@ -1,6 +1,8 @@
+import importlib
 import threading
 import time
 from collections.abc import Mapping
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -8,8 +10,8 @@ import pytest
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import websocket_wire, wire
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
@@ -33,6 +35,12 @@ class _FakeWire(wire.ClientWire):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
+        self.calls: list[wire.Verb] = []
+        self.call_timeouts: list[float] = []
+        # What ``call`` answers; ``None`` stands for a server too old to answer the verb at all.
+        self.readiness: Mapping[str, Any] | None = None
+        # One answer per call, in order, for a test that needs the server's record to change under it.
+        self.readiness_answers: list[Mapping[str, Any]] = []
 
     def api_url(self, address: wire.SessionAddress) -> str:
         return f'http://{address.netloc}{wire.API_PATH}'
@@ -43,6 +51,15 @@ class _FakeWire(wire.ClientWire):
         if isinstance(outcome, wire.ConnectRefused):
             raise outcome
         return outcome
+
+    def call(self, address, verb, payload, headers, timeout):
+        self.calls.append(verb)
+        self.call_timeouts.append(timeout)
+        if self.readiness_answers:
+            return self.readiness_answers.pop(0)
+        if self.readiness is None:
+            raise wire.VerbUnsupported('this wire answers sessions alone')
+        return self.readiness
 
 
 _ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
@@ -276,6 +293,49 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 1
         assert refused.value.refusal is wire.Refusal.FINAL
+
+    def test_a_server_too_old_to_say_how_warm_it_is_is_asked_once(self):
+        """Every wait reads the server's state, and one that does not answer the verb is not asked again."""
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 4)
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=60.0).new_session()
+
+        assert fake.calls == [wire.READY]
+
+    def test_every_wait_reads_what_the_server_says_it_is_doing(self):
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 3)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields;
+        # sharing the constant would leave nothing pinning the client to the wire.
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint 30000'}
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=60.0).new_session()
+
+        assert fake.calls == [wire.READY] * 3
+
+    def test_a_readiness_probe_takes_no_more_than_the_connect_deadline_leaves(self):
+        """The probe is the caller's time to spend: a verb timeout outlasting the connect is not theirs."""
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 3)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint'}
+        client = InferenceClient(fake, _ADDRESS, connect_deadline=0.2)
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            client.new_session()
+
+        assert fake.call_timeouts, 'no wait probed the server'
+        worst = max(fake.call_timeouts)
+        assert worst <= 0.2, f'a 0.2s connect deadline gave the probe {worst}s'
 
     def test_a_cold_refusal_retries_to_the_deadline(self):
         fake = _FakeWire(_refused(wire.Refusal.COLD))
@@ -602,3 +662,116 @@ def test_remote_session_meta(inference_server, open_session):
     assert meta['server.model_name'] == 'test_model'
 
     session.close()
+
+
+def _shipped_client_wires() -> list[type[wire.ClientWire]]:
+    """Every client wire this package ships, discovered rather than listed.
+
+    The wire modules are imported here so every shipped subclass exists before they are enumerated.
+
+    A wire added later is covered by the budget test below without anyone remembering to add it; a fake
+    defined in a test module is not a shipped wire and is left out.
+    """
+    importlib.import_module('positronic.offboard.grpc_wire')
+    importlib.import_module('positronic.offboard.websocket_wire')
+    return sorted(
+        (
+            cls
+            for cls in wire.ClientWire.__subclasses__()
+            if cls.__module__.startswith('positronic.offboard.') and '.tests.' not in cls.__module__
+        ),
+        key=lambda cls: cls.__name__,
+    )
+
+
+class TestEveryWireSpendsTheCallersBudgetOnce:
+    """A caller's timeout is one budget, whatever the transport underneath divides it into.
+
+    Every spend the budget covers takes what is left of it: the request that opens the call, each phase a
+    transport times on its own, and each wait between them. Each test reads the value the transport was
+    handed rather than the clock, so it fails on a budget spent twice and not on a slow machine.
+    """
+
+    def test_the_package_ships_the_wires_these_cover(self):
+        """The enumeration itself: a wire added later fails here until its budget is covered too."""
+        assert {cls.__name__ for cls in _shipped_client_wires()} == {'GrpcClientWire', 'WebsocketClientWire'}
+
+    def test_the_request_that_starts_a_warm_is_inside_the_wait_deadline(self):
+        """The call that starts the warm is a spend the caller's budget covers, like the polls after it."""
+        budget = 0.3
+        fake = _FakeWire()
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'ready', 'message': '', 'inferences': 1}
+
+        InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=budget)
+
+        assert fake.calls[0] is wire.WARM, 'the first call is the one that starts the warm'
+        given = fake.call_timeouts[0]
+        assert given <= budget, f'a {budget}s wait deadline gave the warm request {given}s'
+
+    def test_a_checkpoint_switch_under_a_warm_restarts_the_count_it_waits_for(self):
+        """A load resets the count, so a threshold from before the switch is another checkpoint's."""
+        fake = _FakeWire()
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness_answers = [
+            {'status': 'ready', 'message': '', 'checkpoint_id': 'a', 'inferences': 3},
+            {'status': 'ready', 'message': '', 'checkpoint_id': 'b', 'inferences': 1},
+        ]
+
+        with patch('positronic.offboard.client.time.sleep'):
+            answered = InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=10.0)
+
+        assert answered.checkpoint_id == 'b'
+        assert answered.inferences == 1, "the new checkpoint's first inference is what this warm waited for"
+        assert fake.calls == [wire.WARM, wire.READY], 'the wait went on past the switch'
+
+    def test_the_websocket_wire_divides_its_budget_across_the_phases_httpx_times(self):
+        budget = 8.0
+        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+        with patch('positronic.offboard.websocket_wire.httpx.request') as request:
+            request.return_value = MagicMock(status_code=200, **{'json.return_value': {}})
+            websocket_wire.WebsocketClientWire().call(address, wire.READY, {}, None, budget)
+
+        sent = request.call_args.kwargs['timeout']
+        total = sent.connect + sent.write + sent.read + sent.pool
+        assert total <= budget, f'four phases of {sent.connect}s buy {total}s of a {budget}s budget'
+
+    def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
+        budget, on_the_channel = 4.0, 1.0
+        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+        unary = MagicMock(return_value=b'{}')
+        channel = MagicMock(**{'unary_unary.return_value': unary})
+
+        def a_channel_that_took_its_time(*_args, **_kwargs):
+            time.sleep(on_the_channel)
+            return channel
+
+        with patch('positronic.offboard.grpc_wire._ready_channel', side_effect=a_channel_that_took_its_time):
+            grpc_wire.GrpcClientWire().call(address, wire.READY, {}, None, budget)
+
+        given = unary.call_args.kwargs['timeout']
+        assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'
+
+    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
+        """The loop checks the deadline and then sleeps; the sleep is the caller's time to spend too."""
+        deadline = 0.5
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
+        fake.readiness = {'status': 'loading', 'message': 'Downloading checkpoint'}
+        slept: list[float] = []
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep', side_effect=slept.append),
+            pytest.raises((TimeoutError, IndexError)),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert slept, 'the loop never backed off'
+        assert max(slept) <= deadline, f'a {deadline}s connect deadline slept {max(slept)}s in one wait'
+
+
+def test_from_url_carries_the_verb_timeout_like_the_other_settings():
+    """`from_url` is the documented path, so a setting it cannot pass is a setting URL callers lack."""
+    client = InferenceClient.from_url('localhost:8000', verb_timeout=5.0)
+
+    assert client.verb_timeout == 5.0

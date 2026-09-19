@@ -1,12 +1,13 @@
 """The transports a session runs over, and the two ends of one open session.
 
-A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
+A wire carries a session's ``protocol`` frames as opaque bytes and reads none of them. It encodes a
+unary call itself, because the two wires spell one differently.
 """
 
 import abc
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
-from typing import ClassVar, NamedTuple
+from typing import Any, ClassVar, NamedTuple
 
 from starlette.datastructures import QueryParams
 
@@ -16,6 +17,28 @@ SESSION_PATH = f'{API_PATH}/session'
 # The model catalogue, served under the HTTP API.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
+
+
+class Verb(NamedTuple):
+    """One unary call beside the session, and the spelling each wire gives it.
+
+    ``ready`` asks what the server can do now, and ``warm`` asks it to warm, naming the run's task under
+    ``positronic.keys.TASK``. Both answer one ``protocol.Readiness`` record and neither opens a session.
+    """
+
+    name: str
+    http_method: str
+    grpc_method: str
+
+    @property
+    def path(self) -> str:
+        """The HTTP route this verb answers on."""
+        return f'{API_PATH}/{self.name}'
+
+
+READY = Verb('ready', 'GET', 'Ready')
+WARM = Verb('warm', 'POST', 'Warm')
+VERBS = (READY, WARM)
 
 
 def default_port(secure: bool) -> int:
@@ -56,6 +79,10 @@ MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 class PeerDisconnected(Exception):
     """The peer ended the session."""
+
+
+class VerbUnsupported(Exception):
+    """The server answers sessions but not this verb."""
 
 
 class Refusal(Enum):
@@ -114,6 +141,22 @@ class ClientWire(abc.ABC):
         self, address: SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> 'ClientConnection':
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
+
+    @abc.abstractmethod
+    def call(
+        self,
+        address: SessionAddress,
+        verb: Verb,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        """What the server on ``address`` answers ``verb`` with, outside any session.
+
+        Each wire encodes the payload and the answer its own way, so both hold plain data alone. Raises
+        ``VerbUnsupported`` where the server serves sessions but not this verb, and ``ConnectRefused``
+        where it answers nothing.
+        """
 
 
 class ClientConnection(abc.ABC):
@@ -179,12 +222,15 @@ class ServerConnection(abc.ABC):
 # names, or ``None`` for the model the server pinned.
 SessionHandler = Callable[[ServerConnection, str | None], Awaitable[None]]
 
+# What a wire hands the server for one unary call: the verb, and the payload the caller sent.
+VerbHandler = Callable[[Verb, Mapping[str, Any]], Awaitable[Mapping[str, Any]]]
+
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
 Authorized = Callable[[Mapping[str, str]], bool]
 
 
 class Wire(abc.ABC):
-    """One transport that sessions arrive on.
+    """One transport that sessions and unary calls arrive on.
 
     A wire reads its own route for the model a session names, and refuses an unauthorized peer before
     the session opens.
@@ -196,8 +242,11 @@ class Wire(abc.ABC):
         """Where this wire serves. The port is known once ``start`` returns."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
-        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
+    async def start(self, session: SessionHandler, verbs: VerbHandler, authorized: Authorized) -> None:
+        """Bind, and give every accepted session to ``session`` and every unary call to ``verbs``.
+
+        Raises when the port is not free.
+        """
 
     @abc.abstractmethod
     async def serve(self) -> None:

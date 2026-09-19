@@ -56,6 +56,24 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
+def warm_image(width: int, height: int) -> np.ndarray:
+    """A black frame at a codec's declared width, in the uint8 HWC RGB a rig camera produces."""
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def warm_state(key: str, dim: int) -> np.ndarray:
+    """The zero-valued rig-side vector a warm carries under ``key``, ``dim`` wide.
+
+    A pose is the identity transform rather than zeros: its rotation is a quaternion, and a codec that
+    recodes one raises on a zero.
+    """
+    if not obs_keys.is_ee_pose(key):
+        return np.zeros(dim, dtype=np.float32)
+    pose = geom.Transform3D().as_vector(geom.Rotation.Representation.QUAT).astype(np.float32)
+    assert pose.shape == (dim,), f"'{key}' is a pose, which is {pose.shape[0]} wide on the wire, not {dim}"
+    return pose
+
+
 class Codec(Layer):
     """Base class for observation/action codecs.
 
@@ -74,6 +92,20 @@ class Codec(Layer):
 
     def encode(self, data: dict) -> dict:
         return {}
+
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        """The rig-side observation a warm is built from, zero-filled, carrying ``task`` as the prompt.
+
+        ``None`` where this codec encodes no observation. One entry of a chain declares these inputs and
+        the whole chain encodes them, so a warm pays the encode a served observation pays and the task
+        lands where this codec's model reads it.
+        """
+        return None
+
+    def warm_observation(self, task: str) -> dict[str, Any] | None:
+        """The encoded observation a warm runs, or ``None`` where this chain declares no warm inputs."""
+        inputs = self.warm_inputs(task)
+        return None if inputs is None else self.encode(inputs)
 
     def decode(self, data):
         if isinstance(data, list):
@@ -165,6 +197,22 @@ def _merged_meta(left: dict, right: dict) -> dict:
     return result
 
 
+def _declared_warm_inputs(left: Codec, right: Codec, task: str) -> dict[str, Any] | None:
+    """The warm inputs of whichever half declares them; at most one entry of a chain encodes observations.
+
+    Both halves declaring breaks that: under ``&`` each half encodes the same input, so a warm built from
+    one half's declaration reaches the other half's encoder short of what it reads. Neither side names the
+    observation the composition warms on, so this says so rather than picking one.
+    """
+    declared, other = left.warm_inputs(task), right.warm_inputs(task)
+    if declared is not None and other is not None:
+        raise ValueError(
+            'both composed codecs declare warm inputs, so neither names the observation the composition '
+            'warms on; one entry of a chain encodes observations'
+        )
+    return declared if declared is not None else other
+
+
 class _ComposedCodec(Codec):
     """Two codecs composed via ``|``. Encodes left-to-right, decodes right-to-left."""
 
@@ -174,6 +222,9 @@ class _ComposedCodec(Codec):
 
     def encode(self, data):
         return self._right.encode(self._left.encode(data))
+
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        return _declared_warm_inputs(self._left, self._right, task)
 
     def decode(self, data):
         return self._left.decode(self._right.decode(data))
@@ -208,6 +259,9 @@ class _ParallelCodec(Codec):
 
     def encode(self, data):
         return {**self._left.encode(data), **self._right.encode(data)}
+
+    def warm_inputs(self, task: str) -> dict[str, Any] | None:
+        return _declared_warm_inputs(self._left, self._right, task)
 
     def decode(self, data):
         left_out = self._left.decode(data)

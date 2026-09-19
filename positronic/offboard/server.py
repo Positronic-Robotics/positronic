@@ -7,18 +7,20 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from importlib.metadata import version as _pkg_version
-from typing import Any
+from types import MappingProxyType
+from typing import Any, NamedTuple
 
 import configuronic as cfn
 import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
 
+from positronic import keys
 from positronic.offboard import keys as offboard_keys
-from positronic.policy import Policy, Recorder, Session
+from positronic.policy import Codec, Policy, Recorder, Session
 from positronic.policy.base import Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -29,6 +31,9 @@ from .protocol import deserialise, serialise
 logger = logging.getLogger(__name__)
 
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+
+# Read once: it cannot change while the process runs, and a readiness poll would look it up every call.
+POSITRONIC_VERSION = _pkg_version('positronic')
 
 AUTH_HEADER = 'Authorization'
 
@@ -53,11 +58,21 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, conn: wire.ServerConnecti
                 await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message}))
 
 
+class SlotState(NamedTuple):
+    """What the model slot is doing, and what it would tell a person about it."""
+
+    status: protocol.ServerStatus
+    message: str
+
+
 class PolicyManager:
     """Manages the lifecycle of the one policy ``source`` currently has loaded.
 
     Ensures only one policy is loaded at a time. Waits for all active sessions
     to finish before switching policies.
+
+    ``state`` and ``inferences`` are what the ``ready`` verb answers from, and both come back to their
+    starting values on every load: a slot that switches checkpoint is loading again, and cold again.
     """
 
     def __init__(self, source: ModelSource):
@@ -67,6 +82,14 @@ class PolicyManager:
         self.active_sessions: int = 0
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
+        self.state = SlotState(protocol.ServerStatus.LOADING, 'Loading the checkpoint pinned at startup')
+        self.inferences = 0
+        self.last_timing: Mapping[str, float] = MappingProxyType({})
+
+    def record_inference(self, timing: Mapping[str, float]) -> None:
+        """Count one inference the loaded checkpoint answered, and keep what it cost."""
+        self.inferences += 1
+        self.last_timing = MappingProxyType(dict(timing))
 
     async def get_policy(self, checkpoint_id: str, conn: wire.ServerConnection | None = None) -> Policy:
         await _acquire_with_keepalives(self._lock, conn, 'Waiting for the model slot')
@@ -75,13 +98,11 @@ class PolicyManager:
                 logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
 
                 while self.active_sessions > 0:
-                    message = f'Waiting for {self.active_sessions} active session(s) to finish...'
-                    logger.info(message)
-                    if conn:
-                        await conn.send(
-                            serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
-                        )
-
+                    await self._announce(
+                        protocol.ServerStatus.WAITING,
+                        f'Waiting for {self.active_sessions} active session(s) to finish...',
+                        conn,
+                    )
                     try:
                         await asyncio.wait_for(self._condition.wait(), timeout=5.0)
                     except TimeoutError:
@@ -93,19 +114,20 @@ class PolicyManager:
                     # Empty the slot first: a failed load must not leave the closed policy under the old id.
                     self.current_policy = None
                     self.current_checkpoint_id = None
+                # Clear the evidence before the load: a slow or failed one must not answer `ready` with a
+                # count and timing the checkpoint now loading never earned.
+                self.inferences = 0
+                self.last_timing = MappingProxyType({})
 
-                if conn:
-                    await conn.send(
-                        serialise({
-                            protocol.STATUS: protocol.ServerStatus.LOADING,
-                            protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
-                        })
-                    )
-
-                logger.info(f'Loading policy {checkpoint_id}')
+                await self._announce(protocol.ServerStatus.LOADING, f'Loading checkpoint {checkpoint_id}...', conn)
                 on_progress = self._progress_callback(conn)
-                self.current_policy = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
+                try:
+                    self.current_policy = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
+                except Exception as e:
+                    self.state = SlotState(protocol.ServerStatus.ERROR, f'Loading {checkpoint_id} failed: {e}')
+                    raise
                 self.current_checkpoint_id = checkpoint_id
+                self.state = SlotState(protocol.ServerStatus.READY, f'Serving checkpoint {checkpoint_id}')
 
             assert self.current_policy is not None
             if conn:
@@ -114,23 +136,46 @@ class PolicyManager:
         finally:
             self._lock.release()
 
-    @staticmethod
-    def _progress_callback(conn: wire.ServerConnection | None) -> Callable[[str], None] | None:
+    async def _announce(self, status: protocol.ServerStatus, message: str, conn: wire.ServerConnection | None) -> None:
+        """Record what the slot is doing, and tell a client that waits on it."""
+        self.state = SlotState(status, message)
+        logger.info(message)
+        if conn is not None:
+            await conn.send(serialise({protocol.STATUS: status, protocol.MESSAGE: message}))
+
+    def _progress_callback(self, conn: wire.ServerConnection | None) -> Callable[[str], None]:
         """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
 
         Blocks the loader until each message is on the wire, so one emitted at the very end of a load
         cannot overtake the ``ready`` that follows it and be read as the first inference result.
         """
-        if conn is None:
-            return None
         loop = asyncio.get_running_loop()
 
         def on_progress(msg: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                conn.send(serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})), loop
-            ).result()
+            self.state = SlotState(protocol.ServerStatus.LOADING, msg)
+            if conn is not None:
+                asyncio.run_coroutine_threadsafe(
+                    conn.send(serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})), loop
+                ).result()
 
         return on_progress
+
+    @asynccontextmanager
+    async def leased_policy(self) -> AsyncIterator[Policy | None]:
+        """What the slot holds, held against a checkpoint switch until the caller is done with it.
+
+        A switch waits for the lease as it waits for a session, so the policy cannot be closed and
+        replaced under an inference already running on it.
+        """
+        async with self._lock:
+            policy = self.current_policy
+            if policy is not None:
+                self.active_sessions += 1
+        try:
+            yield policy
+        finally:
+            if policy is not None:
+                await self.release_session()
 
     async def release_session(self):
         async with self._lock:
@@ -241,10 +286,12 @@ class PolicyServer:
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, _, _ = split(self._pipeline)
+        local, _, remote_half = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
         _declared_stack(local)
+        # What builds the observation a ``warm`` runs. A remote half that is not a codec encodes nothing.
+        self._server_codec = remote_half if isinstance(remote_half, Codec) else None
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
@@ -252,6 +299,7 @@ class PolicyServer:
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
+        self._warms_in_flight = 0
         self._last_activity = time.monotonic()
         # Backend calls run in a worker thread, so the event loop keeps servicing other connections, but are
         # serialized here: sessions may share one backend client, which concurrent calls would corrupt.
@@ -261,6 +309,8 @@ class PolicyServer:
         # Set while ``serve`` runs; ``shutdown`` reaches the loop from another thread.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
+        # The warm a ``WARM`` call started, so a second call joins it rather than running a second one.
+        self._warming: asyncio.Task | None = None
 
         # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
         # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
@@ -296,6 +346,74 @@ class PolicyServer:
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
+
+    def readiness(self) -> protocol.Readiness:
+        """What this server can do now."""
+        state = self._manager.state
+        return protocol.Readiness(
+            status=state.status,
+            message=state.message,
+            checkpoint_id=self._manager.current_checkpoint_id,
+            inferences=self._manager.inferences,
+            timing=self._manager.last_timing,
+            positronic_version=POSITRONIC_VERSION,
+        )
+
+    async def _answer_verb(self, verb: wire.Verb, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Answer one unary call with the state at the moment it answers. ``WARM`` does not wait for the
+        warm it starts."""
+        if verb is wire.WARM:
+            self._last_activity = time.monotonic()
+            self._start_warming(str(payload.get(keys.TASK) or ''))
+        return self.readiness().to_wire()
+
+    def _start_warming(self, task: str) -> None:
+        """Start one warm inference off the call that asked for it. A warm already running is not started
+        a second time."""
+        if self._warming is None or self._warming.done():
+            self._warming = asyncio.create_task(self._warm(task))
+
+    async def _warm(self, task: str) -> None:
+        """The warm a ``WARM`` call starts. Nothing awaits it, so a failure is reported and not raised."""
+        # A warm is activity: a cold checkpoint's first inference outlasts a short idle timeout, and the
+        # watchdog would otherwise shut the server down in the middle of the call that asked for it.
+        self._warms_in_flight += 1
+        try:
+            await self._warm_loaded_checkpoint(task)
+        except Exception as e:
+            # The checkpoint stays loaded and answers sessions, and the inference count stays at zero.
+            logger.error(f'Warming failed: {e}', exc_info=True)
+        finally:
+            self._warms_in_flight = max(0, self._warms_in_flight - 1)
+            self._last_activity = time.monotonic()
+
+    async def _warm_loaded_checkpoint(self, task: str) -> None:
+        """Answer one observation on the loaded checkpoint, so a scored episode does not pay the first one."""
+        async with self._manager.leased_policy() as policy:
+            if policy is None:
+                logger.error('Nothing to warm: the model slot is empty')
+                return
+            obs = self._server_codec.warm_observation(task) if self._server_codec is not None else None
+            if obs is None:
+                logger.info('This pipeline builds no warm observation; the checkpoint warms at load alone')
+                return
+            # The same lock a session takes: the backend is one client, and two calls on it corrupt each other.
+            async with self._infer_lock:
+                timing = await asyncio.to_thread(self._warm_once, policy, obs)
+            self._manager.record_inference(timing)
+            logger.info(f'Warmed {self._manager.current_checkpoint_id} in {timing[protocol.TIMING_SERVED]:.0f}ms')
+
+    @staticmethod
+    def _warm_once(policy: Policy, obs: dict[str, Any]) -> dict[str, float]:
+        """One inference on ``policy``, timed as a served one, in its own session."""
+        session = blocking(policy).new_session()
+        try:
+            with _ServedTiming.opened() as timing:
+                with timing.phase(protocol.TIMING_INFER):
+                    session(obs, time.time_ns())
+            return timing.report()
+        finally:
+            session.close()
 
     def _session_pipeline(self, params: dict[str, Any]) -> Pipeline:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -337,7 +455,9 @@ class PolicyServer:
                         raise
                     finally:
                         self._infer_lock.release()
-                    answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                    served = timing.report()
+                    answer = serialise({protocol.RESULT: actions, protocol.TIMING: served})
+                self._manager.record_inference(served)
                 await conn.send(answer)
             except wire.PeerDisconnected:
                 raise
@@ -390,7 +510,7 @@ class PolicyServer:
                 **session.meta,
                 offboard_keys.LOCAL_STACK: local_spec,
                 offboard_keys.COMPRESS_IMAGES: border.compress_images,
-                offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
+                offboard_keys.POSITRONIC_VERSION: POSITRONIC_VERSION,
             }
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
@@ -434,7 +554,7 @@ class PolicyServer:
         poll = min(timeout_s, 30)
         while True:
             await asyncio.sleep(poll)
-            if self._active_sessions > 0:
+            if self._active_sessions > 0 or self._warms_in_flight > 0:
                 continue
             idle = time.monotonic() - self._last_activity
             if idle >= timeout_s:
@@ -470,7 +590,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized)
+                    await w.start(self._serve_session, self._answer_verb, self._authorized)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:

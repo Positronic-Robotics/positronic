@@ -9,7 +9,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state, warm_image, warm_state
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
 # shares a value with ``keys.TASK`` by vocabulary, not by contract: that one names the prompt on the way in.
@@ -59,6 +59,15 @@ class ObservationCodec(Codec):
 
     def _decode_single(self, data: dict) -> dict:
         return {}
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """Zero-valued inputs under the rig-side names this codec reads, at the widths it declares."""
+        inputs: dict[str, Any] = {keys.TASK: task}
+        for input_key, (width, height) in self._image_configs.values():
+            inputs[input_key] = warm_image(width, height)
+        for features in self._state.values():
+            inputs.update({name: warm_state(name, dim) for name, dim in features.items()})
+        return inputs
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}

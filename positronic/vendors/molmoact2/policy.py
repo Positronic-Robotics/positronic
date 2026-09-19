@@ -10,16 +10,15 @@ from positronic.policy.codec import ACTION
 from positronic.vendors import molmoact2
 
 # The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
-# serves, at the 378x378 the model tiles every image to.
+# serves.
 _NUM_VIEWS = 3
-_IMAGE_SIZE = (378, 378)
 _STATE_DIM = 8
 
 
 def warm_observation() -> dict[str, Any]:
     """Zero-filled inputs one inference can run on, so the model's first-call cost is paid before it serves."""
     return {
-        molmoact2.IMAGES: [np.zeros((*_IMAGE_SIZE, 3), dtype=np.uint8) for _ in range(_NUM_VIEWS)],
+        molmoact2.IMAGES: [np.zeros((*molmoact2.IMAGE_SIZE, 3), dtype=np.uint8) for _ in range(_NUM_VIEWS)],
         molmoact2.STATE: np.zeros(_STATE_DIM, dtype=np.float32),
         molmoact2.TASK: '',
     }

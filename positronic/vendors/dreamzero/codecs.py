@@ -24,11 +24,15 @@ from positronic.policy.codec import (
     lerobot_action,
     lerobot_image,
     lerobot_state,
+    warm_image,
+    warm_state,
 )
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
+# The DROID arm this vendor serves.
+NUM_JOINTS = 7
 
 
 def _reshape_grip(values):
@@ -68,7 +72,7 @@ class DreamZeroObservationCodec(Codec):
 
         self._training_meta = {
             LEROBOT_FEATURES: {
-                'state.joint_position': lerobot_state(7),
+                'state.joint_position': lerobot_state(NUM_JOINTS),
                 'state.gripper_position': lerobot_state(1),
                 'video.wrist_image_left': lerobot_image(w, h),
                 'video.exterior_image_1_left': lerobot_image(w, h),
@@ -76,7 +80,7 @@ class DreamZeroObservationCodec(Codec):
             },
             GR00T_MODALITY: {
                 'state': {
-                    'joint_position': {'start': 0, 'end': 7, 'original_key': 'state.joint_position'},
+                    'joint_position': {'start': 0, 'end': NUM_JOINTS, 'original_key': 'state.joint_position'},
                     'gripper_position': {'start': 0, 'end': 1, 'original_key': 'state.gripper_position'},
                 },
                 'video': {
@@ -111,6 +115,18 @@ class DreamZeroObservationCodec(Codec):
         if frame.ndim == 4:
             return np.stack([image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, f) for f in frame])
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """Zero-valued inputs under the rig-side names this codec reads, at the widths it declares."""
+        frame = warm_image(*self._image_size)
+        return {
+            keys.TASK: task,
+            self._wrist_camera: frame,
+            self._exterior_camera_1: frame,
+            self._exterior_camera_2: frame,
+            keys.JOINTS: warm_state(keys.JOINTS, NUM_JOINTS),
+            keys.GRIP: warm_state(keys.GRIP, 1),
+        }
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joint_pos = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)

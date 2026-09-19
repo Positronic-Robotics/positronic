@@ -111,3 +111,15 @@ def test_short_chunk_keeps_every_step_and_its_own_end_timestamp():
     assert len(trajectory) == 11
     assert [a[keys.ACTION_TIMESTAMP] for a in trajectory] == pytest.approx([i / 10 for i in range(11)])
     assert trajectory[-1] == {keys.ACTION_TIMESTAMP: pytest.approx(1.0)}
+
+
+def test_observation_warms_at_the_size_the_processor_resizes_to():
+    obs = codecs.DroidCodec().warm_observation('pick up the towel')
+
+    assert obs is not None
+    assert obs[protocol.TASK] == 'pick up the towel'
+    assert obs[protocol.STATE][protocol.RIGHT_ARM].shape == (protocol.NUM_JOINTS,)
+    # An open gripper: the codec inverts the canonical 0=open into Galaxea's convention.
+    assert obs[protocol.STATE][protocol.RIGHT_GRIPPER] == pytest.approx([1.0])
+    width, height = protocol.IMAGE_SIZE
+    assert obs[protocol.IMAGES][protocol.WRIST_IMAGE].shape == (3, height, width)

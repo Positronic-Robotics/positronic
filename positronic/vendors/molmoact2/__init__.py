@@ -3,3 +3,6 @@
 IMAGES = 'images'
 STATE = 'state'
 TASK = 'task'
+
+# The (width, height) the model tiles every image to. A warm frame carries it, so its resize is a no-op.
+IMAGE_SIZE = (378, 378)

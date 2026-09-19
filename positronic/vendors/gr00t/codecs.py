@@ -1,6 +1,7 @@
 """DROID observations and joint-position actions for GR00T."""
 
 from functools import partial
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -25,6 +26,8 @@ from positronic.policy.codec import (
     lerobot_action,
     lerobot_image,
     lerobot_state,
+    warm_image,
+    warm_state,
 )
 from positronic.vendors import gr00t
 
@@ -51,6 +54,17 @@ class DroidCodec(Codec):
     @staticmethod
     def _encode_image(frame):
         return image.resize_with_pad_per_frame(*gr00t.IMAGE_SIZE, Image.Resampling.BILINEAR, np.asarray(frame))
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """Zero-valued inputs under the rig-side names this codec reads, at the widths it declares."""
+        frame = warm_image(*gr00t.IMAGE_SIZE)
+        return {
+            keys.TASK: task,
+            **dict.fromkeys(self.image_mappings.values(), frame),
+            keys.EE_POSE: warm_state(keys.EE_POSE, 7),
+            keys.GRIP: warm_state(keys.GRIP, 1),
+            keys.JOINTS: warm_state(keys.JOINTS, gr00t.STATE_DIMS[gr00t.JOINT_POSITION]),
+        }
 
     def encode(self, inputs: dict) -> dict:
         state = {

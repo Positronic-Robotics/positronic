@@ -23,11 +23,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 from cryptography.x509.oid import NameOID
 
-from positronic.offboard import grpc_wire, wire
+from positronic.offboard import grpc_wire, protocol, wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, bearer
-from positronic.offboard.tests.conftest import DictSource, Served, StartServer
+from positronic.offboard.tests.conftest import WARM_PROMPT_FIELD, DictSource, Served, StartServer, warm_pipeline
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, remote
@@ -61,6 +61,30 @@ def test_a_grpc_session_handshakes_and_infers(both_wires):
 
 def _apart_from_the_endpoint(meta: dict) -> dict:
     return {key: value for key, value in meta.items() if key not in (offboard_keys.HOST, offboard_keys.PORT)}
+
+
+def test_both_wires_answer_the_readiness_verb_alike(both_wires):
+    served, _policy = both_wires
+    over_grpc = InferenceClient.from_url(grpc_url(served)).readiness()
+    over_websocket = InferenceClient.from_url(f'{served.host}:{served.port}').readiness()
+    assert over_grpc == over_websocket
+    assert over_grpc.status is protocol.ServerStatus.READY
+
+
+def test_a_grpc_warm_starts_one_inference(start_server, make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(warm_pipeline(policy), grpc=True)
+    client = InferenceClient.from_url(grpc_url(served))
+    assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+    policy._mock_session.assert_called_once_with({WARM_PROMPT_FIELD: 'stack the cubes'}, ANY)
+
+
+def test_a_server_that_does_not_answer_the_verb_says_so(both_wires, monkeypatch):
+    """A server too old for the verb answers UNIMPLEMENTED, which the client reads as the verb's absence."""
+    served, _policy = both_wires
+    monkeypatch.setattr(wire, 'READY', wire.Verb('ready', 'GET', 'ReadyTheServerNeverRegistered'))
+    with pytest.raises(wire.VerbUnsupported):
+        InferenceClient.from_url(grpc_url(served)).readiness()
 
 
 def test_both_wires_answer_one_observation_alike(both_wires):
@@ -487,6 +511,9 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))
             return opened[-1]
+
+        def call(self, address, verb, payload, headers, timeout):
+            return client_wire.call(address, verb, payload, headers, timeout)
 
     client._wire = _Recording()
     with pytest.raises(RuntimeError):
