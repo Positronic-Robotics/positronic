@@ -1,7 +1,10 @@
 import asyncio
+import errno
 import logging
 import os
+import pathlib
 import socket
+import stat
 import threading
 import time
 import urllib.parse
@@ -13,6 +16,7 @@ from unittest.mock import ANY, MagicMock, patch
 import configuronic as cfn
 import httpx
 import pytest
+from fastapi import APIRouter
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
@@ -537,6 +541,207 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         session.close()
 
 
+@pytest.fixture
+def unix_stub_server(start_unix_server, socket_path, make_mock_policy) -> tuple[str, MagicMock]:
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), socket_path)
+    return socket_path, policy
+
+
+def test_a_pipeline_served_over_a_unix_socket(unix_stub_server):
+    socket_path, policy = unix_stub_server
+    client = InferenceClient.from_url(f'unix://{socket_path}')
+
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {'name': 'chunked_schedule'}
+        assert session.metadata[offboard_keys.UDS] == socket_path
+        assert offboard_keys.HOST not in session.metadata
+        assert offboard_keys.PORT not in session.metadata
+
+        obs = {'image': 'test'}
+        assert session.infer(obs) == [{'action': [1, 2, 3]}]
+        policy._mock_session.assert_called_with(obs, ANY)
+    finally:
+        session.close()
+
+
+def test_a_unix_url_carries_the_model_id_past_the_socket_path(unix_stub_server):
+    socket_path, _policy = unix_stub_server
+
+    session = InferenceClient.from_url(f'unix://{socket_path}/api/v1/session/10000').new_session()
+    try:
+        assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
+    finally:
+        session.close()
+
+
+def test_a_socket_path_carrying_url_escapes_is_dialled_as_a_filename(start_unix_server, socket_path, make_mock_policy):
+    """``urlsplit`` leaves the path encoded, so a directory holding a space or a percent would
+    otherwise be dialled as a file that does not exist."""
+    odd = pathlib.Path(socket_path).parent / 'a b%c'
+    odd.mkdir()
+    uds = str(odd / 's.sock')
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), uds)
+
+    client = InferenceClient.from_url(f'unix://{urllib.parse.quote(uds)}')
+
+    assert str(client._address.uds) == uds
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_unix_server, socket_path, make_mock_policy):
+    """``serve`` binds only once the model has loaded, so a co-located client starting beside its
+    server finds no socket at all for that interval."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_unix_server(pipeline, socket_path))
+    late.start()
+
+    try:
+        session = InferenceClient.from_url(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_server_restarting_over_the_socket_it_left(
+    start_unix_server, socket_path, make_mock_policy
+):
+    """A bound path whose server has gone refuses the dial, and the successor binds over it. The wait
+    covers that restart as it covers a first start."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gone:
+        gone.bind(socket_path)
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_unix_server(pipeline, socket_path))
+    late.start()
+
+    try:
+        session = InferenceClient.from_url(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def test_a_dial_this_process_broke_fails_at_once_over_a_live_socket(unix_stub_server):
+    """A descriptor limit is this process's own, so no server appearing clears it. The socket is live
+    and the path says so, which is exactly when reading the path alone would wait out the deadline."""
+    socket_path, _policy = unix_stub_server
+    started = time.monotonic()
+
+    with patch('positronic.offboard.websocket_wire.unix_connect') as dial:
+        dial.side_effect = OSError(errno.EMFILE, 'Too many open files')
+        with pytest.raises(OSError) as refusal:
+            InferenceClient.from_url(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+
+    assert 'Too many open files' in str(refusal.value)
+    assert time.monotonic() - started < 5.0
+
+
+def test_a_dial_at_a_path_holding_something_that_is_not_a_socket_fails_at_once(socket_path):
+    """No waiting clears a wrong path. Which errno says so differs by platform, so this asserts the
+    connect deadline goes unspent."""
+    pathlib.Path(socket_path).write_text('not a socket')
+    started = time.monotonic()
+
+    with pytest.raises(OSError):
+        InferenceClient.from_url(f'unix://{socket_path}', connect_deadline=30.0).new_session()
+
+    assert time.monotonic() - started < 5.0
+
+
+def test_a_server_binds_over_the_socket_an_earlier_run_left(start_unix_server, socket_path, make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(socket_path)
+
+    start_unix_server(ChunkedSchedule() | remote | _StubSource(policy), socket_path)
+
+    assert InferenceClient.from_url(f'unix://{socket_path}').list_models() == ['stub']
+
+
+def test_a_path_that_is_not_a_socket_is_refused_and_left_alone(socket_path):
+    """A wrong ``uds`` is refused, and the file it names stays as it was."""
+    path = pathlib.Path(socket_path)
+    path.write_text('not a socket')
+
+    with pytest.raises(OSError) as refusal:
+        websocket_wire.claim_socket_path(socket_path)
+
+    assert refusal.value.errno == errno.EADDRINUSE
+    assert path.read_text() == 'not a socket'
+
+
+@pytest.mark.timeout(30.0)
+def test_a_second_claim_on_one_path_is_refused_and_the_first_goes_on_serving(socket_path):
+    """The bind is the claim, so two servers starting on one absent path cannot both pass it."""
+    held = websocket_wire.claim_socket_path(socket_path)
+    try:
+        with pytest.raises(OSError) as refusal:
+            websocket_wire.claim_socket_path(socket_path)
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert held.accept()[0].close() is None
+    finally:
+        held.close()
+
+
+def test_a_claimed_socket_keeps_the_mode_the_umask_gives(socket_path):
+    """A restrictive umask is the deployment's choice, and widening it would open the socket to every
+    local account that can reach the directory."""
+    previous = os.umask(0o077)
+    try:
+        sock = websocket_wire.claim_socket_path(socket_path)
+    finally:
+        os.umask(previous)
+    try:
+        assert stat.S_IMODE(os.stat(socket_path).st_mode) & 0o077 == 0
+    finally:
+        sock.close()
+
+
+@pytest.mark.timeout(30.0)
+def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mock_policy):
+    """``asyncio.create_unix_server`` unlinks the file it finds, so only a refusal here keeps the
+    address with the server that owns it."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(policy))
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
+        live.bind(socket_path)
+        live.listen()
+
+        with pytest.raises(OSError) as refusal:
+            server.serve([websocket_wire.WebsocketWire('localhost', 0, server.api, uds=socket_path)])
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert live.accept()[0].close() is None
+
+
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
     """Nothing left of the marker leaves the rig nothing to run, so the server refuses to serve it."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
@@ -872,3 +1077,9 @@ def test_every_served_layer_ships_its_own_duration_inside_infer(start_server, ma
     # through _layer_name would assert the naming rule against itself.
     assert timing[protocol.TIMING_INFER] >= timing['slow_codec_ms'] >= timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
     assert timing['slow_codec_ms'] - timing[protocol.TIMING_MODEL] >= _STUB_SLEEP_MS
+
+
+def test_a_server_refuses_a_relative_socket_path():
+    """No ``unix://`` URL names a relative path, so a server binding one publishes an unreachable address."""
+    with pytest.raises(ValueError, match='relative socket path'):
+        websocket_wire.WebsocketWire('localhost', 0, APIRouter(), uds='policy.sock')

@@ -1,3 +1,5 @@
+import os
+import tempfile
 import threading
 from collections.abc import Callable, Generator, Mapping
 from typing import NamedTuple
@@ -30,14 +32,15 @@ def start_server() -> Generator[StartServer, None, None]:
     """Factory serving pipelines on daemon threads; teardown stops and joins every started server.
 
     Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
-    serves the gRPC wire beside the websocket one.
+    serves the gRPC wire beside the websocket one. ``uds`` binds the websocket wire to that socket path
+    instead, as ``serve --uds`` does; the port it reports is then 0.
     """
     running: list[tuple[PolicyServer, threading.Thread]] = []
 
-    def start(pipeline, *, grpc: bool = False, **server_kwargs) -> Served:
+    def start(pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, **server_kwargs)
-        wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api)]
+        wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api, uds=uds)]
         if grpc:
             wires.append(grpc_wire.GrpcWire(host, 0))
         ready = threading.Event()
@@ -53,6 +56,26 @@ def start_server() -> Generator[StartServer, None, None]:
         server.shutdown()
         thread.join(timeout=10.0)
         assert not thread.is_alive(), 'the server did not stop when asked'
+
+
+StartUnixServer = Callable[..., PolicyServer]
+
+
+@pytest.fixture
+def socket_path() -> Generator[str, None, None]:
+    """A path for a Unix socket, short enough for the 104-byte limit that ``tmp_path`` can pass."""
+    with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+        yield os.path.join(directory, 's.sock')
+
+
+@pytest.fixture
+def start_unix_server(start_server: StartServer) -> StartUnixServer:
+    """Factory serving pipelines on a Unix socket, through the websocket wire as ``serve --uds`` binds it."""
+
+    def start(pipeline, uds: str, **server_kwargs) -> PolicyServer:
+        return start_server(pipeline, uds=uds, **server_kwargs).server
+
+    return start
 
 
 @pytest.fixture
