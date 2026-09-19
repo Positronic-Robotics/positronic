@@ -24,6 +24,7 @@ import numpy as np
 
 from positronic.cfg.eval import spec
 from positronic.eval import keys as eval_keys
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -56,15 +57,21 @@ def _load_fixture(path: str) -> list[tuple[np.ndarray, dict]]:
 
 def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dict, task: str) -> bool:
     # Exact-state reset: the token carries the task plus the demo's own recorded initial scene state.
+    # A demo replays one scene, so the server serves one slot and ``slots`` unpacks to one entry.
     out = conn.reset({'task': task, 'instruction_type': 'default', 'state': initial_state})
-    drift = float(np.abs(out['obs']['joint_pos'] - actions[0][:7]).max())
+    (slot,) = out[protocol.SLOTS]
+    drift = float(np.abs(slot[protocol.FRAME_OBS][robolab_keys.OBS_JOINT_POS] - actions[0][:7]).max())
     print(f'  reset joints vs first action: {drift:.4f} rad')
     assert drift < _RESET_DRIFT_TOL, f'exact-state reset missed the demo start: {drift:.4f} rad'
     for action in [*actions, *([actions[-1]] * _HOLD_TAIL_STEPS)]:
-        out = conn.step({'command': {'type': 'joint_pos', 'q': action[:7]}, 'grip': float(action[7])})
-        if out['done']:
-            return bool(out['success'])
-    print(f'  no terminal; final subtask [status, completed, total, score]: {out["obs"]["subtask"].tolist()}')
+        command = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: action[:7]}
+        (slot,) = conn.step([{protocol.ACTION_COMMAND: command, protocol.ACTION_GRIP: float(action[7])}])[
+            protocol.SLOTS
+        ]
+        if slot[protocol.FRAME_DONE]:
+            return bool(slot[protocol.FRAME_SUCCESS])
+    subtask = slot[protocol.FRAME_OBS][robolab_keys.OBS_SUBTASK].tolist()
+    print(f'  no terminal; final subtask [status, completed, total, score]: {subtask}')
     return False
 
 

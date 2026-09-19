@@ -26,6 +26,7 @@ import argparse
 import numpy as np
 
 from positronic import geom
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.libero.launcher import serve_libero
 
@@ -57,11 +58,14 @@ def _step_command(obs: dict, delta: np.ndarray, command_mode: str) -> dict:
     """The per-step wire command for the active replay path: ``cartesian`` ships an absolute pose the env
     re-derives a delta from; ``cartesian_delta`` ships the world-frame delta straight to the OSC controller."""
     match command_mode:
-        case 'cartesian':
-            return {'type': 'cartesian', 'pose': _compose_pose(obs, delta)}
-        case 'cartesian_delta':
+        case protocol.CARTESIAN:
+            return {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _compose_pose(obs, delta)}
+        case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = _physical_delta(delta)
-            return {'type': 'cartesian_delta', 'delta': np.concatenate([delta_pos, delta_rot.reshape(9)])}
+            return {
+                protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
+                protocol.COMMAND_DELTA: np.concatenate([delta_pos, delta_rot.reshape(9)]),
+            }
         case _:
             raise ValueError(f'unknown command mode {command_mode!r}')
 
@@ -70,15 +74,18 @@ def _replay_episode(
     conn: EnvConnection, actions: np.ndarray, init_state: np.ndarray, scene: dict, *, command_mode: str
 ) -> bool:
     # Exact-state reset: the token carries the task spec plus the demo's own recorded full state to restore.
-    obs = conn.reset({**scene, 'state': init_state})['obs']
+    # LIBERO runs one scene per server, so ``slots`` unpacks to one entry.
+    (slot,) = conn.reset({**scene, 'state': init_state})[protocol.SLOTS]
     for _ in range(_SETTLE_STEPS):
-        obs = conn.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']
+        (slot,) = conn.step([
+            {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
+        ])[protocol.SLOTS]
     success = False
     for action in actions:
         grip = (float(action[6]) + 1.0) / 2.0  # robosuite gripper [-1, 1] -> positronic [0, 1]
-        out = conn.step({'command': _step_command(obs, action[:6], command_mode), 'grip': grip})
-        obs = out['obs']
-        success = success or out['done']
+        command = _step_command(slot[protocol.FRAME_OBS], action[:6], command_mode)
+        (slot,) = conn.step([{protocol.ACTION_COMMAND: command, protocol.ACTION_GRIP: grip}])[protocol.SLOTS]
+        success = success or slot[protocol.FRAME_DONE]
     return success
 
 
@@ -95,7 +102,7 @@ def run_replay(
     suite: str = 'libero_spatial',
     task_id: int = 0,
     camera_resolution: int = 128,
-    command_mode: str = 'cartesian',
+    command_mode: str = protocol.CARTESIAN,
 ) -> float:
     """Replay every episode in ``fixture_path`` through the env server; return the success rate."""
     episodes = _load_fixture(fixture_path)
@@ -120,7 +127,9 @@ def main() -> None:
     parser.add_argument('--suite', default='libero_spatial', help='LIBERO task suite the fixture was extracted from')
     parser.add_argument('--task-id', type=int, default=0)
     parser.add_argument('--camera-resolution', type=int, default=128)
-    parser.add_argument('--command-mode', choices=['cartesian', 'cartesian_delta'], default='cartesian')
+    parser.add_argument(
+        '--command-mode', choices=[protocol.CARTESIAN, protocol.CARTESIAN_DELTA], default=protocol.CARTESIAN
+    )
     parser.add_argument('--min-success', type=float, default=0.8, help='replay success rate below this fails the run')
     args = parser.parse_args()
 

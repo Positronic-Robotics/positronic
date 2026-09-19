@@ -17,7 +17,8 @@ OK = 'ok'
 TASKS = 'tasks'
 SPEC = 'spec'
 TOKEN = 'token'
-ACTION = 'action'
+ACTIONS = 'actions'
+SLOTS = 'slots'
 ERROR = 'error'
 
 
@@ -53,6 +54,15 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
+
+
+def one_slot(frame: dict[str, Any]) -> dict[str, Any]:
+    """A one-slot answer as a flat frame: that slot's own fields beside the ones describing the batch.
+
+    For a client of a server that runs one scene per process. A wider answer raises.
+    """
+    (slot,) = frame[SLOTS]
+    return {**{key: value for key, value in frame.items() if key != SLOTS}, **slot}
 
 
 def _pack(obj):

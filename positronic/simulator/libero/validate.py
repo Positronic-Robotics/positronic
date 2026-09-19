@@ -51,6 +51,7 @@ run picks up a ``~/.libero`` written by some earlier, differently-located clone.
 import argparse
 
 import numpy as np
+import protocol  # pyright: ignore[reportMissingImports]
 from env import LiberoEnv
 from robosuite.utils.transform_utils import axisangle2quat, euler2mat, mat2quat, quat2axisangle, quat2mat
 
@@ -95,26 +96,37 @@ def _goal_qpos(c) -> np.ndarray:
     return np.asarray(c.goal_qpos)
 
 
+def _reset(env: LiberoEnv, token: dict) -> dict:
+    """Reset the env under validation and report its one slot's frame."""
+    return protocol.one_slot(env.reset(token))
+
+
+def _step(env: LiberoEnv, action: dict) -> dict:
+    """Step the env under validation with one slot's action and report that slot's frame."""
+    return protocol.one_slot(env.step([action]))
+
+
 def _check_serve(env: LiberoEnv, token: dict) -> None:
-    env.reset(token)
-    out = None
+    out = _reset(env, token)
     for _ in range(5):
-        out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
-    assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'} <= out['obs'].keys()
+        out = _step(env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0})
+    expected = {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'}
+    assert expected <= out[protocol.FRAME_OBS].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 
 
 def _check_grip(env: LiberoEnv, token: dict) -> None:
     """Drive the gripper to both stops and assert the observed ``grip`` reaches the [0, 1] closure extremes —
     the open command (0) settles near 0, the closed command (1) near 1."""
-    env.reset(token)
-    out = None
+    out = _reset(env, token)
     for _ in range(40):
-        out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
-    assert out['obs']['grip'] < 0.05, f'open grip {out["obs"]["grip"]}'
+        out = _step(env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0})
+    opened = out[protocol.FRAME_OBS]['grip']
+    assert opened < 0.05, f'open grip {opened}'
     for _ in range(40):
-        out = env.step({'command': {'type': 'hold'}, 'grip': 1.0})
-    assert out['obs']['grip'] > 0.95, f'closed grip {out["obs"]["grip"]}'
+        out = _step(env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 1.0})
+    closed = out[protocol.FRAME_OBS]['grip']
+    assert closed > 0.95, f'closed grip {closed}'
     print('  grip normalization: OK (open < 0.05, closed > 0.95)')
 
 
@@ -122,7 +134,7 @@ def _check_action_inverse(env: LiberoEnv, token: dict, ctype: str, key: str, goa
     """For ``_OSC_SAMPLES`` random actions: forward through the active controller's ``set_goal``, invert via
     ``_arm_action``, assert the recovered action matches. ``goal_payload`` reads the controller's resulting goal
     setpoint into the wire command field ``key``."""
-    env.reset(token)
+    _reset(env, token)
     c = env._controller
     # Sync the controller's cached ee_pos/joint state to the live sim (a real ``step`` does this every turn), so
     # ``set_goal`` builds its goal from the same pose ``_arm_action`` reads back via ``_cur_pose``/``_cur_q``.
@@ -131,7 +143,7 @@ def _check_action_inverse(env: LiberoEnv, token: dict, ctype: str, key: str, goa
     for _ in range(_OSC_SAMPLES):
         action = np.random.uniform(-1.0, 1.0, dim)
         c.set_goal(action.copy())
-        recovered = env._arm_action({'type': ctype, key: goal_payload(c)})
+        recovered = env._arm_action({protocol.COMMAND_TYPE: ctype, key: goal_payload(c)})
         assert np.allclose(recovered, action, atol=atol), f'{ctype}: {action} -> {recovered}'
     print(f'  {ctype} inverse: OK ({_OSC_SAMPLES} random actions, atol {atol})')
 
@@ -158,11 +170,20 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
     by a fixed offset and (b) reconstruct the two finger qpos from the closure scalar. This drives the arm and
     gripper across their range, proves both are pose-invariant, and prints the values to bake into the codec.
     """
-    wire = env.reset(token)['obs']
+    wire = _reset(env, token)[protocol.FRAME_OBS]
     samples = []
     for _ in range(8):
         samples.append((wire, _robosuite_obs(env)))
-        wire = env.step({'command': {'type': 'cartesian', 'pose': _nudge_pose(env)}, 'grip': 0.0})['obs']
+        wire = _step(
+            env,
+            {
+                protocol.ACTION_COMMAND: {
+                    protocol.COMMAND_TYPE: protocol.CARTESIAN,
+                    protocol.COMMAND_POSE: _nudge_pose(env),
+                },
+                protocol.ACTION_GRIP: 0.0,
+            },
+        )[protocol.FRAME_OBS]
 
     # Orientation: a fixed grip-site -> hand-body rotation. Measure on the first sample (xyzw, w>=0 from mat2quat).
     r_off = quat2mat(samples[0][0]['eef_quat']).T @ quat2mat(samples[0][1]['robot0_eef_quat'])
@@ -171,18 +192,24 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
     # Gripper: drive to both stops to read the finger qpos endpoints, then the codec's linear reconstruction
     # CLOSED + (1 - grip) * (OPEN - CLOSED) recovers the true qpos from the closure scalar (q_open/q_closed are
     # the non-circular measurement; the sweep checks the linear model holds).
-    env.reset(token)
+    _reset(env, token)
     for _ in range(40):
-        wire = env.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']
+        wire = _step(env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0})[
+            protocol.FRAME_OBS
+        ]
     q_open = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
     for _ in range(40):
-        wire = env.step({'command': {'type': 'hold'}, 'grip': 1.0})['obs']
+        wire = _step(env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 1.0})[
+            protocol.FRAME_OBS
+        ]
     q_closed = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
     recon_err = 0.0
-    env.reset(token)
+    _reset(env, token)
     for g in np.linspace(0.0, 1.0, 6):
         for _ in range(20):
-            wire = env.step({'command': {'type': 'hold'}, 'grip': float(g)})['obs']
+            wire = _step(
+                env, {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: float(g)}
+            )[protocol.FRAME_OBS]
         true_qpos = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
         recon = q_closed + (1.0 - wire['grip']) * (q_open - q_closed)
         recon_err = max(recon_err, float(np.max(np.abs(recon - true_qpos))))
@@ -218,7 +245,7 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
 def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
     """Pin the OSC scaling and control rate the libero codec bakes: ``PoseDeltaAction.OUTPUT_MAX``
     must equal the controller's per-step output range, and the codec stamps the chunk at the env's control rate."""
-    env.reset(token)
+    _reset(env, token)
     c = env._controller
     output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors PoseDeltaAction.OUTPUT_MAX
     assert np.allclose(c.output_max, output_max) and np.allclose(c.output_min, -output_max), (
@@ -230,7 +257,7 @@ def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
 
 
 def _check_fk_identity(env: LiberoEnv, token: dict) -> None:
-    env.reset(token)
+    _reset(env, token)
     pos_fk, rot_fk = env._fk(env._cur_q())
     pos_live, rot_live = env._cur_pose()
     # After the seeded reset's settle the arm carries residual motion near the singular tool-down pose, so the
@@ -241,7 +268,7 @@ def _check_fk_identity(env: LiberoEnv, token: dict) -> None:
 
 
 def _check_flange_to_eef(env: LiberoEnv, token: dict) -> None:
-    env.reset(token)
+    _reset(env, token)
     sim = env._sim
     link7 = sim.model.body_name2id(_LINK7_BODY)
     link7_rot = np.asarray(sim.data.body_xmat[link7]).reshape(3, 3)
@@ -256,7 +283,7 @@ def _check_flange_to_eef(env: LiberoEnv, token: dict) -> None:
 
 
 def _check_ik_roundtrip(env: LiberoEnv, token: dict) -> None:
-    env.reset(token)
+    _reset(env, token)
     n = len(env._qpos_idx)
     for _ in range(_IK_SAMPLES):
         target_pos, target_rot = env._fk(env._cur_q() + np.random.uniform(-0.1, 0.1, n))
@@ -280,7 +307,7 @@ def main() -> None:
     ee_token = _token(args, 'ee')
     _check_serve(ee, ee_token)
     _check_grip(ee, ee_token)
-    _check_action_inverse(ee, ee_token, 'cartesian', 'pose', _osc_goal, atol=_OSC_ATOL)
+    _check_action_inverse(ee, ee_token, protocol.CARTESIAN, protocol.COMMAND_POSE, _osc_goal, atol=_OSC_ATOL)
     _check_obs_encoding(ee, ee_token)
     _check_osc_delta_scale(ee, ee_token)
     _check_fk_identity(ee, ee_token)
@@ -290,7 +317,7 @@ def main() -> None:
 
     print('joint / JOINT_POSITION')
     jp = LiberoEnv()
-    _check_action_inverse(jp, _token(args, 'joint'), 'joint_pos', 'q', _goal_qpos)
+    _check_action_inverse(jp, _token(args, 'joint'), protocol.JOINT_POS, protocol.COMMAND_JOINT_POS, _goal_qpos)
     jp.close()
 
     print('joint_delta / JOINT_VELOCITY')
@@ -298,7 +325,11 @@ def main() -> None:
     # The wire ``dq`` is a per-step joint delta, so feed the controller's goal velocity as the delta it covers
     # over one control period; ``_arm_action`` divides by that period to recover the rate.
     _check_action_inverse(
-        jv, _token(args, 'joint_delta'), 'joint_vel', 'dq', lambda c: np.asarray(c.goal_vel) * jv._control_dt
+        jv,
+        _token(args, 'joint_delta'),
+        protocol.JOINT_DELTA,
+        protocol.COMMAND_JOINT_DELTA,
+        lambda c: np.asarray(c.goal_vel) * jv._control_dt,
     )
     jv.close()
 

@@ -94,13 +94,26 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = conn.reset(self._adapter.reset_token(params))
+        self._frame = self._single_episode(conn.reset(self._adapter.reset_token(params)))
         self._meta = self._frame[protocol.FRAME_META]
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
         self._emit_payload(self._frame[protocol.FRAME_OBS])
         # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
+
+    def _single_episode(self, result: dict[str, Any]) -> dict[str, Any]:
+        """An env server's payload as the one episode this proxy drives.
+
+        A World runs one episode, so the proxy owns one set of observation signals, one recorder and one
+        ``done``. An env server may serve several slots at once — RoboLab clones its scene to fill a GPU —
+        and driving that from here would leave every slot but one unrecorded, so a wider server is refused
+        rather than silently narrowed.
+        """
+        slots = result[protocol.SLOTS]
+        if len(slots) != 1:
+            raise ValueError(f'the env server serves {len(slots)} slots; this proxy drives one episode')
+        return protocol.one_slot(result)
 
     def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
         for name, value in self._adapter.observations(raw_obs).items():
@@ -130,7 +143,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._conn is not None, 'stepped before the first reset connected'
         reads = ((name, receiver.read()) for name, receiver in self.commands.items())
         commands = {name: msg for name, msg in reads if msg is not None}
-        result = self._conn.step(self._adapter.action(commands))
+        result = self._single_episode(self._connect().step([self._adapter.action(commands)]))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
