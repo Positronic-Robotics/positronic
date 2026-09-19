@@ -25,7 +25,7 @@ entry's meaning means a new name.
 import abc
 import functools
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -185,18 +185,19 @@ def inline(pipeline: Pipeline) -> Policy:
     return joined.wrap(policy) if joined is not None else policy
 
 
-def from_spec(node: dict[str, Any]) -> Layer | None:
+def from_spec(node: dict[str, Any], layers: Mapping[str, type[Layer]] = WIRE_LAYERS) -> Layer | None:
     """Rebuild a declared local stack from its wire spec; ``None`` for an empty declaration.
 
     Unknown entry names raise ``ValueError`` and unknown arguments ``TypeError`` — a declaration
-    this build cannot honor fails before anything moves.
+    this build cannot honor fails before anything moves. ``layers`` is the vocabulary a name resolves
+    against; a caller substitutes an entry to run a declared layer in another mode.
     """
     if SEQ in node:
-        parts = tuple(part for part in (from_spec(child) for child in node[SEQ]) if part is not None)
+        parts = tuple(part for part in (from_spec(child, layers) for child in node[SEQ]) if part is not None)
         return _join(parts)
     if PAR in node:
-        return functools.reduce(operator.and_, (from_spec(child) for child in node[PAR]))
+        return functools.reduce(operator.and_, (from_spec(child, layers) for child in node[PAR]))
     name = node.get('name')
-    if name not in WIRE_LAYERS:
-        raise ValueError(f'Unknown local-stack entry {name!r}; this build knows {sorted(WIRE_LAYERS)}')
-    return WIRE_LAYERS[name](**node.get('args', {}))
+    if not isinstance(name, str) or name not in layers:
+        raise ValueError(f'Unknown local-stack entry {name!r}; this build knows {sorted(layers)}')
+    return layers[name](**node.get('args', {}))
