@@ -69,8 +69,8 @@ class ArtifactRefs(BaseModel):
     a failed run whose record was not written.
 
     `policy_log` is the text the submitter's own policy container printed, stdout and stderr
-    together, from the attempt that decided the run. Every terminal run carries it, and it is
-    absent only where the container printed nothing.
+    together, from the attempt that decided the run. It is absent where the container printed
+    nothing.
     """
 
     result: str
