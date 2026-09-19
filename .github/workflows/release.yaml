@@ -69,9 +69,39 @@ jobs:
           packages-dir: client/dist
           skip-existing: true
 
+  # `positronic` requires `positronic-eval-vocabulary` too, on the same contract as the client: the
+  # words are on the index before the release that reads them.
+  publish-vocabulary-pypi:
+    runs-on: ubuntu-latest
+    needs: verify-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable uv (with cache)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        working-directory: vocabulary
+        run: |
+          rm -rf dist/
+          uvx --from build pyproject-build --sdist --wheel
+
+      - name: Twine check
+        run: uvx twine check vocabulary/dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: vocabulary/dist
+          skip-existing: true
+
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [verify-release, publish-client-pypi]
+    needs: [verify-release, publish-client-pypi, publish-vocabulary-pypi]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
