@@ -67,10 +67,15 @@ class ArtifactRefs(BaseModel):
 
     `diagnostics` is why a failed run's policy failed. It is absent on a run that succeeded, and on
     a failed run whose record was not written.
+
+    `policy_log` is the text the submitter's own policy container printed, stdout and stderr
+    together, from the attempt that decided the run. It is absent where the container printed
+    nothing.
     """
 
     result: str
     diagnostics: str | None = None
+    policy_log: str | None = None
 
 
 class EpisodeCounts(BaseModel):
