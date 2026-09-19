@@ -64,11 +64,42 @@ def _install_vendor_stub() -> None:
     sys.modules.update({PACKAGE: package, VENDOR: vendor, DESK: desk})
 
 
+I2RT = 'i2rt'
+
+
+def _install_i2rt_stub() -> None:
+    """Bind the two names the YAM driver takes from ``i2rt``. It ships in the ``yam`` extra, and the driver
+    reaches the vendor only through the ``connect`` factory a test replaces."""
+
+    class GripperType(Enum):
+        LINEAR_4310 = 'linear_4310'
+
+    get_robot = types.ModuleType(f'{I2RT}.robots.get_robot')
+    get_robot.get_yam_robot = lambda *args, **kwargs: None
+    utils = types.ModuleType(f'{I2RT}.robots.utils')
+    utils.GripperType = GripperType
+
+    robots = types.ModuleType(f'{I2RT}.robots')
+    robots.__dict__.update(get_robot=get_robot, utils=utils)
+    package = types.ModuleType(I2RT)
+    package.robots = robots
+
+    sys.modules.update({
+        I2RT: package,
+        f'{I2RT}.robots': robots,
+        f'{I2RT}.robots.get_robot': get_robot,
+        f'{I2RT}.robots.utils': utils,
+    })
+
+
 # Both are reached for only inside the functions that use them, so an empty module carries the import
 _EMPTY_STUBS = ('scservo_sdk', 'placo')
 
 if importlib.util.find_spec(PACKAGE) is None:
     _install_vendor_stub()
+
+if importlib.util.find_spec(I2RT) is None:
+    _install_i2rt_stub()
 
 for _name in _EMPTY_STUBS:
     if importlib.util.find_spec(_name) is None:
