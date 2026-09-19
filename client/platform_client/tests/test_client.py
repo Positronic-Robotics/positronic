@@ -548,6 +548,7 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
         'provider': None,
         'spec': None,
         'image': None,
+        'wire': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,

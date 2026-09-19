@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from platform_client.enums import EndpointKind, Placement
+from platform_client.enums import EndpointKind, Placement, Wire
 from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
@@ -192,6 +192,38 @@ def test_an_image_endpoint_names_the_image_and_nothing_else():
         Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/p:v1'), url='wss://h/ws')
     with pytest.raises(ValidationError, match='only an image endpoint carries'):
         Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', image=PolicyImage('org/p:v1'))
+
+
+def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
+    """The plan states a served entry's transport: the platform picks its address, not the caller."""
+    entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
+
+    assert entry.wire is Wire.grpc
+    assert Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero').wire is None
+
+
+def test_a_kind_that_states_its_own_wire_refuses_the_field():
+    """A wire stated on these kinds could only disagree with the address they already carry."""
+    with pytest.raises(ValidationError, match='only a served entry carries'):
+        Endpoint(name='baseline', url='wss://baseline.example/ws', wire=Wire.grpc)
+    with pytest.raises(ValidationError, match='only a served entry carries'):
+        Endpoint(name='baseline', kind=EndpointKind.image, image=PolicyImage('org/policy:v1'), wire=Wire.grpc)
+
+
+def test_the_wire_rides_the_json_as_its_slug():
+    """Every closed set crosses the wire as its slug, and a plan read back from its own dump must be
+    the plan that was dumped."""
+    entry = Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero', wire=Wire.grpc)
+
+    sent = entry.model_dump(mode='json')
+
+    assert sent['wire'] == 'grpc' and sent['kind'] == 'served'
+    assert Endpoint.model_validate(sent) == entry
+
+
+def test_an_endpoint_naming_no_wire_takes_the_websocket():
+    """`None` is a served entry's answer too, and it means the WebSocket."""
+    assert Endpoint.model_validate({'name': 'candidate', 'kind': 'served', 'spec': 'dreamzero'}).wire is None
 
 
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():

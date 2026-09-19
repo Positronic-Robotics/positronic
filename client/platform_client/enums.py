@@ -152,6 +152,15 @@ class EndpointKind(IntEnum):
 
 
 @unique
+class Wire(IntEnum):
+    """The transport a served policy is dialled over."""
+
+    INVALID = 0
+    websocket = 1
+    grpc = 2
+
+
+@unique
 class Placement(IntEnum):
     """Which side of the rig a piece of the scene sits on.
 

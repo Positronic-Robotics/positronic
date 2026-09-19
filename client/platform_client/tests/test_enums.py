@@ -23,6 +23,7 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 
 ERROR_CODE_VALUES = {
@@ -76,6 +77,8 @@ BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
 ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2, 'image': 3}
 
+WIRE_VALUES = {'INVALID': 0, 'websocket': 1, 'grpc': 2}
+
 PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
 
 CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
@@ -89,6 +92,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
     (EndpointKind, ENDPOINT_KIND_VALUES),
+    (Wire, WIRE_VALUES),
     (Placement, PLACEMENT_VALUES),
     (CameraVantage, CAMERA_VANTAGE_VALUES),
 ]
