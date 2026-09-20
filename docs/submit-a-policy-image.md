@@ -1,7 +1,7 @@
 # Submit a policy image
 
 The platform pulls a container image that serves your model, runs it against a named eval in
-simulation, and scores it. This page is the path from a model you hold to a scored run.
+simulation, and scores it.
 
 Most of the path exists. Every vendor server in `positronic/vendors/<vendor>/server.py` speaks the
 [session protocol](../positronic/offboard/README.md), and every `positro/<vendor>` image on Docker
@@ -255,8 +255,6 @@ log cannot:
   "startup_log": "..."
 }
 ```
-
-Two readings that save time:
 
 - `vram_peak_mib` near 25 means the container never reached the GPU. The failure is in startup,
   before the model loads. Read `policy_log` for the exception.
