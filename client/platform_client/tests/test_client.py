@@ -236,15 +236,25 @@ def test_get_submission_sends_the_hex_id_and_resolves_the_variant():
 
 
 def test_list_artifacts_parses_every_entry_and_its_cursor():
+    # The cursor is the LAST key of the page, not the first key of the one after it: `after` is
+    # exclusive, so a first-unseen cursor would skip one object at every page boundary.
+    later_key = f'{EPISODE_KEY}.later'
     gateway = Gateway(
-        200, {'artifacts': [{'key': EPISODE_KEY, 'size': 812, 'url': f'{BASE}/signed?sig=beef'}], 'next': EPISODE_KEY}
+        200,
+        {
+            'artifacts': [
+                {'key': EPISODE_KEY, 'size': 812, 'url': f'{BASE}/signed?sig=beef'},
+                {'key': later_key, 'size': 96, 'url': f'{BASE}/signed?sig=feed'},
+            ],
+            'next': later_key,
+        },
     )
     response = make_client(gateway).list_artifacts(SubmissionId(0x1F))
 
     assert isinstance(response, ArtifactListResponse)
     assert response.artifacts[0].key == EPISODE_KEY
     assert response.artifacts[0].size == 812
-    assert response.next == EPISODE_KEY
+    assert response.next == response.artifacts[-1].key
     assert gateway.request().url.path == routes.SUBMISSIONS_ARTIFACTS
     assert dict(gateway.request().url.params) == {'id': '1f'}
 

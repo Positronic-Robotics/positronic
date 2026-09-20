@@ -94,7 +94,9 @@ class ArtifactEntry(BaseModel):
 class ArtifactListResponse(BaseModel):
     """`submissions.artifacts` — one page of objects, in key order.
 
-    `next` is the key the page after it starts from, and is absent on the last page.
+    `next` is the LAST key this page returned, which is what the next page passes as its `after`.
+    It is absent on the last page. A first-unseen key here would skip one object per boundary,
+    because `after` is exclusive.
     """
 
     artifacts: list[ArtifactEntry] = Field(default_factory=list)
