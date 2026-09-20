@@ -28,6 +28,33 @@ class Command(Enum):
     CLOSE = 'close'
 
 
+# Arm command tags shared by clients and environment servers.
+CARTESIAN = 'cartesian'
+CARTESIAN_DELTA = 'cartesian_delta'
+JOINT_POS = 'joint_pos'
+JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
+HOLD = 'hold'
+CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
+
+ACTION_COMMAND = 'command'
+ACTION_GRIP = 'grip'  # Closure in [0, 1].
+
+COMMAND_TYPE = 'type'
+COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
+COMMAND_DELTA = 'delta'  # CARTESIAN_DELTA — a relative pose, same encoding
+COMMAND_JOINT_POS = 'q'  # JOINT_POS — absolute joint targets
+COMMAND_JOINT_DELTA = 'dq'  # JOINT_DELTA — per-step joint deltas
+COMMAND_MODE = 'mode'  # Optional control law.
+
+# Response fields; required fields for reset and step are defined by EnvProtocol.
+FRAME_OBS = 'obs'
+FRAME_META = 'meta'
+FRAME_ROBOT_META = 'robot_meta'
+FRAME_CONTROL_DT = 'control_dt'
+FRAME_DONE = 'done'
+FRAME_SUCCESS = 'success'
+
+
 def _pack(obj):
     if isinstance(obj, np.ndarray):
         if obj.dtype.kind in ('V', 'O', 'c'):

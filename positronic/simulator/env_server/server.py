@@ -20,17 +20,16 @@ from typing import Any
 from websockets.sync.server import ServerConnection, serve
 
 # Isolated interpreters can import these modules as a package or as flat files.
-try:
+if __package__:
     from . import protocol
-except ImportError:
+else:
     import protocol
 
 
 class EnvProtocol(ABC):
     """An environment exchanging raw arrays and plain data with no Positronic dependencies.
 
-    Canonical observation and command conversion belongs in the client's ``EnvAdapter``.
-    Implementations own environment construction and caching across resets.
+    Implementations convert wire commands to native actions and own environment construction.
     """
 
     @abstractmethod
