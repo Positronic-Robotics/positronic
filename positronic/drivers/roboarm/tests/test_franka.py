@@ -41,7 +41,7 @@ class Call(StrEnum):
 
 @dataclass
 class _Goal:
-    """A goal as pf hands one back. Reading ``status`` crosses from C++, so it answers a fresh object."""
+    """A goal as pf hands one back: reading ``status`` crosses from C++."""
 
     _status: franka.pf.GoalStatus
     reason: str | None
@@ -805,8 +805,6 @@ def _refusals(caplog) -> list[str]:
 
 
 def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
-    """pf is a pybind11 extension, so a status crossing from C++ is equal to the canonical member and
-    is not identical to it."""
     status = REFUSED.status
 
     assert status == franka.pf.GoalStatus.ABORTED
