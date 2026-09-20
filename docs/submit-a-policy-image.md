@@ -1,160 +1,95 @@
 # Submit a policy image
 
-The platform pulls a container image that serves your model, runs it in simulation against an
-eval, a named set of tasks from the platform's catalog, and scores it.
+Positronic runs your policy for you. You provide a Docker image that runs an inference server: an
+HTTP server on port 8000 that speaks the positronic
+[session protocol](../positronic/offboard/README.md). The platform pulls the image, starts it on a
+GPU beside a simulator, plays an eval against it, and scores the result. An eval is a named set of
+tasks from the platform's catalog.
 
-Every vendor server in `positronic/vendors/<vendor>/server.py` speaks the
-[session protocol](../positronic/offboard/README.md), and every `positro/<vendor>` image on Docker
-Hub carries the vendor stack and the positronic tree. You add the weights, the offline
-environment, `EXPOSE 8000`, and a start command. Two recipes ship in `docker/`:
+The container gets no network access. Bake every package, weight and tokenizer into the image, and
+test that the image starts with the network denied before you submit:
+`docker run --rm --network none <image>`.
 
-| Model | Recipe | Base image | What it serves |
+## Example images
+
+Every `positro/<vendor>` image on Docker Hub carries a vendor stack and an inference server for it.
+Each recipe below adds the weights, an offline environment, `EXPOSE 8000` and a start command:
+
+| Model | Recipe | Base | Serves |
 |---|---|---|---|
 | openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi` | `pi05_droid_jointpos`, the public checkpoint |
 | GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t` | `nvidia/GR00T-N1.7-DROID` |
 
-For a fine-tuned checkpoint of one of these families, copy the recipe and replace the weights step.
-For a model of another family, see [Other models](#other-models).
+The header of each recipe gives its build command. The comments in each recipe say where a
+checkpoint of your own goes and which flag names it. Loading GR00T needs about 15 GB of CPU RAM
+before anything reaches the GPU.
 
-## What the platform does with your image
+The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
+`nvidia/Cosmos-Reason2-2B` (4.9 GB). The backbone repository is gated: accept NVIDIA's terms on its
+Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
+mount, and it enters no layer.
 
-1. It resolves your image reference to a digest at submission and records it as
-   `policy_image_digest`. The run uses those bytes.
-2. It refuses an image whose compressed size, config and layers summed, is over 30 GB
-   (`image_too_large`), and one it cannot pull anonymously (`image_unpullable`). Both are
-   charged to your quota.
-3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
-   server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
-   run's bearer token.
-4. It denies all network egress from the container for the whole run. Only the simulator can
-   reach your container, on port 8000.
-5. It waits for `GET /api/v1/models` to answer on port 8000. VM boot, the image pull and your
-   server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
-   to pull.
-6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
-7. It fails the run if a route serves a caller without the token, or refuses the run's own token.
-   The vendor servers read `AUTH_TOKEN` and check it; a server of your own must do the same.
-8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM.
+Other models:
 
-## The requirements
+- **DreamZero.** The public `GEAR-Dreams/DreamZero-DROID` checkpoint is 65 GB on the Hub, and the
+  `positro/dreamzero` base is 20 GB compressed. Together they exceed the 30 GB budget. Serve
+  DreamZero on your own GPU and file an eval plan with a `remote` endpoint
+  ([Eval plans](../client/README.md#eval-plans)).
+- **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
+  and hold the image to the rules in [Life of a submission](#life-of-a-submission).
 
-| # | Requirement | What happens if you miss it |
-|---|---|---|
-| 1 | The image starts the server itself: `CMD` or `ENTRYPOINT`, plus `EXPOSE 8000` | `policy_setup_crash`: the base image's `CMD ["bash"]` runs and exits |
-| 2 | Every weight and tokenizer is in the image | a download at start hangs or fails |
-| 3 | Nothing at start needs the network | `uv run` and Hugging Face both do, see below |
-| 4 | The image is public, and pinned by digest when you submit | `image_unpullable`, or a run of bytes you did not test |
-| 5 | The server honours `AUTH_TOKEN` | `policy_setup_crash` |
-| 6 | The image is under 30 GB compressed | `image_too_large` |
+### Two traps in the `positro/*` bases
 
-Under requirement 4, a gated checkpoint goes into a public image. That is a licence decision to
-make before you build.
-
-## Two traps at start
-
-Both are properties of the `positro/*` images, measured on `positro/openpi:latest` with the network
+Both recipes handle both traps. Both were measured on `positro/openpi:latest` with the network
 denied.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
-server with `uv run`,
-which builds that environment at container start. With the network denied the container dies in
-seconds on a DNS error. Build the environment in the image and call its interpreter:
+server with `uv run`, which builds that environment at container start. With the network denied
+the container dies in seconds on a DNS error. Each recipe runs
+`uv sync --locked --python 3.13 --no-dev` at build time and starts the interpreter the sync made,
+`/positronic/.venv/bin/python`.
 
-```dockerfile
-# Wrong: resolves the project and fetches an interpreter at every start.
-CMD ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.server", "droid_jointpos"]
-
-# Right: `uv sync` at build time, then the interpreter it made.
-RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
-CMD ["/positronic/.venv/bin/python", "-m", "positronic.vendors.openpi.server", "droid_jointpos"]
-```
-
-**Hugging Face asks the Hub about a local checkpoint.** `transformers` and `huggingface_hub` send a
-HEAD request per file, each retried five times, about 23 s per file against a resolver that cannot
-answer. Set the offline variables in the image:
-
-```dockerfile
-ENV HF_HOME=/opt/hf HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-```
-
-GR00T needs one more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub
-about the backbone's tokenizer with no cache fallback. `Dockerfile.submit-gr00t` sets all four. The
-numbers come from a container with the network denied. The offline variables alone fail at once
-with `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
+**Hugging Face asks the Hub about a local checkpoint.** `transformers` and `huggingface_hub` send
+a HEAD request per file, each retried five times, about 23 s per file against a resolver that
+cannot answer. Each recipe sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. GR00T needs one
+more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub about the
+backbone's tokenizer with no cache fallback. The offline variables alone fail at once with
+`OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
 
-## Build the image
+### Build and push
 
-### openpi π0.5 DROID
-
-```bash
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-    -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push docker
-```
-
-The recipe fetches the public `pi05_droid_jointpos` checkpoint and the PaliGemma tokenizer in a
-stage of its own. It resolves the positronic environment with `--extra openpi`. It also resolves
-openpi's own environment, because the server starts `serve_policy.py` through
-`uv run --project /openpi`. Then it serves `droid_jointpos`. The checkpoint sits under a directory
-named `0`: a local `checkpoints_dir` lists its subdirectories as model ids, and an id has to be
-digits.
-
-For a checkpoint of your own, replace the `assets` stage with a `COPY` of the checkpoint directory
-into `/opt/positronic/checkpoints/<name>/0`. Name your pipeline in the `ENTRYPOINT`. The
-[openpi guide](../positronic/vendors/openpi/README.md) lists the pipelines.
-
-### GR00T N1.7 DROID
-
-```bash
-docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
-    -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push docker
-```
-
-The recipe resolves the positronic environment, then downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB)
-and the backbone `nvidia/Cosmos-Reason2-2B` (4.9 GB) into `HF_HOME`. The backbone repository is
-gated: accept NVIDIA's terms on its Hub page, then put a read token in `$HOME/.hf_token`. The token
-enters no layer. The image serves the `droid` pipeline, which is the base checkpoint.
-
-For a fine-tuned checkpoint, `COPY` its `checkpoint-<step>` directories into the image and add
-`--pipeline.source.model_source=<their parent>` to the `CMD`. A fine-tuned checkpoint loads the
-same backbone as the base, which the recipe bakes. Loading the model needs about 15 GB of CPU RAM
-before anything reaches the GPU.
-
-### Other models
-
-- **DreamZero.** The public `GEAR-Dreams/DreamZero-DROID` checkpoint is 65 GB on the Hub, and
-  the `positro/dreamzero` base is 20 GB compressed. Together they do not fit the 30 GB budget.
-  Serve DreamZero on your own GPU and file an eval plan with a `remote` endpoint instead
-  ([Eval plans](../client/README.md#eval-plans)).
-- **A model of your own.** Write a server that speaks the session protocol
-  ([Connect your model](connect-your-model.md)), and hold the image to the requirements above.
-
-### Push and check
-
-- Push to Docker Hub when your base is `positro/*`. The base layers cross-mount from the public
-  repository, so only your layers upload. Another registry re-uploads all of them.
+- `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases
+  publish amd64 only, so a build on an ARM host resolves nothing without it.
 - `--provenance=false --sbom=false` makes buildx push one image manifest. Without them it pushes a
   manifest index with an `unknown/unknown` attestation entry beside the image.
-- `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases publish
-  amd64 only, so a build on an ARM host resolves nothing without it.
-- Read the digest and the compressed size the way the platform does, anonymously:
+- Push to Docker Hub when your base is `positro/*`. The base layers cross-mount from the public
+  repository, so only your layers upload. Another registry re-uploads all of them.
+- The image must be public. Under that rule a gated checkpoint goes into a public image, which is
+  a licence decision to make before you build.
 
-```bash
-TOK=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:<you>/<image>:pull" | jq -r .token)
-curl -s -D - -o manifest.json -H "Authorization: Bearer $TOK" \
-  -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-  "https://registry-1.docker.io/v2/<you>/<image>/manifests/v1" \
-  | grep -i '^docker-content-digest'
-jq '{compressed_bytes: (([.layers[].size] | add) + .config.size)}' manifest.json
-```
+## Life of a submission
 
-Pin `docker-content-digest`: it names the manifest the registry served. `config.digest` inside
-the manifest names the config blob, and the registry refuses a reference to it. The size adds the
-layers and the config blob, which is the count the platform makes against the 30 GB budget.
-
-The platform sees the same `401` or `404`: the image is not public, or the name is wrong.
+1. The platform resolves your image reference to a digest at submission and records it as
+   `policy_image_digest`. The run uses those bytes.
+2. It refuses an image it cannot pull anonymously (`image_unpullable`), and one whose compressed
+   size, config and layers summed, is over 30 GB (`image_too_large`). Both are charged to your
+   quota.
+3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
+   server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
+   run's bearer token. An image with no start command runs the base image's `CMD ["bash"]`, which
+   exits, and the run fails with `policy_setup_crash`.
+4. It denies all network egress from the container for the whole run. Only the simulator can
+   reach your container, on port 8000. A download at start hangs or fails.
+5. It waits for `GET /api/v1/models` to answer on port 8000. VM boot, the image pull and your
+   server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
+   to pull.
+6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
+7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
+   refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
+   your own must do the same.
+8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM.
 
 ## Test the image before you submit
 
@@ -183,20 +118,27 @@ docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; 
 
 The route answers `{"models": [...]}` with the token and `401` without it.
 
-## Register and submit
-
-The client installs from the repository and puts `platform-register` on your path:
+After the push, read the digest and the compressed size the way the platform does, anonymously:
 
 ```bash
-uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@main#subdirectory=client"
-uv run platform-register --alias="<display name>"      # GitHub's device flow; prints the key once
-export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
+docker/read_image_digest.sh <you>/<image>:v1
 ```
 
-The commands that drive an eval ship with `positronic`, so run them from a checkout of this
-repository:
+[`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
+header, which names the manifest the registry served, and that is the digest to pin. The
+`config.digest` inside the manifest names the config blob, and the registry refuses a reference to
+it. The size adds the layers and the config blob, which is the count the platform makes against
+the 30 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
+is wrong.
+
+## Submit
+
+The commands ship with `positronic`, and a checkout of this repository carries the platform
+client at the version it pins. Run them from the checkout:
 
 ```bash
+uv run platform-register --alias="<display name>"      # GitHub's device flow; prints the key once
+export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 uv run positronic eval catalog                          # the evals your key may name
 uv run positronic eval run --eval=<eval> \
     --policy-image=docker.io/<you>/<image>@sha256:<digest> \
@@ -215,7 +157,7 @@ uv run positronic eval list
   [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
   against it.
 
-## Read the result
+## Read the outcome
 
 The lifecycle is `pending -> running -> finished | errored | cancelled`. A `blocked` run waits on
 what its `reason` names. A `running` run reports its `stage`:
