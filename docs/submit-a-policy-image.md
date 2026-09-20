@@ -1,12 +1,12 @@
 # Submit a policy image
 
-The platform pulls a container image that serves your model, runs it against a named eval in
-simulation, and scores it.
+The platform pulls a container image that serves your model, runs it in simulation against an
+eval, a named set of tasks from the platform's catalog, and scores it.
 
-Most of the path exists. Every vendor server in `positronic/vendors/<vendor>/server.py` speaks the
+Every vendor server in `positronic/vendors/<vendor>/server.py` speaks the
 [session protocol](../positronic/offboard/README.md), and every `positro/<vendor>` image on Docker
-Hub carries the vendor stack and the positronic tree. What you add is the last mile: the weights,
-the offline environment, `EXPOSE 8000`, and a start command. Two recipes ship in `docker/`:
+Hub carries the vendor stack and the positronic tree. You add the weights, the offline
+environment, `EXPOSE 8000`, and a start command. Two recipes ship in `docker/`:
 
 | Model | Recipe | Base image | What it serves |
 |---|---|---|---|
@@ -24,8 +24,8 @@ For a model of another family, see [Other models](#other-models).
    (`image_too_large`), and one it cannot pull anonymously (`image_unpullable`). Both are
    charged to your quota.
 3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
-   server. The platform passes no flags and no secrets. The one variable it sets is `AUTH_TOKEN`,
-   the run's bearer token.
+   server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
+   run's bearer token.
 4. It denies all network egress from the container for the whole run. Only the simulator can
    reach your container, on port 8000.
 5. It waits for `GET /api/v1/models` to answer on port 8000. VM boot, the image pull and your
@@ -40,15 +40,15 @@ For a model of another family, see [Other models](#other-models).
 
 | # | Requirement | What happens if you miss it |
 |---|---|---|
-| 1 | The image starts the server itself: `CMD` or `ENTRYPOINT`, plus `EXPOSE 8000` | `policy_setup_crash` after `bash` exits |
+| 1 | The image starts the server itself: `CMD` or `ENTRYPOINT`, plus `EXPOSE 8000` | `policy_setup_crash`: the base image's `CMD ["bash"]` runs and exits |
 | 2 | Every weight and tokenizer is in the image | a download at start hangs or fails |
 | 3 | Nothing at start needs the network | `uv run` and Hugging Face both do, see below |
 | 4 | The image is public, and pinned by digest when you submit | `image_unpullable`, or a run of bytes you did not test |
 | 5 | The server honours `AUTH_TOKEN` | `policy_setup_crash` |
 | 6 | The image is under 30 GB compressed | `image_too_large` |
 
-Requirement 4 has a consequence: a gated checkpoint has to be baked into a public image. That is a
-licence decision to make before you build.
+Under requirement 4, a gated checkpoint goes into a public image. That is a licence decision to
+make before you build.
 
 ## Two traps at start
 
@@ -56,7 +56,8 @@ Both are properties of the `positro/*` images, measured on `positro/openpi:lates
 denied.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
-`/positronic` and no environment for it. `docker-compose.yml` starts every server with `uv run`,
+`/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
+server with `uv run`,
 which builds that environment at container start. With the network denied the container dies in
 seconds on a DNS error. Build the environment in the image and call its interpreter:
 
@@ -78,9 +79,9 @@ ENV HF_HOME=/opt/hf HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 ```
 
 GR00T needs one more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub
-about the backbone's tokenizer with no cache fallback. `Dockerfile.submit-gr00t` sets all four. This was
-measured in a container with the network denied. The offline variables alone fail at once with
-`OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
+about the backbone's tokenizer with no cache fallback. `Dockerfile.submit-gr00t` sets all four. The
+numbers come from a container with the network denied. The offline variables alone fail at once
+with `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
 
 ## Build the image
@@ -116,9 +117,9 @@ gated: accept NVIDIA's terms on its Hub page, then put a read token in `$HOME/.h
 enters no layer. The image serves the `droid` pipeline, which is the base checkpoint.
 
 For a fine-tuned checkpoint, `COPY` its `checkpoint-<step>` directories into the image and add
-`--pipeline.source.model_source=<their parent>` to the `CMD`. The base checkpoint's backbone is
-still the one the recipe bakes. Loading the model needs about 15 GB of CPU RAM before anything
-reaches the GPU.
+`--pipeline.source.model_source=<their parent>` to the `CMD`. A fine-tuned checkpoint loads the
+same backbone as the base, which the recipe bakes. Loading the model needs about 15 GB of CPU RAM
+before anything reaches the GPU.
 
 ### Other models
 
@@ -135,8 +136,8 @@ reaches the GPU.
   repository, so only your layers upload. Another registry re-uploads all of them.
 - `--provenance=false --sbom=false` makes buildx push one image manifest. Without them it pushes a
   manifest index with an `unknown/unknown` attestation entry beside the image.
-- `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases are
-  amd64 and carry no other, so a build on an ARM host resolves nothing without it.
+- `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases publish
+  amd64 only, so a build on an ARM host resolves nothing without it.
 - Read the digest and the compressed size the way the platform does, anonymously:
 
 ```bash
@@ -149,13 +150,11 @@ curl -s -D - -o manifest.json -H "Authorization: Bearer $TOK" \
 jq '{compressed_bytes: (([.layers[].size] | add) + .config.size)}' manifest.json
 ```
 
-`docker-content-digest` is the digest to pin: it names the manifest the registry served. A
-reference to the `config.digest` inside the manifest names a different object, and the registry
-refuses it. The size adds the layers and the config blob, which is the count the platform makes
-against the 30 GB budget.
+Pin `docker-content-digest`: it names the manifest the registry served. `config.digest` inside
+the manifest names the config blob, and the registry refuses a reference to it. The size adds the
+layers and the config blob, which is the count the platform makes against the 30 GB budget.
 
-A `401` or a `404` here is what the platform sees too: the image is not public, or the name is
-wrong.
+The platform sees the same `401` or `404`: the image is not public, or the name is wrong.
 
 ## Test the image before you submit
 
@@ -165,12 +164,12 @@ Run it with the network denied. This reproduces the platform's own conditions an
 docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 ```
 
-What a correct image prints: the server pins its checkpoint, starts the model process, reads the
-weights from the image, and then fails on the missing GPU. For the openpi recipe that is jax on
-CPU reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
-`Flash Attention 2 is not available on CPU`. Everything you control is then correct. What you must
-not see: `NameResolutionError`, `dns error`, `OfflineModeIsEnabled`, or a hang. One line to
-ignore: albumentations prints a `UserWarning` about fetching its version, which is harmless.
+In a correct image, the server pins its checkpoint, starts the model process, reads the weights
+from the image, and then fails on the missing GPU. For the openpi recipe that is jax on CPU
+reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
+`Flash Attention 2 is not available on CPU`. Everything you control is then correct. The run must
+not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
+albumentations prints a `UserWarning` about fetching its version; ignore it.
 
 On a machine with a GPU, serve it with the network denied and dial the models route from inside
 the container with the token:
@@ -194,7 +193,8 @@ uv run platform-register --alias="<display name>"      # GitHub's device flow; p
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 ```
 
-The commands that drive an eval ship with `positronic`, so run them from a checkout:
+The commands that drive an eval ship with `positronic`, so run them from a checkout of this
+repository:
 
 ```bash
 uv run positronic eval catalog                          # the evals your key may name
@@ -211,8 +211,9 @@ uv run positronic eval list
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
   catalog changes, so read the names from it. Start with the smallest eval it offers: it answers
   whether the image serves at all.
-- `users.me` reports your quota. The default is 2 image submissions per day. An eval plan the
-  lab rig runs does not count against it.
+- `users.me` reports your quota. The default is 2 image submissions per day. An
+  [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
+  against it.
 
 ## Read the result
 
@@ -227,11 +228,11 @@ what its `reason` names. A `running` run reports its `stage`:
 
 Reaching `evaluating` proves the image works. A run can go back to `provisioning` from
 `evaluating`: a lost simulator VM is replaced, and `result.json` records which attempt scored.
-`episodes` and `runs` on a submission are the lab rig's fields. An image run reports `0/0` and an
-empty list, while it runs and after it finishes.
+`episodes` and `runs` on a submission are fields of a plan the lab rig runs. An image run reports
+`0/0` and an empty list, while it runs and after it finishes.
 
-A `finished` submission carries `scores.primary`, the value a board ranks on, and `artifacts`
-with signed links:
+A `finished` submission carries `scores.primary`, the value a leaderboard ranks on, and
+`artifacts` with signed links:
 
 | link | content | present |
 |---|---|---|
@@ -270,21 +271,22 @@ log cannot:
 
 ### The episodes
 
-`submissions.artifacts` lists what a finished run wrote, one page at a time. No other route
-reaches an episode: a signed link covers one key, and the bucket refuses you a listing. The
+`submissions.artifacts` lists what a finished run wrote, one page at a time, and it is the only
+route to an episode: a signed link covers one key, and the bucket refuses a listing. The
 client calls it with `list_artifacts`, and `positronic eval` has no command for it.
 
 - Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
   run writes one tree per attempt, and only that tree holds the episodes that count.
-- `prefix` is read under the submission's own prefix, so one attempt's episodes are
-  `attempts/<n>/episodes/`. The same attempt holds `scores.json`, `logs/` and `timing.jsonl`.
-  `control/` is never listed.
-- Page with `after`, and pass the `next` of the page before it. These links expire after 15
-  minutes, like the three above.
-- `attempts/<n>/episodes/` is a positronic dataset root. Download the tree whole and it reads like
-  a dataset a local run wrote. The privileged channels are stripped from it.
-- A plan the lab rig ran is refused here. Its files land in your own bucket, and `submissions.get`
-  names that prefix.
+- The route's `prefix` filter is read under the submission's own prefix, so one attempt's
+  episodes are `attempts/<n>/episodes/`. The same attempt holds `scores.json`, `logs/` and
+  `timing.jsonl`. `control/` is never listed.
+- The route pages: pass `after` with the `next` of the page before it. These links expire after
+  15 minutes, like the three above.
+- `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic
+  reads it as a dataset, the same as one a local `positronic eval run` writes
+  ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
+- A plan the lab rig ran is refused here: its episodes land under the prefix `submissions.get`
+  names.
 
 ### Failure reasons
 
@@ -301,7 +303,7 @@ fault is not.
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |
-| `quota_exceeded` | platform | the platform's own capacity, not your quota; resubmit, then report it |
+| `quota_exceeded` | platform | the platform's own capacity; resubmit, then report it |
 | `provision_wedged` | platform | resubmit with a new transaction key |
 | `runner_unresponsive` | platform | resubmit |
 | `internal_error` | platform | resubmit, then report it |

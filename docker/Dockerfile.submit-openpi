@@ -42,7 +42,7 @@ RUN uv sync --frozen --project /openpi && uv cache clean
 COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
 COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
-# A fetch the build did not make fails at once instead of hanging on a denied network.
+# A fetch the build did not make fails at once on the denied network.
 ENV UV_OFFLINE=1 \
     UV_NO_SYNC=1 \
     HF_HUB_OFFLINE=1 \

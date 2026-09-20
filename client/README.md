@@ -81,8 +81,8 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `submissions.create`. `--from-file` names the file, and
-no other option does: an `--eval` value is a name. The same flags state a plan
+`positronic eval run` files that plan with `submissions.create`. `--from-file` takes the plan
+file, and an `--eval` value is a name. The same flags state a plan
 without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
 `--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
 catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
@@ -94,11 +94,12 @@ Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answe
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
 image runs the platform executes itself.
 
-`EvalPlan` refuses unknown fields. A plan built from a record of your own has to drop the record's
-own fields first, and `EvalPlan.model_validate(plan)` raises before anything reaches the platform.
+`EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
+reaches the platform.
 
-A policy image is the other shape: [Submit a policy image](../docs/submit-a-policy-image.md) says
-what the platform requires of one, and how to build, test and submit it.
+A plan states its own tasks and endpoints. A policy image run names a catalog eval:
+[Submit a policy image](../docs/submit-a-policy-image.md) says what the platform requires of the
+image, and how to build, test and submit it.
 
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
 the eval whose tasks it runs. `plan_of_image` builds that shape.
