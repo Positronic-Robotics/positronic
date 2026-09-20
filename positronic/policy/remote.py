@@ -70,13 +70,9 @@ class RemotePolicy(Policy):
         wire: str,
         address: SessionAddress,
         *,
-        recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        # TODO: Integrate boundary recording with processor runs and explicit clocks.
-        if recording_dir is not None:
-            raise NotImplementedError('Processor boundary recording is not implemented')
         self._client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
         self._server_meta: dict[str, Any] | None = None
 

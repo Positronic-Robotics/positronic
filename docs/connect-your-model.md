@@ -155,14 +155,7 @@ A rig with more than one arm names every channel after the arm that owns it: obs
 
 ## Debugging with recordings
 
-When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy layer — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
-
-- **`raw`** — the observation and the action as they cross the wire.
-- **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
-
-Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.
-
-The client side can record too: `--output_dir` saves the full episode as a Positronic dataset, browsable with `positronic-server`.
+Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-server`.
 
 ## Implement your own server
 
@@ -240,7 +233,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 ### Slow-loading or subprocess models
 
-The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` message, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
+The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` message, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching and idle shutdown are `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
 
 ### Serialization
 

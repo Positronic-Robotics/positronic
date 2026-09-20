@@ -258,8 +258,6 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **Status Streaming:** Long model loads are handled gracefully with progress updates.
 
-**Server-side recording:** Servers accept an optional `recording_dir`. When set, each session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
-
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
 ## Classes
@@ -311,11 +309,10 @@ asked for port 0 binds any free one, and `ws.served_address.port` is the port it
 
 Passing a `cfn.Config` that builds the pipeline enables [session parameters](#session-parameters);
 an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the server after that
-many minutes without activity. Boundary recording through `recording_dir` is not implemented for
-callable models or processor runs; passing it raises. Harness episode recording remains available.
+many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--websocket`, `--grpc`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--websocket`, `--grpc` and `--idle_timeout_min` are flags of `serve` itself — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. It takes the wire and the address that wire

@@ -401,7 +401,6 @@ COMMANDS = {
     # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
     'phail': serve.override(
         pipeline=joints.override(codec=codecs.phail_v1),
-        recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
         **{
             'pipeline.source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
             'pipeline.source.backbone': 'wan2.2',

@@ -81,8 +81,7 @@ COMMANDS = {
         pipeline=ee.override(
             codec=lerobot_codecs.phail_v1,
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'},
-        ),
-        recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
+        )
     ),
 }
 

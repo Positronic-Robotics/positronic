@@ -303,8 +303,7 @@ COMMANDS = {
             codec=codecs.phail_v1,
             ee_frame=None,
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/'},
-        ),
-        recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
+        )
     ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
     # Its poses are the sim panda's ``default``, which sits 45 mm along the approach axis from the FR3's, so
@@ -314,8 +313,7 @@ COMMANDS = {
         pipeline=ee_flip_grip.override(
             ee_frame=None,
             **{'source.checkpoints_dir': 's3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/'},
-        ),
-        recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
+        )
     ),
     'droid': serve.override(
         pipeline=droid_pipe.override(**{

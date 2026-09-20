@@ -1,11 +1,9 @@
-import runpy
 import threading
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
 import msgpack
 import numpy as np
-import pos3
 import pytest
 from websockets.sync.server import serve
 
@@ -15,20 +13,6 @@ from positronic.policy.executor import Executor, blocking
 from positronic.policy.spec import split
 from positronic.utils.serialization import deserialize
 from positronic.vendors.galaxea import codecs, protocol, server
-
-
-def test_cli_supports_recording_directory(tmp_path, monkeypatch):
-    output = tmp_path / 'recordings'
-
-    def record(_commands):
-        local = pos3.sync(str(output))
-        local.mkdir(parents=True, exist_ok=True)
-        (local / 'recording.txt').write_text('recorded')
-
-    monkeypatch.setattr(server.cfn, 'cli', record)
-    monkeypatch.setattr('pimm.logging.init_logging', lambda: None)
-    runpy.run_path(server.__file__, run_name='__main__')
-    assert (output / 'recording.txt').read_text() == 'recorded'
 
 
 @dataclass

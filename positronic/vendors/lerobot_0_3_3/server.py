@@ -125,12 +125,10 @@ COMMANDS = {
         pipeline=ee.override(
             codec=ee_codec.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action)),
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'},
-        ),
-        recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
+        )
     ),
     'sim_stack': serve.override(
-        pipeline=ee_flip.override(**{'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/'}),
-        recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
+        pipeline=ee_flip.override(**{'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/'})
     ),
     'demo': serve.override(
         pipeline=ee_flip.override(**{

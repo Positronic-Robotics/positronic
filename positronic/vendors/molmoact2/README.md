@@ -32,7 +32,7 @@ uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.se
 
 The server serves a named policy pipeline — the codec plus the HuggingFace model source. MolmoAct2 ships one
 pipeline, `droid`, which is the default subcommand. The codec lives server-side, so clients send raw
-observations and receive decoded joint commands. `--websocket`, `--grpc`, `--recording_dir` and
+observations and receive decoded joint commands. `--websocket`, `--grpc` and
 `--idle_timeout_min` are the server's flags: each wire carries the address it binds, so
 `--websocket.served_address.port` moves the WebSocket wire and
 `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it to a

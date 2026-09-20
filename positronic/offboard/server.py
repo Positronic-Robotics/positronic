@@ -213,11 +213,7 @@ class PolicyServer:
     """
 
     def __init__(
-        self,
-        pipeline: cfn.Config | Pipeline,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
-        auth_token: str | None = None,
+        self, pipeline: cfn.Config | Pipeline, idle_timeout_min: float | None = None, auth_token: str | None = None
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -227,9 +223,6 @@ class PolicyServer:
         self._pipeline.local.to_spec()
         self._source = self._pipeline.source
         self._manager = ModelManager(self._source)
-        # TODO: Integrate boundary recording with callable models and explicit clocks.
-        if recording_dir is not None:
-            raise NotImplementedError('Callable model boundary recording is not implemented')
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
@@ -470,12 +463,11 @@ def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
     return websocket_wire.ServedUnixSocket(Path(uds))
 
 
-@cfn.config(websocket=websocket, grpc=None, recording_dir=None, idle_timeout_min=None)
+@cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
 def serve(
     pipeline: cfn.Config,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
-    recording_dir: str | None,
     idle_timeout_min: float | None,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
@@ -495,7 +487,6 @@ def serve(
     """
     server = PolicyServer(
         pipeline,
-        recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )

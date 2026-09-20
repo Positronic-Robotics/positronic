@@ -55,7 +55,7 @@ WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
 
-# TODO: Replace observation timestamps in recording, probes, and serving-cost tools with explicit clocks.
+# TODO: Replace observation timestamps in serving-cost tools with explicit clocks.
 OBS_TIME_NS = 'obs_time_ns'
 WALL_TIME_NS = 'wall_time_ns'
 
