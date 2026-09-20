@@ -11,7 +11,7 @@ package is absent.
 import importlib.util
 import sys
 import types
-from enum import Enum
+from typing import ClassVar
 
 import pytest
 
@@ -25,10 +25,40 @@ DESK = f'{PACKAGE}.desk'
 def _install_vendor_stub() -> None:
     """Bind the names ``positronic_franka`` gives the Franka driver. Reached as ``franka.pf.*``, never imported."""
 
-    class GoalStatus(Enum):
-        REACHED = 'reached'
-        IN_FLIGHT = 'in_flight'
-        ABORTED = 'aborted'
+    class GoalStatus:
+        """A member of a pybind11 ``py::enum_``: equal by value, and not identical across the C++ boundary.
+
+        pybind11 builds a fresh Python object for each value a C++ call returns, so a status read off a goal
+        is equal to the canonical member and is never identical to it. ``enum.Enum`` interns its members, so
+        a stub built on one holds an identity test here that the arm fails.
+        """
+
+        NONE: ClassVar['GoalStatus']
+        REACHED: ClassVar['GoalStatus']
+        IN_FLIGHT: ClassVar['GoalStatus']
+        ABORTED: ClassVar['GoalStatus']
+
+        def __init__(self, name: str, value: int):
+            self._name = name
+            self._value = value
+
+        def returned_from_cpp(self) -> 'GoalStatus':
+            """The object pybind11 makes for this value on its way out of C++."""
+            return GoalStatus(self._name, self._value)
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, GoalStatus) and self._value == other._value
+
+        def __hash__(self) -> int:
+            return hash(self._value)
+
+        def __repr__(self) -> str:
+            return f'GoalStatus.{self._name}'
+
+    GoalStatus.NONE = GoalStatus('NONE', 0)
+    GoalStatus.REACHED = GoalStatus('REACHED', 1)
+    GoalStatus.IN_FLIGHT = GoalStatus('IN_FLIGHT', 2)
+    GoalStatus.ABORTED = GoalStatus('ABORTED', 3)
 
     class InternalImpedance:
         def __init__(self, k_theta=(3000.0, 3000.0, 3000.0, 2500.0, 2500.0, 2000.0, 2000.0)):

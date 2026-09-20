@@ -41,8 +41,14 @@ class Call(StrEnum):
 
 @dataclass
 class _Goal:
-    status: franka.pf.GoalStatus
+    """A goal as pf hands one back. Reading ``status`` crosses from C++, so it answers a fresh object."""
+
+    _status: franka.pf.GoalStatus
     reason: str | None
+
+    @property
+    def status(self) -> franka.pf.GoalStatus:
+        return self._status.returned_from_cpp()
 
 
 # A goal the arm would not take, and one it did.
@@ -796,6 +802,19 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 def _refusals(caplog) -> list[str]:
     """The lines the refusal log wrote."""
     return [record.message for record in caplog.records if record.message.startswith('The arm refused a move')]
+
+
+def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
+    """What every refusal test below rests on: the stub answers pf's own non-interned value.
+
+    pf is a pybind11 extension, so a status crossing from C++ is equal to the canonical member and never
+    identical to it. A stub built on ``enum.Enum`` interns its members, and every test under it then passes
+    against a driver that reads the arm by identity and is dead on hardware.
+    """
+    status = REFUSED.status
+
+    assert status == franka.pf.GoalStatus.ABORTED
+    assert status is not franka.pf.GoalStatus.ABORTED
 
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():

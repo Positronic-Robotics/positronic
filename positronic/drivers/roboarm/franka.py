@@ -296,7 +296,7 @@ class _Arm(DriverRun[command.CommandType]):
 
         libfranka prints the same rejection from the control thread, unstamped and outside Python.
         """
-        refused = goal.status is pf.GoalStatus.ABORTED
+        refused = goal.status == pf.GoalStatus.ABORTED
         if refused and not self._refused:
             self._refusals += 1
             self._quiet_at = self.clock.now() + self._REFUSAL_QUIET_S
@@ -306,7 +306,7 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.warning(f'The arm refused a move: {goal.reason or goal.status}{cause}')
         self._refused = refused
         # A goal the arm reached breaks the streak outright; any other unrefused one has to hold for the quiet time.
-        reached = goal.status is pf.GoalStatus.REACHED
+        reached = goal.status == pf.GoalStatus.REACHED
         if self._refusals and (reached or (not refused and self.clock.now() >= self._quiet_at)):
             if self._refusals > 1:  # the line above already reported a single one, with its reason
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
