@@ -10,7 +10,7 @@ from functools import partial
 
 import pytest
 
-import pimm
+from pimm.tests.testing import MockClock
 from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
 from positronic.policy.executor import Executor, blocking
 
@@ -387,32 +387,15 @@ def test_close_frees_what_the_functions_held(serve):
     assert gone() is None
 
 
-class _HandClock(pimm.Clock):
-    """A world nothing advances but the test, so a charged answer comes due exactly when the test says."""
-
-    def __init__(self) -> None:
-        self._now_ns = 0
-
-    def now(self) -> float:
-        return self._now_ns / 1e9
-
-    def now_ns(self) -> int:
-        return self._now_ns
-
-    def advance(self, seconds: float) -> None:
-        self._now_ns += round(seconds * 1e9)
-
-
-def test_a_charged_call_is_unanswered_until_its_world_has_run_that_long(serve):
-    """A world that does not advance never comes due for the call, however long ago the function returned."""
-    clock = _HandClock()
+def test_a_charged_call_is_unanswered_until_the_clock_has_run_the_wall_time_it_took(serve):
+    clock = MockClock()
     rt = serve(sleep=partial(time.sleep, 0.05))
     rt.charge_wall_time_to(clock)
 
     answer = rt.fns['sleep']()
     rt.wait_until_landed(TIMEOUT_SEC)
     clock.advance(0.04)
-    assert not answer.done(), 'answered before the world ran the 0.05s the call took'
+    assert not answer.done(), 'answered before the clock ran the 0.05s the call took'
     with pytest.raises(NotAnswered):
         answer.result()
 
@@ -422,7 +405,6 @@ def test_a_charged_call_is_unanswered_until_its_world_has_run_that_long(serve):
 
 
 def test_an_uncharged_call_answers_as_it_lands(serve):
-    """Charging is asked for: a runtime nobody charged answers on the call alone, whatever any clock reads."""
     rt = serve(sleep=partial(time.sleep, 0.05))
 
     answer = rt.fns['sleep']()
@@ -430,10 +412,9 @@ def test_an_uncharged_call_answers_as_it_lands(serve):
     assert answer.done()
 
 
-def test_closing_answers_a_charged_call_its_world_never_came_due_for(serve):
-    """The world has stopped, so an answer held against it would never come due — and the session that holds
-    it closes on ``done``."""
-    clock = _HandClock()
+def test_close_waives_the_charge_on_an_unpaid_call(serve):
+    """Nothing runs the clock after close, and a session refuses to close on an unanswered call."""
+    clock = MockClock()
     rt = serve(sleep=partial(time.sleep, 0.05))
     rt.charge_wall_time_to(clock)
 
@@ -445,8 +426,7 @@ def test_closing_answers_a_charged_call_its_world_never_came_due_for(serve):
 
 
 def test_charging_a_runtime_that_has_already_served_a_call_is_refused(serve):
-    """That call ran against no clock, and nothing can charge it after the fact."""
-    clock = _HandClock()
+    clock = MockClock()
     rt = serve(add=operator.add)
     settled(rt.fns['add'](2, 3)).result()
 
@@ -454,9 +434,8 @@ def test_charging_a_runtime_that_has_already_served_a_call_is_refused(serve):
         rt.charge_wall_time_to(clock)
 
 
-def test_charging_before_the_first_call_is_what_the_refusal_leaves_open(serve):
-    """The boundary of the refusal above: a runtime nobody has called takes the clock and charges."""
-    clock = _HandClock()
+def test_charging_before_the_first_call_is_accepted(serve):
+    clock = MockClock()
     rt = serve(sleep=partial(time.sleep, 0.05))
     rt.charge_wall_time_to(clock)
 

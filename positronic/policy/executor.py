@@ -25,30 +25,25 @@ from positronic.policy.base import (
 )
 
 
-class _Charge:
-    """What one call costs the world it was made in.
-
-    The answer is withheld until that world's clock has advanced, from the instant the call was made, by the
-    wall time the call took. A world on a wall clock reaches that instant as the answer lands, so nothing is
-    ever withheld there.
-    """
+class _WallTimeCharge:
+    """The wall time one call takes, charged to a world clock."""
 
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._made_ns, self._made_wall_ns = clock.now_ns(), time.monotonic_ns()
-        # Stamped from the thread the call ran on, so ``paid`` reads it across threads.
+        # Set on the worker thread, read on the caller's.
         self._landed_wall_ns: int | None = None
-        self._released = False
+        self._waived = False
 
-    def land(self) -> None:
+    def call_landed(self) -> None:
         self._landed_wall_ns = time.monotonic_ns()
 
-    def release(self) -> None:
-        """Charge nothing from here on: whoever was advancing this world has stopped."""
-        self._released = True
+    def waive(self) -> None:
+        self._waived = True
 
-    def paid(self) -> bool:
-        if self._released:
+    def is_paid(self) -> bool:
+        """Whether the clock has run the call's wall time since the call was made. A waived charge is paid."""
+        if self._waived:
             return True
         if self._landed_wall_ns is None:
             return False
@@ -68,7 +63,7 @@ class Executor(Runtime):
             name: str,
             call: Future[Any],
             read: Callable[['Executor._Answer'], None],
-            charge: '_Charge | None' = None,
+            charge: '_WallTimeCharge | None' = None,
         ):
             self.name = name
             self.call = call
@@ -76,7 +71,7 @@ class Executor(Runtime):
             self._charge = charge
 
         def done(self) -> bool:
-            return self.call.done() and (self._charge is None or self._charge.paid())
+            return self.call.done() and (self._charge is None or self._charge.is_paid())
 
         def result(self) -> Any:
             if not self.done():
@@ -84,10 +79,10 @@ class Executor(Runtime):
             self._read(self)
             return self.call.result()
 
-        def release(self) -> None:
-            """Answer as soon as the call lands, whatever the world still owes for it."""
+        def waive_charge(self) -> None:
+            """Drop the charge, so the answer is readable as soon as the call lands."""
             if self._charge is not None:
-                self._charge.release()
+                self._charge.waive()
 
         def failure(self) -> BaseException | None:
             """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
@@ -96,23 +91,21 @@ class Executor(Runtime):
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every answer that no caller has read. A call that has still to answer is one of these, so
-        # ``has_unanswered_call`` and ``owes_an_answer`` read this one set.
+        # Every answer no caller has read, the calls still to answer among them.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
         self._charged_clock: Clock | None = None
-        self._called = False
+        self._has_served_a_call = False
 
     def charge_wall_time_to(self, clock: Clock) -> None:
-        """Charge every call to ``clock``'s world, for the wall time the call takes. Refused once a call has
-        been made: that call is uncharged, and a runtime charging only some of its calls times the world
-        against a debt nobody can read off it.
+        """Charge every call the wall time it takes, on ``clock``. Refused once a call was made: that call went
+        uncharged, and a runtime charges all its calls or none.
 
-        The answer stays unanswered until ``clock`` has advanced by that duration from the instant the call
-        was made, so whoever reads it keeps the world running in the meantime.
+        A charged call is answered once ``clock`` has run that long since the call was made, so whoever reads
+        the answer must keep ``clock`` running.
         """
         with self._lock:
-            if self._called:
+            if self._has_served_a_call:
                 raise RuntimeError('This runtime has already served a call, which nothing charged')
             self._charged_clock = clock
 
@@ -122,8 +115,7 @@ class Executor(Runtime):
 
     @property
     def has_unanswered_call(self) -> bool:
-        """Whether any call is still to answer. A charged call that has landed is one of these until the
-        world has paid for it: nothing is running, and the caller still cannot read a result."""
+        """Whether any call is still to answer, a landed call whose charge is unpaid among them."""
         with self._lock:
             return any(not answer.done() for answer in self._unread)
 
@@ -136,10 +128,9 @@ class Executor(Runtime):
             return bool(self._unread)
 
     def wait_until_landed(self, timeout: float | None = None) -> None:
-        """Block until every call made so far has finished running, or until ``timeout`` seconds pass.
+        """Block until every call made so far has landed, or until ``timeout`` seconds pass.
 
-        A charged call has landed before it has answered: the world still owes it the wall time it took,
-        and only the caller can run the world, so a wait for the answer would never return.
+        A landed call may still be unanswered: its charge is paid by a clock only the caller runs.
         """
         with self._lock:
             pending = [answer.call for answer in self._unread]
@@ -148,14 +139,14 @@ class Executor(Runtime):
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
         with self._lock:
-            # Read under the same lock the setter takes, so no call runs against a half-installed charge.
-            self._called, charged_clock = True, self._charged_clock
-        # Opened before the submit, so a call that queues for a worker is charged for that wait too.
-        charge = _Charge(charged_clock) if charged_clock is not None else None
+            # Same lock as ``charge_wall_time_to``, so every call made after a clock is set sees it.
+            self._has_served_a_call, charged_clock = True, self._charged_clock
+        # Made before the submit, so the time a call queues for a worker is charged too.
+        charge = _WallTimeCharge(charged_clock) if charged_clock is not None else None
         call = self._pool.submit(context.run, fn, *args, **kwargs)
         answer = self._Answer(name, call, self._read, charge)
         if charge is not None:
-            call.add_done_callback(lambda _: charge.land())
+            call.add_done_callback(lambda _: charge.call_landed())
         with self._lock:
             self._unread.add(answer)
         return answer
@@ -181,7 +172,7 @@ class Executor(Runtime):
             unread, self._unread = self._unread, set()
             self._fns = dict.fromkeys(self._fns, self._closed)
         for answer in unread:
-            answer.release()
+            answer.waive_charge()
             # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
             # and the log is the only place the failure can go.
             if (exc := answer.failure()) is not None:

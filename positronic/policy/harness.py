@@ -118,7 +118,7 @@ class _EpisodeInference:
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
         if self._charges_wall_time:
-            # Keep a world faster than wall no further ahead of the call than wall time has gone.
+            # Hold a clock that has run further than wall since the call, until wall catches up.
             paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
             self._rollout.rt.wait_until_landed(max(self._clock.now() - paid_through, 0.0))
             return

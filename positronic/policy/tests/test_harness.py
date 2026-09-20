@@ -266,9 +266,7 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 class _Pacer(pimm.ControlSystem):
     """Stands in for the simulator: the sole time-master, sleeping one control period every turn.
 
-    ``real_time_factor`` is the rate it steps at, in world seconds per wall second; left out, it steps as
-    fast as the machine allows. A factor below 1.0 makes one period cost ``period / real_time_factor``
-    seconds of wall.
+    ``real_time_factor`` is world seconds per wall second; ``None`` steps as fast as the machine allows.
     """
 
     def __init__(self, period: float = 0.005, real_time_factor: float | None = None):
@@ -2491,22 +2489,16 @@ def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, before the function was released'
 
 
-def _boundary_gaps(played: list[tuple[float, Any]]) -> list[float]:
-    """How long the world ran between one chunk's last command and the next chunk's first.
+def _gaps_between_chunks(played: list[tuple[float, Any]]) -> list[float]:
+    """World time from each chunk's last command to the next chunk's first.
 
-    A chunk's grip values ascend, so a value under its predecessor is where one chunk ends and the next
-    begins.
+    A drop in grip value marks a chunk boundary: the values ascend within a chunk.
     """
     return [played[i][0] - played[i - 1][0] for i in range(1, len(played)) if played[i][1] < played[i - 1][1]]
 
 
 @pytest.mark.timeout(60.0)
 def test_a_sim_slower_than_wall_pays_the_whole_call(world):
-    """A charged trial costs the world the call's whole wall duration, at any rate the simulator steps at.
-
-    A simulator slower than real time reaches the answer having run a fraction of what the call took, so
-    letting it run is not payment: the answer is held back until the world has run the rest.
-    """
     wall_sec = 0.05
     played = _run_episode(
         world,
@@ -2516,15 +2508,14 @@ def test_a_sim_slower_than_wall_pays_the_whole_call(world):
         run_sec=0.5,
     )
 
-    gaps = _boundary_gaps(played)
+    gaps = _gaps_between_chunks(played)
     assert gaps, f'no chunk boundary in {[t for t, _ in played]}'
     assert min(gaps) >= wall_sec * 0.9, f'the world ran {min(gaps):.4f}s for a call that took {wall_sec}s'
 
 
 @pytest.mark.timeout(60.0)
-def test_an_uncharged_call_costs_a_slow_sim_nothing_either(world):
-    """A trial stating ``charge_inference_time=False`` holds the world still at any rate the simulator steps
-    at, so a chunk boundary costs one waypoint period rather than the wall time the model took."""
+def test_an_uncharged_call_costs_a_slow_sim_nothing(world):
+    """The world holds still while the model runs, so a chunk boundary costs one waypoint period."""
     played = _run_episode(
         world,
         RemoteStubPolicy(wall_sec=0.05, chunk=slow_chunk(0.05, 5)),
@@ -2534,7 +2525,7 @@ def test_an_uncharged_call_costs_a_slow_sim_nothing_either(world):
         run_sec=0.2,
     )
 
-    gaps = _boundary_gaps(played)
+    gaps = _gaps_between_chunks(played)
     assert gaps, f'no chunk boundary in {[t for t, _ in played]}'
     assert max(gaps) <= 0.02, f'the world ran {max(gaps):.4f}s for a call the trial charges nothing for'
 
