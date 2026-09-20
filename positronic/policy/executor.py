@@ -139,9 +139,9 @@ class Executor(Runtime):
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
         with self._lock:
-            # Same lock as ``charge_wall_time_to``, so every call made after a clock is set sees it.
+            # Every call made after a clock is set sees it: this read holds the lock ``charge_wall_time_to`` takes.
             self._has_served_a_call, charged_clock = True, self._charged_clock
-        # Made before the submit, so the time a call queues for a worker is charged too.
+        # The charge counts the time a call queues for a worker: it starts before the submit.
         charge = _WallTimeCharge(charged_clock) if charged_clock is not None else None
         call = self._pool.submit(context.run, fn, *args, **kwargs)
         answer = self._Answer(name, call, self._read, charge)

@@ -2515,7 +2515,7 @@ def test_a_sim_slower_than_wall_pays_the_whole_call(world):
 
 @pytest.mark.timeout(60.0)
 def test_an_uncharged_call_costs_a_slow_sim_nothing(world):
-    """The world holds still while the model runs, so a chunk boundary costs one waypoint period."""
+    """A chunk boundary costs one waypoint period: the world holds still while the model runs."""
     played = _run_episode(
         world,
         RemoteStubPolicy(wall_sec=0.05, chunk=slow_chunk(0.05, 5)),
