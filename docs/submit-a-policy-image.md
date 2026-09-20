@@ -238,7 +238,7 @@ with signed links:
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 
 The links expire after 15 minutes. Read `submissions.get` again for fresh ones. `submissions.get`
-returns these three files. The episode recordings stay in the platform's storage.
+returns these three files. The episodes are a separate call, below.
 
 `policy_log` is the first thing to read on a failed run. `diagnostics` answers the questions the
 log cannot:
@@ -265,6 +265,24 @@ log cannot:
 - `vram_peak_mib` near 25 means the container never reached the GPU. The failure is in startup,
   before the model loads. Read `policy_log` for the exception.
 - `container_oom_killed: false` with a low `vram_peak_mib` rules out both memory limits at once.
+
+### The episodes
+
+`submissions.artifacts` lists what a finished run wrote, one page at a time. It is the only route
+that reaches an episode: a signed link covers one key, and the bucket refuses you a listing. The
+client calls it with `list_artifacts`, and `positronic eval` has no command for it.
+
+- Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
+  run writes one tree per attempt, and only that tree holds the episodes that count.
+- `prefix` is read under the submission's own prefix, so one attempt's episodes are
+  `attempts/<n>/episodes/`. The same attempt holds `scores.json`, `logs/` and `timing.jsonl`.
+  `control/` is never listed.
+- Page with `after`, and pass the `next` of the page before it. These links expire after 15
+  minutes, like the three above.
+- `attempts/<n>/episodes/` is a positronic dataset root. Download the tree whole and it reads like
+  a dataset a local run wrote. The privileged channels are stripped from it.
+- A plan the lab rig ran is refused here. Its files land in your own bucket, and `submissions.get`
+  names that prefix.
 
 ### Failure reasons
 

@@ -209,9 +209,10 @@ absent on a run that wrote nothing, `diagnostics` on a run whose record was not 
 
 `submissions.artifacts` lists what a finished run wrote, one page at a time. Each entry names its
 `key` under the submission's own prefix, its `size`, and a signed `url` that expires. Pass `prefix`
-to keep the page to one part of the tree (`episodes/`), and `after` with the `next` of the page
-before it to read the rest. The route answers a finished run alone: a run still going has a
-part-written prefix, and a run that failed reads its records off `submissions.get`.
+to keep the page to one part of the tree, so one attempt's episodes are `attempts/<n>/episodes/`
+and `result.json`'s `attempt_location` names the attempt that scored. Pass `after` with the `next`
+of the page before it to read the rest. The route answers a finished run alone: a run still going
+has a part-written prefix, and a run that failed reads its records off `submissions.get`.
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package
