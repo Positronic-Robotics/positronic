@@ -373,7 +373,7 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
     assert mock_session.infer.call_count == 1
 
     release.set()
-    rt.wait(ANSWER_SEC)
+    rt.wait_until_landed(ANSWER_SEC)
     assert session({}, 0) == chunk
 
 
@@ -393,12 +393,12 @@ def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
+    rt.wait_until_landed(ANSWER_SEC)
     session.cancel()
 
     assert session({}, 0) is None  # the cancelled answer, read and thrown away
     assert session({}, 0) is None  # a round-trip of its own
-    rt.wait(ANSWER_SEC)
+    rt.wait_until_landed(ANSWER_SEC)
     assert mock_session.infer.call_count == 2
 
 
@@ -410,7 +410,7 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
+    rt.wait_until_landed(ANSWER_SEC)
     session.cancel()
 
     with pytest.raises(TimeoutError, match='server stalled'):
@@ -425,7 +425,7 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
     session, rt = open_session(endpoint)
 
     assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
+    rt.wait_until_landed(ANSWER_SEC)
     session.cancel()
     with pytest.raises(TimeoutError, match='server stalled'):
         session({}, 0)

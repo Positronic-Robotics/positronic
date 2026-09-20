@@ -126,11 +126,11 @@ def test_cancellation_discards_pending_chunk_and_next_call_recomputes(backend):
         assert backend.entered.wait(5)
         session.cancel()
         backend.release.set()
-        rt.wait(timeout=5)
+        rt.wait_until_landed(timeout=5)
         assert session({protocol.TASK: 'new'}, 1) is None
         assert not rt.owes_an_answer
         assert session({protocol.TASK: 'new'}, 2) is None
-        rt.wait(timeout=5)
+        rt.wait_until_landed(timeout=5)
         assert len(session({}, 3)) == 32
         assert [obs[protocol.TASK] for obs in backend.requests] == ['old', 'new']
     finally:

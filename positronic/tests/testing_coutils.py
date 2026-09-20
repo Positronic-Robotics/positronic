@@ -74,10 +74,10 @@ class EpisodeCaller:
         return self._perform_task(rollout)
 
     def wait_for_functions(self) -> None:
-        """Block until every function the rollouts asked for has answered. The task answers are its own
-        matter, and may all still be pending when this returns."""
+        """Block until every function the rollouts asked for has finished running. The task answers are
+        their own matter, and may all still be pending when this returns."""
         for rollout in self._rollouts:
-            rollout.rt.wait()
+            rollout.rt.wait_until_landed()
 
     def close(self) -> None:
         while self._rollouts:

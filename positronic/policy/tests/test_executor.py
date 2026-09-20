@@ -155,7 +155,7 @@ def test_wait_returns_once_every_call_has_answered(serve):
     executor = serve(sleep=partial(time.sleep, 0.05), add=operator.add)
 
     first, second = executor.fns['sleep'](), executor.fns['add'](2, 3)
-    executor.wait(TIMEOUT_SEC)
+    executor.wait_until_landed(TIMEOUT_SEC)
 
     assert not executor.in_flight
     assert first.done() and second.result() == 5
@@ -167,7 +167,7 @@ def test_wait_gives_up_at_its_timeout(serve):
     executor.fns['gate']()
 
     started = time.monotonic()
-    executor.wait(0.01)
+    executor.wait_until_landed(0.01)
 
     assert time.monotonic() - started < TIMEOUT_SEC
     assert executor.in_flight
@@ -410,7 +410,7 @@ def test_a_charged_call_is_unanswered_until_its_world_has_run_that_long(serve):
     rt.charge_wall_time_to(clock)
 
     answer = rt.fns['sleep']()
-    rt.wait(TIMEOUT_SEC)
+    rt.wait_until_landed(TIMEOUT_SEC)
     clock.advance(0.04)
     assert not answer.done(), 'answered before the world ran the 0.05s the call took'
     with pytest.raises(NotAnswered):
@@ -426,7 +426,7 @@ def test_an_uncharged_call_answers_as_it_lands(serve):
     rt = serve(sleep=partial(time.sleep, 0.05))
 
     answer = rt.fns['sleep']()
-    rt.wait(TIMEOUT_SEC)
+    rt.wait_until_landed(TIMEOUT_SEC)
     assert answer.done()
 
 

@@ -120,12 +120,12 @@ class _EpisodeInference:
         if self._charges_wall_time:
             # Keep a world faster than wall no further ahead of the call than wall time has gone.
             paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
-            self._rollout.rt.wait(max(self._clock.now() - paid_through, 0.0))
+            self._rollout.rt.wait_until_landed(max(self._clock.now() - paid_through, 0.0))
             return
         # A trial that pays nothing waits the function out. It waits in steps, because a model that never
         # answers must not also keep the world from coming down.
         while self._rollout.rt.in_flight and not should_stop.value:
-            self._rollout.rt.wait(POLL_PERIOD_SEC)
+            self._rollout.rt.wait_until_landed(POLL_PERIOD_SEC)
 
 
 class _EpisodeTelemetry:

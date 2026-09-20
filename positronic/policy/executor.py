@@ -129,8 +129,12 @@ class Executor(Runtime):
         with self._lock:
             return bool(self._unread)
 
-    def wait(self, timeout: float | None = None) -> None:
-        """Block until every call made so far has answered, or until ``timeout`` seconds pass."""
+    def wait_until_landed(self, timeout: float | None = None) -> None:
+        """Block until every call made so far has finished running, or until ``timeout`` seconds pass.
+
+        A charged call has landed before it has answered: the world still owes it the wall time it took,
+        and only the caller can run the world, so a wait for the answer would never return.
+        """
         with self._lock:
             pending = [answer.call for answer in self._unread]
         concurrent.futures.wait(pending, timeout=timeout)
@@ -185,7 +189,7 @@ class _BlockingPolicy(DelegatingPolicy):
             # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
             # on a call that lands while the session call runs, leaving its answer unread.
             while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
-                self._rt.wait()
+                self._rt.wait_until_landed()
             return actions
 
         def close(self):

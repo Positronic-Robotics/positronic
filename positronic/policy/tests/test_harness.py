@@ -268,7 +268,7 @@ class _Pacer(pimm.ControlSystem):
 
     ``real_time_factor`` is the rate it steps at, in world seconds per wall second; left out, it steps as
     fast as the machine allows. A factor below 1.0 makes one period cost ``period / real_time_factor``
-    seconds of wall, the way stepping physics does.
+    seconds of wall.
     """
 
     def __init__(self, period: float = 0.005, real_time_factor: float | None = None):
