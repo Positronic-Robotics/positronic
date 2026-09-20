@@ -205,6 +205,27 @@ A command's `type` selects the fields beside it: `cartesian_pos` (`pose`), `join
 
 Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
+**Frames ahead of the observation (`stream_frames`):**
+
+A server started with `stream_frames=True` says so in the ready handshake (`"stream_frames": true`). A rig that reads it sends each frame of a declared `temporal_stack` as soon as that frame is the one the next request will use, one message per frame and per stacked key, and the observation then carries the ids in place of the stack. The server keeps the frames per session and assembles the stack when the observation names them. A rig that ignores the flag sends the stack as before, and a server that did not declare it gets the stack as before.
+
+```json
+{"__frame__": {"key": "image.exterior", "obs_time_ns": 1737000000000000000, "value": "<uint8 (H, W, 3)>"}}
+```
+
+No answer follows a frame. The observation that names frames:
+
+```json
+{
+  "image.exterior": {"__frame_ids__": [1737000000000000000, 1737000000200000000, 1737000000400000000]},
+  "robot_state.ee_pose": [0.5, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
+  "obs_time_ns": 1737000000400000000,
+  "task": "pick up the red cube"
+}
+```
+
+An id the server does not hold answers an error. The server does not yet encode a frame on arrival; it only holds it, so the encode still runs when the observation arrives.
+
 **Server → Client (Error):**
 ```json
 {

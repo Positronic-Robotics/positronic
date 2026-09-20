@@ -6,13 +6,14 @@ import json
 import logging
 import os
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import configuronic as cfn
+import numpy as np
 import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.datastructures import QueryParams
@@ -174,6 +175,37 @@ def _declared_stack(local: Layer | None) -> dict[str, Any]:
     return local.to_spec()
 
 
+class _FrameRing:
+    """The frames one session streamed ahead, by key and ``obs_time_ns``, until an observation names them.
+
+    ``assemble`` replaces every ``FRAME_IDS`` entry of an observation with the stack of the frames it
+    names, oldest first. An id the ring does not hold is an error the client reads as a miss.
+    """
+
+    def __init__(self, keep: int = 64):
+        self._keep = keep
+        self._frames: dict[str, OrderedDict[int, Any]] = {}
+
+    def put(self, frame: Mapping[str, Any]) -> None:
+        held = self._frames.setdefault(frame[protocol.FRAME_KEY], OrderedDict())
+        held[int(frame[protocol.FRAME_TIME_NS])] = frame[protocol.FRAME_VALUE]
+        while len(held) > self._keep:
+            held.popitem(last=False)
+
+    def assemble(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+        out = dict(obs)
+        for key, value in obs.items():
+            if not (isinstance(value, Mapping) and protocol.FRAME_IDS in value):
+                continue
+            ids = [int(t) for t in value[protocol.FRAME_IDS]]
+            held = self._frames.get(key, {})
+            missing = [t for t in ids if t not in held]
+            if missing:
+                raise ValueError(f'{key}: no streamed frame at obs_time_ns {missing}; the rig has to resend the stack')
+            out[key] = np.stack([held[t] for t in ids])
+        return out
+
+
 class _ServedTiming:
     """What one inference cost the server, in milliseconds on the server's own clock.
 
@@ -235,7 +267,11 @@ class PolicyServer:
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        stream_frames: bool = False,
     ):
+        # Declared in the handshake: a rig that can then sends each frame of a temporal stack as it is
+        # captured, and the observation names them instead of carrying the stack.
+        self._stream_frames = stream_frames
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
         assert isinstance(self._pipeline, Pipeline), (
@@ -314,7 +350,11 @@ class PolicyServer:
         return pipeline
 
     async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
-        """Answer every observation the client sends, until it disconnects."""
+        """Answer every observation the client sends, until it disconnects.
+
+        A frame sent ahead is kept and not answered; the observation that names it gets the stack.
+        """
+        ring = _FrameRing()
         while True:
             message = await conn.receive()
             self._last_activity = time.monotonic()
@@ -322,6 +362,10 @@ class PolicyServer:
                 with _ServedTiming.opened() as timing:
                     with timing.phase(protocol.TIMING_DECODE):
                         raw_obs = deserialise(message)
+                        if protocol.FRAME in raw_obs:
+                            ring.put(raw_obs[protocol.FRAME])
+                            continue
+                        raw_obs = ring.assemble(raw_obs)
                     # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                     # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                     with timing.phase(protocol.TIMING_QUEUED):
@@ -390,6 +434,7 @@ class PolicyServer:
                 **session.meta,
                 offboard_keys.LOCAL_STACK: local_spec,
                 offboard_keys.COMPRESS_IMAGES: border.compress_images,
+                offboard_keys.STREAM_FRAMES: self._stream_frames,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
@@ -506,7 +551,7 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None)
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None, stream_frames=False)
 def serve(
     pipeline: cfn.Config,
     host: str,
@@ -514,6 +559,7 @@ def serve(
     recording_dir: str | None,
     idle_timeout_min: float | None,
     grpc_port: int | None,
+    stream_frames: bool,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
@@ -521,7 +567,8 @@ def serve(
     codec, source, checkpoint — is reached through the pipeline itself. GR00T selects checkpoints with
     ``--pipeline.source.model_source=...``; LeRobot and OpenPI use ``--pipeline.source.checkpoints_dir=...``.
 
-    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
+    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``stream_frames``
+    declares that the rig may send each frame of a temporal stack ahead of the observation.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
@@ -531,6 +578,7 @@ def serve(
         recording_dir=recording_dir,
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        stream_frames=stream_frames,
     )
     wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
     if grpc_port is not None:

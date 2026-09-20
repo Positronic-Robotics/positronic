@@ -8,3 +8,5 @@ CHECKPOINT_ID = 'checkpoint_id'
 LOCAL_STACK = 'local_stack'
 COMPRESS_IMAGES = 'compress_images'
 POSITRONIC_VERSION = 'positronic_version'
+# Whether the server takes the frames of a temporal stack ahead of the observation, one per message.
+STREAM_FRAMES = 'stream_frames'
