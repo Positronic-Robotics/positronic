@@ -125,9 +125,8 @@ docker/read_image_digest.sh <you>/<image>:v1
 ```
 
 [`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
-header, which names the manifest the registry served, and that is the digest to pin. The
-`config.digest` inside the manifest names the config blob, and the registry refuses a reference to
-it. The size adds the layers and the config blob, which is the count the platform makes against
+header, which names the manifest the registry served. Pin that digest. The `config.digest` inside
+the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
 the 30 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
 

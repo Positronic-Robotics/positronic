@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Read a public image's manifest digest and compressed size the way the platform does: anonymously.
-# The digest it prints is the one to pin in `--policy-image=<repo>@<digest>`. The size is the count
-# the platform makes against its 30 GB budget.
+# Pin the digest it prints, as `--policy-image=<repo>@<digest>`. The platform counts the size it
+# prints against its 30 GB budget.
 #
 # Usage
 #   docker/read_image_digest.sh <you>/<image>:<tag>          # a Docker Hub repository
 #
-# Needs curl and jq. A 401 or a 404 is what the platform sees too: the image is not public, or the
-# name is wrong.
+# Needs curl and jq. The platform sees the same 401 or 404: the image is not public, or the name is
+# wrong.
 set -euo pipefail
 
 ref="${1:?usage: $0 <you>/<image>:<tag>}"
