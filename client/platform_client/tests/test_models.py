@@ -25,6 +25,7 @@ from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
+    SubmissionArtifactsQuery,
     SubmissionGetQuery,
     SubmissionListQuery,
 )
@@ -33,6 +34,8 @@ from platform_client.responses import (
     QUOTA_SUBMISSIONS_CONCURRENT,
     QUOTA_SUBMISSIONS_DAY,
     STATUS_FIELD,
+    ArtifactEntry,
+    ArtifactListResponse,
     ArtifactRefs,
     BlockedSubmissionView,
     BoardListResponse,
@@ -69,6 +72,8 @@ SCORES = Scores(primary=0.75)
 RESULT_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/result.json?X-Amz-Signature=beef'
 DIAGNOSTICS_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/diagnostics.json?X-Amz-Signature=cafe'
 POLICY_LOG_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/policy.log?X-Amz-Signature=f00d'
+EPISODE_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/episodes/0000/meta.json?X-Amz-Signature=d00d'
+EPISODE_KEY = 'episodes/0000/meta.json'
 
 DAILY = QuotaLimit(
     key=QUOTA_SUBMISSIONS_DAY,
@@ -142,6 +147,11 @@ MODELS: list[BaseModel] = [
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
+    SubmissionArtifactsQuery(id=SUB),
+    SubmissionArtifactsQuery(id=SUB, prefix='episodes/', after=EPISODE_KEY, limit=50),
+    ArtifactEntry(key=EPISODE_KEY, size=812, url=EPISODE_URL),
+    ArtifactListResponse(),
+    ArtifactListResponse(artifacts=[ArtifactEntry(key=EPISODE_KEY, size=812, url=EPISODE_URL)], next=EPISODE_KEY),
     RankingsQuery(board=BoardRef('smoke')),
     RegisterResponse(
         user_id=USER,
@@ -672,3 +682,42 @@ def test_only_the_blocked_view_says_what_a_run_waits_on():
 def test_a_limit_below_one_is_refused():
     with pytest.raises(ValidationError):
         SubmissionListQuery(limit=0)
+    with pytest.raises(ValidationError):
+        SubmissionArtifactsQuery(id=SUB, limit=0)
+
+
+def test_an_artifact_page_names_each_key_under_the_submissions_own_prefix():
+    payload = ArtifactListResponse(artifacts=[ArtifactEntry(key=EPISODE_KEY, size=812, url=EPISODE_URL)]).model_dump(
+        mode='json'
+    )
+    entry = payload['artifacts'][0]
+    assert entry['key'] == EPISODE_KEY
+    assert entry['size'] == 812
+    assert entry['url'] == EPISODE_URL
+
+
+def test_the_last_page_of_artifacts_carries_no_cursor():
+    assert ArtifactListResponse(artifacts=[ArtifactEntry(key=EPISODE_KEY, size=812, url=EPISODE_URL)]).next is None
+
+
+def test_a_page_with_more_behind_it_carries_the_key_the_next_one_starts_from():
+    page = ArtifactListResponse(artifacts=[ArtifactEntry(key=EPISODE_KEY, size=812, url=EPISODE_URL)], next=EPISODE_KEY)
+    assert SubmissionArtifactsQuery(id=SUB, after=page.next).after == EPISODE_KEY
+
+
+def test_a_submission_with_no_artifacts_reads_as_an_empty_page():
+    assert ArtifactListResponse().artifacts == []
+
+
+def test_an_artifact_of_no_bytes_is_kept_and_a_negative_size_is_refused():
+    # An empty object is a real key the run wrote, so a page reports it; a negative size is a
+    # malformed response.
+    assert ArtifactEntry(key=EPISODE_KEY, size=0, url=EPISODE_URL).size == 0
+    with pytest.raises(ValidationError):
+        ArtifactEntry(key=EPISODE_KEY, size=-1, url=EPISODE_URL)
+
+
+def test_an_artifacts_query_refuses_a_field_it_does_not_declare():
+    # A typo'd narrowing would otherwise be dropped and list the whole submission.
+    with pytest.raises(ValidationError):
+        SubmissionArtifactsQuery.model_validate({'id': '1f', 'prefixx': 'episodes/'})
