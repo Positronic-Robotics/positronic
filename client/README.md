@@ -89,7 +89,16 @@ catalogue entry gives it. Two or more endpoints make one blind sample: the opera
 policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
 it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
-tasks needs a customer grant; a key without one is refused `forbidden`.
+tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
+Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
+`queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
+image runs the platform executes itself.
+
+`EvalPlan` refuses unknown fields. A plan built from a record of your own has to drop the record's
+own fields first, and `EvalPlan.model_validate(plan)` raises before anything reaches the platform.
+
+A policy image is the other shape: [Submit a policy image](../docs/submit-a-policy-image.md) says
+what the platform requires of one, and how to build, test and submit it.
 
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
 the eval whose tasks it runs. `plan_of_image` builds that shape.

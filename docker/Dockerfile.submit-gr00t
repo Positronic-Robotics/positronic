@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: GR00T N1.7 DROID on top of `positro/gr00t`.
+# docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
+#
+# Usage
+#   docker buildx build --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
+#       -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push docker
+#   docker run --rm --network none docker.io/<you>/gr00t-droid:v1        # the offline pre-flight
+#
+# The Hugging Face token is for `nvidia/Cosmos-Reason2-2B`, the backbone every N1.7 checkpoint
+# loads: the repository is gated, and NVIDIA grants access on the form. The token enters no layer.
+
+ARG BASE_IMAGE=positro/gr00t:latest
+FROM ${BASE_IMAGE}
+
+ARG MODEL=nvidia/GR00T-N1.7-DROID
+ARG BACKBONE=nvidia/Cosmos-Reason2-2B
+ENV HF_HOME=/opt/hf \
+    PYTHONUNBUFFERED=1
+
+# The base image carries the positronic tree at /positronic and no environment for it: `uv run`
+# would build one at container start, and the platform runs the container with no network.
+WORKDIR /positronic
+RUN uv sync --locked --python 3.13 && uv cache clean
+
+# Both repositories land in HF_HOME, where the offline load below reads them. For a fine-tuned
+# checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and point
+# `--pipeline.source.model_source` at their parent.
+RUN --mount=type=secret,id=hf_token \
+    HF_TOKEN="$(cat /run/secrets/hf_token)" /opt/gr00t-venv/bin/python -c \
+      "from huggingface_hub import snapshot_download as get; get('${MODEL}'); get('${BACKBONE}')"
+
+# GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with
+# no cache fallback, and the patch answers that question locally. Without it the offline load fails;
+# without HF_HUB_OFFLINE each file costs a retried HEAD request and the load exceeds the ready budget.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    GROOT_PATCH_MISTRAL=1
+
+EXPOSE 8000
+
+CMD ["/positronic/.venv/bin/python", "-m", "positronic.vendors.gr00t.server", "droid"]

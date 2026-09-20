@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: openpi pi05_droid_jointpos on top of `positro/openpi`.
+# docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
+#
+# Usage
+#   docker buildx build --provenance=false --sbom=false \
+#       -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push docker
+#   docker run --rm --network none docker.io/<you>/pi05-droid:v1        # the offline pre-flight
+
+ARG BASE_IMAGE=positro/openpi:latest
+ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim
+
+# The weights come in through a stage of their own, so the served image carries no cloud SDK and no
+# credential. For a checkpoint of your own, replace this stage with a `COPY` of its directory.
+FROM ${CLOUD_SDK_IMAGE} AS assets
+ARG CHECKPOINT_URI=gs://openpi-assets-simeval/pi05_droid_jointpos
+ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model
+# The checkpoint sits one level down, under a directory named by digits: a local `checkpoints_dir`
+# lists its subdirectories as model ids, and the id has to be digits.
+RUN gcloud config set auth/disable_credentials true \
+ && mkdir -p /assets/checkpoints/0 \
+ && gcloud storage rsync --recursive "${CHECKPOINT_URI}" /assets/checkpoints/0
+RUN mkdir -p /assets/openpi-data/big_vision \
+ && curl -fsSL "${TOKENIZER_URL}" -o /assets/openpi-data/big_vision/paligemma_tokenizer.model
+
+FROM ${BASE_IMAGE}
+ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
+    OPENPI_DATA_HOME=/opt/positronic/openpi-data \
+    PYTHONUNBUFFERED=1
+
+# The base image carries the positronic tree at /positronic and no environment for it: `uv run`
+# would build one at container start, and the platform runs the container with no network.
+WORKDIR /positronic
+RUN uv sync --locked --python 3.13 --extra openpi && uv cache clean
+
+# The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
+# the project environment named here. The base resolved openpi into /.venv, so sync into that one:
+# left to its default, uv builds a second copy at /openpi/.venv.
+ENV UV_PROJECT_ENVIRONMENT=/.venv
+RUN uv sync --frozen --project /openpi && uv cache clean
+
+COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
+COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
+
+# A fetch the build did not make fails at once instead of hanging on a denied network.
+ENV UV_OFFLINE=1 \
+    UV_NO_SYNC=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.openpi.server droid_jointpos \
+   --pipeline.source.checkpoints_dir=\"$CHECKPOINTS_DIR\" \"$@\"", "--"]
