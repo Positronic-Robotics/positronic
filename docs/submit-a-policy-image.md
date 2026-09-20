@@ -223,7 +223,7 @@ what its `reason` names. A `running` run reports its `stage`:
 | `evaluating` | your server answered on port 8000 and episodes run |
 | `persisting` | the run writes its files |
 
-Reaching `evaluating` is the proof that the image works. A run can go back to `provisioning` from
+Reaching `evaluating` proves the image works. A run can go back to `provisioning` from
 `evaluating`: a lost simulator VM is replaced, and `result.json` records which attempt scored.
 `episodes` and `runs` on a submission are the lab rig's fields. An image run reports `0/0` and an
 empty list, while it runs and after it finishes.
@@ -240,7 +240,7 @@ with signed links:
 The links expire after 15 minutes. Read `submissions.get` again for fresh ones. `submissions.get`
 returns these three files. The episodes are a separate call, below.
 
-`policy_log` is the first thing to read on a failed run. `diagnostics` answers the questions the
+Read `policy_log` first on a failed run. `diagnostics` answers the questions the
 log cannot:
 
 ```json
@@ -268,8 +268,8 @@ log cannot:
 
 ### The episodes
 
-`submissions.artifacts` lists what a finished run wrote, one page at a time. It is the only route
-that reaches an episode: a signed link covers one key, and the bucket refuses you a listing. The
+`submissions.artifacts` lists what a finished run wrote, one page at a time. No other route
+reaches an episode: a signed link covers one key, and the bucket refuses you a listing. The
 client calls it with `list_artifacts`, and `positronic eval` has no command for it.
 
 - Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
