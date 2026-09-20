@@ -97,26 +97,33 @@ class Executor(Runtime):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
         # Every answer that no caller has read. A call that has still to answer is one of these, so
-        # ``in_flight`` and ``owes_an_answer`` read this one set.
+        # ``has_unanswered_call`` and ``owes_an_answer`` read this one set.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
         self._charged_clock: Clock | None = None
+        self._called = False
 
     def charge_wall_time_to(self, clock: Clock) -> None:
-        """Charge every call from here on to ``clock``'s world, for the wall time the call takes.
+        """Charge every call to ``clock``'s world, for the wall time the call takes. Refused once a call has
+        been made: that call is uncharged, and a runtime charging only some of its calls times the world
+        against a debt nobody can read off it.
 
         The answer stays unanswered until ``clock`` has advanced by that duration from the instant the call
         was made, so whoever reads it keeps the world running in the meantime.
         """
-        self._charged_clock = clock
+        with self._lock:
+            if self._called:
+                raise RuntimeError('This runtime has already served a call, which nothing charged')
+            self._charged_clock = clock
 
     @property
     def fns(self) -> Mapping[str, Fn]:
         return self._fns
 
     @property
-    def in_flight(self) -> bool:
-        """Whether any call is still to answer."""
+    def has_unanswered_call(self) -> bool:
+        """Whether any call is still to answer. A charged call that has landed is one of these until the
+        world has paid for it: nothing is running, and the caller still cannot read a result."""
         with self._lock:
             return any(not answer.done() for answer in self._unread)
 
@@ -140,8 +147,11 @@ class Executor(Runtime):
 
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
+        with self._lock:
+            # Read under the same lock the setter takes, so no call runs against a half-installed charge.
+            self._called, charged_clock = True, self._charged_clock
         # Opened before the submit, so a call that queues for a worker is charged for that wait too.
-        charge = _Charge(self._charged_clock) if self._charged_clock is not None else None
+        charge = _Charge(charged_clock) if charged_clock is not None else None
         call = self._pool.submit(context.run, fn, *args, **kwargs)
         answer = self._Answer(name, call, self._read, charge)
         if charge is not None:
@@ -185,8 +195,8 @@ class _BlockingPolicy(DelegatingPolicy):
             self._rt = rt
 
         def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-            # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
-            # on a call that lands while the session call runs, leaving its answer unread.
+            # The inner session reads an answer only on a later call. A test of ``has_unanswered_call``
+            # would exit on a call that lands while the session call runs, leaving its answer unread.
             while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
                 self._rt.wait_until_landed()
             return actions

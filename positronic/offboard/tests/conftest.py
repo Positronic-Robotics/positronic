@@ -80,7 +80,7 @@ def round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> list[di
     """
     assert session(obs, time_ns) is None, 'a round-trip was already in flight'
     rt.wait_until_landed(ANSWER_SEC)
-    assert not rt.in_flight, 'the round-trip never came back'
+    assert not rt.has_unanswered_call, 'the round-trip never came back'
     return session(obs, time_ns)
 
 

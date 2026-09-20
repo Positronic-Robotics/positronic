@@ -101,7 +101,7 @@ class _EpisodeInference:
     def __call__(self, obs: dict[str, Any], should_stop: pimm.SignalReceiver[bool]) -> list[dict[str, Any]] | None:
         now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
-        if not self._rollout.rt.in_flight:
+        if not self._rollout.rt.has_unanswered_call:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
         owned = frozen_view(self._owned(obs))
         while True:
@@ -124,7 +124,7 @@ class _EpisodeInference:
             return
         # A trial that pays nothing waits the function out. It waits in steps, because a model that never
         # answers must not also keep the world from coming down.
-        while self._rollout.rt.in_flight and not should_stop.value:
+        while self._rollout.rt.has_unanswered_call and not should_stop.value:
             self._rollout.rt.wait_until_landed(POLL_PERIOD_SEC)
 
 

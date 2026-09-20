@@ -120,20 +120,20 @@ def test_call_runs_under_a_copy_of_the_context_it_was_made_in(serve):
     assert settled(fns['marker']()).result() == 'episode-7'
 
 
-def test_nothing_is_in_flight_before_a_call(serve):
-    assert not serve(add=operator.add).in_flight
+def test_nothing_is_unanswered_before_a_call(serve):
+    assert not serve(add=operator.add).has_unanswered_call
 
 
-def test_a_call_is_in_flight_until_it_answers(serve):
+def test_a_call_is_unanswered_until_it_answers(serve):
     release = threading.Event()
     executor = serve(gate=lambda: release.wait(TIMEOUT_SEC))
 
     answer = executor.fns['gate']()
-    assert executor.in_flight
+    assert executor.has_unanswered_call
 
     release.set()
     settled(answer)
-    assert not executor.in_flight
+    assert not executor.has_unanswered_call
 
 
 def test_nothing_is_owed_before_a_call(serve):
@@ -144,7 +144,7 @@ def test_an_answer_stays_owed_after_its_call_lands_until_it_is_read(serve):
     executor = serve(add=operator.add)
     answer = settled(executor.fns['add'](2, 3))
 
-    assert not executor.in_flight
+    assert not executor.has_unanswered_call
     assert executor.owes_an_answer
 
     answer.result()
@@ -157,7 +157,7 @@ def test_wait_returns_once_every_call_has_answered(serve):
     first, second = executor.fns['sleep'](), executor.fns['add'](2, 3)
     executor.wait_until_landed(TIMEOUT_SEC)
 
-    assert not executor.in_flight
+    assert not executor.has_unanswered_call
     assert first.done() and second.result() == 5
 
 
@@ -170,7 +170,7 @@ def test_wait_gives_up_at_its_timeout(serve):
     executor.wait_until_landed(0.01)
 
     assert time.monotonic() - started < TIMEOUT_SEC
-    assert executor.in_flight
+    assert executor.has_unanswered_call
     release.set()
 
 
@@ -442,3 +442,25 @@ def test_closing_answers_a_charged_call_its_world_never_came_due_for(serve):
 
     assert answer.done()
     assert answer.result() is None
+
+
+def test_charging_a_runtime_that_has_already_served_a_call_is_refused(serve):
+    """That call ran against no clock, and nothing can charge it after the fact."""
+    clock = _HandClock()
+    rt = serve(add=operator.add)
+    settled(rt.fns['add'](2, 3)).result()
+
+    with pytest.raises(RuntimeError, match='already served a call'):
+        rt.charge_wall_time_to(clock)
+
+
+def test_charging_before_the_first_call_is_what_the_refusal_leaves_open(serve):
+    """The boundary of the refusal above: a runtime nobody has called takes the clock and charges."""
+    clock = _HandClock()
+    rt = serve(sleep=partial(time.sleep, 0.05))
+    rt.charge_wall_time_to(clock)
+
+    answer = rt.fns['sleep']()
+    rt.wait_until_landed(TIMEOUT_SEC)
+
+    assert not answer.done(), 'the call was not charged to the clock'
