@@ -47,6 +47,9 @@ from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignor
     ActionNoiseConfig,
     FrankaRobotConfig,
 )
+from molmo_spaces.env.data_views import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    MlSpacesArticulationObject,
+)
 from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     load_all_episodes,
 )
@@ -70,6 +73,20 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+
+
+class _BenchmarkTaskSampler(JsonEvalTaskSampler):
+    def set_joint_values(self, env: Any) -> None:
+        # HACK: upstream c2f1b583 rejects scene-built THOR objects during its grasp-library lookup.
+        # Benchmark joint initialization needs only the recorded joint name and position, not a grasp.
+        task = self.episode_spec.task
+        if 'joint_name' not in task:
+            return
+        obj = env.object_managers[env.current_batch_index].get_object_by_name(task['pickup_obj_name'])
+        if not isinstance(obj, MlSpacesArticulationObject):
+            raise TypeError(f'Benchmark joint target {obj.name} is not articulated')
+        index = list(obj.joint_names).index(task['joint_name'])
+        obj.set_joint_position(index, task['joint_start_position'][0])
 
 
 class MolmoSpacesEnv(EnvProtocol):
@@ -114,7 +131,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
         cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
-        self._sampler = JsonEvalTaskSampler(cfg, episode)
+        self._sampler = _BenchmarkTaskSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view

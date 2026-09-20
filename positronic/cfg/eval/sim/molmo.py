@@ -79,5 +79,16 @@ def benchmarks(
 bench_v1 = benchmarks.override(suite='molmospaces-bench-v1')
 bench_v2 = benchmarks.override(suite='molmospaces-bench-v2')
 
+# MolmoSpaces Combined: https://github.com/allenai/molmospaces/blob/main/molmo_spaces/evaluation/ms-bench.md
+leaderboard_ms = bench_v1.override(
+    scene_dataset=['ithor', 'procthor-10k'],
+    benchmark=[
+        'FrankaCloseDataGenConfig_20260123_json_benchmark',
+        'FrankaOpenDataGenConfig_20260123_json_benchmark',
+        'FrankaPickDroidMiniBench_json_benchmark_20251231',
+        'FrankaPickandPlaceDroidMiniBench_20260111_json_benchmark',
+    ],
+)
+
 pick_v1 = bench_v1.override(task_config='FrankaPickDroidMiniBench')
 first_episode = pick_v1.override(episodes=0)
