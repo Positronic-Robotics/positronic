@@ -27,10 +27,12 @@ from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
+    SubmissionArtifactsQuery,
     SubmissionGetQuery,
     SubmissionListQuery,
 )
 from platform_client.responses import (
+    ArtifactListResponse,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -180,6 +182,22 @@ class PlatformClient:
     def get_submission(self, submission_id: SubmissionId) -> SubmissionView:
         query = SubmissionGetQuery(id=submission_id)
         return self._SUBMISSION_VIEW.validate_json(self._send('GET', routes.SUBMISSIONS_GET, query=query).content)
+
+    def list_artifacts(
+        self,
+        submission_id: SubmissionId,
+        *,
+        prefix: str | None = None,
+        after: str | None = None,
+        limit: int | None = None,
+    ) -> ArtifactListResponse:
+        """One page of the objects a finished submission wrote, in key order.
+
+        `prefix` keeps the page to one directory under the submission, and a page's `next` is the
+        `after` of the page behind it. A submission short of finished is refused `bad_request`.
+        """
+        query = SubmissionArtifactsQuery(id=submission_id, prefix=prefix, after=after, limit=limit)
+        return self._get(routes.SUBMISSIONS_ARTIFACTS, ArtifactListResponse, query=query)
 
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
         return self._post(routes.SUBMISSIONS_CANCEL, request, CancelResponse)
