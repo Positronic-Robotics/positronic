@@ -21,10 +21,11 @@ from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import executor as executor_module
-from positronic.policy.base import Policy, Sequential, Step
+from positronic.policy.base import Policy, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import Harness, Rollout
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.sequential import Sequential
 
 MOTOR = 'motor'
 POSITION = 'position'

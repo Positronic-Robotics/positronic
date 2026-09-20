@@ -9,8 +9,6 @@ from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 from attr import dataclass
 from typing_extensions import TypeAliasType
 
-from positronic.utils import flatten_dict
-
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
 PAR = 'par'
@@ -126,41 +124,3 @@ class Processor(ABC, Generic[InputT, OutputT]):
 
 Policy = Processor[Obs, Step]
 PolicyRun = ProcessorRun[Obs, Step]
-
-
-class Sequential(Processor[InputT, OutputT]):
-    """Nest processor definitions, with the first outermost.
-
-    ``runtime.start(Sequential(A(...), B(...)), infer)`` passes ``infer`` to B's generator and B's
-    generator to A. Each processor controls when and how often it sends inputs to its child.
-    This sequence owns the generators it creates; external dependencies remain owned by their caller.
-    """
-
-    def __init__(self, first: Processor[InputT, OutputT], /, *rest: Processor[Any, Any]) -> None:
-        self._first = first
-        self._rest = rest
-
-    def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT]:
-        children: list[ProcessorRun[Any, Any]] = []
-        try:
-            for processor in reversed((self._first, *self._rest)):
-                child = runtime.start(processor, *dependencies)
-                children.append(child)
-                dependencies = (child,)
-            value = yield
-            while True:
-                value = yield children[-1].send(value)
-        finally:
-            for child in reversed(children):
-                child.close()
-
-    def meta(self) -> dict[str, Any]:
-        """Combine component metadata; later components take precedence on shared keys."""
-        return {
-            key: value
-            for processor in (self._first, *self._rest)
-            for key, value in flatten_dict(processor.meta()).items()
-        }
-
-    def to_spec(self) -> dict[str, Any]:
-        return {SEQ: [processor.to_spec() for processor in (self._first, *self._rest)]}

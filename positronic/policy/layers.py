@@ -5,7 +5,7 @@ locals hold its state. Control processors yield a ``Step`` with commands and the
 
 Describe a local stack without creating episode state::
 
-    from positronic.policy.base import Sequential
+    from positronic.policy.sequential import Sequential
 
     definition = Sequential(
         StopOnFault(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)

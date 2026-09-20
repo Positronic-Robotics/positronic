@@ -8,15 +8,17 @@ import pytest
 
 from positronic import keys
 from positronic.cfg import codecs
+from positronic.geom import Transform3D
 from positronic.offboard import grpc_wire, protocol, websocket_wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
-from positronic.policy.base import Obs, Sequential, Step
-from positronic.policy.codec import Codec, RestrictImageSize
+from positronic.policy.base import Obs, Step
+from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.sequential import Sequential
 from positronic.policy.spec import Model, ModelSource, Pipeline, from_spec
 
 
@@ -53,14 +55,13 @@ class FixedSource(ModelSource):
 def served():
     running = []
 
-    def start(*, codec=None, local_codec=None, transport='websocket', model=None):
+    def start(*, codec=None, local=None, transport='websocket', model=None):
         if model is None:
             model = FixedModel()
         pipeline = Pipeline(
             FixedSource(model),
-            Sequential(StopOnFault(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
+            local if local is not None else Sequential(StopOnFault(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
-            local_codec=local_codec,
         )
         server = PolicyServer(pipeline)
         wire = (
@@ -85,8 +86,12 @@ def served():
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
-def test_remote_chunk_cadence_and_fresh_episode_state(served, transport):
-    url, model, pipeline = served(local_codec=RestrictImageSize(8, 8), transport=transport)
+@pytest.mark.parametrize('resize_first', [False, True])
+def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first):
+    resize = RestrictImageSize(8, 8)
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2)
+    local = Sequential(resize, StopOnFault(), schedule) if resize_first else Sequential(StopOnFault(), schedule, resize)
+    url, model, pipeline = served(local=local, transport=transport)
     policy = RemotePolicy(url)
     assert policy.meta()['server.model_name'] == 'fixed'
     assert policy.meta()['server.action_fps'] == 10
@@ -182,30 +187,6 @@ def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, mo
         session.close()
 
 
-def test_codec_work_is_inside_submit():
-    caller_thread = threading.get_ident()
-    threads = []
-
-    class ThreadCodec(OffsetCodec):
-        def encode(self, data):
-            threads.append(threading.get_ident())
-            return super().encode(data)
-
-        def _decode_single(self, data):
-            threads.append(threading.get_ident())
-            return super()._decode_single(data)
-
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-    try:
-        answer = runtime.submit(ThreadCodec().wrap(lambda obs: {'value': obs['encoded']}), {})
-        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
-        assert answer.result() == {'value': 52}
-        assert len(threads) == 2
-        assert all(thread != caller_thread for thread in threads)
-    finally:
-        runtime.close()
-
-
 def test_act_codec_matches_data_conversions_without_timing():
     config = {'obs': codecs.eepose_obs, 'action': codecs.absolute_pos_action, 'flip_grip': True}
     data_codec = codecs.compose_data.override(**config).instantiate()
@@ -235,18 +216,6 @@ def test_act_codec_matches_data_conversions_without_timing():
     assert rebuilt.to_spec() == data_codec.to_spec()
 
 
-def test_sequential_combines_component_metadata():
-    class NamedSchedule(ChunkedSchedule):
-        def meta(self):
-            return {'config': {'fps': 10}}
-
-    class NamedStop(StopOnFault):
-        def meta(self):
-            return {'config': {'fault_handling': True, 'fps': 20}}
-
-    assert Sequential(NamedStop(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
-
-
 def test_act_codec_can_run_on_either_side_of_the_connection(served):
     class EchoStateModel(FixedModel):
         def __call__(self, obs: Obs):
@@ -265,7 +234,11 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
     }
     outputs = []
     inputs = []
-    for placement in ({'codec': codec}, {'local_codec': codec}):
+    for placement in (
+        {'codec': codec},
+        {'local': Sequential(StopOnFault(), ChunkedSchedule(fps=10), codec)},
+        {'local': Sequential(StopOnFault(), codec, ChunkedSchedule(fps=10))},
+    ):
         url, model, _ = served(model=EchoStateModel(), **placement)
         runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
         run = runtime.start(RemotePolicy(url))
@@ -280,10 +253,11 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
         finally:
             runtime.close()
             run.close()
-    assert inputs[0] == inputs[1]
-    assert outputs[0] == outputs[1]
+    assert inputs[0] == inputs[1] == inputs[2]
+    assert outputs[0] == outputs[1] == outputs[2]
 
 
-def test_spec_rejects_mixed_codec_and_processor_sequence():
-    with pytest.raises(ValueError, match='Declare codecs separately'):
-        from_spec({'seq': [RestrictImageSize(8, 8).to_spec(), ChunkedSchedule(10).to_spec()]})
+def test_pipeline_rejects_frame_conversion_on_both_sides():
+    local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
+    with pytest.raises(ValueError, match='Only one side'):
+        Pipeline(FixedSource(FixedModel()), local, codec=ChangeEEFrame(Transform3D.identity))

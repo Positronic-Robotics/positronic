@@ -88,8 +88,7 @@ ee_codec = codecs.compose_data.override(obs=codecs.eepose_obs, action=codecs.abs
 def pipeline(codec: Codec, source: ModelSource, fps: float, horizon_sec: float | None):
     return Pipeline(
         source=source,
-        local=Sequential(StopOnFault(), ChunkedSchedule(fps=fps, horizon_sec=horizon_sec)),
-        local_codec=RestrictImageSize(224, 224),
+        local=Sequential(StopOnFault(), ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
         codec=codec,
     )
 

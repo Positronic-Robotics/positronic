@@ -15,7 +15,6 @@ from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyRun, Processor, Runtime
-from .codec import Codec
 from .spec import from_spec
 
 
@@ -62,7 +61,7 @@ class RemotePolicy(Policy):
 
     ``wire`` names the transport and ``address`` is the address it dials. Each episode owns its connection.
     Submitted calls finish before the harness closes the generator and its connection.
-    Codecs wrap the remote callable, so their work is included in submission time.
+    The declared stack determines when client codecs run.
     """
 
     def __init__(
@@ -97,11 +96,6 @@ class RemotePolicy(Policy):
             if not isinstance(stack, Processor):
                 raise ValueError('The declared client stack must be a processor')
             infer = partial(round_trip, session, compress_images=bool(meta.get(offboard_keys.COMPRESS_IMAGES)))
-            if (codec_spec := meta.get(offboard_keys.LOCAL_CODEC)) is not None:
-                codec = from_spec(codec_spec)
-                if not isinstance(codec, Codec):
-                    raise ValueError('The declared client codec must be a codec')
-                infer = codec.wrap(infer)
             yield from stack.run(runtime, infer)
         finally:
             session.close()

@@ -1,7 +1,7 @@
 """Explicit client/server policy configuration and the registry of deliverable components.
 
-Processors control execution on the client. Codecs wrap ordinary inference calls on either side of
-the connection. Model sources load callable models on the server; they cannot be delivered to clients.
+Processors and codecs compose the client stack. Server codecs wrap ordinary inference calls.
+Model sources load callable models on the server; they cannot be delivered to clients.
 
 TODO: Migrate the remaining vendor pipeline configs to explicit Pipeline arguments.
 """
@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
-from positronic.policy.base import PAR, SEQ, Obs, Policy, Processor, Sequential
+from positronic.policy.base import PAR, SEQ, Obs, Policy, Processor
 from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -26,6 +26,7 @@ from positronic.policy.codec import (
 )
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.sequential import Sequential
 
 
 class Model(ABC):
@@ -68,17 +69,19 @@ class ModelSource(ABC):
 
 @dataclass
 class Pipeline:
-    """A model source, client processor stack, and codecs placed on each side of the connection."""
+    """A model source, a client stack of processors and codecs, and an optional server codec."""
 
     source: ModelSource
     local: Policy
     codec: Codec | None = None
-    local_codec: Codec | None = None
     compress_images: bool = False
 
     def __post_init__(self) -> None:
-        declared = [codec for codec in (self.local_codec, self.codec) if codec and roboarm_keys.EE_FRAME in codec.meta]
-        if len(declared) > 1:
+        if (
+            self.codec is not None
+            and roboarm_keys.EE_FRAME in self.codec.meta
+            and roboarm_keys.EE_FRAME in self.local.meta()
+        ):
             raise ValueError('Only one side of a pipeline may convert the end-effector frame')
 
 
@@ -107,10 +110,7 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
             raise ValueError('A sequential spec must contain at least one component')
         if all(isinstance(part, Codec) for part in parts):
             return reduce(or_, cast(list[Codec], parts))
-        if all(isinstance(part, Processor) for part in parts):
-            processors = cast(list[Processor], parts)
-            return Sequential(processors[0], *processors[1:])
-        raise ValueError('Declare codecs separately from the client processor stack')
+        return Sequential(parts[0], *parts[1:])
     if PAR in node:
         parts = [from_spec(child) for child in node[PAR]]
         if not parts or not all(isinstance(part, Codec) for part in parts):

@@ -334,11 +334,9 @@ class PolicyServer:
                 **self._source.meta(rid),
                 **model.meta(),
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
-                **(pipeline.local_codec.meta if pipeline.local_codec is not None else {}),
                 **pipeline.local.meta(),
                 offboard_keys.CHECKPOINT_ID: rid,
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
-                offboard_keys.LOCAL_CODEC: pipeline.local_codec.to_spec() if pipeline.local_codec is not None else None,
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }

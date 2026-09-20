@@ -147,9 +147,9 @@ Upon connection, the server sends a ready packet with metadata:
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
       {"name": "stop_on_fault"},
-      {"name": "chunked_schedule", "args": {"fps": 15.0, "horizon_sec": 1.0}}
+      {"name": "chunked_schedule", "args": {"fps": 15.0, "horizon_sec": 1.0}},
+      {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
-    "local_codec": {"name": "restrict_image_size", "args": {"width": 224, "height": 224}},
     "compress_images": false,
     "positronic_version": "0.2.1"
   }
@@ -162,12 +162,13 @@ This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
 - Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
-- `local_stack` — processor definitions composed by `"seq"`, with the first outermost.
+- `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
   the chunk's execution horizon. The harness emits each step's commands immediately.
-- `local_codec` — optional data conversions around the remote callable. These run inside submitted
-  work, including image resizing. Codec specs support `"seq"` and `"par"` composition.
+  A codec outside the scheduler runs on every policy call and decodes each emitted command set,
+  preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
+  and decodes whole chunks. Codec specs also support `"par"` composition.
   Processor and codec names are resolved only through `WIRE_PROCESSORS` and `WIRE_CODECS` in
   `positronic.policy.spec`; an unknown name fails before the policy emits commands.
 - `compress_images` — whether the rig JPEG-encodes frames before
@@ -263,10 +264,10 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 ## Classes
 
 ### `server.PolicyServer`
-Serves a `Pipeline` with explicit `source`, `local`, `codec`, and `local_codec` arguments.
+Serves a `Pipeline` with explicit `source`, `local`, and `codec` arguments.
 `ModelSource.get_models()` backs the catalogue, `resolve()` selects a checkpoint, and `load()` returns
 a callable `Model` that owns the loaded resources.
-Server codecs wrap its call; the client receives the processor and local-codec specs in the handshake.
+Server codecs wrap its call; the client receives one stack spec containing its processors and codecs.
 
 ```python
 from positronic.offboard.server import PolicyServer
@@ -279,8 +280,9 @@ from positronic.policy.layers import ChunkedSchedule, StopOnFault
 
 pipeline = Pipeline(
     source=my_model_source,
-    local=Sequential(StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0)),
-    local_codec=RestrictImageSize(224, 224),
+    local=Sequential(
+        StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
+    ),
     codec=my_model_codec,
 )
 server = PolicyServer(pipeline)

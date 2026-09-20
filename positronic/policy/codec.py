@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
@@ -29,7 +29,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import PAR, SEQ, Obs
+from positronic.policy.base import PAR, SEQ, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -93,16 +93,41 @@ class Codec:
     def meta(self) -> dict:
         return {}
 
-    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]:
-        """Encode inputs and decode outputs around one ordinary function call."""
+    @overload
+    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
+
+    @overload
+    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+
+    def wrap(
+        self, function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
+    ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        """Encode inputs and decode outputs around a callable or a primed processor run.
+
+        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
+        wrapped dependency, including closing it when it is a generator.
+        """
+        if isinstance(function, cabc.Generator):
+            run = self._wrap_run(function)
+            next(run)
+            return run
 
         def call(obs: Obs) -> Any:
             codec_name = {telemetry_keys.ATTR_CODEC: type(self).__name__}
             with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
                 encoded = self.encode(dict(obs))
-            return self.decode(function(encoded))
+            result = function(encoded)
+            if isinstance(result, Step):
+                return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
+            return self.decode(result) if result is not None else None
 
         return call
+
+    def _wrap_run(self, inner: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]:
+        call = self.wrap(inner.send)
+        obs = yield
+        while True:
+            obs = yield call(obs)
 
     def to_spec(self) -> dict[str, Any]:
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
@@ -456,7 +481,7 @@ class RestrictImageSize(Codec):
     already within it passes through untouched. This decides bandwidth, never geometry — the model's own
     codec still resizes exactly, and serving without this codec differs only in bytes on the wire.
 
-    Declare it as ``Pipeline.local_codec`` to apply it before sending observations to the server.
+    Place it in the client ``Sequential`` stack to apply it before sending observations to the server.
     """
 
     WIRE_NAME = 'restrict_image_size'
