@@ -48,23 +48,30 @@ class Motion:
         if max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps) > 10:
             raise ValueError('Motion limits must fit within a 10 second trajectory')
 
-    def duration(self, start: geom.Transform3D, end: geom.Transform3D) -> float:
-        """Validate a displacement and return the minimum duration allowed by the speed bounds."""
-        distance = float(np.linalg.norm(end.translation - start.translation))
-        angle = (end.rotation * start.rotation.inv).angle
-        if distance > self.max_translation + 1e-9:
-            raise ValueError(f'Move is {distance:.4f} m; maximum is {self.max_translation:.4f} m. Split the move.')
-        if angle > self.max_rotation + 1e-9:
-            raise ValueError(f'Rotation is {angle:.4f} rad; maximum is {self.max_rotation:.4f} rad. Split the move.')
-        return max(distance / self.linear_speed, angle / self.angular_speed, 1 / self.fps)
-
-    def trajectory(self, start: geom.Transform3D, target: MoveTo) -> list[dict]:
+    def _clamp(self, start: geom.Transform3D, target: MoveTo) -> MoveTo:
         end = target.pose
-        duration = self.duration(start, end)
+        offset = end.translation - start.translation
+        distance = math.hypot(*offset)
+        angle = (end.rotation * start.rotation.inv).angle
+        bounded = target.model_copy()
+        if distance > self.max_translation:
+            bounded.x, bounded.y, bounded.z = start.translation + offset / distance * self.max_translation
+        if angle > self.max_rotation:
+            rotation = start.rotation.interpolate(end.rotation, self.max_rotation / angle)
+            bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
+        return bounded
+
+    def trajectory(self, start: geom.Transform3D, target: MoveTo) -> tuple[MoveTo, list[dict]]:
+        """Return the clamped target and its trajectory from the measured starting pose."""
+        target = self._clamp(start, target)
+        end = target.pose
+        distance = math.hypot(*(end.translation - start.translation))
+        angle = (end.rotation * start.rotation.inv).angle
+        duration = max(distance / self.linear_speed, angle / self.angular_speed, 1 / self.fps)
         steps = math.ceil(duration * self.fps)
         times = np.arange(1, steps + 1) / self.fps
         fractions = times / times[-1]
-        return [
+        return target, [
             {
                 keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
                 keys.TARGET_GRIP: target.gripper,

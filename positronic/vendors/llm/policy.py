@@ -130,6 +130,7 @@ class _Observation:
 class _Decision:
     messages: list[ModelMessage]
     target: MoveTo | None = None
+    tool_call_id: str | None = None
     stop_reason: str | None = None
     hindsight: str | None = None
 
@@ -152,6 +153,9 @@ class _Conversation:
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
             'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
             'Moves play before the next observation; actual arrival must be checked from the measured state. '
+            'Oversized moves are clamped from the latest measured pose: translation keeps its direction and '
+            'rotation follows the shortest turn, each limited independently. '
+            'The tool result reports the clamped target; check it before planning the next move. '
             'Camera frames remain fixed during a decision. '
             'take_pic only reveals a frame; it does not move a camera. '
             'A note should briefly describe what you see and why you chose the motion. '
@@ -192,12 +196,7 @@ class _Conversation:
         data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
         match data:
             case MoveTo():
-                duration = self.policy.motion.duration(self.obs.pose, data.pose)
-                result = (
-                    f'Target accepted for a move lasting at least {duration:.3f} seconds. Check the next observation.'
-                )
-                self.messages.append(ModelRequest([ToolReturnPart(tool.value, result, tool_call_id=call.tool_call_id)]))
-                return _Decision(self.messages, target=data)
+                return _Decision(self.messages, target=data, tool_call_id=call.tool_call_id)
             case Finish():
                 self.messages.append(
                     ModelRequest([ToolReturnPart(tool.value, 'No further actions.', tool_call_id=call.tool_call_id)])
@@ -360,19 +359,20 @@ class LLMPolicy(Policy):
             trajectory = []
             if self._target is not None:
                 start = _Observation.measured_pose(obs)
-                try:
-                    trajectory = self._policy.motion.trajectory(start, self._target)
-                except ValueError as exc:
-                    self._target = None
-                    self._history.append(
-                        ModelRequest.user_text_prompt(
-                            f'Move was not executed: the measured pose changed while waiting. {exc} '
-                            'Reassess the next observation.'
-                        )
-                    )
-                    self._transcript.write('discarded', call=self._calls, reason=str(exc))
-                    return []
-            self._transcript.write('accepted', call=self._calls, time_ns=time_ns, stop_reason=self._stop_reason)
+                self._target, trajectory = self._policy.motion.trajectory(start, self._target)
+                result = {
+                    'target': self._target.model_dump(),
+                    'clamped': self._target != decision.target,
+                    'duration_s': trajectory[-1][keys.ACTION_TIMESTAMP],
+                    'feedback': 'Target scheduled. Check the next measured observation for actual arrival.',
+                }
+                assert decision.tool_call_id is not None
+                self._history.append(
+                    ModelRequest([ToolReturnPart(Tool.MOVE_TO.value, result, tool_call_id=decision.tool_call_id)])
+                )
+                self._transcript.write('accepted', call=self._calls, time_ns=time_ns, **result)
+            else:
+                self._transcript.write('accepted', call=self._calls, time_ns=time_ns, stop_reason=self._stop_reason)
             return trajectory
 
         def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict] | None:

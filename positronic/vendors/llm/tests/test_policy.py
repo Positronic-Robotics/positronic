@@ -13,6 +13,7 @@ from pydantic_ai.messages import (
     SystemPromptPart,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 
@@ -40,7 +41,7 @@ def observation(time_ns=0, x=0.0):
     }
 
 
-def move(x=0.01):
+def move(x: float | str = 0.01):
     return ModelResponse([
         ToolCallPart(
             'move_to',
@@ -195,7 +196,7 @@ def test_follow_up_needs_another_session_call_and_uses_the_frozen_observation(mo
 @pytest.mark.parametrize(
     'bad',
     [
-        move(0.2),
+        move('invalid'),
         ModelResponse([TextPart('I will move.')]),
         ModelResponse([ToolCallPart('move_to', '{broken')]),
         ModelResponse([ToolCallPart('done', {}), ToolCallPart('give_up', {})]),
@@ -359,7 +360,7 @@ def test_metadata_snapshot_excludes_response_arriving_after_cancellation(model):
         assert any(e['event'] == 'discarded' for e in active.meta['transcript'])
 
 
-@pytest.mark.parametrize('bad', [move(0.2), ModelResponse([TextPart('I will move.')])])
+@pytest.mark.parametrize('bad', [move('invalid'), ModelResponse([TextPart('I will move.')])])
 def test_corrected_replies_are_preserved_in_static_transcript(model, bad):
     _, replies = model
     replies.extend([bad, finish()])
@@ -372,13 +373,13 @@ def test_corrected_replies_are_preserved_in_static_transcript(model, bad):
     assert [e['obs_time_ns'] for e in events if e['event'] == 'request'] == [123, 123]
     response = next(e for e in events if e['event'] == 'response')
     if bad.tool_calls:
-        assert response['tools'][0]['arguments']['x'] == 0.2
+        assert response['tools'][0]['arguments']['x'] == 'invalid'
     else:
         assert response['text'] == ['I will move.']
 
 
-@pytest.mark.parametrize('current_x,accepted', [(0.02, True), (-0.1, False)])
-def test_delayed_motion_starts_at_delivery_pose_and_is_anchored_at_delivery(model, current_x, accepted):
+@pytest.mark.parametrize('current_x,expected_x', [(0.02, 0.04), (-0.1, -0.05)])
+def test_delayed_motion_starts_at_delivery_pose_and_is_anchored_at_delivery(model, current_x, expected_x):
     _, replies = model
     replies.append(move(0.04))
     policy = ChunkedSchedule().wrap(LLMPolicy(Endpoint('test'), Motion()))
@@ -386,14 +387,51 @@ def test_delayed_motion_starts_at_delivery_pose_and_is_anchored_at_delivery(mode
         assert active(observation(), 0) is None
         rt.wait(5)
         trajectory = active(observation(x=current_x), 5_000_000_000)
-        if accepted:
-            assert trajectory
-            assert 5 < trajectory[0][keys.ACTION_TIMESTAMP] < trajectory[-1][keys.ACTION_TIMESTAMP]
-            assert current_x < trajectory[0][keys.ROBOT_COMMAND].pose.translation[0] < 0.04
-            assert trajectory[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
-            assert active(observation(), 5_100_000_000) is None
-        else:
-            assert trajectory == []
+        assert trajectory
+        assert 5 < trajectory[0][keys.ACTION_TIMESTAMP] < trajectory[-1][keys.ACTION_TIMESTAMP]
+        assert current_x < trajectory[0][keys.ROBOT_COMMAND].pose.translation[0] < expected_x
+        assert trajectory[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
+        assert active(observation(), 5_100_000_000) is None
+
+
+@pytest.mark.parametrize('requested_x,current_x,expected_x', [(0.2, 0, 0.05), (0.04, -0.1, -0.05), (0.2, 0.18, 0.2)])
+def test_clamped_target_is_reported_and_recorded_without_a_correction(model, requested_x, current_x, expected_x):
+    requests, replies = model
+    replies.extend([move(requested_x), finish()])
+    with session(LLMPolicy(Endpoint('test'), Motion())) as (active, rt):
+        assert active(observation(), 0) is None
+        rt.wait(5)
+        trajectory = active(observation(1, x=current_x), 1)
+        assert trajectory
+        assert len(requests) == 1
+        assert trajectory[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
+        assert complete(active, rt, observation(2, x=current_x), 2) == []
+        events = active.meta['transcript']
+    assert len(requests) == 2
+    assert not any(e['event'] in ('rejected', 'discarded') for e in events)
+    response = next(e for e in events if e['event'] == 'response')
+    assert response['tools'][0]['arguments']['x'] == requested_x
+    accepted = next(e for e in events if e['event'] == 'accepted')
+    assert accepted['target']['x'] == pytest.approx(expected_x)
+    assert accepted['clamped'] is (requested_x != expected_x)
+    results = [
+        part
+        for message in requests[-1][0]
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    assert len(results) == 1
+    assert results[0].tool_call_id == 'move'
+    assert results[0].content == {
+        'target': accepted['target'],
+        'clamped': accepted['clamped'],
+        'duration_s': trajectory[-1][keys.ACTION_TIMESTAMP],
+        'feedback': accepted['feedback'],
+    }
+    state = [e for e in events if e['event'] == 'observation'][-1]
+    assert state['previous_target'] == accepted['target']
+    assert state['remaining_translation_m'] == pytest.approx([expected_x - current_x, 0, 0])
 
 
 def test_config_builds_a_local_policy_with_scheduling(model):

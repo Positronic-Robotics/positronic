@@ -35,7 +35,8 @@ class Camera(pimm.ControlSystem):
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize('ending', ['done', 'give_up'])
 @pytest.mark.parametrize('charge', [False, True])
-def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_path, ending, charge):
+@pytest.mark.parametrize('distance', [0.01, 0.2])
+def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_path, ending, charge, distance):
     states = []
 
     def request(endpoint, messages, tools):
@@ -55,7 +56,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
                 ToolCallPart(
                     'move_to',
                     {
-                        'x': x + 0.01,
+                        'x': x + distance,
                         'y': y,
                         'z': z,
                         'roll': roll,
@@ -122,10 +123,12 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
-        assert before['position_m'][0] < after['position_m'][0] <= before['position_m'][0] + 0.01
+        target_x = before['position_m'][0] + min(distance, Motion().max_translation)
+        assert before['position_m'][0] < after['position_m'][0] <= target_x
+        assert after['previous_target']['x'] == pytest.approx(target_x)
         assert after['gripper'] == pytest.approx(0.2)
-        remaining = before['position_m'][0] + 0.01 - after['position_m'][0]
+        remaining = target_x - after['position_m'][0]
         assert after['remaining_translation_m'] == pytest.approx([remaining, 0, 0], abs=1e-7)
         final_pose = list(episode[keys.EE_POSE].values())[-1]
-        assert final_pose[0] == pytest.approx(before['position_m'][0] + 0.01)
+        assert final_pose[0] == pytest.approx(target_x)
         assert len(episode[keys.EE_POSE]) > 1
