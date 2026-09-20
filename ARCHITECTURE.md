@@ -136,10 +136,10 @@ trajectory".
 as functions, and the framework runs each one off the loop thread. That work costs the trial either
 the wall time it took or nothing: it is charged unless a sim task states
 `charge_inference_time=False`. Only the harness reads the flag. Paying nothing means the loop waits
-for the work, which keeps a virtual clock still; paying wall time means letting the world run,
-though no further ahead of the work's start than wall time has. The harness reads the world clock
-and gives the reading to the policy stack as the call's `time_ns`. A scheduling layer stamps its
-chunk with that value, and never learns the mode.
+for the work, which keeps a virtual clock still; paying wall time means the world runs that long in
+its own seconds, at whatever rate a simulator steps. The harness reads the world clock and gives the
+reading to the policy stack as the call's `time_ns`. A scheduling layer stamps its chunk with that
+value, and never learns the mode.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

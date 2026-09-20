@@ -10,6 +10,7 @@ from functools import partial
 
 import pytest
 
+import pimm
 from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
 from positronic.policy.executor import Executor, blocking
 
@@ -384,3 +385,60 @@ def test_close_frees_what_the_functions_held(serve):
     assert gone() is not None
     executor.close()
     assert gone() is None
+
+
+class _HandClock(pimm.Clock):
+    """A world nothing advances but the test, so a charged answer comes due exactly when the test says."""
+
+    def __init__(self) -> None:
+        self._now_ns = 0
+
+    def now(self) -> float:
+        return self._now_ns / 1e9
+
+    def now_ns(self) -> int:
+        return self._now_ns
+
+    def advance(self, seconds: float) -> None:
+        self._now_ns += round(seconds * 1e9)
+
+
+def test_a_charged_call_is_unanswered_until_its_world_has_run_that_long(serve):
+    """A world that does not advance never comes due for the call, however long ago the function returned."""
+    clock = _HandClock()
+    rt = serve(sleep=partial(time.sleep, 0.05))
+    rt.charge_wall_time_to(clock)
+
+    answer = rt.fns['sleep']()
+    rt.wait(TIMEOUT_SEC)
+    clock.advance(0.04)
+    assert not answer.done(), 'answered before the world ran the 0.05s the call took'
+    with pytest.raises(NotAnswered):
+        answer.result()
+
+    clock.advance(TIMEOUT_SEC)
+    assert answer.done()
+    assert answer.result() is None
+
+
+def test_an_uncharged_call_answers_as_it_lands(serve):
+    """Charging is asked for: a runtime nobody charged answers on the call alone, whatever any clock reads."""
+    rt = serve(sleep=partial(time.sleep, 0.05))
+
+    answer = rt.fns['sleep']()
+    rt.wait(TIMEOUT_SEC)
+    assert answer.done()
+
+
+def test_closing_answers_a_charged_call_its_world_never_came_due_for(serve):
+    """The world has stopped, so an answer held against it would never come due — and the session that holds
+    it closes on ``done``."""
+    clock = _HandClock()
+    rt = serve(sleep=partial(time.sleep, 0.05))
+    rt.charge_wall_time_to(clock)
+
+    answer = rt.fns['sleep']()
+    rt.close()
+
+    assert answer.done()
+    assert answer.result() is None

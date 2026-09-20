@@ -4,11 +4,13 @@ import concurrent.futures
 import contextvars
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
+from pimm import Clock
 from positronic.offboard.protocol import MODEL_CALL
 from positronic.policy.base import (
     Answer,
@@ -23,6 +25,37 @@ from positronic.policy.base import (
 )
 
 
+class _Charge:
+    """What one call costs the world it was made in.
+
+    The answer is withheld until that world's clock has advanced, from the instant the call was made, by the
+    wall time the call took. A world on a wall clock reaches that instant as the answer lands, so nothing is
+    ever withheld there; a simulator's clock is its own, so its trial feels the model's latency in simulated
+    seconds at whatever rate the simulator steps.
+    """
+
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+        self._made_ns, self._made_wall_ns = clock.now_ns(), time.monotonic_ns()
+        # Stamped on the thread the call ran on; ``None`` until the call lands.
+        self._landed_wall_ns: int | None = None
+        self._released = False
+
+    def land(self) -> None:
+        self._landed_wall_ns = time.monotonic_ns()
+
+    def release(self) -> None:
+        """Charge nothing from here on: whoever was advancing this world has stopped."""
+        self._released = True
+
+    def paid(self) -> bool:
+        if self._released:
+            return True
+        if self._landed_wall_ns is None:
+            return False
+        return self._clock.now_ns() >= self._made_ns + (self._landed_wall_ns - self._made_wall_ns)
+
+
 class Executor(Runtime):
     """Serves a set of functions on worker threads of its own, ``max_workers`` calls at a time.
 
@@ -31,19 +64,31 @@ class Executor(Runtime):
     """
 
     class _Answer(Answer):
-        def __init__(self, name: str, call: Future[Any], read: Callable[['Executor._Answer'], None]):
+        def __init__(
+            self,
+            name: str,
+            call: Future[Any],
+            read: Callable[['Executor._Answer'], None],
+            charge: '_Charge | None' = None,
+        ):
             self.name = name
             self.call = call
             self._read = read
+            self._charge = charge
 
         def done(self) -> bool:
-            return self.call.done()
+            return self.call.done() and (self._charge is None or self._charge.paid())
 
         def result(self) -> Any:
-            if not self.call.done():
+            if not self.done():
                 raise NotAnswered('The call is not answered yet')
             self._read(self)
             return self.call.result()
+
+        def release(self) -> None:
+            """Answer as soon as the call lands, whatever the world still owes for it."""
+            if self._charge is not None:
+                self._charge.release()
 
         def failure(self) -> BaseException | None:
             """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
@@ -56,6 +101,16 @@ class Executor(Runtime):
         # ``in_flight`` and ``owes_an_answer`` read this one set.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
+        # The world each call is charged to, ``None`` while a call costs its caller nothing.
+        self._charged_clock: Clock | None = None
+
+    def charge_wall_time_to(self, clock: Clock) -> None:
+        """Charge every call from here on to ``clock``'s world, for the wall time the call takes.
+
+        The answer stays unanswered until ``clock`` has advanced by that duration from the instant the call
+        was made, so whoever reads it keeps the world running in the meantime.
+        """
+        self._charged_clock = clock
 
     @property
     def fns(self) -> Mapping[str, Fn]:
@@ -83,8 +138,12 @@ class Executor(Runtime):
 
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
+        # Opened before the submit, so a call that queues for a worker is charged for that wait too.
+        charge = _Charge(self._charged_clock) if self._charged_clock is not None else None
         call = self._pool.submit(context.run, fn, *args, **kwargs)
-        answer = self._Answer(name, call, self._read)
+        answer = self._Answer(name, call, self._read, charge)
+        if charge is not None:
+            call.add_done_callback(lambda _: charge.land())
         with self._lock:
             self._unread.add(answer)
         return answer
@@ -110,6 +169,7 @@ class Executor(Runtime):
             unread, self._unread = self._unread, set()
             self._fns = dict.fromkeys(self._fns, self._closed)
         for answer in unread:
+            answer.release()
             # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
             # and the log is the only place the failure can go.
             if (exc := answer.failure()) is not None:

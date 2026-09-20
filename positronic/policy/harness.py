@@ -70,6 +70,8 @@ class _EpisodeInference:
         self._clock = clock
         # One instant on two clocks, so ``wait`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
+        if charges_wall_time:
+            rollout.rt.charge_wall_time_to(clock)
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -116,7 +118,7 @@ class _EpisodeInference:
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
         if self._charges_wall_time:
-            # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
+            # Keep a world faster than wall no further ahead of the call than wall time has gone.
             paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
             self._rollout.rt.wait(max(self._clock.now() - paid_through, 0.0))
             return

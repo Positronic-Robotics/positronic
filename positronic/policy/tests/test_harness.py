@@ -264,13 +264,21 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 
 
 class _Pacer(pimm.ControlSystem):
-    """Stands in for the simulator: the sole time-master, sleeping one control period every turn."""
+    """Stands in for the simulator: the sole time-master, sleeping one control period every turn.
 
-    def __init__(self, period: float = 0.005):
+    ``real_time_factor`` is the rate it steps at, in world seconds per wall second; left out, it steps as
+    fast as the machine allows. A factor below 1.0 makes one period cost ``period / real_time_factor``
+    seconds of wall, the way stepping physics does.
+    """
+
+    def __init__(self, period: float = 0.005, real_time_factor: float | None = None):
         self._period = period
+        self._wall_per_period = None if real_time_factor is None else period / real_time_factor
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
+            if self._wall_per_period is not None:
+                time.sleep(self._wall_per_period)
             yield pimm.Sleep(self._period)
 
 
@@ -2384,6 +2392,7 @@ def _run_episode(
     steps=4000,
     run_sec=1.5,
     hold_sec: float | None = None,
+    pacer: pimm.ControlSystem | None = None,
 ) -> list[tuple[float, Any]]:
     """One trial run; ``charge_inference_time`` left out leaves the task at its own default. Returns the grip
     commands with the world time each went out at. A sim trial runs against a pacer, the sole time-master a
@@ -2416,7 +2425,7 @@ def _run_episode(
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
-    systems = [harness, driver, _Pacer()] if simulated else [harness, driver]
+    systems = [harness, driver, pacer or _Pacer()] if simulated else [harness, driver]
     scheduler = world.start(systems)
     if hold_sec is not None:
         drive_until(scheduler, policy.entered.is_set, max_steps=steps)
@@ -2480,6 +2489,54 @@ def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, before the function was released'
+
+
+def _boundary_gaps(played: list[tuple[float, Any]]) -> list[float]:
+    """How long the world ran between one chunk's last command and the next chunk's first.
+
+    A chunk's grip values ascend, so a value under its predecessor is where one chunk ends and the next
+    begins.
+    """
+    return [played[i][0] - played[i - 1][0] for i in range(1, len(played)) if played[i][1] < played[i - 1][1]]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_sim_slower_than_wall_pays_the_whole_call(world):
+    """A charged trial costs the world the call's whole wall duration, at any rate the simulator steps at.
+
+    A simulator slower than real time reaches the answer having run a fraction of what the call took, so
+    letting it run is not payment: the answer is held back until the world has run the rest.
+    """
+    wall_sec = 0.05
+    played = _run_episode(
+        world,
+        RemoteStubPolicy(wall_sec=wall_sec, chunk=slow_chunk(0.05, 5)),
+        ChunkedSchedule(),
+        pacer=_Pacer(real_time_factor=0.25),
+        run_sec=0.5,
+    )
+
+    gaps = _boundary_gaps(played)
+    assert gaps, f'no chunk boundary in {[t for t, _ in played]}'
+    assert min(gaps) >= wall_sec * 0.9, f'the world ran {min(gaps):.4f}s for a call that took {wall_sec}s'
+
+
+@pytest.mark.timeout(60.0)
+def test_an_uncharged_call_costs_a_slow_sim_nothing_either(world):
+    """A trial stating ``charge_inference_time=False`` holds the world still at any rate the simulator steps
+    at, so a chunk boundary costs one waypoint period rather than the wall time the model took."""
+    played = _run_episode(
+        world,
+        RemoteStubPolicy(wall_sec=0.05, chunk=slow_chunk(0.05, 5)),
+        ChunkedSchedule(),
+        charge_inference_time=False,
+        pacer=_Pacer(real_time_factor=0.25),
+        run_sec=0.2,
+    )
+
+    gaps = _boundary_gaps(played)
+    assert gaps, f'no chunk boundary in {[t for t, _ in played]}'
+    assert max(gaps) <= 0.02, f'the world ran {max(gaps):.4f}s for a call the trial charges nothing for'
 
 
 class _ObservedTicks(Layer):
