@@ -21,7 +21,7 @@ ENV HF_HOME=/opt/hf \
 # The base image carries the positronic tree at /positronic and no environment for it: `uv run`
 # would build one at container start, and the platform runs the container with no network.
 WORKDIR /positronic
-RUN uv sync --locked --python 3.13 && uv cache clean
+RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
 
 # Both repositories land in HF_HOME, where the offline load below reads them. For a fine-tuned
 # checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and point

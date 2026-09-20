@@ -31,7 +31,7 @@ ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
 # The base image carries the positronic tree at /positronic and no environment for it: `uv run`
 # would build one at container start, and the platform runs the container with no network.
 WORKDIR /positronic
-RUN uv sync --locked --python 3.13 --extra openpi && uv cache clean
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
 
 # The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
 # the project environment named here. The base resolved openpi into /.venv, so sync into that one:
