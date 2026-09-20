@@ -36,7 +36,10 @@ def vcs_wheel() -> dict:
 def git_repo(path: Path) -> str:
     path.mkdir(parents=True, exist_ok=True)
     env = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
-    run = lambda *args: subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True, env=env)  # noqa: E731
+
+    def run(*args: str) -> None:
+        subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True, env=env)
+
     run('init', '-q')
     (path / 'f').write_text(str(path))
     run('add', 'f')

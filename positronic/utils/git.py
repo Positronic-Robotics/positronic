@@ -68,6 +68,14 @@ def get_git_diff(workdir: Path | None = None, patterns: list[str] | None = None)
         return None
 
 
+def _direct_url(distribution: str) -> dict | None:
+    try:
+        text = importlib_metadata.distribution(distribution).read_text('direct_url.json')
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    return json.loads(text) if text else None
+
+
 def get_package_checkout(distribution: str = 'positronic') -> Path | None:
     """Return the checkout an editable install of ``distribution`` imports from, or None.
 
@@ -98,14 +106,6 @@ def get_package_git_state(distribution: str = 'positronic') -> dict[str, str | b
         return state
     checkout = get_package_checkout(distribution)
     return get_git_state(workdir=checkout) if checkout is not None else None
-
-
-def _direct_url(distribution: str) -> dict | None:
-    try:
-        text = importlib_metadata.distribution(distribution).read_text('direct_url.json')
-    except importlib_metadata.PackageNotFoundError:
-        return None
-    return json.loads(text) if text else None
 
 
 __all__ = ['get_git_state', 'get_git_diff', 'get_package_checkout', 'get_package_git_state']
