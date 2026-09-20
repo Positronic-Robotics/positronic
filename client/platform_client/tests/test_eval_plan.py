@@ -202,8 +202,9 @@ def test_a_served_endpoint_names_the_wire_it_is_dialled_over():
     assert Endpoint(name='candidate', kind=EndpointKind.served, spec='dreamzero').wire is None
 
 
-def test_a_kind_that_states_its_own_wire_refuses_the_field():
-    """A wire stated on these kinds could only disagree with the address they already carry."""
+def test_only_a_served_endpoint_states_the_wire():
+    """A remote entry names its transport in the url scheme, and the platform picks the transport it
+    serves an image on."""
     with pytest.raises(ValidationError, match='only a served entry carries'):
         Endpoint(name='baseline', url='wss://baseline.example/ws', wire=Wire.grpc)
     with pytest.raises(ValidationError, match='only a served entry carries'):
