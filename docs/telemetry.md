@@ -1,6 +1,6 @@
 # Eval telemetry
 
-Opt-in wall-clock telemetry for `positronic eval run`. A sim eval runs on a virtual clock, so the virtual
+Wall-clock telemetry for `positronic eval run`. A sim eval runs on a virtual clock, so the virtual
 time a rollout advances says nothing about the real compute it cost. This telemetry captures that operational
 signal — the wall-clock split of each phase (reset, env step, inference, record IO), the machine's CPU / memory
 / GPU load, and the inference-latency distribution — so a sizing or performance pass can read what a rollout
@@ -42,11 +42,16 @@ under the bound tracer enters the report, so a sweep containing a real embodimen
 than allowed to pollute it. (A real eval runs its recorder and producers as separate processes with no shared
 tracer, so there is nothing to time there anyway — run real embodiments in a separate untimed invocation.)
 
-A normal eval (no `--timing`) pays nothing: the span helpers compile to no-ops and no sidecar is written. That
-is also why the recording stack is not a default dependency — `--timing` needs the `telemetry` extra
-(`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), and says so if it is missing. An install
-without it carries only the OTel API the no-op helpers sit on. The RoboLab image ships the repo and resolves
-its dependencies at run time, so a timed eval inside it names the extra on the invocation itself:
+A run that records episodes writes the harness sidecar without being asked: `prepare_output_dir` points
+`POSITRONIC_ENV_TELEMETRY_DIR` at `<output_dir>/telemetry/`, so the spans land where `pos3.sync` mirrors them
+and upload with the episodes. `--timing` adds the `eval.pass` span and the machine-load stream on top. A run
+with no `--output_dir` records nothing, and the span helpers compile to no-ops.
+
+The recording stack is not a default dependency: it ships in the `telemetry` extra
+(`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), which the dev dependency group pulls in,
+so a checkout has it. `--timing` raises without it and names the extra. A recording run without it warns and
+records no spans, because a run delivers episodes and the sidecar is not one. The RoboLab image ships the repo
+and resolves its dependencies at run time, so a timed eval inside it names the extra on the invocation itself:
 `uv run --extra telemetry positronic eval run … --timing`.
 
 ## File layout

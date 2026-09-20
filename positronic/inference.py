@@ -16,13 +16,14 @@ import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import prepare_output_dir, run, run_world
+from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.harness import Rollout
+from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +94,11 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` builds the
     # world the rig runs in.
     try:
-        output_path = prepare_output_dir(output_dir)
-        operator = KeyboardOperator(next_task, policy, output_path)
-        logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(embodiment, operator, record=output_path is not None, done=operator.done)
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            output_path = prepare_output_dir(output_dir)
+            operator = KeyboardOperator(next_task, policy, output_path)
+            logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
+            run_world(embodiment, operator, record=output_path is not None, done=operator.done)
     finally:
         policy.close()
 

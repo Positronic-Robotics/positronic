@@ -1,20 +1,23 @@
 import importlib
+import os
 import sys
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
 from typing import cast
 
+import pos3
 import pytest
 
 import pimm
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
-from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
+from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, Session
 from positronic.policy.harness import Rollout
+from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
@@ -185,3 +188,46 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']
+
+
+def test_the_spans_sidecar_lands_where_the_episodes_upload_from(tmp_path, monkeypatch):
+    """Every binary that records resolves its output directory here, so each one writes its spans where
+    `pos3.sync` mirrors them without being told."""
+    monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            local_dir = prepare_output_dir(tmp_path / 'episodes')
+            pointed_at = os.environ[ENV_TELEMETRY_DIR]
+
+    assert local_dir is not None
+    assert pointed_at == str(local_dir / telemetry.TELEMETRY_SUBDIR)
+
+
+def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monkeypatch):
+    """A run recording nowhere has nowhere to put spans, and takes no earlier run's directory."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'an-earlier-run' / 'telemetry'))
+
+    assert prepare_output_dir(None) is None
+    assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):
+    """A destination that outlives its run reaches a later `Harness` in the same process."""
+    monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            prepare_output_dir(tmp_path / 'episodes')
+
+    assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_the_scope_gives_back_a_directory_its_caller_set(tmp_path, monkeypatch):
+    """The scope restores rather than clears, so it cannot reach past the value it replaced."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / 'mine'))
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            prepare_output_dir(tmp_path / 'episodes')
+
+    assert os.environ[ENV_TELEMETRY_DIR] == str(tmp_path / 'mine')
