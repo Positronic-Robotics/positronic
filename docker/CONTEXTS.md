@@ -17,6 +17,10 @@
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
 | `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
+`Dockerfile.submit-openpi` and `Dockerfile.submit-gr00t` build a policy image the platform runs on
+top of `positro/openpi` and `positro/gr00t`: weights baked, offline, serving on `:8000`. See
+[Submit a policy image](../docs/submit-a-policy-image.md).
+
 Build and push all: `make push`
 
 Galaxea is opt-in: `make build-galaxea`. Its evaluation-only image is excluded from

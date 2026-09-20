@@ -14,7 +14,8 @@
 
 Positronic is the open stack behind **[PhAIL](https://phail.ai)** — independent evaluation of VLA models on real robots and in simulation, through one API. It's the full engine underneath: bring robots online, capture and curate data, run inference across model vendors, and **evaluate policies** in sim and on real hardware.
 
-**→ Evaluating a model? Start here: [docs/evaluation.md](docs/evaluation.md).**
+**→ Evaluating a model? Start here: [docs/evaluation.md](docs/evaluation.md).** Submitting one to
+the platform? [docs/submit-a-policy-image.md](docs/submit-a-policy-image.md).
 
 ## The Problem
 

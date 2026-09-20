@@ -6,9 +6,10 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset import Episode
-from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
+from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -126,11 +127,28 @@ def test_episode_meta_written_and_exposed(tmp_path):
     formatted_size = f'{m["size_mb"]:.2f}'
     assert isinstance(formatted_size, str)
     assert formatted_size.replace('.', '', 1).isdigit()
-    # git info present when running inside a git repo; skip strict assertions otherwise
+    # git info present when positronic is installed from a checkout or a VCS wheel
     if 'git' in m['writer']:
         git = m['writer']['git']
         assert isinstance(git, dict)
-        assert {'commit', 'branch', 'dirty'}.issubset(git.keys())
+        assert {'commit', 'dirty'}.issubset(git.keys())
+
+
+def test_episode_written_by_an_installed_wheel_records_that_wheel_revision(tmp_path, monkeypatch):
+    cwd_head = git_repo(tmp_path / 'cwd')
+    monkeypatch.chdir(tmp_path / 'cwd')
+    install_as(monkeypatch, vcs_wheel())
+    _cached_env_writer_info.cache_clear()
+    try:
+        with DiskEpisodeWriter(tmp_path / 'ep') as w:
+            w.append('a', 1, 1000)
+    finally:
+        _cached_env_writer_info.cache_clear()
+
+    git = DiskEpisode(tmp_path / 'ep').meta['writer']['git']
+    assert git['commit'] == WHEEL_COMMIT
+    assert git['commit'] != cwd_head
+    assert git['dirty'] is False
 
 
 def test_episode_writer_marks_unfinished_and_clears_on_close(tmp_path):

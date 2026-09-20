@@ -90,15 +90,25 @@ never sees that address until the run records it. Only a served entry may theref
 container the platform runs. The kinds refuse each other's fields, so an entry cannot carry two
 answers to the same question.
 
-`positronic eval run` files that plan with `submissions.create`. `--from-file` names the file, and
-no other option does: an `--eval` value is a name. The same flags state a plan
+`positronic eval run` files that plan with `submissions.create`. `--from-file` takes the plan
+file, and an `--eval` value is a name. The same flags state a plan
 without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
 `--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
 catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
 policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
 it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
-tasks needs a customer grant; a key without one is refused `forbidden`.
+tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
+Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
+`queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
+image runs the platform executes itself.
+
+`EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
+reaches the platform.
+
+A plan states its own tasks and endpoints. A policy image run names a catalog eval:
+[Submit a policy image](../docs/submit-a-policy-image.md) says what the platform requires of the
+image, and how to build, test and submit it.
 
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
 the eval whose tasks it runs. `plan_of_image` builds that shape.
@@ -209,9 +219,10 @@ absent on a run that wrote nothing, `diagnostics` on a run whose record was not 
 
 `submissions.artifacts` lists what a finished run wrote, one page at a time. Each entry names its
 `key` under the submission's own prefix, its `size`, and a signed `url` that expires. Pass `prefix`
-to keep the page to one part of the tree (`episodes/`), and `after` with the `next` of the page
-before it to read the rest. The route answers a finished run alone: a run still going has a
-part-written prefix, and a run that failed reads its records off `submissions.get`.
+to keep the page to one part of the tree, so one attempt's episodes are `attempts/<n>/episodes/`
+and `result.json`'s `attempt_location` names the attempt that scored. Pass `after` with the `next`
+of the page before it to read the rest. The route answers a finished run alone: a run still going
+has a part-written prefix, and a run that failed reads its records off `submissions.get`.
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package

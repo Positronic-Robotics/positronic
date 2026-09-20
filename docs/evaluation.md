@@ -50,13 +50,14 @@ recording, the machine's load, and the inference-latency distribution — into s
 dataset, and `positronic eval timing-report` reduces them. Sizing and performance work reads that; a run's
 scores never do. See [Eval telemetry](telemetry.md).
 
-## Three ways to start
+## Four ways to start
 
 1. **Run it yourself, in sim.** Self-serve, on your own compute — the reference-policy path above. RoboLab renders in Isaac Sim and wants an RTX-class host.
 2. **Have us run the sim.** Point us at your endpoint and we run the suite on our GPUs and return the runs, so nobody on your side provisions a GPU or installs Isaac.
 3. **Get evaluated on real hardware.** The same endpoint, on our rigs, operated and operator-scored. The first one is on us, with full results back within a day.
+4. **Submit a policy image to the platform.** Self-serve: the platform pulls an image that serves your model, runs a named eval on its own GPUs, and scores it. [Submit a policy image](submit-a-policy-image.md) is the path, with a recipe per model family.
 
-Both of the last two start at hi@phail.ai.
+The second and the third start at hi@phail.ai.
 
 ## Public or private
 
