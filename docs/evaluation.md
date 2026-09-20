@@ -43,28 +43,6 @@ uv run positronic-server --dataset.path=~/evals/libero \
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
 
-## MolmoSpaces leaderboard
-
-`.sim.molmo.leaderboard_ms` selects the official
-[MolmoSpaces Combined](https://molmospaces.allen.ai/leaderboard/ms) benchmarks:
-Close-v1 (915 episodes), Open-v1 (1,000), Pick-v1.1 (1,000), and PnP-v1 (1,000).
-It pins the four benchmark manifests specified in the
-[upstream evaluation instructions](https://github.com/allenai/molmospaces/blob/main/molmo_spaces/evaluation/ms-bench.md).
-Every episode runs once, using its benchmark seed and horizon, with the standard MuJoCo renderer.
-
-```bash
-uv run positronic eval run --eval=.sim.molmo.leaderboard_ms \
-  --policy=.remote --policy.url=localhost:8000 \
-  --charge_inference_time=False --output_dir=~/evals/molmospaces/leaderboard_ms/pi05
-```
-
-Keep inference time uncharged for this comparison. The simulator reports oracle success: an episode
-passes if it reaches the task's success condition before its horizon, and stops on success. Compute a
-success rate for each benchmark, then average the four rates equally for the Combined score.
-An episode subset selected with `--eval.episodes` is a smoke test, not the full leaderboard evaluation.
-The separate MolmoBot and All Combined leaderboard sets include Filament rendering and camera variants
-that this preset does not select.
-
 ## What a run cost
 
 `--timing` records the wall-clock cost of a sim sweep — the split across reset, env step, inference and
