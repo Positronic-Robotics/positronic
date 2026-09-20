@@ -90,7 +90,8 @@ def get_package_checkout() -> Path | None:
 def get_package_git_state() -> dict[str, str | bool] | None:
     """Return the git revision of the installed positronic, or None if it has none.
 
-    A wheel built from a VCS URL answers with the commit its ``direct_url.json`` names (PEP 610).
+    A wheel built from a git URL answers with the commit its ``direct_url.json`` names (PEP 610),
+    which also records the version control system, so another one answers nothing.
     An editable install answers with the state of the checkout it imports from. Any other install
     has no revision. The git repository around ``site-packages`` never answers: a venv inside a
     checkout would name that checkout, which is not the code in the process.
@@ -99,7 +100,7 @@ def get_package_git_state() -> dict[str, str | bool] | None:
     if direct_url is None:
         return None
     vcs = direct_url.get('vcs_info')
-    if vcs is not None:
+    if vcs is not None and vcs.get('vcs') == 'git':
         state: dict[str, str | bool] = {'commit': vcs['commit_id'], 'dirty': False, 'url': direct_url['url']}
         if 'requested_revision' in vcs:
             state['requested_revision'] = vcs['requested_revision']

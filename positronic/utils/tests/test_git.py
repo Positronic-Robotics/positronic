@@ -93,6 +93,10 @@ def test_an_install_with_no_origin_has_no_revision(cwd_repo, monkeypatch):
     install_as(monkeypatch, {'url': 'file:///nowhere', 'archive_info': {}})
     assert get_package_git_state() is None
 
+    mercurial = {'url': 'https://example.invalid/positronic', 'vcs_info': {'vcs': 'hg', 'commit_id': 'a' * 40}}
+    install_as(monkeypatch, mercurial)
+    assert get_package_git_state() is None
+
 
 def test_run_metadata_records_the_installed_revision_and_no_diff_for_a_wheel(cwd_repo, monkeypatch):
     install_as(monkeypatch, vcs_wheel())
