@@ -39,6 +39,26 @@ class Call(StrEnum):
     CLOSE_BRAKES = 'close_brakes'
 
 
+class _StatusFromCpp:
+    """A goal status as pybind11 hands one back: equal to the canonical member, and not identical to it.
+
+    pf ships only with the hardware extra, so the stub stands in for it on a default sync and the real
+    pybind11 type is in play otherwise. This wraps whichever one it is, rather than extending either.
+    """
+
+    def __init__(self, member: 'franka.pf.GoalStatus'):
+        self._member = member
+
+    def __eq__(self, other: object) -> bool:
+        return self._member == other
+
+    def __hash__(self) -> int:
+        return hash(self._member)
+
+    def __repr__(self) -> str:
+        return repr(self._member)
+
+
 @dataclass
 class _Goal:
     """A goal as pf hands one back: reading ``status`` crosses from C++."""
@@ -47,8 +67,8 @@ class _Goal:
     reason: str | None
 
     @property
-    def status(self) -> franka.pf.GoalStatus:
-        return self._status.returned_from_cpp()
+    def status(self) -> _StatusFromCpp:
+        return _StatusFromCpp(self._status)
 
 
 # A goal the arm would not take, and one it did.
