@@ -65,8 +65,7 @@ together load the model in 151 s.
   manifest index with an `unknown/unknown` attestation entry beside the image.
 - Push to Docker Hub when your base is `positro/*`. The base layers cross-mount from the public
   repository, so only your layers upload. Another registry re-uploads all of them.
-- The image must be public. Under that rule a gated checkpoint goes into a public image, which is
-  a licence decision to make before you build.
+- The image must be public.
 
 ## Life of a submission
 
