@@ -4,7 +4,9 @@ import threading
 import time
 from concurrent.futures import Future
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -12,10 +14,12 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import FakeCall, Passive
+from pimm.tests.testing import Passive, wire_call
 from pimm.world import VirtualClock
 from positronic import keys
+from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.eval import Command, Embodiment, Observation, Task
+from positronic.eval import keys as eval_keys
 from positronic.policy import executor as executor_module
 from positronic.policy.base import Policy, Sequential, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
@@ -177,24 +181,25 @@ def observed_harness():
             receiver._bind(physical_receiver)
         harness.ds_command._bind(Trace(world.clock))
         harness.deadline_ns._bind(Trace(world.clock))
-        call = FakeCall(Rollout(Task('test', None), Observe(), None))
-        list(harness._begin_episode(world.clock, world.should_stop_reader(), call))
+        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        policy_run = runtime.start(Observe())
+        step = partial(harness._step, Task('test', None), runtime, policy_run)
         try:
-            yield world, harness, emitters, serializers, calls
+            yield world, harness, emitters, serializers, calls, step
         finally:
-            harness._close_policy()
-            harness._telemetry.end(world.clock.now(), partial=True)
+            runtime.close()
+            policy_run.close()
 
 
 def test_observations_refresh_on_signal_updates_independently_of_time(observed_harness):
-    world, harness, emitters, serializers, calls = observed_harness
+    world, _, emitters, serializers, calls, step = observed_harness
     frame = np.array([1, 2])
     emitters[keys.WRIST_IMAGE].emit(frame)
-    assert harness._step(world.clock) is None
+    assert step() is None
     assert calls == []
 
     emitters[POSITION].emit(3)
-    harness._step(world.clock)
+    step()
     first, now, tick = calls[-1]
     assert now == tick == 0
     assert set(first) == {keys.WRIST_IMAGE, POSITION, keys.TASK, keys.DESCRIPTOR}
@@ -203,13 +208,13 @@ def test_observations_refresh_on_signal_updates_independently_of_time(observed_h
     np.testing.assert_array_equal(first[keys.WRIST_IMAGE], [1, 2])
     assert all(serializer.call_count == 1 for serializer in serializers.values())
 
-    harness._step(world.clock)
+    step()
     assert calls[-1][0][keys.WRIST_IMAGE] is first[keys.WRIST_IMAGE]
     assert all(serializer.call_count == 1 for serializer in serializers.values())
 
     frame[:] = [4, 5]
     emitters[keys.WRIST_IMAGE].emit(frame)
-    harness._step(world.clock)
+    step()
     current, now, tick = calls[-1]
     assert now == tick == 0
     assert current[POSITION] == 3
@@ -219,61 +224,204 @@ def test_observations_refresh_on_signal_updates_independently_of_time(observed_h
     assert serializers[POSITION].call_count == 1
 
     cast(VirtualClock, world.clock).advance_to_ns(1_000_000)
-    harness._step(world.clock)
+    step()
     assert calls[-1][1:] == (1_000_000, 1)
     assert calls[-1][0][keys.WRIST_IMAGE] is current[keys.WRIST_IMAGE]
     assert serializers[keys.WRIST_IMAGE].call_count == 2
     assert serializers[POSITION].call_count == 1
 
 
-def test_observation_cache_initializes_from_already_read_signals_and_resets_on_close(observed_harness):
-    world, harness, emitters, serializers, calls = observed_harness
+def test_observation_cache_initializes_from_already_read_signals(observed_harness):
+    _, harness, emitters, serializers, calls, step = observed_harness
     for name, emitter in emitters.items():
         emitter.emit(1)
         harness.observations[name].read()
-    harness._step(world.clock)
+    step()
     assert len(calls) == 1
     assert all(serializer.call_count == 1 for serializer in serializers.values())
 
-    harness._close_policy()
-    obs = harness._read_obs()
-    assert obs is not None
-    assert obs[keys.WRIST_IMAGE] == obs[POSITION] == 1
-    assert all(serializer.call_count == 2 for serializer in serializers.values())
-
 
 def test_updated_observations_remove_fields_the_serializer_no_longer_returns(observed_harness):
-    world, harness, emitters, _, calls = observed_harness
+    _, _, emitters, _, calls, step = observed_harness
     emitters[keys.WRIST_IMAGE].emit(np.array([1]))
     emitters[POSITION].emit({'': 2, '.extra': 3})
-    harness._step(world.clock)
+    step()
     first = calls[-1][0]
     assert first[POSITION + '.extra'] == 3
 
     emitters[POSITION].emit({'': 4, '.extra': None})
-    harness._step(world.clock)
+    step()
     assert calls[-1][0][POSITION] == 4
     assert POSITION + '.extra' not in calls[-1][0]
     assert first[POSITION] == 2
     assert first[POSITION + '.extra'] == 3
 
     emitters[POSITION].emit(None)
-    harness._step(world.clock)
+    step()
     assert POSITION not in calls[-1][0]
     assert calls[-1][0][keys.WRIST_IMAGE] is first[keys.WRIST_IMAGE]
 
 
-def test_unavailable_serialization_is_retried_without_reusing_old_fields(observed_harness):
-    world, harness, emitters, serializers, calls = observed_harness
+def test_observation_conversion_errors_propagate(observed_harness):
+    _, _, emitters, serializers, calls, step = observed_harness
     emitters[keys.WRIST_IMAGE].emit(np.array([1]))
     emitters[POSITION].emit(1)
-    harness._step(world.clock)
-    serializers[POSITION].side_effect = [pimm.NoValueException(), 2]
+    step()
+    serializers[POSITION].side_effect = pimm.NoValueException('conversion failed')
     emitters[POSITION].emit(2)
-    assert harness._step(world.clock) is None
+    with pytest.raises(pimm.NoValueException, match='conversion failed'):
+        step()
     assert len(calls) == 1
-    harness._step(world.clock)
-    assert calls[-1][0][POSITION] == 2
+
+
+@pytest.fixture
+def episode_harness():
+    with pimm.World(virtual_time=True) as world:
+        source = Passive()
+        serializer = Mock(side_effect=lambda value: value)
+        embodiment = Embodiment(
+            descriptor='test',
+            observations={POSITION: Observation(pimm.ControlSystemEmitter(source), serializer)},
+            commands={MOTOR: Command(pimm.ControlSystemReceiver(source), None)},
+            prepare_handlers={},
+            static_meta={},
+            meta_source=None,
+            simulated=True,
+        )
+        harness = Harness(embodiment)
+        caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](source)
+        wire_call(world, caller, harness.perform_task)
+        emitters = []
+        for receiver in (harness.manual_command, harness.done, harness.observations[POSITION]):
+            emitter, physical_receiver = world.local_pipe()
+            receiver._bind(physical_receiver)
+            emitters.append(emitter)
+        manual, done, observation = emitters
+        ports = SimpleNamespace(
+            world=world,
+            loop=harness.run(world.should_stop_reader(), world.clock),
+            caller=caller,
+            manual=manual,
+            done=done,
+            observation=observation,
+            serializer=serializer,
+            records=Trace(world.clock),
+            deadlines=Trace(world.clock),
+            commands=Trace(world.clock),
+        )
+        harness.ds_command._bind(ports.records)
+        harness.deadline_ns._bind(ports.deadlines)
+        harness.commands[MOTOR]._bind(ports.commands)
+        try:
+            yield ports
+        finally:
+            world.request_stop()
+            list(ports.loop)
+
+
+def test_episode_completion_then_shutdown_with_fresh_observations(episode_harness):
+    h = episode_harness
+    observations, closed = [], []
+
+    class Observe(Policy):
+        def run(self, runtime):
+            try:
+                obs = yield
+                while True:
+                    observations.append(obs)
+                    obs = yield Step({MOTOR: int(obs[POSITION][0])}, runtime.time_ns + 100_000_000)
+            finally:
+                closed.append(True)
+
+    frame = np.array([1])
+    h.observation.emit(frame)
+    h.done.emit({'stale': True})
+    first = h.caller(Rollout(Task('first', 0.01), Observe(), None))
+    next(h.loop)
+    assert h.deadlines.values == [(0, 10_000_000)]
+
+    h.manual.emit({MOTOR: 99})
+    overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), None))
+    h.done.emit({'success': True}, ts=5_000_000)
+    h.world.clock.advance_to_ns(12_000_000)
+    next(h.loop)
+    assert not first.done()  # The recorder gets a turn before the caller is answered.
+    assert closed == [True]
+    assert h.deadlines.values[-1] == (12_000_000, None)
+    with pytest.raises(RuntimeError, match='already running'):
+        overlapping.result()
+    next(h.loop)
+    assert first.result() == {'success': True, eval_keys.TERMINATED: True}
+    assert h.records.values[-1][1].static_data[keys.TASK] == 'first'
+
+    frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
+    second = h.caller(Rollout(Task('second', None), Observe(), None))
+    next(h.loop)
+    assert h.serializer.call_count == 2
+    assert [obs[POSITION][0] for obs in observations] == [1, 2]
+    assert h.commands.values == [(0, 1), (12_000_000, 2)]
+    assert not second.done()
+
+    h.world.request_stop()
+    list(h.loop)
+    with pytest.raises(pimm.calls.HandlerStopped):
+        second.result()
+    assert closed == [True, True]
+    assert h.deadlines.values[-1][1] is None
+    assert [command.type for _, command in h.records.values] == [
+        DsWriterCommandType.START_EPISODE,
+        DsWriterCommandType.STOP_EPISODE,
+        DsWriterCommandType.START_EPISODE,
+        DsWriterCommandType.STOP_EPISODE,
+    ]
+
+
+@pytest.mark.parametrize('done_at_ns, terminated', [(10_000_000, True), (11_000_000, False)])
+def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_at_ns, terminated):
+    h = episode_harness
+
+    class Wait(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 0.01), Wait(), None))
+    next(h.loop)
+    h.done.emit({'success': True}, ts=done_at_ns)
+    h.world.clock.advance_to_ns(12_000_000)
+    next(h.loop)
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED] is terminated
+
+
+@pytest.mark.parametrize('failure', ['startup', 'policy', 'conversion'])
+def test_episode_failures_close_the_generator_and_answer_the_caller(episode_harness, failure):
+    h = episode_harness
+    closed = []
+
+    class Failing(Policy):
+        def run(self, runtime):
+            try:
+                if failure == 'startup':
+                    raise ValueError('startup failed')
+                yield
+                raise ValueError('policy failed')
+            finally:
+                closed.append(True)
+
+    h.observation.emit(1)
+    error = ValueError
+    if failure == 'conversion':
+        error = pimm.NoValueException
+        h.serializer.side_effect = error('conversion failed')
+    answer = h.caller(Rollout(Task('test', None), Failing(), None))
+    with pytest.raises(error, match=f'{failure} failed'):
+        next(h.loop)
+    assert closed == [True]
+    with pytest.raises(pimm.calls.HandlerStopped):
+        answer.result()
 
 
 @contextmanager
