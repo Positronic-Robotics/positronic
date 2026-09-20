@@ -23,7 +23,6 @@ from positronic.policy.spec import Model, ModelSource, Pipeline, from_spec
 class FixedModel(Model):
     def __init__(self):
         self.observations = []
-        self.resets = 0
         self.closed = False
 
     def __call__(self, obs: Obs):
@@ -31,9 +30,6 @@ class FixedModel(Model):
         if obs.get('fail'):
             raise ValueError('model failed')
         return [{'value': index} for index in range(4)]
-
-    def reset(self):
-        self.resets += 1
 
     def meta(self):
         return {'model_name': 'fixed'}
@@ -123,7 +119,6 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport):
         finally:
             runtime.close()
             run.close()
-    assert model.resets == 3  # One metadata probe and two episodes.
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
 

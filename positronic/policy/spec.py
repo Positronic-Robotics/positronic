@@ -34,10 +34,6 @@ class Model(ABC):
     @abstractmethod
     def __call__(self, obs: Obs) -> Any: ...
 
-    def reset(self) -> None:
-        """Prepare the loaded model for a new episode."""
-        return None
-
     def meta(self) -> dict[str, Any]:
         return {}
 

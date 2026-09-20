@@ -267,7 +267,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 ### `server.PolicyServer`
 Serves a `Pipeline` with explicit `source`, `local`, `codec`, and `local_codec` arguments.
 `ModelSource.get_models()` backs the catalogue, `resolve()` selects a checkpoint, and `load()` returns
-a callable `Model` that owns the loaded resources. The server resets that model at session start.
+a callable `Model` that owns the loaded resources.
 Server codecs wrap its call; the client receives the processor and local-codec specs in the handshake.
 
 ```python

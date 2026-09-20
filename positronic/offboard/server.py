@@ -336,11 +336,6 @@ class PolicyServer:
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             model = await self._manager.get_model(rid, conn)
-            await _acquire_with_keepalives(self._infer_lock, conn, 'Waiting for inference slot')
-            try:
-                await asyncio.to_thread(model.reset)
-            finally:
-                self._infer_lock.release()
             meta = {
                 **conn.served_address.meta,
                 **self._source.meta(rid),

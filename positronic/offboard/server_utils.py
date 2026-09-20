@@ -41,11 +41,7 @@ def warmup(policy: Model, obs: dict[str, Any], on_progress: Callable[[str], None
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    policy.reset()
-    try:
-        run_with_progress(lambda: policy(obs), 'Running warmup inference', on_progress)
-    finally:
-        policy.reset()
+    run_with_progress(lambda: policy(obs), 'Running warmup inference', on_progress)
 
 
 def wait_for_subprocess_ready(

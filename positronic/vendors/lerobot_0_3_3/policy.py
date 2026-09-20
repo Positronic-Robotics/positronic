@@ -87,9 +87,6 @@ class LerobotModel(Model):
     def __call__(self, obs: Obs) -> list[dict[str, Any]]:
         return _infer(self._policy, self._device, obs)
 
-    def reset(self) -> None:
-        self._policy.reset()
-
     def meta(self) -> dict[str, Any]:
         return self._meta
 
