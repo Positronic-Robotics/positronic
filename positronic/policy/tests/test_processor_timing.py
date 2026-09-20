@@ -119,6 +119,7 @@ class Motion(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[int](self)
         self.position = pimm.ControlSystemEmitter[int](self)
         self.reset = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.resets = 0
         self.positions = []
 
     def run(self, should_stop, clock):
@@ -126,6 +127,7 @@ class Motion(pimm.ControlSystem):
         while not should_stop.value:
             yield pimm.Sleep(0.002)
             for call in self.reset.incoming():
+                self.resets += 1
                 yield pimm.Sleep(0.004)
                 position = 0
                 call.set_result(None)
@@ -610,7 +612,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
             descriptor='test',
             observations={POSITION: Observation(motion.position, None)},
             commands={MOTOR: Command(motion.command, None)},
-            prepare_handlers={RESET: motion.reset} if prepare else {},
+            prepare_handlers={RESET: motion.reset},
             static_meta={},
             meta_source=None,
             simulated=True,
@@ -626,10 +628,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         records = Trace(world.clock)
         harness.ds_command._bind(records)
         harness.deadline_ns._bind(Trace(world.clock))
-        if prepare:
-            world.connect(harness.prepare[RESET], motion.reset)
-        else:
-            world.pair(motion.reset)
+        world.connect(harness.prepare[RESET], motion.reset)
         loop = world.start([harness, motion])
         observations.emit(0)
         answer = caller(Rollout(Task('move', 2.0, prepare_args={RESET: None} if prepare else {}), definition, None))
@@ -639,6 +638,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
                 if answer.done():
                     break
             assert answer.done()
+            assert motion.resets == (2 if prepare else 0)
             start_ns = records.values[0][0]
             assert start_ns == (8_000_000 if prepare else 0)
             fixture = Path(__file__).resolve().parents[3] / 'integration_tests/fixtures/act_stack/seed_4.npz'

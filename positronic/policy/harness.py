@@ -116,7 +116,7 @@ class Harness(pimm.ControlSystem):
         return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(delay_sec)
 
     def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> pimm.Run[None]:
-        """Prepare the named devices and wait for all of them, unless shutdown interrupts the wait."""
+        """Prepare only the named devices and wait for them. Empty args leave every device as it is."""
         unknown = sorted(set(args) - set(self.prepare))
         if unknown:
             rig = self._embodiment.descriptor or 'this rig'
@@ -226,12 +226,6 @@ class Harness(pimm.ControlSystem):
         task = rollout.task
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
-            if self.prepare and not task.prepare_args:
-                rig = self._embodiment.descriptor or 'this rig'
-                raise ValueError(
-                    f'The trial readies nothing on {rig}, which readies {sorted(self.prepare)}; '
-                    'name at least one of them in prepare_args'
-                )
             yield from self._ready(should_stop, task.prepare_args)
         if should_stop.value:
             return None
