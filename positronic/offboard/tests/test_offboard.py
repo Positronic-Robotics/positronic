@@ -1,5 +1,4 @@
 from types import MappingProxyType
-from unittest.mock import ANY
 
 import numpy as np
 import pytest
@@ -19,9 +18,10 @@ from positronic.offboard.protocol import deserialise, serialise, typed_commands
 from positronic.utils.serialization import encode_jpeg
 
 
-def test_inference_client_connect_and_infer(inference_server, mock_policy):
+def test_inference_client_connect_and_infer(inference_server, mock_model):
     """Test standard client connection and inference flow."""
-    client = InferenceClient(*inference_server.ws())
+    host, port = inference_server
+    client = InferenceClient.from_url(f'{host}:{port}')
 
     session = client.new_session()
     try:
@@ -33,30 +33,29 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_policy._mock_session.assert_called_with(obs, ANY)
+        mock_model.assert_called_with(obs)
     finally:
         session.close()
 
 
-def test_inference_client_new_session(inference_server, mock_policy):
-    """Test that starting a new session calls new_session on the policy."""
-    client = InferenceClient(*inference_server.ws())
-
-    # First session
-    session = client.new_session()
-    session.close()
-
-    # Second session
-    session = client.new_session()
-    session.close()
-
-    assert mock_policy.new_session.call_count == 2
+def test_connections_reuse_the_loaded_model(inference_server, mock_model):
+    host, port = inference_server
+    client = InferenceClient.from_url(f'{host}:{port}')
+    for index in range(2):
+        session = client.new_session()
+        try:
+            session.infer({'episode': index})
+        finally:
+            session.close()
+    assert mock_model.call_count == 2
+    mock_model.close.assert_not_called()
 
 
-def test_session_url_selects_the_model(multi_policy_server):
-    served, policies = multi_policy_server
+def test_session_url_selects_the_model(multi_model_server):
+    host, port, policies = multi_model_server
+    endpoint = f'{host}:{port}'
 
-    default_session = InferenceClient(*served.ws()).new_session()
+    default_session = InferenceClient.from_url(endpoint).new_session()
     try:
         assert default_session.metadata['model_name'] == 'alpha'
         action = default_session.infer({'obs': 'default'})
@@ -64,7 +63,7 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         default_session.close()
 
-    alpha_session = InferenceClient(*served.ws(model='alpha')).new_session()
+    alpha_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/alpha').new_session()
     try:
         assert alpha_session.metadata['model_name'] == 'alpha'
         action = alpha_session.infer({'obs': 'alpha'})
@@ -72,7 +71,7 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         alpha_session.close()
 
-    beta_session = InferenceClient(*served.ws(model='beta')).new_session()
+    beta_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/beta').new_session()
     try:
         assert beta_session.metadata['model_name'] == 'beta'
         action = beta_session.infer({'obs': 'beta'})
@@ -80,9 +79,9 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         beta_session.close()
 
-    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'}, ANY)
-    policies['beta']._mock_session.assert_any_call({'obs': 'beta'}, ANY)
-    policies['alpha']._mock_session.assert_any_call({'obs': 'default'}, ANY)
+    policies['alpha'].assert_any_call({'obs': 'alpha'})
+    policies['beta'].assert_any_call({'obs': 'beta'})
+    policies['alpha'].assert_any_call({'obs': 'default'})
 
 
 def test_wire_serialisation_accepts_mappingproxy():

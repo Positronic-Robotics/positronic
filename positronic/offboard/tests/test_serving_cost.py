@@ -6,8 +6,8 @@ import pytest
 from positronic import keys
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient
-from positronic.offboard.serving_cost import InstantChunk, capture, replay, rig_stack
-from positronic.policy.spec import PolicySource, remote
+from positronic.offboard.serving_cost import InstantChunk, InstantSource, capture, replay, rig_stack
+from positronic.policy.spec import Pipeline
 
 CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 
@@ -28,12 +28,12 @@ def _ticks(count: int, period_ns: int = 66_666_666):
 
 def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_server):
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
-    model = InstantChunk(rows=2, period_s=1 / 15.0)
+    model = InstantChunk(rows=2)
     payloads = capture(_ticks(12), stack, model, requests=2)
     assert payloads, 'the stack sent nothing'
 
-    served = start_server(stack | remote(compress_images=True) | PolicySource(model))
-    session = InferenceClient(*served.ws()).new_session()
+    host, port, *_ = start_server(Pipeline(InstantSource(2), stack, compress_images=True))
+    session = InferenceClient.from_url(f'ws://{host}:{port}').new_session()
     try:
         rows = replay(session, payloads, compress_images=True)
     finally:
@@ -48,7 +48,7 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
 
 def test_a_captured_payload_carries_one_stack_per_stacked_key():
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
-    payloads = capture(_ticks(12), stack, InstantChunk(rows=2, period_s=1 / 15.0), requests=1)
+    payloads = capture(_ticks(12), stack, InstantChunk(rows=2), requests=1)
 
     sent = payloads[0]
     for camera in CAMERAS:
