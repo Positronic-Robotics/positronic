@@ -3,7 +3,7 @@
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
 # Usage
-#   docker buildx build --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
+#   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
 #       -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push docker
 #   docker run --rm --network none docker.io/<you>/gr00t-droid:v1        # the offline pre-flight
 #

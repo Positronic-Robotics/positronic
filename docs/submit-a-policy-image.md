@@ -40,7 +40,7 @@ For a model of another family, see [Other models](#other-models).
 
 | # | Requirement | What happens if you miss it |
 |---|---|---|
-| 1 | The image starts the server itself: `CMD` plus `EXPOSE 8000` | `policy_setup_crash` after `bash` exits |
+| 1 | The image starts the server itself: `CMD` or `ENTRYPOINT`, plus `EXPOSE 8000` | `policy_setup_crash` after `bash` exits |
 | 2 | Every weight and tokenizer is in the image | a download at start hangs or fails |
 | 3 | Nothing at start needs the network | `uv run` and Hugging Face both do, see below |
 | 4 | The image is public, and pinned by digest when you submit | `image_unpullable`, or a run of bytes you did not test |
@@ -65,7 +65,7 @@ seconds on a DNS error. Build the environment in the image and call its interpre
 CMD ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.server", "droid_jointpos"]
 
 # Right: `uv sync` at build time, then the interpreter it made.
-RUN uv sync --locked --python 3.13 --extra openpi && uv cache clean
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
 CMD ["/positronic/.venv/bin/python", "-m", "positronic.vendors.openpi.server", "droid_jointpos"]
 ```
 
@@ -88,7 +88,7 @@ together load the model in 151 s.
 ### openpi π0.5 DROID
 
 ```bash
-docker buildx build --provenance=false --sbom=false \
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
     -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push docker
 ```
 
@@ -106,7 +106,7 @@ into `/opt/positronic/checkpoints/<name>/0`. Name your pipeline in the `ENTRYPOI
 ### GR00T N1.7 DROID
 
 ```bash
-docker buildx build --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
+docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
     -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push docker
 ```
 
@@ -135,6 +135,8 @@ reaches the GPU.
   repository, so only your layers upload. Another registry re-uploads all of them.
 - `--provenance=false --sbom=false` makes buildx push one image manifest. Without them it pushes a
   manifest index with an `unknown/unknown` attestation entry beside the image.
+- `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases are
+  amd64 and carry no other, so a build on an ARM host resolves nothing without it.
 - Read the digest and the compressed size the way the platform does, anonymously:
 
 ```bash
