@@ -35,8 +35,16 @@ class _WallTimeCharge:
         self._landed_wall_ns: int | None = None
         self._waived = False
 
-    def call_landed(self) -> None:
-        self._landed_wall_ns = time.monotonic_ns()
+    def run(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        """Run ``fn`` and record its landing before its future finishes.
+
+        A done callback runs after the future has woken its waiters, so a waiter could read the call as
+        finished with no landing recorded.
+        """
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self._landed_wall_ns = time.monotonic_ns()
 
     def waive(self) -> None:
         self._waived = True
@@ -115,7 +123,7 @@ class Executor(Runtime):
 
     @property
     def has_unanswered_call(self) -> bool:
-        """Whether any call is still to answer. A landed call whose charge is unpaid is still to answer."""
+        """Whether any call is still to answer."""
         with self._lock:
             return any(not answer.done() for answer in self._unread)
 
@@ -128,10 +136,7 @@ class Executor(Runtime):
             return bool(self._unread)
 
     def wait_until_landed(self, timeout: float | None = None) -> None:
-        """Block until every call made so far has landed, or until ``timeout`` seconds pass.
-
-        A landed call may still be unanswered: its charge is paid by a clock only the caller runs.
-        """
+        """Block until every call made so far has landed, or until ``timeout`` seconds pass."""
         with self._lock:
             pending = [answer.call for answer in self._unread]
         concurrent.futures.wait(pending, timeout=timeout)
@@ -143,10 +148,9 @@ class Executor(Runtime):
             self._has_served_a_call, charged_clock = True, self._charged_clock
         # The charge counts the time a call queues for a worker: it starts before the submit.
         charge = _WallTimeCharge(charged_clock) if charged_clock is not None else None
-        call = self._pool.submit(context.run, fn, *args, **kwargs)
+        work = fn if charge is None else partial(charge.run, fn)
+        call = self._pool.submit(context.run, work, *args, **kwargs)
         answer = self._Answer(name, call, self._read, charge)
-        if charge is not None:
-            call.add_done_callback(lambda _: charge.call_landed())
         with self._lock:
             self._unread.add(answer)
         return answer

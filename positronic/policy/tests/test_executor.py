@@ -1,12 +1,15 @@
 """Unit tests for the executor serving functions off the caller's thread."""
 
+import concurrent.futures
 import logging
 import operator
 import threading
 import time
 import weakref
+from collections.abc import Callable
 from contextvars import ContextVar
 from functools import partial
+from typing import Any
 
 import pytest
 
@@ -412,8 +415,58 @@ def test_an_uncharged_call_answers_as_it_lands(serve):
     assert answer.done()
 
 
+class _FutureWhoseCallbacksNeverRun(concurrent.futures.Future[Any]):
+    """A future that finishes and runs no done callback: the state a preempted worker leaves behind."""
+
+    def add_done_callback(self, fn: Callable[[concurrent.futures.Future[Any]], object]) -> None:
+        pass
+
+
+class _CallerThreadPool:
+    """Runs each call on the caller's thread and finishes its future before any done callback runs."""
+
+    def __init__(self, **_: Any) -> None:
+        pass
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> concurrent.futures.Future[Any]:
+        future = _FutureWhoseCallbacksNeverRun()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        pass
+
+
+def test_a_finished_call_has_landed_before_its_done_callbacks_run(serve, monkeypatch):
+    """A preempted worker finishes the future first and runs its done callbacks later."""
+    monkeypatch.setattr('positronic.policy.executor.ThreadPoolExecutor', _CallerThreadPool)
+    clock = MockClock()
+    rt = serve(add=operator.add)
+    rt.charge_wall_time_to(clock)
+
+    answer = rt.fns['add'](2, 3)
+    clock.advance(TIMEOUT_SEC)
+
+    assert answer.done(), 'the call finished with no landing recorded'
+    assert answer.result() == 5
+
+
+def test_a_charged_call_that_raises_lands_and_answers_with_what_it_raised(serve):
+    clock = MockClock()
+    rt = serve(fail=partial(operator.truediv, 1, 0))
+    rt.charge_wall_time_to(clock)
+
+    answer = rt.fns['fail']()
+    rt.wait_until_landed(TIMEOUT_SEC)
+    clock.advance(TIMEOUT_SEC)
+
+    assert answer.done()
+    with pytest.raises(ZeroDivisionError):
+        answer.result()
+
+
 def test_close_waives_the_charge_on_an_unpaid_call(serve):
-    """Nothing runs the clock after close, and a session refuses to close on an unanswered call."""
+    """Nothing runs the clock after close, so a charge left on a call is never paid."""
     clock = MockClock()
     rt = serve(sleep=partial(time.sleep, 0.05))
     rt.charge_wall_time_to(clock)
