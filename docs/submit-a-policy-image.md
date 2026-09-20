@@ -139,12 +139,18 @@ reaches the GPU.
 
 ```bash
 TOK=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:<you>/<image>:pull" | jq -r .token)
-curl -s -H "Authorization: Bearer $TOK" \
+curl -s -D - -o manifest.json -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json" \
   -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
   "https://registry-1.docker.io/v2/<you>/<image>/manifests/v1" \
-  | jq '{digest: .config.digest, compressed_bytes: ([.layers[].size] | add)}'
+  | grep -i '^docker-content-digest'
+jq '{compressed_bytes: (([.layers[].size] | add) + .config.size)}' manifest.json
 ```
+
+`docker-content-digest` is the digest to pin: it names the manifest the registry served. A
+reference to the `config.digest` inside the manifest names a different object, and the registry
+refuses it. The size adds the layers and the config blob, which is the count the platform makes
+against the 30 GB budget.
 
 A `401` or a `404` here is what the platform sees too: the image is not public, or the name is
 wrong.
@@ -200,9 +206,9 @@ uv run positronic eval list
 - Pin by digest. A tag is resolved at submission, so a tag can name bytes you did not test.
 - Reuse the transaction key on a retry. The same key returns the original submission; a retry
   without one spends quota again. The same key with a different request is refused as a conflict.
-- The catalog offers `molmo.franka_pick_mini` (20 episodes) and `molmo.franka_pick_mini_smoke`
-  (5 episodes) today. Read the names from the catalog; both provision the same GPU VMs. Run the
-  smoke eval first: it answers whether the image serves at all.
+- `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
+  catalog changes, so read the names from it. Start with the smallest eval it offers: it answers
+  whether the image serves at all.
 - `users.me` reports your quota. The default is 2 image submissions per day. An eval plan the
   lab rig runs does not count against it.
 
