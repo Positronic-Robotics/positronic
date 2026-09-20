@@ -68,34 +68,34 @@ def get_git_diff(workdir: Path | None = None, patterns: list[str] | None = None)
         return None
 
 
-def _direct_url(distribution: str) -> dict | None:
+def _direct_url() -> dict | None:
     try:
-        text = importlib_metadata.distribution(distribution).read_text('direct_url.json')
+        text = importlib_metadata.distribution('positronic').read_text('direct_url.json')
     except importlib_metadata.PackageNotFoundError:
         return None
     return json.loads(text) if text else None
 
 
-def get_package_checkout(distribution: str = 'positronic') -> Path | None:
-    """Return the checkout an editable install of ``distribution`` imports from, or None.
+def get_package_checkout() -> Path | None:
+    """Return the checkout an editable install of positronic imports from, or None.
 
     A wheel, a PyPI install and a missing distribution all answer None.
     """
-    direct_url = _direct_url(distribution)
+    direct_url = _direct_url()
     if direct_url is None or not direct_url.get('dir_info', {}).get('editable'):
         return None
     return Path(url2pathname(urlparse(direct_url['url']).path))
 
 
-def get_package_git_state(distribution: str = 'positronic') -> dict[str, str | bool] | None:
-    """Return the git revision of the installed ``distribution``, or None if it has none.
+def get_package_git_state() -> dict[str, str | bool] | None:
+    """Return the git revision of the installed positronic, or None if it has none.
 
     A wheel built from a VCS URL answers with the commit its ``direct_url.json`` names (PEP 610).
     An editable install answers with the state of the checkout it imports from. Any other install
     has no revision. The git repository around ``site-packages`` never answers: a venv inside a
     checkout would name that checkout, which is not the code in the process.
     """
-    direct_url = _direct_url(distribution)
+    direct_url = _direct_url()
     if direct_url is None:
         return None
     vcs = direct_url.get('vcs_info')
@@ -104,7 +104,7 @@ def get_package_git_state(distribution: str = 'positronic') -> dict[str, str | b
         if 'requested_revision' in vcs:
             state['requested_revision'] = vcs['requested_revision']
         return state
-    checkout = get_package_checkout(distribution)
+    checkout = get_package_checkout()
     return get_git_state(workdir=checkout) if checkout is not None else None
 
 
