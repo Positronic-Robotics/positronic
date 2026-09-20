@@ -299,7 +299,7 @@ fault is not.
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |
-| `quota_exceeded` | platform | `users.me` for your cap, then resubmit |
+| `quota_exceeded` | platform | the platform's own capacity, not your quota; resubmit, then report it |
 | `provision_wedged` | platform | resubmit with a new transaction key |
 | `runner_unresponsive` | platform | resubmit |
 | `internal_error` | platform | resubmit, then report it |
