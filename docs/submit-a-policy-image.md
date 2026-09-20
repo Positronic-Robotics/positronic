@@ -21,7 +21,7 @@ Each recipe below adds the weights, an offline environment, `EXPOSE 8000` and a 
 | GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t` | `nvidia/GR00T-N1.7-DROID` |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
-checkpoint of your own goes and which flag names it. Loading GR00T needs about 15 GB of CPU RAM
+checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
 before anything reaches the GPU.
 
 The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
