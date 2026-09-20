@@ -36,7 +36,7 @@ class _Charge:
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._made_ns, self._made_wall_ns = clock.now_ns(), time.monotonic_ns()
-        # Stamped on the thread the call ran on; ``None`` until the call lands.
+        # Stamped from the thread the call ran on, so ``paid`` reads it across threads.
         self._landed_wall_ns: int | None = None
         self._released = False
 
@@ -100,7 +100,6 @@ class Executor(Runtime):
         # ``in_flight`` and ``owes_an_answer`` read this one set.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
-        # The world each call is charged to, ``None`` while a call costs its caller nothing.
         self._charged_clock: Clock | None = None
 
     def charge_wall_time_to(self, clock: Clock) -> None:
