@@ -40,8 +40,7 @@ Other models:
 
 ### Two traps in the `positro/*` bases
 
-Both recipes handle both traps. Both were measured on `positro/openpi:latest` with the network
-denied.
+Both recipes handle both traps.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
