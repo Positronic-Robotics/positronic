@@ -805,12 +805,8 @@ def _refusals(caplog) -> list[str]:
 
 
 def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
-    """What every refusal test below rests on: the stub answers pf's own non-interned value.
-
-    pf is a pybind11 extension, so a status crossing from C++ is equal to the canonical member and never
-    identical to it. A stub built on ``enum.Enum`` interns its members, and every test under it then passes
-    against a driver that reads the arm by identity and is dead on hardware.
-    """
+    """pf is a pybind11 extension, so a status crossing from C++ is equal to the canonical member and
+    is not identical to it."""
     status = REFUSED.status
 
     assert status == franka.pf.GoalStatus.ABORTED
