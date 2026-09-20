@@ -27,7 +27,7 @@ from platform_client.enums import (
     SubmissionStatus,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Endpoint, EvalPlan, RegistryCredential, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
@@ -45,7 +45,7 @@ from platform_client.responses import (
     SubmissionListResponse,
 )
 from platform_client.tasks import TaskRef
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
@@ -192,6 +192,24 @@ def test_create_submission_sends_the_run_defining_fields():
     assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
     assert gateway.body()['eval'] == 'fake.smoke'
     assert gateway.body()['transaction_key'] is None
+
+
+def test_create_submission_sends_a_registry_password_the_platform_can_use():
+    """The one dump that carries the value. A masked password reaches the gateway as a credential
+    that opens nothing, and the private image it was stated for reads back as unpullable."""
+    gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
+    plan = plan_of_image(
+        PolicyImage('org/policy:v1'),
+        EvalRef('fake.smoke'),
+        credential=RegistryCredential(username='a-reader', password=SecretStr('the-registry-password')),
+    )
+
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['image_credential'] == {
+        'username': 'a-reader',
+        'password': 'the-registry-password',
+    }
 
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
@@ -583,6 +601,7 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
         'provider': None,
         'spec': None,
         'image': None,
+        'image_credential': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,

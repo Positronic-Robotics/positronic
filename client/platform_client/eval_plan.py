@@ -15,7 +15,7 @@ from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, SerializationInfo, field_serializer, model_validator
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
 
@@ -80,8 +80,46 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
+# The serialisation context key under which a password serialises as itself. The client's own send
+# path sets it, and nothing else does.
+SENDING = 'sending'
+
+
+class RegistryCredential(BaseModel):
+    """What opens the registry ONE image reference names, so the platform can read a private image.
+
+    The password is a `SecretStr`, and it serialises as itself only under the `SENDING` context the
+    client's own send path sets. Every other dump, log line and `repr` of a plan carries a mask, and
+    a Python dump carries the `SecretStr` itself, so a caller that serialises a plan by hand raises.
+    """
+
+    model_config = _FORBID_EXTRA
+
+    username: str = Field(min_length=1)
+    password: SecretStr = Field(min_length=1)
+
+    @field_serializer('password', when_used='json')
+    def _password(self, password: SecretStr, info: SerializationInfo) -> str:
+        """The value where this dump IS the request carrying it, and a mask everywhere else.
+
+        A plan is dumped to be logged, stored and compared as well as to be sent, so a password that
+        serialised by default would travel into all four. `when_used='json'` leaves a Python dump
+        holding the `SecretStr` itself, so a caller that serialises one by hand raises.
+        """
+        return password.get_secret_value() if (info.context or {}).get(SENDING) else str(password)
+
+
 # A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
-_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
+_ENDPOINT_MAY_STATE = frozenset({
+    'name',
+    'kind',
+    'url',
+    'provider',
+    'spec',
+    'image',
+    'image_credential',
+    'episodes_per_endpoint',
+})
 
 
 class Endpoint(Cascade):
@@ -90,8 +128,9 @@ class Endpoint(Cascade):
     A `remote` endpoint is an address the caller provides. A `served` endpoint names the checkpoint
     it serves (`spec`) and has no `url`: the platform starts it and records the address. `provider`
     names what starts it, and the platform derives one from `spec` when the entry names none. An
-    `image` endpoint names the container image the platform runs the policy from. An entry on a task
-    carrying no locator at all names one of the plan's endpoints.
+    `image` endpoint names the container image the platform runs the policy from, and
+    `image_credential` opens the registry when that image is not public. An entry on a task carrying
+    no locator at all names one of the plan's endpoints.
     """
 
     name: str = Field(min_length=1)
@@ -102,6 +141,8 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
+    # What reads `image` where the registry serves it to nobody. A public image needs none.
+    image_credential: RegistryCredential | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -128,6 +169,20 @@ class Endpoint(Cascade):
             raise ValueError(
                 f'remote endpoint {self.name!r} names a provider, a spec or an image, which only a served or an '
                 'image endpoint carries'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_credential_opens_the_image_this_entry_names(self) -> Self:
+        """Refuse a credential on an entry that names no image of its own: it opens nothing.
+
+        A bare label runs the plan endpoint of that name, and that endpoint carries its own; a
+        remote or a served endpoint runs no image at all.
+        """
+        if self.image_credential is not None and self.image is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
+                'image the entry that states it names'
             )
         return self
 
@@ -329,16 +384,23 @@ IMAGE_ENDPOINT_NAME = 'policy'
 
 
 def plan_of_image(
-    image: PolicyImage, eval_name: EvalRef, *, alias: str | None = None, transaction_key: TransactionKey | None = None
+    image: PolicyImage,
+    eval_name: EvalRef,
+    *,
+    alias: str | None = None,
+    transaction_key: TransactionKey | None = None,
+    credential: RegistryCredential | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The catalogue expands the name into tasks and the count each takes, so such a plan states
-    neither.
+    neither. `credential` opens a registry that serves `image` to nobody; a public image takes none.
     """
     return EvalPlan(
         eval=eval_name,
-        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, image=image)],
+        endpoints=[
+            Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, image=image, image_credential=credential)
+        ],
         alias=alias,
         transaction_key=transaction_key,
     )

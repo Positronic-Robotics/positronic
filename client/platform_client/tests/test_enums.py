@@ -64,6 +64,7 @@ SUBMISSION_STATUS_VALUES = {
     'errored': 5,
     'cancelled': 6,
     'blocked': 7,
+    'mirroring': 8,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}

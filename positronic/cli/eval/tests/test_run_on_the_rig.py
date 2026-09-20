@@ -103,6 +103,7 @@ def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
         'provider': None,
         'spec': None,
         'image': None,
+        'image_credential': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,

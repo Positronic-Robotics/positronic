@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from platform_client.enums import EndpointKind, Placement
-from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    _ENDPOINT_MAY_STATE,
+    SENDING,
+    Endpoint,
+    EvalPlan,
+    RegistryCredential,
+    TaskNode,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
 from platform_client.tasks import TaskRef
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
@@ -319,3 +329,111 @@ def test_a_clutter_draw_needs_a_range():
 def test_a_malformed_url_is_a_validation_error():
     with pytest.raises(ValidationError, match='is not a URL'):
         Endpoint.model_validate({'name': 'bad', 'url': 'http://host:bad'})
+
+
+# A value no assertion below may find in a rendering of a plan.
+A_PASSWORD = 'the-registry-password'
+A_CREDENTIAL = {'username': 'a-reader', 'password': A_PASSWORD}
+
+
+def an_image_endpoint(**over) -> dict:
+    return {'name': 'policy', 'kind': 'image', 'image': 'org/policy:v1', **over}
+
+
+def test_an_image_endpoint_carries_a_credential_for_a_private_registry():
+    endpoint = Endpoint.model_validate(an_image_endpoint(image_credential=A_CREDENTIAL))
+    assert endpoint.image_credential is not None
+    assert endpoint.image_credential.username == 'a-reader'
+    assert endpoint.image_credential.password.get_secret_value() == A_PASSWORD
+
+
+def test_an_entry_that_names_no_image_may_state_no_credential():
+    """The boundary of the rule above: a credential opens the image its own entry names."""
+    with pytest.raises(ValidationError, match='names no image'):
+        Endpoint.model_validate({'name': 'remote', 'url': 'wss://host/ws', 'image_credential': A_CREDENTIAL})
+    with pytest.raises(ValidationError, match='names no image'):
+        Endpoint.model_validate({'name': 'policy', 'image_credential': A_CREDENTIAL})
+
+
+def test_a_per_task_entry_states_a_credential_for_the_image_it_names():
+    """`_ENDPOINT_MAY_STATE` admits it, so the count rule does not read it as a per-task property."""
+    assert 'image_credential' in _ENDPOINT_MAY_STATE
+    plan = EvalPlan.model_validate({
+        'tasks': [{'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)]}],
+        'episodes_per_endpoint': 4,
+    })
+    entry = plan.tasks[0].endpoints[0] if plan.tasks[0].endpoints else None
+    assert entry is not None and entry.image_credential is not None
+
+
+def test_no_rendering_of_a_plan_carries_the_password():
+    """Every way a plan reaches a log, an error or a store renders the password as a mask."""
+    plan = EvalPlan.model_validate({
+        'eval': 'robolab.public_subset',
+        'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
+    })
+    assert A_PASSWORD not in repr(plan)
+    assert A_PASSWORD not in str(plan)
+    assert A_PASSWORD not in plan.model_dump_json()
+    assert A_PASSWORD not in str(plan.model_dump())
+    assert A_PASSWORD not in str(plan.model_dump(mode='json'))
+
+
+def test_a_credential_survives_the_model_it_is_read_into():
+    """The mask is a rendering, not the value: the platform still reads what opens the registry."""
+    plan = EvalPlan.model_validate({
+        'eval': 'robolab.public_subset',
+        'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
+    })
+    credential = plan.endpoints[0].image_credential
+    assert credential is not None
+    assert credential.password.get_secret_value() == A_PASSWORD
+
+
+def test_an_empty_half_of_a_credential_is_refused():
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(an_image_endpoint(image_credential={'username': '', 'password': A_PASSWORD}))
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(an_image_endpoint(image_credential={'username': 'a-reader', 'password': ''}))
+
+
+def test_plan_of_image_carries_the_credential_onto_its_one_endpoint():
+    plan = plan_of_image(
+        PolicyImage('org/policy:v1'),
+        EvalRef('robolab.public_subset'),
+        credential=RegistryCredential(username='a-reader', password=SecretStr(A_PASSWORD)),
+    )
+    credential = plan.endpoints[0].image_credential
+    assert credential is not None
+    assert credential.password.get_secret_value() == A_PASSWORD
+
+
+def test_a_plan_serialised_by_hand_refuses_to_write_the_password():
+    """`model_dump` yields the `SecretStr`, which `json` will not encode.
+
+    Masking covers the renderings a model controls. This covers the one it does not: a caller that
+    takes the dump apart itself raises here and writes nothing, so no store, log or payload built
+    that way can carry the value.
+    """
+    plan = EvalPlan.model_validate({
+        'eval': 'robolab.public_subset',
+        'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
+    })
+    with pytest.raises(TypeError):
+        json.dumps(plan.model_dump())
+
+
+def test_only_the_send_path_serialises_the_password_as_itself():
+    """The value travels in the request that carries it, and in no other rendering.
+
+    A mask everywhere else is what keeps the password out of a log and a store; a mask HERE would
+    hand the platform a credential that opens nothing, which is the same feature not working.
+    """
+    plan = EvalPlan.model_validate({
+        'eval': 'robolab.public_subset',
+        'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
+    })
+    sent = plan.model_dump(mode='json', context={SENDING: True})
+    assert sent['endpoints'][0]['image_credential']['password'] == A_PASSWORD
+    assert A_PASSWORD not in json.dumps(plan.model_dump(mode='json'))
+    assert A_PASSWORD not in plan.model_dump_json()

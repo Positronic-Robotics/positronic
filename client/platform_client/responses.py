@@ -10,7 +10,15 @@ from __future__ import annotations
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import (
+    INTERNAL_STATUSES,
+    BoardVisibility,
+    KeyStatus,
+    OnExhausted,
+    QuotaSubject,
+    ReasonCode,
+    SubmissionStatus,
+)
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
@@ -18,8 +26,12 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Fi
 
 
 def _public(status: SubmissionStatus) -> SubmissionStatus:
-    """A status as a CALLER may see it: `submitting` is an internal claim state, reported as `pending`."""
-    if status is SubmissionStatus.submitting:
+    """A status as a CALLER may see it. The gateway reports an internal state as `pending`.
+
+    The set is the enum's (`INTERNAL_STATUSES`), so a state added there is refused here without a
+    second edit.
+    """
+    if status in INTERNAL_STATUSES:
         raise ValueError(f'{status.name} is an internal state and never reaches a caller')
     return status
 

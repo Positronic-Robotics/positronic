@@ -8,6 +8,7 @@ from typing import get_args
 import pytest
 from platform_client.boards import BoardRef
 from platform_client.enums import (
+    INTERNAL_STATUSES,
     BoardVisibility,
     ErrorCode,
     KeyStatus,
@@ -416,7 +417,7 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
     # Every status a caller can see carries a variant. This catches one added without one;
     # `submitting` is internal and INVALID is the unset sentinel.
-    internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
+    internal = {SubmissionStatus.INVALID} | INTERNAL_STATUSES
     assert {get_args(variant)[1].tag for variant in variants} == {
         slug_of(status) for status in SubmissionStatus if status not in internal
     }
@@ -644,18 +645,15 @@ def test_a_scale_of_zero_is_refused_at_the_boundary():
         QuotaLimit.model_validate(payload)
 
 
+@pytest.mark.parametrize('status', sorted(slug_of(status) for status in INTERNAL_STATUSES))
 @pytest.mark.parametrize(
-    'model, payload',
-    [
-        (SubmissionCreateResponse, {'submission_id': 'ff', 'status': 'submitting'}),
-        (CancelResponse, {'status': 'submitting', 'refunded': False}),
-    ],
+    'model, field', [(SubmissionCreateResponse, {'submission_id': 'ff'}), (CancelResponse, {'refunded': False})]
 )
-def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel], payload: dict):
-    # The enum says the gateway reports `submitting` as `pending`; a payload carrying it is a
+def test_no_internal_state_reaches_a_caller(model: type[BaseModel], field: dict, status: str):
+    # The enum says the gateway reports each of these as `pending`; a payload carrying one is a
     # gateway that forgot, refused here rather than left for every consumer to normalise.
     with pytest.raises(ValidationError):
-        model.model_validate(payload)
+        model.model_validate(field | {'status': status})
 
 
 @pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])

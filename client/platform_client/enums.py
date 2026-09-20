@@ -61,11 +61,12 @@ class ReasonCode(IntEnum):
 
 @unique
 class SubmissionStatus(IntEnum):
-    """The lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
+    """The lifecycle: mirroring -> pending -> submitting -> running -> finished|errored|cancelled.
 
     `blocked` interrupts it at any point before an end state, and a later report moves it on.
-    `submitting` is the internal claim state; the gateway reports it as `pending`, so it never
-    reaches a caller.
+    `mirroring` and `submitting` are internal states; the gateway reports both as `pending`, so
+    neither reaches a caller. A submission starts at `mirroring` only where the platform must take
+    its own copy of the image first, and at `pending` otherwise.
     """
 
     INVALID = 0
@@ -77,6 +78,7 @@ class SubmissionStatus(IntEnum):
     cancelled = 6
     # It waits on what `reason` names, and a later report moves it on.
     blocked = 7
+    mirroring = 8
 
 
 @unique
@@ -123,10 +125,16 @@ class BoardVisibility(IntEnum):
 # Charged, undecided, still holding a concurrency slot. `blocked` is charged and undecided too, and
 # holds no slot, so it is in neither this set nor the terminal one.
 ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
+    SubmissionStatus.mirroring,
     SubmissionStatus.pending,
     SubmissionStatus.submitting,
     SubmissionStatus.running,
 })
+
+# Never on the wire: a caller-facing model carrying one of these is a gateway that forgot. Named
+# here because the enum owns which of its own members are internal; a second copy goes stale the
+# next time one joins.
+INTERNAL_STATUSES: frozenset[SubmissionStatus] = frozenset({SubmissionStatus.submitting, SubmissionStatus.mirroring})
 
 # Decided and immutable.
 TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
