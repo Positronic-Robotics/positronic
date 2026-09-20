@@ -30,8 +30,7 @@ class _Charge:
 
     The answer is withheld until that world's clock has advanced, from the instant the call was made, by the
     wall time the call took. A world on a wall clock reaches that instant as the answer lands, so nothing is
-    ever withheld there; a simulator's clock is its own, so its trial feels the model's latency in simulated
-    seconds at whatever rate the simulator steps.
+    ever withheld there.
     """
 
     def __init__(self, clock: Clock) -> None:
