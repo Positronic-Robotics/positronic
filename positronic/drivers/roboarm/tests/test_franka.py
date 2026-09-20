@@ -42,8 +42,8 @@ class Call(StrEnum):
 class _StatusFromCpp:
     """A goal status as pybind11 hands one back: equal to the canonical member, and not identical to it.
 
-    pf ships only with the hardware extra, so the stub stands in for it on a default sync and the real
-    pybind11 type is in play otherwise. This wraps whichever one it is, rather than extending either.
+    pf ships only with the hardware extra, so the type in play is the stub on a default sync and the
+    real pybind11 enum otherwise.
     """
 
     def __init__(self, member: 'franka.pf.GoalStatus'):
