@@ -26,12 +26,12 @@ from positronic.policy.base import (
 
 
 class _WallTimeCharge:
-    """The wall time one call takes, charged to a world clock."""
+    """A charge on a world clock for the wall time one call takes."""
 
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._made_ns, self._made_wall_ns = clock.now_ns(), time.monotonic_ns()
-        # Set on the worker thread, read on the caller's.
+        # The worker thread sets this; the caller's thread reads it.
         self._landed_wall_ns: int | None = None
         self._waived = False
 
@@ -91,15 +91,15 @@ class Executor(Runtime):
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every answer no caller has read, the calls still to answer among them.
+        # Every answer no caller has read. A call still to answer is one of them.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
         self._charged_clock: Clock | None = None
         self._has_served_a_call = False
 
     def charge_wall_time_to(self, clock: Clock) -> None:
-        """Charge every call the wall time it takes, on ``clock``. Refused once a call was made: that call went
-        uncharged, and a runtime charges all its calls or none.
+        """Charge ``clock`` the wall time every call takes. The runtime refuses this once it has served a call:
+        that call went uncharged, and a runtime charges all its calls or none.
 
         A charged call is answered once ``clock`` has run that long since the call was made, so whoever reads
         the answer must keep ``clock`` running.
@@ -115,7 +115,7 @@ class Executor(Runtime):
 
     @property
     def has_unanswered_call(self) -> bool:
-        """Whether any call is still to answer, a landed call whose charge is unpaid among them."""
+        """Whether any call is still to answer. A landed call whose charge is unpaid is still to answer."""
         with self._lock:
             return any(not answer.done() for answer in self._unread)
 
@@ -187,7 +187,7 @@ class _BlockingPolicy(DelegatingPolicy):
 
         def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
             # The inner session reads an answer only on a later call. A test of ``has_unanswered_call``
-            # would exit on a call that lands while the session call runs, leaving its answer unread.
+            # would exit on a call that lands while the session call runs, and that answer would stay unread.
             while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
                 self._rt.wait_until_landed()
             return actions

@@ -264,7 +264,7 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 
 
 class _Pacer(pimm.ControlSystem):
-    """Stands in for the simulator: the sole time-master, sleeping one control period every turn.
+    """Stands in for the simulator as the sole time-master and sleeps one control period every turn.
 
     ``real_time_factor`` is world seconds per wall second; ``None`` steps as fast as the machine allows.
     """
