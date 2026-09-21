@@ -108,16 +108,17 @@ WS_PORT=8000
 # wire alone.
 ARGS=" $* "
 case "$ARGS" in
-  *" --grpc.served_address.port="*)
-    GRPC_PORT=${ARGS#*--grpc.served_address.port=}; GRPC_PORT=${GRPC_PORT%% *}
+  *" --grpc.served_address.port="*|*" --grpc.served_address.port "*)
+    # configuronic takes a value after `=` or after a space, so every flag read here reads both.
+    GRPC_PORT=${ARGS#*--grpc.served_address.port}; GRPC_PORT=${GRPC_PORT#[= ]}; GRPC_PORT=${GRPC_PORT%% *}
     # A port names the address of a wire, and the server serves no gRPC until `--grpc` names the
     # wire itself. A port on its own would declare a container port nothing answers on.
     case "$ARGS" in
-      *" --grpc="*) ;;
+      *" --grpc="*|*" --grpc "*) ;;
       *) set -- "$@" "--grpc=@positronic.offboard.server.grpc" ;;
     esac
     ;;
-  *" --grpc="*)
+  *" --grpc="*|*" --grpc "*)
     # The caller named the gRPC wire and left its port at the wire's own default.
     GRPC_PORT=8001 ;;
   *)
