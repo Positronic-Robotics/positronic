@@ -226,6 +226,7 @@ BROKEN_CREDENTIALS = {
     'an undefined alias': f'      password: *{REGISTRY_PASSWORD}\n',
     'a duplicate anchor': f'      password: &{REGISTRY_PASSWORD} x\n      other: &{REGISTRY_PASSWORD} y\n',
     'an unknown tag': f'      password: !{REGISTRY_PASSWORD} x\n',
+    'a repeated mapping key': f'      password:\n        {REGISTRY_PASSWORD}: a\n        {REGISTRY_PASSWORD}: b\n',
 }
 
 

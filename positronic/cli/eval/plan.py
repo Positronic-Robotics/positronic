@@ -1,5 +1,6 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
+import functools
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -19,19 +20,34 @@ ALIAS_FIELD = 'alias'
 
 
 class _KeyGivenTwice(yaml.constructor.ConstructorError):
-    """A plan repeated a mapping key. The key this names is a plan field, never a stated value."""
+    """A plan repeated a mapping key. The message names the key only where it is a plan field."""
+
+
+@functools.cache
+def _plan_field_names() -> frozenset[str]:
+    """Every name the plan schema declares, at any depth."""
+    schema = EvalPlan.model_json_schema()
+    names = set(schema.get('properties', ()))
+    for definition in schema.get('$defs', {}).values():
+        names.update(definition.get('properties', ()))
+    return frozenset(names)
 
 
 class _OneValuePerKey(yaml.SafeLoader):
     """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
-    two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
+    two caps, and the one it keeps is a typo, so a repeated key is refused.
+
+    This runs over every mapping in the file, so a key is not always a plan field. One that is not
+    may be a value a caller wrote, a registry password among them, and goes unnamed.
+    """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
         seen: set[str] = set()
         for key_node, _ in node.value:
             key = self.construct_object(key_node, deep=deep)
             if isinstance(key, str) and key in seen:
-                raise _KeyGivenTwice(None, None, f'{key!r} is given twice', key_node.start_mark)
+                stated = repr(key) if key in _plan_field_names() else 'a key'
+                raise _KeyGivenTwice(None, None, f'{stated} is given twice', key_node.start_mark)
             if isinstance(key, str):
                 seen.add(key)
         return super().construct_mapping(node, deep=deep)
