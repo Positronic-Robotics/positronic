@@ -71,7 +71,7 @@ together load the model in 151 s.
 
 Push to a private repository and hand the platform a read-only credential for it. The platform
 copies the image into its own registry, runs it from there, and discards the credential. Nothing
-of yours stays readable to anyone else, and the run pulls from our side.
+of yours stays readable to anyone else.
 
 Write the password into a file of its own and name the file:
 
