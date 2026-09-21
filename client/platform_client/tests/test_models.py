@@ -266,8 +266,8 @@ def test_every_model_built_from_input_declares_its_fields_and_hides_them_from_it
     """A model-level validator is handed the raw input, which a `SecretStr` field has not masked.
 
     Three of these carry a credential today — the registry password, the identity `users.register`
-    presents, and the key the record holds — and which three it is changes. Walking the modules is
-    what covers a model added to one of them, and a field added to a model.
+    presents, and the key the record holds — and which three it is changes. Walking the modules
+    covers a model added to one of them.
     """
     for module in (eval_plan, requests, config):
         declared = [

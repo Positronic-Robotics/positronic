@@ -227,8 +227,8 @@ class PlatformClient:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
     def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
-        # `SENDING` is what lets a registry password serialise as itself. This dump IS the request
-        # that carries it; every other dump of a plan masks the value (`eval_plan.RegistryCredential`).
+        # `SENDING` lets a registry password serialise as itself: this dump carries the request.
+        # Every other dump of a plan masks the value (`eval_plan.RegistryCredential`).
         body = request.model_dump(mode='json', context={SENDING: True})
         return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
 

@@ -497,8 +497,8 @@ def test_a_plan_serialised_by_hand_refuses_to_write_the_password():
 def test_only_the_send_path_serialises_the_password_as_itself():
     """The value travels in the request that carries it, and in no other rendering.
 
-    A mask everywhere else is what keeps the password out of a log and a store; a mask HERE would
-    hand the platform a credential that opens nothing, which is the same feature not working.
+    A mask everywhere else keeps the password out of a log and a store. A mask HERE would hand the
+    platform a credential that opens nothing.
     """
     plan = EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
