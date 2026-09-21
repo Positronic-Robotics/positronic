@@ -8,7 +8,7 @@ reports success, and the root release then goes out depending on a version whose
 ones in this repository. Nothing fails — a fresh install just gets the old member, which is why
 this is caught here rather than at release time.
 
-Two things are checked per member, and it takes both to close it:
+Each member is held to both of these, and it takes both to close the hole:
 
 1. A change under the member's directory bumps its `pyproject.toml`'s `version`. Without this the
    new code never reaches the index, because `skip-existing` skips a version already published.

@@ -75,22 +75,20 @@ A consumer whose lockfile already carries `grpcio` (through a cloud SDK) and `we
 
 ## What the wire keeps out of its consumers
 
-Two kinds of code disappear from a consumer once it speaks to the wire.
-
-A transport-specific dial. A consumer that opens a `websockets.connect` of its own to wake an
+A transport-specific dial disappears from a consumer once it speaks to the wire. A consumer that opens a `websockets.connect` of its own to wake an
 endpoint has to skip every gRPC endpoint, because the same call cannot reach one; `probe` reaches
 both. A consumer that classifies a failed dial by matching library exception names over the
 raised type's bases has to list `grpc.RpcError`, `websockets.*` and `httpx.*`; `dial` raises one
 `ConnectRefused` for all of them, so `isinstance` answers.
 
-A copied fact. The gRPC probe path, the session route, the models route, the scheme lists and the
+A copied fact disappears too. The gRPC probe path, the session route, the models route, the scheme lists and the
 scheme-to-TLS map are each one symbol here. A consumer imports the symbol or derives its table
 from `BY_SCHEME` (`{s.text for s in wire.schemes()}` over `CLIENT_WIRES`). A literal spelled a
 second time in another repository drifts the day either side edits it, and nothing reports the
 drift; an imported symbol cannot.
 
-Two facts stay literals where they are spelled today, because they are not wire facts. The port a
-server serves a wire on, and the server flag that names it, are a deployment's configuration. A
+The port a server serves a wire on, and the server flag that names it, stay literals where they are
+spelled: they are a deployment's configuration, not wire facts. A
 test in the consumer that installs `positronic` pins the flag name against the server's own
 signature.
 

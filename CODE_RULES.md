@@ -412,10 +412,10 @@ dials and probes; one exception type says a session did not open. Where the wire
 what the caller needs, add the verb to the wire interface and implement it in every wire, rather than
 branching on the transport at the call site.
 
-Three things are not this: a wire implementation and its tests; the one place that composes the
-wires a process serves or dials — a server's list of wires, the client's scheme table; and a
-deployment's own configuration of a transport it serves — the port a gRPC wire binds, the flag that
-names it — which is data a deployment states, not a code path that branches on it.
+A wire implementation and its tests are not this. Nor is the one place that composes the wires a
+process serves or dials — a server's list of wires, the client's scheme table — nor a deployment's
+own configuration of a transport it serves: the port a gRPC wire binds, the flag that names it, which
+is data a deployment states rather than a code path that branches on it.
 
 ```python
 # Bad — the caller reads the scheme to pick a library, and matches the library's error by name
