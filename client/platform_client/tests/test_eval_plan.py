@@ -10,6 +10,7 @@ from platform_client.enums import EndpointKind, Placement
 from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
+    FROM_A_PLAN_FILE,
     REVEAL_REGISTRY_PASSWORD,
     Cascade,
     Endpoint,
@@ -387,7 +388,7 @@ def test_an_image_endpoint_carries_a_credential_for_a_private_registry(credentia
     endpoint = Endpoint.model_validate(an_image_endpoint(image_credential=credential))
     assert endpoint.image_credential is not None
     assert endpoint.image_credential.username == 'a-reader'
-    assert endpoint.image_credential.password() == A_PASSWORD
+    assert endpoint.image_credential.secret() == A_PASSWORD
 
 
 def test_an_entry_that_names_no_image_may_state_no_credential(credential: dict):
@@ -420,7 +421,7 @@ def test_a_credential_reads_its_password_when_it_is_asked_for_it(credential: dic
     plan = a_plan_with(credential)
     read = plan.endpoints[0].image_credential
     assert read is not None
-    assert read.password() == A_PASSWORD
+    assert read.secret() == A_PASSWORD
 
 
 def test_an_empty_half_of_a_credential_is_refused(password_file: Path):
@@ -473,7 +474,7 @@ def test_plan_of_image_carries_the_credential_onto_its_one_endpoint(password_fil
     )
     read = plan.endpoints[0].image_credential
     assert read is not None
-    assert read.password() == A_PASSWORD
+    assert read.secret() == A_PASSWORD
 
 
 def test_a_refused_endpoint_reports_no_password(credential: dict):
@@ -529,7 +530,7 @@ def test_a_dumped_plan_reads_back_as_itself(credential: dict):
     again = EvalPlan.model_validate(plan.model_dump(mode='json'))
     read = again.endpoints[0].image_credential
     assert read is not None
-    assert read.password() == A_PASSWORD
+    assert read.secret() == A_PASSWORD
 
 
 def test_only_the_send_path_serialises_the_password_as_itself(credential: dict):
@@ -567,7 +568,7 @@ def test_the_password_keeps_the_spaces_at_its_own_edges(tmp_path: Path):
         an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(padded)})
     )
     assert endpoint.image_credential is not None
-    assert endpoint.image_credential.password() == '  a password with edges  '
+    assert endpoint.image_credential.secret() == '  a password with edges  '
 
 
 def test_a_file_with_no_trailing_newline_is_the_password_whole(tmp_path: Path):
@@ -577,7 +578,7 @@ def test_a_file_with_no_trailing_newline_is_the_password_whole(tmp_path: Path):
         an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(bare)})
     )
     assert endpoint.image_credential is not None
-    assert endpoint.image_credential.password() == 'no-newline-here'
+    assert endpoint.image_credential.secret() == 'no-newline-here'
 
 
 def test_a_windows_line_ending_goes_with_the_newline(tmp_path: Path):
@@ -587,4 +588,48 @@ def test_a_windows_line_ending_goes_with_the_newline(tmp_path: Path):
         an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(written_on_windows)})
     )
     assert endpoint.image_credential is not None
-    assert endpoint.image_credential.password() == 'a-password'
+    assert endpoint.image_credential.secret() == 'a-password'
+
+
+def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
+    """The platform validates a request as an `EvalPlan`, so what the send path dumps must be a plan
+    this model accepts."""
+    plan = a_plan_with(credential)
+    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+
+    received = EvalPlan.model_validate(sent)
+
+    read = received.endpoints[0].image_credential
+    assert read is not None
+    assert read.secret() == A_PASSWORD
+    assert read.password_file is None
+
+
+def test_a_plan_file_states_the_file_and_never_the_password(credential: dict):
+    """`read_plan` validates under `FROM_A_PLAN_FILE`, which is what keeps the secret out of a file
+    every error path quotes."""
+    stated = {'username': 'a-reader', 'password': A_PASSWORD}
+    payload = {'eval': 'robolab.public_subset', 'endpoints': [an_image_endpoint(image_credential=stated)]}
+
+    with pytest.raises(ValidationError, match='stays in the file'):
+        EvalPlan.model_validate(payload, context={FROM_A_PLAN_FILE: True})
+
+    EvalPlan.model_validate(payload)  # the same payload IS what a request carries
+
+
+def test_a_credential_states_one_route_to_its_password(credential: dict):
+    both = {**credential, 'password': A_PASSWORD}
+    with pytest.raises(ValidationError, match='state one'):
+        Endpoint.model_validate(an_image_endpoint(image_credential=both))
+    with pytest.raises(ValidationError, match='state one'):
+        Endpoint.model_validate(an_image_endpoint(image_credential={'username': 'a-reader'}))
+
+
+def test_a_received_credential_dumps_its_password_masked(credential: dict):
+    received = Endpoint.model_validate(
+        an_image_endpoint(image_credential={'username': 'a-reader', 'password': A_PASSWORD})
+    )
+    dumped = received.model_dump(mode='json')['image_credential']
+
+    assert A_PASSWORD not in str(dumped)
+    assert dumped['username'] == 'a-reader'

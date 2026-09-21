@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
+from platform_client.eval_plan import FROM_A_PLAN_FILE, Endpoint, EvalPlan, TaskNode
 from platform_client.ids import TransactionKey
 from platform_client.responses import SubmissionCreateResponse
 from platform_client.tasks import TaskRef
@@ -88,7 +88,7 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
             raise SystemExit(f'{path} carries {field}; drop --{field.replace("_", "-")}')
         payload = {**payload, field: stated}
     try:
-        return EvalPlan.model_validate(payload)
+        return EvalPlan.model_validate(payload, context={FROM_A_PLAN_FILE: True})
     except ValidationError as exc:
         raise SystemExit(f'{path}: {one_line(exc)}') from exc
 

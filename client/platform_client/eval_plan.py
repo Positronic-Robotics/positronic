@@ -17,7 +17,16 @@ from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, Field, SerializationInfo, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    SerializationInfo,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
@@ -84,26 +93,31 @@ def _absolute_url(url: str, whose: str) -> None:
 # send path alone sets it.
 REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
+# The validation context key `read_plan` sets. A plan file names the file the password is in.
+FROM_A_PLAN_FILE = 'from_a_plan_file'
+
 
 class RegistryCredential(BaseModel):
-    """The username, and the file holding the password, that open the registry one image endpoint
-    names.
+    """What opens the registry one image endpoint names: a username, and the password by one of two
+    routes.
 
-    A plan names the file and never the password, so nothing that reads, renders or refuses a plan
-    holds the secret to echo. The send path reads the file and the wire carries `password`; every
-    other JSON dump carries `password_file` and reads back as this model.
+    A caller states `password_file`, the path of the file the password is in, so nothing that reads,
+    renders or refuses a plan file holds the secret to echo. The send path reads that file and the
+    wire carries `password`, which is the shape the platform validates a request in. `read_plan`
+    passes `FROM_A_PLAN_FILE`, under which `password` is refused.
     """
 
     model_config = INPUT_MODEL_CONFIG
 
     username: str = Field(min_length=1)
-    password_file: Path
+    password_file: Path | None = None
+    password: SecretStr | None = Field(default=None, min_length=1)
 
     @field_validator('password_file')
     @classmethod
     def _opens_and_holds_a_password(cls, path: Path) -> Path:
-        # Read when the plan is read, so a path that is mistyped, unreadable or blank is refused
-        # there rather than in the middle of a send. The content goes; the send path reads it again.
+        # Read when the plan is read, so a mistyped, unreadable or blank path is refused there. The
+        # content goes; the send path reads it again.
         path = path.expanduser()
         if not path.is_file():
             raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
@@ -115,14 +129,23 @@ class RegistryCredential(BaseModel):
             raise ValueError(f'{path} holds no password')
         return path
 
-    def password(self) -> str:
-        """The password, read at the moment it is sent.
+    @model_validator(mode='after')
+    def _one_route_to_the_password(self, info: ValidationInfo) -> Self:
+        if (info.context or {}).get(FROM_A_PLAN_FILE) and self.password is not None:
+            raise ValueError('a plan states password_file; the password stays in the file it names')
+        if (self.password_file is None) == (self.password is None):
+            raise ValueError('image_credential states password_file, and a request carries password; state one')
+        return self
+
+    def secret(self) -> str:
+        """The password itself, read at the moment it is sent.
 
         One trailing line ending goes, so a file written with `echo` carries no newline into the
-        request. Everything else the file holds is the password, an edge space included. A file
-        that changed since the plan was read raises, and the CLI reports a `ValueError` from a
-        send as a refusal.
+        request. Everything else the file holds is the password, an edge space included.
         """
+        if self.password is not None:
+            return self.password.get_secret_value()
+        assert self.password_file is not None  # `_one_route_to_the_password` refused a model with neither
         held = self.password_file.read_text()
         password = held.removesuffix('\n').removesuffix('\r')
         if not password:
@@ -132,8 +155,10 @@ class RegistryCredential(BaseModel):
     @model_serializer(mode='plain', when_used='json')
     def _dump(self, info: SerializationInfo) -> dict[str, str]:
         if (info.context or {}).get(REVEAL_REGISTRY_PASSWORD):
-            return {'username': self.username, 'password': self.password()}
-        return {'username': self.username, 'password_file': str(self.password_file)}
+            return {'username': self.username, 'password': self.secret()}
+        if self.password_file is not None:
+            return {'username': self.username, 'password_file': str(self.password_file)}
+        return {'username': self.username, 'password': str(self.password)}
 
 
 # An endpoint overrides one cascading property; every other property of `Cascade` is per task.
