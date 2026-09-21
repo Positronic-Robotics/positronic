@@ -38,9 +38,9 @@ CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, H
 
 # An action is a map from a command-channel name to that channel's payload, mirroring the embodiment's own
 # ``commands: dict[key, Command]``. A robot-command channel carries a tagged command dict (COMMAND_TYPE and
-# its fields); a gripper channel carries a closure float in [0, 1]. Adding an actuator adds a channel, never
-# a change to this format. The single-arm channel names below mirror positronic's ``keys.ROBOT_COMMAND`` /
-# ``keys.TARGET_GRIP``; the wire cannot import positronic, so a test pins the two equal.
+# its fields); a gripper channel carries a closure float in [0, 1]. The single-arm channel names below mirror
+# positronic's ``keys.ROBOT_COMMAND`` / ``keys.TARGET_GRIP``; the wire cannot import positronic, so a test
+# pins the two equal.
 ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
 

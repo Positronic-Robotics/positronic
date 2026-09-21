@@ -137,8 +137,8 @@ class WireCommandAdapter(EnvAdapter):
         for name, msg in commands.items():
             if msg is not None and msg.updated:
                 self._held[name] = msg.data
-        # The proxy hands the full command-channel set every step (a channel with nothing new reads ``None``),
-        # so the map carries every channel the embodiment declared and the env never misses one.
+        # The map carries every channel the embodiment declared: the proxy hands the full set every step
+        # (a channel with nothing new reads ``None``), so the env never misses one.
         return {name: self._channel_payload(name) for name in commands}
 
     def _channel_payload(self, name: str) -> Any:
