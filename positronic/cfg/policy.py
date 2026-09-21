@@ -33,8 +33,7 @@ def network_address(host: str, port: int, model: str, query: str) -> HostPortAdd
 
 @cfn.config(model='', query='')
 def socket_address(uds: str, model: str, query: str) -> UnixSocketAddress:
-    """A session on a server on this machine. configuronic hands a flag through as it was typed, so
-    the path is built here rather than where it is read."""
+    """A session on a server on this machine, as `websocket_unix` dials one."""
     return UnixSocketAddress(Path(uds), session_path(model), query)
 
 

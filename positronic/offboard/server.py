@@ -515,11 +515,7 @@ grpc = cfn.Config(grpc_wire.GrpcWire, served_address=cfn.Config(server_wire.Serv
 
 @cfn.config()
 def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
-    """The Unix socket a wire binds, named on the command line.
-
-    configuronic hands every flag through as it was typed, so the path is built here rather than
-    where it is read.
-    """
+    """The Unix socket a wire binds, named on the command line."""
     return websocket_wire.ServedUnixSocket(Path(uds))
 
 
