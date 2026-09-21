@@ -1,11 +1,6 @@
-"""End-to-end check that the ABC env server works: drive both arms over the socket and read them back.
+"""Drive both arms of the ABC env server over the socket and check each reaches its Cartesian target.
 
-positronic launches the env-server subprocess (ABC's own interpreter, its own MuJoCo) and this drives the real
-boundary: it commands each arm an absolute Cartesian target anchored on the pose that came back over the wire,
-and asserts the arm arrives there while its partner holds still. That is a genuine oracle for the whole path —
-the server's IK, the control site it solves against, the per-arm channel routing and the grip polarity all have
-to agree for an arm to reach a pose measured in the same frame the command was written in. Run it on a box with
-a working GL context::
+Needs a working GL context::
 
     uv run --locked python -m positronic.simulator.amazon_abc.e2e --task put_plastic_bottles_in_bin
 """
@@ -62,7 +57,6 @@ def _raise_one_arm(conn: EnvConnection, adapter: AbcAdapter, start: dict, arm: s
         adapter,
         {
             keys.arm_channel(keys.ROBOT_COMMAND, arm): _message(roboarm_command.CartesianPosition(target)),
-            # Every arm's channel rides every action, so the partner is told to hold where it stands.
             keys.arm_channel(keys.ROBOT_COMMAND, partner): None,
             keys.arm_channel(keys.TARGET_GRIP, arm): _message(1.0),
             keys.arm_channel(keys.TARGET_GRIP, partner): _message(0.0),
