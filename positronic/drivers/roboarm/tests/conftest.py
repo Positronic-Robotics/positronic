@@ -75,6 +75,13 @@ for _name in _EMPTY_STUBS:
         sys.modules[_name] = types.ModuleType(_name)
 
 
+if importlib.util.find_spec('i2rt') is None:
+    for _name in ('i2rt', 'i2rt.robots', 'i2rt.robots.get_robot', 'i2rt.robots.utils'):
+        sys.modules[_name] = types.ModuleType(_name)
+    sys.modules['i2rt.robots.get_robot'].__dict__['get_yam_robot'] = None
+    sys.modules['i2rt.robots.utils'].__dict__['GripperType'] = types.SimpleNamespace(LINEAR_4310=object())
+
+
 @pytest.fixture
 def world():
     with pimm.World() as w:
