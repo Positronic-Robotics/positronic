@@ -247,12 +247,10 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
     def list_models(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> list[str]:
-        """Raises: this wire's port carries sessions alone, and the catalogue is an HTTP route.
-
-        A server that serves gRPC serves its websocket wire too, and the catalogue is read there.
-        """
+        """Raises: this wire's port carries sessions alone, and the catalogue is an HTTP route."""
         raise ValueError(
-            f'{self.NAME} carries sessions alone; list the models on the websocket wire the same server serves'
+            f'{self.NAME} carries sessions alone and no catalogue; read it on an HTTP-capable wire, '
+            f'where the server serves one'
         )
 
     def channel(self, target: str) -> grpc.Channel:
