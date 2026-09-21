@@ -69,9 +69,15 @@ def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
     source = lerobot_server.LerobotSource(
         policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
         checkpoints_dir='s3://bucket/exp',
+        device='cpu',
     )
     model = source.load('42')
-    assert model.meta() == {'type': 'act', 'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model'}
+    assert model.meta() == {
+        'type': 'act',
+        'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
+        'experiment_name': 'exp',
+        'device': 'cpu',
+    }
     model.close()
 
 

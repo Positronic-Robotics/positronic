@@ -210,13 +210,16 @@ class _Gr00tSession(Session):
 class Gr00tPolicy(Policy):
     """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``."""
 
-    def __init__(self, groot: Gr00tSubprocess, checkpoint_path: str):
+    def __init__(self, groot: Gr00tSubprocess, meta: dict[str, Any]):
         self._groot = groot
-        self._meta = {policy_keys.CHECKPOINT_PATH: checkpoint_path}
+        self._meta = meta
 
     def new_session(self, context=None, rt=None):
         self._groot.client.reset()
         return _Gr00tSession(self._groot.client, self._meta)
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         self._groot.stop()
@@ -339,7 +342,15 @@ class Gr00tSource(ModelSource):
         )
         try:
             groot.start(on_progress)
-            policy = Gr00tPolicy(groot, str(model_path))
+            policy = Gr00tPolicy(
+                groot,
+                {
+                    policy_keys.TYPE: 'groot',
+                    policy_keys.CHECKPOINT_PATH: str(model_path),
+                    'embodiment': gr00t.EMBODIMENT,
+                    policy_keys.EXPERIMENT_NAME: self.model_source.split('/')[-1] or '',
+                },
+            )
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
             modalities = groot.client.call_endpoint(gr00t.GET_MODALITY_CONFIG)
             warmup(policy, self._warm_observation(modalities), on_progress)
@@ -347,13 +358,6 @@ class Gr00tSource(ModelSource):
             groot.stop()
             raise
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {
-            policy_keys.TYPE: 'groot',
-            'embodiment': gr00t.EMBODIMENT,
-            policy_keys.EXPERIMENT_NAME: self.model_source.split('/')[-1] or '',
-        }
 
 
 gr00t_source = cfn.Config(Gr00tSource)

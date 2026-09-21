@@ -284,13 +284,17 @@ class _DreamZeroSession(Session):
 class DreamZeroPolicy(Policy):
     """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
 
-    def __init__(self, sp: DreamZeroSubprocess):
+    def __init__(self, sp: DreamZeroSubprocess, meta: dict[str, Any]):
         self._subprocess = sp
+        self._meta = meta
 
     def new_session(self, context=None, rt=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
         return _DreamZeroSession(client, str(uuid.uuid4()))
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         self._subprocess.stop()
@@ -355,17 +359,16 @@ class DreamZeroSource(ModelSource):
         except Exception:
             sp.stop()
             raise
-        return DreamZeroPolicy(sp)
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        checkpoint_path = self._checkpoint_path(model_id)
-        return {
-            policy_keys.TYPE: 'dreamzero',
-            'backbone': self._backbone,
-            'num_gpus': self._num_gpus,
-            policy_keys.CHECKPOINT_PATH: checkpoint_path,
-            policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
-        }
+        return DreamZeroPolicy(
+            sp,
+            {
+                policy_keys.TYPE: 'dreamzero',
+                'backbone': self._backbone,
+                'num_gpus': self._num_gpus,
+                policy_keys.CHECKPOINT_PATH: checkpoint_path,
+                policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
+            },
+        )
 
 
 dreamzero_source = cfn.Config(DreamZeroSource)

@@ -327,7 +327,6 @@ class PolicyServer:
             model = await self._manager.get_model(rid, conn)
             meta = {
                 **conn.served_address.meta,
-                **self._source.meta(rid),
                 **model.meta(),
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
                 **pipeline.local.meta(),

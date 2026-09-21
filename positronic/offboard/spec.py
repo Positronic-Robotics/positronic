@@ -44,9 +44,6 @@ class ModelSource(ABC):
     @abstractmethod
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model: ...
 
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {}
-
     def __eq__(self, other):
         return type(self) is type(other) and self.__dict__ == other.__dict__
 

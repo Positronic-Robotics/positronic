@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import configuronic as cfn
 import pos3
@@ -47,12 +46,17 @@ class LerobotSource(ModelSource):
         local = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
-        policy = LerobotPolicy(str(local), self.device, extra_meta={policy_keys.CHECKPOINT_PATH: checkpoint_path})
+        policy = LerobotPolicy(
+            str(local),
+            self.device,
+            extra_meta={
+                policy_keys.CHECKPOINT_PATH: checkpoint_path,
+                policy_keys.EXPERIMENT_NAME: self.experiment_name,
+                'device': self.device,
+            },
+        )
         warmup(policy, warm_observation(policy.config), on_progress)
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {'device': self.device, policy_keys.EXPERIMENT_NAME: self.experiment_name}
 
 
 lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)

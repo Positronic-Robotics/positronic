@@ -65,10 +65,18 @@ class MolmoAct2Policy(Policy):
         ).eval()
         self._norm_tag = norm_tag
         self._num_steps = num_steps
-        self._meta = {policy_keys.TYPE: 'molmoact2', 'norm_tag': norm_tag}
+        self._meta = {
+            policy_keys.TYPE: 'molmoact2',
+            'norm_tag': norm_tag,
+            'hf_repo': model_id,
+            'model_id': model_id.split('/')[-1],
+        }
 
     def new_session(self, context=None, rt=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         if self._model is not None:

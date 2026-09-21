@@ -7,7 +7,6 @@ import time
 import urllib.parse
 from collections.abc import Callable, Generator
 from http import HTTPStatus
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import configuronic as cfn
@@ -48,9 +47,6 @@ class _StubSource(ModelSource):
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         return self._policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {'type': 'stub'}
 
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
@@ -213,7 +209,7 @@ def test_an_idle_server_stops_itself(make_mock_model):
 
 @pytest.fixture
 def stub_server(start_server, make_mock_model) -> tuple[str, int, PolicyServer, MagicMock]:
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, server, _ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)))
     return host, port, server, policy
 
@@ -290,7 +286,7 @@ class _LatestSource(ModelSource):
 
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_model):
-    source = _LatestSource(make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
+    source = _LatestSource(make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'}))
     host, port, *_ = start_server(PolicyDeployment(source, ChunkedSchedule(fps=10)))
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
@@ -319,7 +315,7 @@ class _ProgressSource(_StubSource):
 
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_model):
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(PolicyDeployment(_ProgressSource(policy), ChunkedSchedule(fps=10)))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
@@ -365,7 +361,7 @@ class _IdentityCodec(Codec):
 
 @pytest.fixture
 def codec_server(start_server, make_mock_model) -> tuple[str, int, MagicMock]:
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(
         PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10), codec=_IdentityCodec())
     )
@@ -424,7 +420,7 @@ def test_warmup_failure_propagates_without_closing_the_model(make_mock_model):
 
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_model):
-    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     pipeline = PolicyDeployment(_StubSource(stub), ChunkedSchedule(fps=10), codec=_IdentityCodec())
     host, port, *_ = start_server(pipeline)
     client = InferenceClient.from_url(f'{host}:{port}')
@@ -456,7 +452,7 @@ def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> Infere
 
 @pytest.fixture
 def param_server(start_server, make_mock_model) -> Generator[tuple[str, int], None, None]:
-    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     pipe_cfg = cfn.Config(_tunable_pipe, source=cfn.Config(_StubSource, policy=stub))
     host, port, *_ = start_server(pipe_cfg)
     yield host, port
@@ -552,7 +548,7 @@ def test_source_touching_session_param_rejected(param_server):
 
 
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_model):
-    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(_tunable_pipe(_StubSource(stub)))
     with pytest.raises(RuntimeError, match='config-launched'):
         _param_session(host, port, [('pad_start', 'false')])
@@ -578,7 +574,7 @@ def authed_endpoint(start_server, make_mock_model) -> tuple[str, str]:
     """An authenticated server's URL, and the token gating it."""
     if _LIVE_ENDPOINT:
         return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     return f'{host}:{port}', _TOKEN
 
@@ -686,7 +682,7 @@ def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(

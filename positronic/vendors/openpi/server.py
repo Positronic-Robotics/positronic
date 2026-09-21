@@ -139,13 +139,17 @@ class _OpenpiSession(Session):
 class OpenpiPolicy(Policy):
     """A running OpenPI subprocess as a Policy; ``close()`` stops the subprocess."""
 
-    def __init__(self, subproc: OpenpiSubprocess):
+    def __init__(self, subproc: OpenpiSubprocess, meta: dict[str, Any]):
         self._subproc = subproc
+        self._meta = meta
 
     def new_session(self, context=None, rt=None):
         client = self._subproc.client
         client.reset()
         return _OpenpiSession(client)
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         self._subproc.stop()
@@ -226,23 +230,23 @@ class OpenpiSource(ModelSource):
         )
         try:
             subproc.start(on_progress)
-            policy = OpenpiPolicy(subproc)
+            policy = OpenpiPolicy(
+                subproc,
+                {
+                    policy_keys.TYPE: 'openpi',
+                    policy_keys.CONFIG_NAME: self.config_name,
+                    policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
+                    if self._passthrough
+                    else f'{self.checkpoints_dir}/{model_id}',
+                    policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
+                },
+            )
             # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
             warmup(policy, self.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {
-            policy_keys.TYPE: 'openpi',
-            policy_keys.CONFIG_NAME: self.config_name,
-            policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
-            if self._passthrough
-            else f'{self.checkpoints_dir}/{model_id}',
-            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
-        }
 
 
 ###########################################################################################

@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable
-from typing import Any
 
 import configuronic as cfn
 
@@ -51,9 +50,6 @@ class MolmoAct2Source(ModelSource):
         )
         warmup(policy, warm_observation(), on_progress)
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {'model_id': model_id, 'hf_repo': self._hf_repo}
 
 
 molmoact2_source = cfn.Config(MolmoAct2Source)

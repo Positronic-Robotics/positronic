@@ -148,9 +148,10 @@ class _BackendProcess:
 
 
 class GalaxeaPolicy(Policy):
-    def __init__(self, backend: _BackendProcess, infer_timeout: float):
+    def __init__(self, backend: _BackendProcess, infer_timeout: float, meta: dict[str, Any]):
         self._backend = backend
         self._timeout = infer_timeout
+        self._meta = meta
 
     @property
     def functions(self):
@@ -160,6 +161,9 @@ class GalaxeaPolicy(Policy):
         if rt is None:
             raise ValueError('GalaxeaPolicy requires a runtime for inference')
         return _GalaxeaSession(self._backend.url, self._timeout, rt)
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         self._backend.stop()
@@ -194,10 +198,11 @@ class GalaxeaSource(ModelSource):
         except Exception:
             backend.stop()
             raise
-        return GalaxeaPolicy(backend, self._timeout)
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {policy_keys.CHECKPOINT_PATH: str(self._checkpoint), 'usage': 'internal non-commercial evaluation only'}
+        return GalaxeaPolicy(
+            backend,
+            self._timeout,
+            {policy_keys.CHECKPOINT_PATH: str(self._checkpoint), 'usage': 'internal non-commercial evaluation only'},
+        )
 
 
 @cfn.config(codec=codecs.droid, source=cfn.Config(GalaxeaSource))
