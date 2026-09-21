@@ -137,6 +137,7 @@ class TestInferenceClientHeaders:
         assert fake.dials == [(_ADDRESS, headers, DEFAULT_OPEN_TIMEOUT)]
         assert mock_session_cls.call_args.args[0] is conn
         assert mock_session_cls.call_args.kwargs['infer_timeout'] == DEFAULT_INFER_TIMEOUT
+        assert mock_session_cls.call_args.kwargs['uds'] is None, 'a network address names no socket'
 
     def test_new_session_without_headers_dials_with_none(self):
         fake = _FakeWire(MagicMock())
