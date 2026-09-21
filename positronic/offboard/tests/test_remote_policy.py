@@ -146,7 +146,7 @@ class TestInferenceClientHeaders:
         assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
     def test_the_catalogue_read_hands_the_wire_the_headers_and_the_open_timeout(self):
-        """The client owns neither the URL nor the transport now: it asks the wire, with what it dials with."""
+        """The client asks the wire for the catalogue, with the headers and the timeout it dials with."""
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
         fake = _FakeWire()
         fake.models = ['m1']

@@ -154,9 +154,8 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     NAME = 'websocket'
     ADDRESS = wire.HostPortAddress
     DEFAULT_PORT = 80
-    # The URL schemes this wire writes: the session upgrades from HTTP, and the API answers on it.
+    # The URL scheme this wire writes for a session; ``_api_connection`` says how the API is reached.
     SCHEME = 'ws'
-    API_SCHEME = 'http'
 
     def netloc(self, address: wire.HostPortAddress) -> str:
         """``host:port``, less the port this wire defaults to."""
@@ -183,7 +182,6 @@ class WebsocketTlsClientWire(WebsocketClientWire):
     NAME = 'websocket_tls'
     DEFAULT_PORT = 443
     SCHEME = 'wss'
-    API_SCHEME = 'https'
 
     def _api_connection(self, address: wire.HostPortAddress, open_timeout: float) -> HTTPConnection:
         # No context named: the connection verifies the edge against the system's own roots.
@@ -221,7 +219,6 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     NAME = 'websocket_unix'
     ADDRESS = wire.UnixSocketAddress
     SCHEME = 'ws'
-    API_SCHEME = 'http'
     # A socket names no authority, so the handshake and the API carry this in place of one. The server
     # reads the route and ignores it, and no name is resolved: the connection is already open.
     STANDS_FOR_THE_SERVER = 'localhost'

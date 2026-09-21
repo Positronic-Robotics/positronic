@@ -45,17 +45,19 @@ needs.
 ## The client interface
 
 `NAME` is what a caller selects a wire by: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
-`grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
+`grpc_tls`. `ADDRESS` is the address type that wire dials, and `DEFAULT_PORT` the port a URL leaves
+out on the members that name one.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
   members write `host:port`. What a wire dials is its own: `websocket` and `websocket_tls` dial this
   spelling, and the others dial a socket or a target instead.
-- `api_url(address)` — the server's HTTP API beside this wire (`http://` or `https://`), or `None`
-  where the wire's port carries sessions alone.
-- `api_socket(address)` — the Unix socket `api_url` answers on, or `None` where it answers over the
-  network. Only `websocket_unix` names a socket, so a caller reaches the API through the wire and
-  never reads `uds` itself.
+- `list_models(address, headers, open_timeout)` — the models the server serves, read on the
+  transport that carries this wire's sessions: over HTTP for the network members, and over the
+  socket itself for `websocket_unix`. It carries the same `headers` as `dial`, so an edge that
+  authenticates on them lets the read through, and refuses in `dial`'s own vocabulary. The gRPC
+  members raise `ValueError`: their port carries sessions alone, and a server that serves gRPC
+  serves its websocket wire, where the catalogue answers. No caller builds a URL or a transport.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
