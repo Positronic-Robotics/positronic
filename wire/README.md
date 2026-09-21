@@ -44,8 +44,8 @@ needs.
 
 ## The client interface
 
-`ClientWire` has two facts and five verbs. `NAME` is what a caller selects it by: `websocket`,
-`websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
+`NAME` is what a caller selects a wire by: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
+`grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out. The verbs follow.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
@@ -54,8 +54,8 @@ needs.
 - `api_url(address)` — the server's HTTP API beside this wire (`http://` or `https://`), or `None`
   where the wire's port carries sessions alone.
 - `api_socket(address)` — the Unix socket `api_url` answers on, or `None` where it answers over the
-  network. `websocket_unix` is the one member that names a socket, so a caller reaches the API
-  through the wire and never reads `uds` itself.
+  network. Only `websocket_unix` names a socket, so a caller reaches the API through the wire and
+  never reads `uds` itself.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
@@ -72,7 +72,7 @@ needs.
 `SessionAddress` is `host`, `port`, `path` (`session_path(model)`), `query` and `uds`, as written; a
 caller that records an endpoint records those five and the wire's name, never a URL.
 
-`uds` is the fifth field, and `websocket_unix` is the one member that reads it: an absolute path to a
+`uds` is the fifth field, and only `websocket_unix` reads it: an absolute path to a
 Unix socket a server on the same machine bound, dialled instead of the network. `host` still stands for
 the server in the handshake sent over that socket, and no port is claimed there. A socket is
 same-machine by construction, so no TLS member sits beside it. An `OSError` the socket raises is `COLD`

@@ -41,8 +41,8 @@ class SessionAddress(NamedTuple):
     reads each value as a JSON literal, and only whoever wrote the query knows whether ``true`` means the
     bool or the string.
 
-    ``uds`` is the Unix socket a same-machine session opens on, and the socket wire is the one wire that
-    reads it. ``host`` and ``port`` still stand for the server in the handshake that wire sends.
+    ``uds`` is the Unix socket a same-machine session opens on, and only the socket wire reads it.
+    ``host`` and ``port`` still stand for the server in the handshake that wire sends.
     """
 
     host: str
