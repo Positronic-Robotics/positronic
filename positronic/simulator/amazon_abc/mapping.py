@@ -18,7 +18,6 @@ JOINT = '{arm}_joint{index}'
 # What the eval selects, and what a task record answers with.
 SELECT_TASKS = 'tasks'
 TASK_NAME = 'name'
-TASK_PROMPT = 'prompt'
 
 # The reset token.
 TOKEN_TASK = 'task'

@@ -1,19 +1,18 @@
 import configuronic as cfn
 
-from positronic import keys
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
-from positronic.simulator.amazon_abc.adapter import AbcAdapter
+from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.amazon_abc.launcher import serve_abc
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 
 
 @cfn.config(
-    camera_dict={keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: 'left', keys.WRIST_RIGHT_IMAGE: 'right'},
+    camera_dict=CAMERAS,
     camera_height=168,
     camera_width=224,
     # ABC's own sim-eval budget is 3540 actions of ~34 ms.

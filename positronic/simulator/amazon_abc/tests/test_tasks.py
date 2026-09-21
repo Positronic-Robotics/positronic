@@ -15,11 +15,9 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
-from positronic.simulator.amazon_abc.adapter import AbcAdapter
+from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
-
-_CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: 'left', keys.WRIST_RIGHT_IMAGE: 'right'}
 
 
 @pytest.fixture
@@ -36,9 +34,9 @@ def asked(monkeypatch) -> list[Any]:
 
 
 def test_the_adapter_names_a_task_the_way_the_reset_token_does():
-    adapter = AbcAdapter(_CAMERAS)
+    adapter = AbcAdapter(CAMERAS)
 
-    params = adapter.task_params([{mapping.TASK_NAME: 'put_plastic_bottles_in_bin', mapping.TASK_PROMPT: 'p'}])
+    params = adapter.task_params([{mapping.TASK_NAME: 'put_plastic_bottles_in_bin'}])
 
     assert params == [{eval_keys.TASK: 'put_plastic_bottles_in_bin'}]
     token = adapter.reset_token({
@@ -86,18 +84,18 @@ def _frame(**overrides: Any) -> dict[str, Any]:
             protocol.arm_channel(mapping.OBS_EEF_QUAT, arm): np.array([1.0, 0.0, 0.0, 0.0]),
             protocol.arm_channel(mapping.OBS_GRIP, arm): np.float32(0.25 * index),
         })
-    for camera in _CAMERAS.values():
+    for camera in CAMERAS.values():
         raw[camera] = np.zeros((3, 4, 6), dtype=np.uint8)
     return {**raw, **overrides}
 
 
 def test_every_arm_reports_its_own_state_and_grip():
-    obs = AbcAdapter(_CAMERAS).observations(_frame())
+    obs = AbcAdapter(CAMERAS).observations(_frame())
 
     assert set(obs) == {
         *(keys.arm_channel(keys.ROBOT_STATE, arm) for arm in mapping.ARMS),
         *(keys.arm_channel(keys.GRIP, arm) for arm in mapping.ARMS),
-        *_CAMERAS,
+        *CAMERAS,
     }
     right = obs[keys.arm_channel(keys.ROBOT_STATE, 'right')]
     assert np.array_equal(right.q, np.ones(mapping.ARM_JOINTS, dtype=np.float32))
@@ -106,7 +104,7 @@ def test_every_arm_reports_its_own_state_and_grip():
 
 
 def test_a_camera_arrives_as_height_width_channels():
-    obs = AbcAdapter(_CAMERAS).observations(_frame())
+    obs = AbcAdapter(CAMERAS).observations(_frame())
 
     assert obs[keys.WRIST_LEFT_IMAGE].array.shape == (4, 6, 3)
 
@@ -119,7 +117,7 @@ def test_the_grip_conventions_are_inverses():
 
 
 def test_the_terminal_carries_the_envs_own_verdict():
-    adapter = AbcAdapter(_CAMERAS)
+    adapter = AbcAdapter(CAMERAS)
 
     running = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
     assert adapter.terminal(running) is None
@@ -138,7 +136,7 @@ def test_the_embodiment_takes_a_command_and_a_grip_per_arm():
 
 
 def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():
-    adapter = AbcAdapter(_CAMERAS)
+    adapter = AbcAdapter(CAMERAS)
     left = keys.arm_channel(keys.ROBOT_COMMAND, 'left')
     right = keys.arm_channel(keys.ROBOT_COMMAND, 'right')
     pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]))

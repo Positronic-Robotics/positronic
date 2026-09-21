@@ -20,12 +20,15 @@ from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 
+_LEFT, _RIGHT = mapping.ARMS
+# ABC names the overhead camera `top` and gives each arm's wrist camera the arm's own name.
+CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: _LEFT, keys.WRIST_RIGHT_IMAGE: _RIGHT}
+
 
 class AbcAdapter(WireCommandAdapter):
-    def __init__(self, camera_dict: dict[str, str], arms: tuple[str, ...] = mapping.ARMS):
+    def __init__(self, camera_dict: dict[str, str]):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the ABC camera name
-        self._arms = arms
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [{eval_keys.TASK: r[mapping.TASK_NAME]} for r in records]
@@ -40,7 +43,7 @@ class AbcAdapter(WireCommandAdapter):
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
-        for arm in self._arms:
+        for arm in mapping.ARMS:
             pose = geom.Transform3D(
                 raw_obs[protocol.arm_channel(mapping.OBS_EEF_POS, arm)],
                 geom.Rotation.from_quat(raw_obs[protocol.arm_channel(mapping.OBS_EEF_QUAT, arm)]),
