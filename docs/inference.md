@@ -96,7 +96,7 @@ the server is local or on another machine.
 
 ## Public VLM / LLM APIs
 
-The [LLM policy](../positronic/vendors/llm/README.md) calls OpenAI, Anthropic, Google, or an OpenAI-compatible endpoint directly from the rig. It needs no Positronic inference server. Install `uv sync --extra llm` and select `--policy=@positronic.vendors.llm.policy.llm` with a model name and provider credentials.
+The [LLM policy](../positronic/vendors/llm/README.md) calls OpenAI, Anthropic, Google, or an OpenAI-compatible endpoint directly from the rig. It needs no Positronic inference server. Install the matching provider extra (`llm-openai`, `llm-anthropic`, or `llm-google`) and select `--policy=@positronic.vendors.llm.policy.llm` with a model name and provider credentials.
 
 The model sees measured hand state and camera images, then requests one bounded absolute hand move at a time. The existing robot driver performs inverse kinematics. Each episode has its own conversation and transcript.
 

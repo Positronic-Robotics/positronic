@@ -286,7 +286,7 @@ def test_timeout_covers_response_and_sdk_retry_wait(http, retry):
         raise AssertionError('The timeout should cancel this request')
 
     responses.append(delayed)
-    endpoint = Endpoint('openai-responses:gpt-5', timeout=0.02)
+    endpoint = Endpoint('openai-responses:gpt-5', timeout=1.0)
     with pytest.raises(TimeoutError):
         endpoint.request([ModelRequest.user_text_prompt('stop')], [])
     assert len(requests) == 1

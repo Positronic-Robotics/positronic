@@ -16,7 +16,7 @@ uv run --extra llm-openai positronic eval run \
   --output_dir=~/datasets/llm-policy/sim
 ```
 
-Add `--charge_inference_time=True` to count API latency against simulated trial time. The default pauses simulated time while waiting for inference. Hardware always pays wall time. Use separate output directories when comparing the two modes.
+Use `--charge_inference_time=True` to count API latency against simulated trial time, or `--charge_inference_time=False` to pause simulated time while waiting for inference. Hardware always pays wall time. Use separate output directories when comparing the two modes.
 
 ### Models and dependencies
 
@@ -68,7 +68,7 @@ Only the task instruction, measured hand pose/gripper, and selected labelled RGB
 | `give_up` | `reason` and `hindsight`; stop issuing actions for this episode |
 | `take_pic` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
-The model must return exactly one tool call. Oversized moves, malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion stops further actions and model invocations.
+The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion stops further actions and model invocations.
 
 After `done`, `give_up`, or call-budget exhaustion, the session returns an empty trajectory on every call and makes no further API requests. Queued commands are cleared; drivers retain their last commanded target. The episode and recording continue until the simulator or operator ends it, or its timeout expires. An episode without a timeout requires external completion. Cancellation does not restart a finished session; each new episode gets a fresh session.
 
