@@ -71,13 +71,20 @@ def yam(robot_arm, cameras):
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+def yam_bimanual(
+    left_channel: str,
+    right_channel: str,
+    mounts: dict[str, list[float]],
+    gravity_comp_factor: list[float] | None,
+    cameras,
+):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
@@ -90,7 +97,9 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     from positronic.drivers.roboarm import yam as yam_driver
 
     arms = {
-        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
+        side: yam_driver.Robot(
+            channel, base_pose=geom.Transform3D(mounts[side]), gravity_comp_factor=gravity_comp_factor
+        )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {
