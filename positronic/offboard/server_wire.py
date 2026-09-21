@@ -87,11 +87,15 @@ class Wire(abc.ABC):
     @property
     @abc.abstractmethod
     def served_address(self) -> ServedAddress:
-        """Where this wire serves. A bound port is known once ``start`` returns."""
+        """Where this wire serves, known once ``start`` returns: a bound port, or the socket path."""
 
     @abc.abstractmethod
     async def start(self, session: SessionHandler, authorized: Authorized) -> None:
-        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
+        """Bind, and give every accepted session to ``session``.
+
+        Raises when the address is taken: a port another process holds, or a socket path a live
+        server is already serving on.
+        """
 
     @abc.abstractmethod
     async def serve(self) -> None:
