@@ -176,7 +176,6 @@ class WebsocketWire(server_wire.Wire):
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
         self._served_address: server_wire.ServedAddress | None = None
-        self._bound_port = 0
         self._served = False
 
     @property
@@ -189,18 +188,18 @@ class WebsocketWire(server_wire.Wire):
         if self._uds is not None:
             self._sockets = [claim_socket_path(self._uds)]
             self._served_address = ServedUnixSocket(self._uds)
-            self._bound_port = 0
+            bound_port = 0
         else:
             self._sockets = _listening_sockets(self._host, self._port)
-            self._bound_port = self._sockets[0].getsockname()[1]
-            self._served_address = server_wire.ServedHostPort(self._host, self._bound_port)
+            bound_port = self._sockets[0].getsockname()[1]
+            self._served_address = server_wire.ServedHostPort(self._host, bound_port)
         app = FastAPI()
         app.include_router(self._api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,
             host=self._host,
-            port=self._bound_port,
+            port=bound_port,
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
