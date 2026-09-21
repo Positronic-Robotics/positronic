@@ -179,7 +179,7 @@ def a_password_file(tmp_path, password: str = 'the-registry-password\n'):
 
 
 def test_a_private_image_sends_the_credential_the_registry_asks_for(platform, run_command, tmp_path):
-    # The file is what the caller names; the request is where the password itself first appears.
+    # The caller names the file, and the password itself first appears in the request.
     platform.answer({'submission_id': ID, 'status': 'pending'})
     password_file = a_password_file(tmp_path)
 
