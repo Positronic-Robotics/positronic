@@ -30,6 +30,8 @@ def spawned(monkeypatch):
     return build
 
 
+# rules-allow: hardcoded-keys — these assertions spell the names the subprocess reads, so a test built from
+# the launcher's own constants would check the derivation against itself.
 def test_headless_linux_gets_a_renderer_without_being_told(spawned, monkeypatch):
     """A GPU host has no display, and nobody running an eval should have to know that."""
     monkeypatch.delenv('MUJOCO_GL', raising=False)
