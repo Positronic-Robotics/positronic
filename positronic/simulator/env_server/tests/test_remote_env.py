@@ -337,6 +337,11 @@ class TestChannelMapAction:
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['target_grip.right'] == 0.0
 
+    def test_a_vector_on_a_non_robot_channel_passes_through(self):
+        adapter = _CommandOnlyAdapter()
+        action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
+        np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
+
     def test_a_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
