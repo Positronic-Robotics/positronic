@@ -2,8 +2,7 @@
 
 Runs in positronic's interpreter (the ``AbcEnv`` server runs in ABC's). The command side is
 ``WireCommandAdapter``'s forwarding, one channel per arm; the IK that bridges pose<->joint commands lives
-server-side where the MuJoCo model is. ABC measures and drives each arm at the site the YAM driver calls
-``DEFAULT_FRAME``, so the frames already agree and nothing is re-expressed on the way through.
+server-side where the MuJoCo model is. The frames already agree, so nothing is re-expressed on the way through.
 """
 
 from typing import Any
