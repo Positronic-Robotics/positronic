@@ -20,8 +20,10 @@ class ServerConnection(abc.ABC):
     def endpoint_meta(self) -> dict[str, Any]:
         """Where this wire serves, as a session's metadata names it.
 
-        A wire whose address is not a host and a port answers with its own keys instead.
+        A socket path is not a host, so a wire that bound one names it and neither of the other keys.
         """
+        if self.endpoint.uds is not None:
+            return {keys.UDS: str(self.endpoint.uds)}
         return {keys.HOST: self.endpoint.host, keys.PORT: self.endpoint.port}
 
     @property
