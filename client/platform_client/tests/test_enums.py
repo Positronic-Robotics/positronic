@@ -3,7 +3,7 @@
 The platform stores these integers, so this test is the ratchet: adding a member is expected and
 updates the map below; changing or reusing a value silently re-reads every existing row as
 something else, and that is what must fail. A value moves only beside the migration that moves the
-rows, which is how `SubmissionStatus` closed the gaps two platform-only states had left.
+rows it is stored in.
 """
 
 from __future__ import annotations
