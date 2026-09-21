@@ -132,7 +132,7 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     assert states[-1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
     assert Image.open(io.BytesIO(frames(requests[-1][0])[0].data)).size == (8, 4)
-    assert [event['obs_time_ns'] for event in events if event['event'] == 'observation'] == [1, 2, 3]
+    assert [event[keys.OBS_TIME_NS] for event in events if event['event'] == 'observation'] == [1, 2, 3]
     assert [event['call'] for event in events if event['event'] == 'accepted'] == [1, 2, 3]
     assert len([event for event in events if event['event'] == 'instructions']) == 1
     assert 'privileged-value-never-send' not in json.dumps(events)
@@ -185,7 +185,7 @@ def test_follow_up_needs_another_session_call_and_uses_the_frozen_observation(mo
         assert len(requests) == 2
         assert active(later, 3) == []
         events = active.meta['transcript']
-    assert [e['obs_time_ns'] for e in events if e['event'] == 'request'] == [1, 1]
+    assert [e[keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [1, 1]
     assert len([e for e in events if e['event'] == 'observation']) == 1
     if reply.tool_calls:
         pictures = frames(requests[1][0])
@@ -370,7 +370,7 @@ def test_corrected_replies_are_preserved_in_static_transcript(model, bad):
     assert [e['call'] for e in events if e['event'] == 'response'] == [1, 2]
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [1]
     assert [e['call'] for e in events if e['event'] == 'accepted'] == [2]
-    assert [e['obs_time_ns'] for e in events if e['event'] == 'request'] == [123, 123]
+    assert [e[keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [123, 123]
     response = next(e for e in events if e['event'] == 'response')
     if bad.tool_calls:
         assert response['tools'][0]['arguments']['x'] == 'invalid'

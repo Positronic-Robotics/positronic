@@ -230,7 +230,7 @@ def test_session_metadata_records_compact_provider_reply(http, provider):
     assert 'iVBOR' not in recorded
     events = meta['transcript']
     request = next(e for e in events if e['event'] == 'request')
-    assert request['obs_time_ns'] == 1000
+    assert request[keys.OBS_TIME_NS] == 1000
     assert request['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
     response = next(e for e in events if e['event'] == 'response')
     assert response['tools'][0]['name'] == 'done'

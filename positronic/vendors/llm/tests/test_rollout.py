@@ -119,7 +119,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         before, after = states[index * 2 : index * 2 + 2]
         assert [e['call'] for e in requests] == [1, 2]
         assert [e['call'] for e in responses] == [1, 2]
-        assert [e['obs_time_ns'] for e in requests] == [before['obs_time_ns'], after['obs_time_ns']]
+        assert [e[keys.OBS_TIME_NS] for e in requests] == [before[keys.OBS_TIME_NS], after[keys.OBS_TIME_NS]]
         assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]

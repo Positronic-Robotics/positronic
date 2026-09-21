@@ -100,7 +100,7 @@ class _Observation:
     def state(self, target: MoveTo | None) -> dict[str, Any]:
         state = {
             'task': self.task,
-            'obs_time_ns': self.time_ns,
+            keys.OBS_TIME_NS: self.time_ns,
             'position_m': self.pose.translation.tolist(),
             'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
             'gripper': self.grip,
@@ -290,7 +290,9 @@ class _Conversation:
         if self._pictures:
             self.messages.append(self.obs.frames(self._pictures, self.policy.image_size))
             self._pictures = []
-        self.transcript.write('request', call=call, obs_time_ns=self.obs.time_ns, cameras=sorted(self._revealed))
+        self.transcript.write(
+            'request', call=call, cameras=sorted(self._revealed), **{keys.OBS_TIME_NS: self.obs.time_ns}
+        )
         response = self.policy.endpoint.request(self._outgoing(), self.policy._tools)
         self.transcript.write(
             'response',
