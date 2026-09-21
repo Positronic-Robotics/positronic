@@ -263,11 +263,7 @@ def test_ids_and_statuses_leave_as_wire_values():
 
 
 def test_every_model_built_from_input_declares_its_fields_and_hides_them_from_its_errors():
-    """A model-level validator is handed the raw input, which a `SecretStr` field has not masked.
-
-    The config belongs to every model these modules declare rather than to the ones that hold a
-    credential, so walking the modules covers a model added to one of them.
-    """
+    """A model added to one of these modules is held to `INPUT_MODEL_CONFIG` without an edit here."""
     for module in (eval_plan, requests, config):
         declared = [
             member
@@ -435,7 +431,7 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
     # Every status a caller can see carries a variant. This catches one added without one;
-    # `submitting` is internal and INVALID is the unset sentinel.
+    # `INTERNAL_STATUSES` never reach a caller and INVALID is the unset sentinel.
     internal = {SubmissionStatus.INVALID} | INTERNAL_STATUSES
     assert {get_args(variant)[1].tag for variant in variants} == {
         slug_of(status) for status in SubmissionStatus if status not in internal
@@ -669,8 +665,7 @@ def test_a_scale_of_zero_is_refused_at_the_boundary():
     'model, field', [(SubmissionCreateResponse, {'submission_id': 'ff'}), (CancelResponse, {'refunded': False})]
 )
 def test_no_internal_state_reaches_a_caller(model: type[BaseModel], field: dict, status: str):
-    # The enum says the gateway reports each of these as `pending`; a payload carrying one is a
-    # gateway that forgot, refused here rather than left for every consumer to normalise.
+    # The gateway reports each of these as `pending`, so a payload that carries one is refused.
     with pytest.raises(ValidationError):
         model.model_validate(field | {'status': status})
 

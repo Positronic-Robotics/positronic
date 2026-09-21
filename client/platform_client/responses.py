@@ -26,11 +26,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Fi
 
 
 def _public(status: SubmissionStatus) -> SubmissionStatus:
-    """A status as a CALLER may see it. The gateway reports an internal state as `pending`.
-
-    The set is the enum's (`INTERNAL_STATUSES`), so a state added there is refused here without a
-    second edit.
-    """
+    """A status as a caller may see it: the gateway reports an internal state as `pending`."""
     if status in INTERNAL_STATUSES:
         raise ValueError(f'{status.name} is an internal state and never reaches a caller')
     return status

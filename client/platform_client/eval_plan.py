@@ -79,18 +79,16 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
-# The serialisation context key that emits a registry password as plaintext. The client's own send
-# path sets it, and nothing else does.
+# The serialisation context key under which a registry password dumps as plaintext. The client's
+# send path alone sets it.
 REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
 
 class RegistryCredential(BaseModel):
-    """What opens the registry ONE image reference names, so the platform can read a private image.
+    """The username and password that open the registry one image endpoint names.
 
-    The password is a `SecretStr`, and it serialises as itself only under the
-    `REVEAL_REGISTRY_PASSWORD` context the client's own send path sets. Every other dump, log line
-    and `repr` of a plan carries a mask, and a Python dump carries the `SecretStr` itself, so a
-    caller that serialises a plan by hand raises.
+    A JSON dump masks the password unless the `REVEAL_REGISTRY_PASSWORD` context is set. A Python
+    dump holds the `SecretStr`, which `json.dumps` refuses.
     """
 
     model_config = INPUT_MODEL_CONFIG
@@ -100,14 +98,11 @@ class RegistryCredential(BaseModel):
 
     @field_serializer('password', when_used='json')
     def _password(self, password: SecretStr, info: SerializationInfo) -> str:
-        """A Python dump holds the `SecretStr` itself, so a caller that serialises one by hand
-        raises rather than writing the value."""
         reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
         return password.get_secret_value() if reveal else str(password)
 
 
-# The one cascading property an endpoint states for itself; `Cascade` holds the rest. Derived, so
-# a property added to `Cascade`, or a field added to `Endpoint`, needs no edit here.
+# An endpoint overrides one cascading property; every other property of `Cascade` is per task.
 _ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
 _PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 
@@ -131,7 +126,6 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    # What reads `image` where the registry serves it to nobody. A public image needs none.
     image_credential: RegistryCredential | None = None
 
     @model_validator(mode='before')
@@ -164,11 +158,8 @@ class Endpoint(Cascade):
 
     @model_validator(mode='after')
     def _a_credential_opens_the_image_this_entry_names(self) -> Self:
-        """Refuse a credential on an entry that names no image of its own: it opens nothing.
-
-        A bare label runs the plan endpoint of that name, and that endpoint carries its own; a
-        remote or a served endpoint runs no image at all.
-        """
+        """Refuse a credential on an entry that names no image. A bare label runs a plan endpoint,
+        which carries its own credential."""
         if self.image_credential is not None and self.image is None:
             raise ValueError(
                 f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
@@ -384,7 +375,7 @@ def plan_of_image(
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The catalogue expands the name into tasks and the count each takes, so such a plan states
-    neither. `credential` opens a registry that serves `image` to nobody; a public image takes none.
+    neither. `credential` opens the registry when `image` is not public.
     """
     return EvalPlan(
         eval=eval_name,

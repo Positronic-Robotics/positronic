@@ -134,16 +134,11 @@ A_PER_TASK_VALUE = {
 
 
 def test_an_endpoint_refuses_every_per_task_property():
-    """Every property `Cascade` carries but the count, driven over the model rather than a list.
-
-    A set that repeats its names passes a membership check and goes on passing once the model
-    carries a name nothing added to it. A rename or an addition fails the coverage assert, which
-    also covers the one name the refused set still spells as a string.
-    """
+    """An endpoint refuses every property of `Cascade` but the count. The equality assert keeps
+    `A_PER_TASK_VALUE` complete, so a field added to `Cascade` fails here until it has a value."""
     assert _ENDPOINT_OVERRIDES in Cascade.model_fields
     assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
-    # An endpoint's own fields do not cascade, so a field added to `Endpoint` — `image_credential`
-    # among them — is stated on one with nothing to add here.
+    # A field of `Endpoint` itself does not cascade, so it is never per task.
     assert not _PER_TASK_ONLY & (set(Endpoint.model_fields) - set(Cascade.model_fields))
     for name, value in A_PER_TASK_VALUE.items():
         with pytest.raises(ValidationError, match='per-task properties'):
@@ -151,7 +146,6 @@ def test_an_endpoint_refuses_every_per_task_property():
 
 
 def test_an_endpoint_states_the_one_property_it_overrides():
-    """The boundary of the rule above: an endpoint may state the count."""
     assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
 
 
@@ -360,7 +354,7 @@ def test_a_malformed_url_is_a_validation_error():
         Endpoint.model_validate({'name': 'bad', 'url': 'http://host:bad'})
 
 
-# A value no assertion below may find in a rendering of a plan.
+# No assertion below may find this value in a rendering of a plan.
 A_PASSWORD = 'the-registry-password'
 A_CREDENTIAL = {'username': 'a-reader', 'password': A_PASSWORD}
 
@@ -377,7 +371,6 @@ def test_an_image_endpoint_carries_a_credential_for_a_private_registry():
 
 
 def test_an_entry_that_names_no_image_may_state_no_credential():
-    """The boundary of the rule above: a credential opens the image its own entry names."""
     with pytest.raises(ValidationError, match='names no image'):
         Endpoint.model_validate({'name': 'remote', 'url': 'wss://host/ws', 'image_credential': A_CREDENTIAL})
     with pytest.raises(ValidationError, match='names no image'):
@@ -385,7 +378,6 @@ def test_an_entry_that_names_no_image_may_state_no_credential():
 
 
 def test_a_per_task_entry_states_a_credential_for_the_image_it_names():
-    """An endpoint's own field, so the count rule does not read it as a per-task property."""
     assert 'image_credential' not in _PER_TASK_ONLY
     plan = EvalPlan.model_validate({
         'tasks': [{'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)]}],
@@ -396,7 +388,6 @@ def test_a_per_task_entry_states_a_credential_for_the_image_it_names():
 
 
 def test_no_rendering_of_a_plan_carries_the_password():
-    """Every way a plan reaches a log, an error or a store renders the password as a mask."""
     plan = EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
         'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
@@ -409,7 +400,6 @@ def test_no_rendering_of_a_plan_carries_the_password():
 
 
 def test_a_credential_survives_the_model_it_is_read_into():
-    """The mask is a rendering, not the value: the platform still reads what opens the registry."""
     plan = EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
         'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
@@ -438,20 +428,17 @@ def test_plan_of_image_carries_the_credential_onto_its_one_endpoint():
 
 
 def test_a_refused_endpoint_reports_no_password():
-    """A model-level validator is handed the whole input dict, before any field is coerced, so the
-    password the error would echo is the plaintext the caller typed and `SecretStr` reaches it
-    nowhere."""
+    """A `ValidationError` echoes the raw input, which `SecretStr` does not mask."""
     with pytest.raises(ValidationError) as caught:
         Endpoint.model_validate(an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL))
     error = caught.value
     assert A_PASSWORD not in str(error)
     assert A_PASSWORD not in repr(error)
-    # Hiding the input costs the echoed value alone; the error still says what was wrong.
+    # The message survives the hidden input.
     assert 'has no host' in str(error)
 
 
 def test_a_refused_plan_reports_no_password():
-    """The shape a caller validates: the endpoint is nested, and the error names its place."""
     with pytest.raises(ValidationError) as caught:
         EvalPlan.model_validate({
             'eval': 'robolab.public_subset',
@@ -464,11 +451,7 @@ def test_a_refused_plan_reports_no_password():
 
 
 def test_a_caller_that_asks_for_the_input_is_given_it():
-    """The boundary of the rule above: `errors()` and `json()` carry the input on request.
-
-    Pydantic takes `include_input` per call rather than from the model, so this is the caller's to
-    drop, and the config reaches only what a model renders on its own.
-    """
+    """`errors()` and `json()` take `include_input` from the caller, so the config does not reach them."""
     with pytest.raises(ValidationError) as caught:
         Endpoint.model_validate(an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL))
     error = caught.value
@@ -477,12 +460,7 @@ def test_a_caller_that_asks_for_the_input_is_given_it():
 
 
 def test_a_plan_serialised_by_hand_refuses_to_write_the_password():
-    """`model_dump` yields the `SecretStr`, which `json` will not encode.
-
-    Masking covers the renderings a model controls. This covers the one it does not: a caller that
-    takes the dump apart itself raises here and writes nothing, so no store, log or payload built
-    that way can carry the value.
-    """
+    """A Python dump holds the `SecretStr`, which `json.dumps` refuses."""
     plan = EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
         'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
@@ -492,11 +470,7 @@ def test_a_plan_serialised_by_hand_refuses_to_write_the_password():
 
 
 def test_only_the_send_path_serialises_the_password_as_itself():
-    """The value travels in the request that carries it, and in no other rendering.
-
-    A mask everywhere else keeps the password out of a log and a store. A mask HERE would hand the
-    platform a credential that opens nothing.
-    """
+    """The `REVEAL_REGISTRY_PASSWORD` context dumps the password as plaintext; every other dump masks it."""
     plan = EvalPlan.model_validate({
         'eval': 'robolab.public_subset',
         'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],

@@ -1,9 +1,9 @@
-"""The pydantic config every model built from input carries: it declares what it takes, and its
-errors do not repeat what it was given.
+"""The config for every model built from caller input: an unknown field is refused, and a
+`ValidationError` does not echo the input.
 
-A model-level validator is handed the raw input whole, before any field is coerced, so a
-`SecretStr` field masks nothing in the `ValidationError` that follows. The flag reaches `str` and
-`repr` alone; `errors()` and `json()` take `include_input` from the caller.
+Pydantic validates a model over its raw input, so a `SecretStr` field masks nothing in a
+`ValidationError`. The hiding reaches `str` and `repr` alone; `errors()` and `json()` take
+`include_input` from the caller.
 """
 
 from __future__ import annotations

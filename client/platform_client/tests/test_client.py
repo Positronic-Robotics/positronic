@@ -195,8 +195,7 @@ def test_create_submission_sends_the_run_defining_fields():
 
 
 def test_create_submission_sends_a_registry_password_the_platform_can_use():
-    """This dump carries the value. A masked password reaches the gateway as a credential that
-    opens nothing, and the private image it was stated for reads back as unpullable."""
+    """The request carries the password as plaintext: a masked password opens no registry."""
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
     plan = plan_of_image(
         PolicyImage('org/policy:v1'),

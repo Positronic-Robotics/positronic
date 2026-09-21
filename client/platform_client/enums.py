@@ -64,9 +64,9 @@ class SubmissionStatus(IntEnum):
     """The lifecycle: mirroring -> pending -> submitting -> running -> finished|errored|cancelled.
 
     `blocked` interrupts it at any point before an end state, and a later report moves it on.
-    `mirroring` and `submitting` are internal states; the gateway reports both as `pending`, so
-    neither reaches a caller. A submission starts at `mirroring` only where the platform must take
-    its own copy of the image first, and at `pending` otherwise.
+    `mirroring` and `submitting` are internal states: the gateway reports both as `pending`. A
+    submission starts at `mirroring` where the platform takes its own copy of the image first, and
+    at `pending` otherwise.
     """
 
     INVALID = 0
@@ -131,8 +131,7 @@ ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.running,
 })
 
-# Never on the wire: a caller-facing model carrying one of these is a gateway that forgot. The
-# enum owns which of its members are internal, so a second copy goes stale when one joins.
+# The gateway reports each of these as `pending`; a caller never sees one.
 INTERNAL_STATUSES: frozenset[SubmissionStatus] = frozenset({SubmissionStatus.submitting, SubmissionStatus.mirroring})
 
 # Decided and immutable.
