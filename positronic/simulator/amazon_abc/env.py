@@ -22,10 +22,6 @@ import numpy as np
 import protocol
 from server import EnvProtocol, EnvServer
 
-_IK_ITERS = 100
-_IK_DAMPING = 0.05
-_IK_TOL = 1e-4
-
 
 class _Arm:
     """One YAM chain of the ABC scene: the joints it moves and the site it is measured and driven at."""
@@ -65,7 +61,7 @@ class AbcEnv(EnvProtocol):
         else:
             names = [selection] if isinstance(selection, str) else list(selection)
             specs = [abc_sim.get_task_spec(name) for name in names]
-        return [{mapping.TASK_NAME: s.name, mapping.TASK_PROMPT: s.prompt} for s in specs]
+        return [{mapping.TASK_NAME: s.name} for s in specs]
 
     def _build(self, token: dict[str, Any]) -> None:
         key = (token[mapping.TOKEN_TASK], token[mapping.TOKEN_CAMERA_HEIGHT], token[mapping.TOKEN_CAMERA_WIDTH])
@@ -138,26 +134,27 @@ class AbcEnv(EnvProtocol):
     def _ik(self, arm: _Arm, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         """Damped-least-squares differential IK on the arm's site Jacobian, iterated on a scratch ``MjData``
         seeded from the live scene so the objects standing in it are never perturbed."""
+        iterations, damping, tolerance = 100, 0.05, 1e-4
         model = self._env.model
         data = mujoco.MjData(model)
         data.qpos[:] = self._env.data.qpos
         q = self._measured_q(arm).astype(np.float64)
         rotation_error = np.empty(3)
         quat = np.empty(4)
-        for _ in range(_IK_ITERS):
+        for _ in range(iterations):
             data.qpos[arm.qpos_ids] = q
             mujoco.mj_forward(model, data)
             reached_rot = data.site_xmat[arm.site_id].reshape(3, 3)
             mujoco.mju_mat2Quat(quat, np.ascontiguousarray(target_rot @ reached_rot.T).reshape(9))
             mujoco.mju_quat2Vel(rotation_error, quat, 1.0)
             error = np.concatenate([target_pos - data.site_xpos[arm.site_id], rotation_error])
-            if np.linalg.norm(error) < _IK_TOL:
+            if np.linalg.norm(error) < tolerance:
                 break
             jacp = np.zeros((3, model.nv))
             jacr = np.zeros((3, model.nv))
             mujoco.mj_jacSite(model, data, jacp, jacr, arm.site_id)
             jac = np.vstack([jacp, jacr])[:, arm.dof_ids]
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + _IK_DAMPING**2 * np.eye(6), error)
+            dq = jac.T @ np.linalg.solve(jac @ jac.T + damping**2 * np.eye(6), error)
             q = np.clip(q + dq, arm.lower, arm.upper)
         return q
 
