@@ -1,13 +1,12 @@
 import collections.abc as cabc
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pos3
 from positronic_wire import registry
-from positronic_wire.wire import HostPortAddress, SessionAddress, UnixSocketAddress, session_path
+from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
@@ -153,12 +152,9 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    ``wire`` names the transport (``positronic_wire.registry.CLIENT_WIRES``), ``host`` and ``port`` the
-    server, ``model`` the checkpoint it serves — empty for the one it pinned — and ``query`` the session
-    params as written. ``headers`` carry the credentials.
-
-    A caller names the wire, then fills that wire's address: ``wire=websocket host=… port=…``, or
-    ``wire=websocket_unix uds=…`` for a server on this machine, which names no host and no port.
+    ``wire`` names the transport (``positronic_wire.registry.CLIENT_WIRES``) and ``address`` is that
+    wire's own: where the server is, the checkpoint it serves — the one it pinned, where the model is
+    empty — and the session params as written. ``headers`` carry the credentials.
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
@@ -171,21 +167,12 @@ class RemotePolicy(Policy):
     def __init__(
         self,
         wire: str,
-        host: str,
-        port: int,
+        address: SessionAddress,
         *,
-        model: str = '',
-        query: str = '',
-        uds: str | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        address: SessionAddress = (
-            UnixSocketAddress(Path(uds), session_path(model), query)
-            if uds is not None
-            else HostPortAddress(host, port, session_path(model), query)
-        )
         client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
         self._endpoint = _Endpoint(client)
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None

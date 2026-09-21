@@ -59,6 +59,11 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         return outcome
 
 
+def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+    """Where a network wire opens a session, as ``RemotePolicy`` now takes it."""
+    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+
+
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
 
@@ -74,7 +79,7 @@ def _mock_remote_policy(metadata=None, infer_return=None):
     mock_session = _mock_session(metadata)
     if infer_return is not None:
         mock_session.infer.return_value = infer_return
-    policy = RemotePolicy('websocket', 'localhost', 0)
+    policy = RemotePolicy('websocket', _address('localhost', 0))
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_session
     return policy, mock_session
@@ -254,7 +259,9 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
 
 def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy('websocket_tls', 'example.com', 443, model='10000', query='fps=2.5', headers=headers)
+    policy = RemotePolicy(
+        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
+    )
     client = policy._endpoint._client
     assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
     assert client.headers == headers
@@ -262,7 +269,7 @@ def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_th
 
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
-        RemotePolicy('ws', 'localhost', 8000)
+        RemotePolicy('ws', _address('localhost', 8000))
 
 
 class TestActionHorizonWrapping:
@@ -517,7 +524,7 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     policy = make_mock_policy(wire_action, {'model_name': 'm'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy))
 
-    session, rt = open_session(RemotePolicy('websocket', served.host, served.port))
+    session, rt = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
     actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
 
     assert actions is not None, 'the chunk was swallowed before any command reached a driver'
@@ -530,7 +537,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     served = inference_server
 
-    policy = RemotePolicy('websocket', served.host, served.port)
+    policy = RemotePolicy('websocket', _address(served.host, served.port))
     session, rt = open_session(policy)
 
     meta = session.meta
@@ -552,7 +559,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
 def test_remote_session_meta(inference_server, open_session):
     """Session meta must include server metadata."""
     served = inference_server
-    session, _ = open_session(RemotePolicy('websocket', served.host, served.port))
+    session, _ = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
 
     meta = session.meta
     assert meta['type'] == 'remote'

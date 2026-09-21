@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import configuronic as cfn
+from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
 
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
@@ -24,7 +25,20 @@ def placeholder():
     )
 
 
-remote = cfn.Config(RemotePolicy, wire='websocket', host='localhost', port=8000)
+@cfn.config(host='localhost', port=8000, model='', query='')
+def network_address(host: str, port: int, model: str, query: str) -> HostPortAddress:
+    """A session on a server reached over the network, as the network wires dial one."""
+    return HostPortAddress(host, port, session_path(model), query)
+
+
+@cfn.config(model='', query='')
+def socket_address(uds: str, model: str, query: str) -> UnixSocketAddress:
+    """A session on a server on this machine. configuronic hands a flag through as it was typed, so
+    the path is built here rather than where it is read."""
+    return UnixSocketAddress(Path(uds), session_path(model), query)
+
+
+remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
 
 @cfn.config()

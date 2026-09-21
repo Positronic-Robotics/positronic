@@ -12,6 +12,9 @@ from positronic.cfg.policy import bearer_headers
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import AUTH_TOKEN_ENV
 
+# The address config the socket wire's own flags hang off, named as the CLI names it.
+_SOCKET_ADDRESS = 'positronic.cfg.policy.socket_address'
+
 
 def _shell_join(command: list[str]) -> str:
     return ' '.join(shlex.quote(part) for part in command)
@@ -45,8 +48,8 @@ def _build_inference_command(
         f'--policy={policy_ref}',
         f'--policy.wire={wire_name}',
         *address_args,
-        f'--policy.model={model_id}',
-        *([f'--policy.query={query}'] if query else []),
+        f'--policy.address.model={model_id}',
+        *([f'--policy.address.query={query}'] if query else []),
         f'--output_dir={output_dir}',
         *extra_args,
     ]
@@ -109,14 +112,15 @@ def main(
     token = os.environ.get(AUTH_TOKEN_ENV)
     policy_ref = '.authed_remote' if token else '.remote'
 
-    # Name the wire, then fill that wire's address. ``InferenceClient`` refuses the other wire's.
+    # Name the wire, then fill that wire's address. ``InferenceClient`` refuses the other wire's, and
+    # the eval subprocess is handed the same address, spelled as that wire's own flags.
     client_wire = registry.client_wire(wire)
-    address: wire_module.SessionAddress = (
-        wire_module.UnixSocketAddress(Path(uds), wire_module.SESSION_PATH, query)
-        if uds is not None
-        else wire_module.HostPortAddress(host, port, wire_module.SESSION_PATH, query)
-    )
-    address_args = [f'--policy.uds={uds}'] if uds is not None else [f'--policy.host={host}', f'--policy.port={port}']
+    if uds is not None:
+        address: wire_module.SessionAddress = wire_module.UnixSocketAddress(Path(uds), wire_module.SESSION_PATH, query)
+        address_args = [f'--policy.address=@{_SOCKET_ADDRESS}', f'--policy.address.uds={uds}']
+    else:
+        address = wire_module.HostPortAddress(host, port, wire_module.SESSION_PATH, query)
+        address_args = [f'--policy.address.host={host}', f'--policy.address.port={port}']
     client = InferenceClient(client_wire, address, headers=bearer_headers.instantiate() if token else None)
     print(f'Connecting to {client.session_url}...')
     try:

@@ -118,6 +118,11 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
+def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+    """Where a network wire opens a session, as ``RemotePolicy`` now takes it."""
+    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+
+
 def _bound_port(bound: websocket_wire.WebsocketWire) -> int:
     """The port a wire bound. A wire serving a socket bound none, and no test here asks one for a port."""
     served = bound.served_address
@@ -823,7 +828,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
     served = start_server(pipeline())
-    remote_session, rt = open_session(RemotePolicy('websocket', served.host, served.port))
+    remote_session, rt = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
 
     local_session, local_rt = open_session(inline(pipeline()))
 
