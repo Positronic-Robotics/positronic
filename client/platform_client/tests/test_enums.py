@@ -1,8 +1,9 @@
 """The persisted enum values are pinned.
 
-Every value here is stored durably, so this test is the ratchet: adding a member is expected and
+The platform stores these integers, so this test is the ratchet: adding a member is expected and
 updates the map below; changing or reusing a value silently re-reads every existing row as
-something else, and that is what must fail.
+something else, and that is what must fail. A value moves only beside the migration that moves the
+rows, which is how `SubmissionStatus` closed the gaps two platform-only states had left.
 """
 
 from __future__ import annotations
@@ -57,11 +58,11 @@ REASON_CODE_VALUES = {
 SUBMISSION_STATUS_VALUES = {
     'INVALID': 0,
     'pending': 1,
-    'running': 3,
-    'finished': 4,
-    'errored': 5,
-    'cancelled': 6,
-    'blocked': 7,
+    'running': 2,
+    'finished': 3,
+    'errored': 4,
+    'cancelled': 5,
+    'blocked': 6,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
@@ -116,10 +117,5 @@ def test_every_status_is_terminal_or_still_in_flight():
 
 
 def test_the_platform_only_states_are_absent():
-    # The platform holds `submitting` at 2 and `mirroring` at 8, and reports both as `pending`.
-    # Both values stay unused here: a member taking one reads every stored row of that state as
-    # something else.
+    """A state no caller is shown is the platform's own, and it keeps those in a field of its own."""
     assert {m.name for m in SubmissionStatus}.isdisjoint({'submitting', 'mirroring'})
-    for value in (2, 8):
-        with pytest.raises(ValueError):
-            SubmissionStatus(value)

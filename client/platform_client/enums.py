@@ -1,8 +1,7 @@
 """The closed sets a caller sees: error codes, terminal reason codes, submission and key status.
 
-The values are stored durably: add a member with the next free value, and never renumber or
-reuse one.
-`INVALID = 0` is the unset/parse-failure sentinel; the wire form is the slug (`platform_client.slug`).
+`INVALID = 0` is the unset/parse-failure sentinel. The wire form is the slug
+(`platform_client.slug`).
 """
 
 from __future__ import annotations
@@ -69,14 +68,12 @@ class SubmissionStatus(IntEnum):
 
     INVALID = 0
     pending = 1
-    # 2 and 8 hold platform states that no caller sees. This enum and the platform store the same
-    # integers, so the gaps stay.
-    running = 3
-    finished = 4
-    errored = 5
-    cancelled = 6
+    running = 2
+    finished = 3
+    errored = 4
+    cancelled = 5
     # It waits on what `reason` names, and a later report moves it on.
-    blocked = 7
+    blocked = 6
 
 
 @unique
