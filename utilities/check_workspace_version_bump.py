@@ -1,38 +1,10 @@
 """Keep each published workspace member, its version, and the root's pin on it in step.
 
-`positronic` requires `positronic-platform-client==<version>` and `positronic-wire==<version>`, and
-the release workflow publishes each member first with `skip-existing`. That flag is what makes
-republishing an unchanged member a no-op rather than a failed release, and it is also the hole: if
-a member's directory changes and its version does not, PyPI keeps the old wheel, the publish step
-reports success, and the root release then goes out depending on a version whose bytes are not the
-ones in this repository. Nothing fails — a fresh install just gets the old member, which is why
-this is caught here rather than at release time.
-
-Each member is held to both of these, and it takes both to close the hole:
-
-1. A change under the member's directory bumps its `pyproject.toml`'s `version`. Without this the
-   new code never reaches the index, because `skip-existing` skips a version already published.
-2. The root's `==` pin on the member names exactly that version. Without this the member publishes
-   fine and the root ships depending on the previous one.
-
-The version must INCREASE, not merely differ: a version already published under other code is worse
-than no bump at all, since the index will keep whichever bytes got there first.
-
-Judged against `--base` (else `$RATCHET_BASE`, else `origin/main`), at the merge-base, so a bump that
-landed on the base side meanwhile is not this change's to claim.
-
-Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable base, or a base with no
-manifest for the member (the member's own first commit) — so an offline commit is never blocked and
-CI, which always has the base sha, is where the gate holds. A manifest that is present and
-unreadable fails closed: that is a corrupt guarded file, not an absence.
-
-It runs under `uv run` rather than a bare interpreter, because it reads the root's pin as a
-requirement and compares versions by PEP 440 — both `packaging`'s to own, not this file's to
-approximate.
-
-The git plumbing below is this module's own rather than shared with the other `utilities/check_*`
-scripts: they run as `python3 utilities/<script>.py`, where the repository root is not on `sys.path`
-and a `utilities.` import cannot resolve.
+A change under a member's directory must raise its `pyproject.toml` version, and the root's `==` pin on
+the member must name that version: the release publishes each member with `skip-existing`, so an
+unbumped member keeps the old wheel on the index and the root then ships depending on it. Judged
+against `--base` (else `$RATCHET_BASE`, else `origin/main`) at the merge-base; an unresolvable base or
+a base with no manifest for the member skips with a note, and a present but unreadable manifest fails.
 """
 
 from __future__ import annotations
