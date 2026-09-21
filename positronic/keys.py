@@ -7,9 +7,8 @@ A key one package owns lives in that package's own ``keys`` module instead: a tr
 the robot model's in ``drivers.roboarm.keys``, and so on.
 """
 
-# The suffixes a serializer adds under an arm's channel (see ``Serializers.robot_state``,
-# ``Serializers.robot_command`` and ``expand_suffixed``). They are named apart from the composed signals
-# below because a consumer picks the entry out by the suffix on a rig whose arms are ``robot_state.{side}``.
+# The suffixes a serializer adds under an arm's channel (``Serializers.robot_state``, ``expand_suffixed``).
+# A rig whose arms are ``robot_state.{side}`` composes them onto that channel, so they are named apart.
 JOINTS_SUFFIX = '.q'
 EE_POSE_SUFFIX = '.ee_pose'
 POSE_SUFFIX = '.pose'

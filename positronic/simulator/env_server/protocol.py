@@ -67,7 +67,7 @@ def sole_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
 def sole_arm(action: dict[str, Any]) -> dict[str, Any]:
     """The one arm entry of ``action``, for an env whose model has a single arm.
 
-    Raises when the client drives a different number of arms than the env has, which no env can act on.
+    Raises when the client drives a different number of arms than the env has.
     """
     arms = action[ACTION_ARMS]
     if len(arms) != 1:

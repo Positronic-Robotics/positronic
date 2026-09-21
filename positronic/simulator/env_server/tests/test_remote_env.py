@@ -303,12 +303,11 @@ class TestPerArmAction:
     """An action carries one entry per arm the adapter drives, each naming the arm it moves.
 
     The channel names are spelled out rather than built with ``keys.arm_channel``: deriving both sides from
-    one helper would pass whatever that helper produced, and the name the whole stack agrees on is what
-    these assert.
+    one helper would pass whatever that helper produced, and these assert the name the whole stack agrees on.
     """
 
-    # rules-allow: hardcoded-keys — spelling the channel is what makes the assertion independent of the
-    # helper under test; see the class docstring.
+    # rules-allow: hardcoded-keys — spelling the channel keeps the assertion independent of the helper
+    # under test; see the class docstring.
 
     def test_one_unnamed_arm_reads_the_bare_channels(self):
         adapter = _ArmsAdapter()
