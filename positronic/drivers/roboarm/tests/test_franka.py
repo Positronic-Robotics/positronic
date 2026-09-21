@@ -39,10 +39,35 @@ class Call(StrEnum):
     CLOSE_BRAKES = 'close_brakes'
 
 
+class _StatusFromCpp:
+    """A goal status as pybind11 hands one back: equal to the canonical member, and not identical to it.
+
+    The type in play is the stub on a default sync, and the real pybind11 enum with the hardware extra.
+    """
+
+    def __init__(self, member: 'franka.pf.GoalStatus'):
+        self._member = member
+
+    def __eq__(self, other: object) -> bool:
+        return self._member == other
+
+    def __hash__(self) -> int:
+        return hash(self._member)
+
+    def __repr__(self) -> str:
+        return repr(self._member)
+
+
 @dataclass
 class _Goal:
-    status: franka.pf.GoalStatus
+    """A goal as pf hands one back: reading ``status`` crosses from C++."""
+
+    _status: franka.pf.GoalStatus
     reason: str | None
+
+    @property
+    def status(self) -> _StatusFromCpp:
+        return _StatusFromCpp(self._status)
 
 
 # A goal the arm would not take, and one it did.
@@ -796,6 +821,13 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 def _refusals(caplog) -> list[str]:
     """The lines the refusal log wrote."""
     return [record.message for record in caplog.records if record.message.startswith('The arm refused a move')]
+
+
+def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
+    status = REFUSED.status
+
+    assert status == franka.pf.GoalStatus.ABORTED
+    assert status is not franka.pf.GoalStatus.ABORTED
 
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
