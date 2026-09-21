@@ -134,6 +134,10 @@ class ControlSystem(ABC):
     ``Yield``, allowing the ``World`` interleaver to sequence multiple systems.
     """
 
+    # None waits for cooperative shutdown without a deadline. These background systems ignore SIGINT;
+    # the parent World requests their shutdown through the stop signal.
+    shutdown_timeout_s: float | None = 90.0
+
     @abstractmethod
     def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
         pass

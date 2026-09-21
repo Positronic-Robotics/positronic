@@ -1,7 +1,10 @@
 import logging
 import multiprocessing as mp
+import os
 import re
+import signal
 import struct
+import threading
 import time
 from functools import partial
 from queue import Empty, Full
@@ -542,7 +545,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -582,7 +585,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -613,7 +616,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -658,8 +661,7 @@ class TestWorldControlSystems:
 
 # Integration tests
 class TestAnyControlSystemEndsTheWorld:
-    """Either group stops the world. The docs said only the main-process one did, and a console
-    built on that would wait for a finish its own producer had already triggered."""
+    """Either foreground or background completion stops the world."""
 
     def test_a_main_process_loop_returning_stops_the_world(self):
         seen = mp.Value('i', 0)
@@ -1392,3 +1394,85 @@ class TestChildLogging:
 
         assert CHILD_LINE in err, err
         assert LIBRARY_LINE not in err, err
+
+
+class ShutdownWaiter(ControlSystem):
+    shutdown_timeout_s = None
+
+    def __init__(self, ready, holding, release, closed):
+        self.ready, self.holding, self.release, self.closed = ready, holding, release, closed
+
+    def run(self, should_stop, clock):
+        self.ready.set()
+        while not should_stop.value:
+            yield Sleep(0.01)
+        self.holding.set()
+        while not self.release.is_set():
+            yield Sleep(0.01)
+        self.closed.set()
+
+
+def test_world_waits_for_device_shutdown_and_ctrl_c_does_not_interrupt_it(monkeypatch):
+    ctx = mp.get_context('spawn')
+    ready, holding, release, closed = (ctx.Event() for _ in range(4))
+    waiter = ShutdownWaiter(ready, holding, release, closed)
+    with World() as world:
+        world.start([], waiter)
+        process = world.background_processes[0]
+        join = process.join
+
+        def wait_for_device(timeout):
+            try:
+                assert timeout is None
+                assert holding.wait(5)
+                assert process.is_alive()
+                assert not closed.is_set()
+            finally:
+                release.set()
+                join(timeout=5)
+
+        monkeypatch.setattr(process, 'join', wait_for_device)
+        assert ready.wait(5)
+        os.kill(process.pid, signal.SIGINT)
+        time.sleep(0.05)
+        assert process.is_alive()
+        assert not world.should_stop
+    assert closed.is_set()
+
+
+def test_world_keeps_the_timeout_for_ordinary_control_systems(monkeypatch):
+    with World() as world:
+        world.start([], Finisher(1))
+        process = world.background_processes[0]
+        join = Mock(wraps=process.join)
+        monkeypatch.setattr(process, 'join', join)
+    join.assert_called_once_with(timeout=90.0)
+
+
+def test_world_finishes_protected_foreground_shutdown_on_context_exit():
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with World(virtual_time=True) as world:
+        loop = world.start(ShutdownWaiter(ready, holding, release, closed))
+        next(loop)
+        assert ready.is_set()
+        assert not closed.is_set()
+    assert holding.is_set()
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure):
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise failure
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with pytest.raises(type(failure)):
+        with World(virtual_time=True) as world:
+            world.run([ShutdownWaiter(ready, holding, release, closed), Failing()])
+    assert ready.is_set()
+    assert holding.is_set()
+    assert closed.is_set()

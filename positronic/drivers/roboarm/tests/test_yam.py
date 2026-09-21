@@ -95,15 +95,34 @@ def test_idle_parks_once_and_a_new_command_moves_the_arm(rig, caplog):
     rig.raise_arm()
 
 
-def test_identical_grip_updates_do_not_prevent_parking(rig):
+def test_repeated_identical_grip_commands_delay_parking_until_they_stop(rig):
     rig.raise_arm()
     for _ in range(600):
         rig.grip.push(0.0)
         rig.tick()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.tick(5)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
 
 
-def test_arm_commands_and_grip_changes_reset_idle_time(rig):
+def test_sync_move_starts_idle_time_at_completion(world, rig):
+    rig.tick(4)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
+    wire_call(world, caller, rig.driver.sync_move)
+    answer = caller(command.JointPosition(RAISED))
+    while not answer.done():
+        rig.tick()
+    answer.result()
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_arm_and_grip_commands_reset_idle_time(rig):
     rig.raise_arm()
     for _ in range(5):
         rig.commands.push(command.JointPosition(RAISED))
@@ -116,14 +135,9 @@ def test_arm_commands_and_grip_changes_reset_idle_time(rig):
     assert rig.vendor._pos[6] == pytest.approx(0.3, abs=0.005)
 
 
-def test_motion_resets_idle_time(rig):
+def test_measured_motion_does_not_reset_command_idle_time(rig):
     rig.raise_arm()
     rig.vendor._vel[:6] = 0.1
-    rig.vendor.stuck = True
-    rig.tick(5)
-    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED)
-    rig.vendor._vel[:] = 0
-    rig.vendor.stuck = False
     rig.tick(5)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
 
@@ -149,27 +163,32 @@ def test_startup_and_shutdown_preserve_the_gripper(rig):
     np.testing.assert_allclose(rig.vendor.released_at[0], np.append(PARK, 0.4), atol=0.005)
 
 
-def test_parking_corrects_servo_bias_before_releasing_torque(rig):
+def test_parking_does_not_offset_the_target_to_compensate_for_bias(rig, caplog):
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.01, 0.025, 0.025, 0.0, 0.0])
-    rig.finish()
-    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
-    assert rig.vendor.closed
+    rig.stop.stopped = True
+    rig.tick(12)
+    assert 'Parking failed; arm still powered' in caplog.text
+    assert not rig.vendor.released_at
+    assert not rig.vendor.closed
+    assert np.min(rig.vendor.targets) >= 0.0
+    assert any(np.array_equal(target[:6], PARK) for target in rig.vendor.targets)
 
 
-def test_failed_parking_is_bounded_and_reported_then_closes(rig, caplog):
+def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
     rig.raise_arm()
     rig.vendor.stuck = True
-    started = rig.clock.now()
-    rig.finish()
-    assert rig.clock.now() - started < 25
-    assert 'did not reach the park pose' in caplog.text
+    rig.stop.stopped = True
+    rig.tick(120)
+    assert 'Parking failed; arm still powered' in caplog.text
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
-    assert rig.vendor.closed
+    assert not rig.vendor.closed
+    assert not rig.vendor.released_at
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
 
 
 def test_stop_during_a_move_answers_the_caller_and_parks(world, rig):
-    rig.tick(2)
+    rig.tick(4)
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
     wire_call(world, caller, rig.driver.sync_move)
     answer = caller(command.JointPosition(RAISED))
@@ -186,9 +205,191 @@ def test_invalid_idle_timeout_is_rejected(timeout):
         yam.Robot(park_after_idle_s=timeout)
 
 
-def test_starting_at_zero_still_settles_under_servo_bias(rig):
+def test_starting_at_zero_still_checks_for_bias_after_commanding_the_target(rig):
     rig.vendor.bias = np.array([0.0, 0.01, 0.025, 0.025, 0.0, 0.0])
-    rig.tick(20)
-    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    rig.tick(12)
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert np.min(rig.vendor.targets) >= 0.0
+
+
+def test_ordinary_move_can_arrive_while_parking_rejects_the_same_error(world, rig):
+    rig.tick(4)
+    rig.vendor.bias = np.array([0.0, 0.01, 0.0, 0.0, 0.0, 0.0])
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
+    wire_call(world, caller, rig.driver.sync_move)
+    answer = caller(command.JointPosition(RAISED))
+    rig.tick(2.5)
+    assert answer.done()
+    answer.result()
     assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
-    assert np.min(rig.vendor.targets) >= -0.05
+    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], RAISED)
+    rig.stop.stopped = True
+    rig.tick(12)
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert not rig.vendor.released_at
+
+
+def test_parking_accepts_error_within_its_tolerance(rig):
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.003, 0.0, 0.0, 0.0, 0.0])
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], PARK)
+    assert rig.vendor.closed
+
+
+def test_parking_allows_more_time_than_an_ordinary_move(rig):
+    rig.vendor._pos[:6] = RAISED
+    rig.vendor.stuck = True
+    rig.tick(4)
+    assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
+    rig.vendor.stuck = False
+    rig.tick(3)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_parking_finishes_after_measured_arrival_and_stopping(rig):
+    rig.vendor._pos[:6] = RAISED
+    rig.tick(2.5)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_ordinary_move_keeps_its_shorter_timeout(world, rig):
+    rig.tick(4)
+    rig.vendor.stuck = True
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
+    wire_call(world, caller, rig.driver.sync_move)
+    answer = caller(command.JointPosition(RAISED))
+    rig.tick(4)
+    assert answer.done()
+    with pytest.raises(TimeoutError, match='after 3s'):
+        answer.result()
+
+
+def test_world_exit_parks_a_foreground_yam_before_closing():
+    vendor = FakeYam()
+    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    with pimm.World(virtual_time=True) as world:
+        loop = world.start(driver)
+        for _ in range(150):
+            next(loop)
+        vendor._pos[:6] = RAISED
+    np.testing.assert_allclose(vendor.released_at[0][:6], PARK, atol=0.005)
+    assert vendor.closed
+
+
+@pytest.mark.parametrize('distance', [0.1, 1.0, 3.0])
+def test_parking_command_speed_is_bounded_for_different_distances(rig, monkeypatch, distance):
+    rig.tick(3)
+    start = distance * np.array([1.0, 1.0, 0.5, -1.0, 0.2, -0.3])
+    rig.vendor._pos[:6] = start
+    commands = []
+    send = rig.vendor.command_joint_pos
+
+    def record(joint_pos):
+        commands.append((rig.clock.now(), joint_pos[:6].copy()))
+        send(joint_pos)
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', record)
+    started = rig.clock.now()
+    rig.finish()
+    times = np.array([time for time, _ in commands])
+    targets = np.array([target for _, target in commands])
+    assert np.all(np.abs(np.diff(targets, axis=0)) <= 0.5 * np.diff(times)[:, None] + 1e-10)
+    assert np.all(targets >= np.minimum(start, PARK) - 1e-10)
+    assert np.all(targets <= np.maximum(start, PARK) + 1e-10)
+    assert rig.clock.now() - started >= distance / 0.5
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+@pytest.mark.parametrize('speed', [0.03, -0.03, float('nan'), float('inf')])
+def test_parking_does_not_release_at_target_with_moving_or_invalid_velocity(rig, caplog, speed):
+    rig.tick(3)
+    rig.vendor._pos[:6] = PARK
+    rig.vendor.stuck = True
+    rig.vendor._vel[0] = speed
+    rig.stop.stopped = True
+    rig.tick(12)
+    assert 'Parking failed; arm still powered' in caplog.text
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert not rig.vendor.released_at
+    assert not rig.vendor.closed
+
+
+@pytest.mark.parametrize('disturbance', ['position', 'velocity'])
+def test_parking_requires_continuously_still_arrival_before_release(rig, disturbance):
+    rig.tick(3)
+    rig.vendor._pos[:6] = PARK
+    rig.vendor.stuck = True
+    rig.vendor._vel[0] = 0.03
+    rig.stop.stopped = True
+    rig.tick(3)
+    assert not rig.vendor.released_at
+
+    rig.vendor._vel[:] = 0.0
+    rig.tick(0.1)
+    assert not rig.vendor.released_at
+    if disturbance == 'position':
+        rig.vendor._pos[0] = 0.01
+    else:
+        rig.vendor._vel[0] = 0.03
+    rig.tick(0.1)
+    rig.vendor._pos[:6] = PARK
+    rig.vendor._vel[:] = 0.0
+    still_since = rig.clock.now()
+    rig.tick(0.15)
+    assert not rig.vendor.released_at
+    rig.finish()
+    assert rig.clock.now() - still_since >= 0.2
+    assert rig.vendor.closed
+
+
+def test_shutdown_read_failure_blocks_release_even_after_reading_recovers(rig, monkeypatch, caplog):
+    rig.raise_arm()
+    rig.stop.stopped = True
+    read = rig.vendor.get_observations
+    failed = False
+
+    def read_with_one_failure():
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError('CAN read failed')
+        return read()
+
+    monkeypatch.setattr(rig.vendor, 'get_observations', read_with_one_failure)
+    rig.tick(20)
+    assert 'Could not verify parking' in caplog.text
+    assert not rig.vendor.closed
+    assert not rig.vendor.released_at
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
+
+
+@pytest.mark.parametrize('operation', ['get_observations', 'command_joint_pos'])
+def test_failed_hold_does_not_end_blocked_shutdown(rig, monkeypatch, caplog, operation):
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.stop.stopped = True
+    rig.tick(12)
+    with monkeypatch.context() as patch:
+
+        def fail(*args):
+            raise OSError('CAN operation failed')
+
+        patch.setattr(rig.vendor, operation, fail)
+        rig.tick(0.05)
+    rig.tick(1)
+    assert 'Could not hold the arm; shutdown remains blocked' in caplog.text
+    assert not rig.vendor.closed
+    assert not rig.vendor.released_at
+
+
+def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
+    rig.raise_arm()
+    rig.loop.close()
+    assert 'before verified parking' in caplog.text
+    assert not rig.vendor.closed
+    assert not rig.vendor.released_at
