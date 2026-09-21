@@ -75,10 +75,12 @@ caller that records an endpoint records those five and the wire's name, never a 
 `uds` is the fifth field, and only `websocket_unix` reads it: an absolute path to a
 Unix socket a server on the same machine bound, dialled instead of the network. `host` still stands for
 the server in the handshake sent over that socket, and no port is claimed there. A socket is
-same-machine by construction, so no TLS member sits beside it. An `OSError` the socket raises is `COLD`
-only where the path could still become a socket — it is absent, or a refusal comes from a socket a
-server is restarting on; a misspelt path, a path holding something that is not a socket and a refused
-permission are `FINAL`, because no retry reaches them.
+same-machine by construction, so no TLS member sits beside it. An absent path is `COLD`: the client
+cannot tell a misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A
+refusal from a socket a server is restarting on is `COLD` too. A path holding something that is not a
+socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed out
+or was reset reached the socket, so the server rather than the path was not ready, and it reads `COLD`
+as it does on a port.
 
 ## What each consumer pays
 

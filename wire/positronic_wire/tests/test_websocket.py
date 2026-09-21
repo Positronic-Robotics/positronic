@@ -182,6 +182,29 @@ def test_a_member_that_dials_the_network_names_no_socket_whatever_the_address_ca
     assert websocket.WebsocketTlsClientWire().api_socket(address) is None
 
 
+@pytest.mark.parametrize(
+    ('raised', 'refusal'),
+    [
+        (TimeoutError('handshake timed out'), wire.Refusal.COLD),
+        (ConnectionResetError(104, 'Connection reset by peer'), wire.Refusal.COLD),
+        (FileNotFoundError(2, 'No such file or directory'), wire.Refusal.COLD),
+        (PermissionError(13, 'Permission denied'), wire.Refusal.FINAL),
+    ],
+)
+def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raised, refusal, tmp_path):
+    """A timeout and a reset reached the socket, so they read as they do on a port. An absent path is
+    cold because a misspelt one and a socket nobody has bound yet look the same from here."""
+    address = wire.SessionAddress('localhost', 0, wire.session_path(), '', tmp_path / 'absent.sock')
+
+    with (
+        patch('positronic_wire.websocket.unix_connect', side_effect=raised),
+        pytest.raises(wire.ConnectRefused) as refused,
+    ):
+        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
+    assert refused.value.refusal is refusal
+    assert refused.value.__cause__ is raised
+
+
 def test_the_socket_wire_refuses_an_address_naming_no_socket():
     address = wire.SessionAddress('localhost', 8000, wire.session_path(), '')
 

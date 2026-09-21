@@ -188,12 +188,16 @@ class WebsocketUnixClientWire(WebsocketClientWire):
     def _refusal(
         self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.SessionAddress
     ) -> wire.Refusal:
-        """A socket a co-located server has not bound yet is cold; every other ``OSError`` is settled.
+        """A path that may still become a socket is cold; a path that cannot is final.
 
         The base wire reads any ``OSError`` as cold, which is right for a port a backend will answer on and
-        wrong for a path: a misspelt one, a path that is not a socket and a refused permission never change,
-        so retrying one spends the whole connect deadline on an answer that is already final.
+        wrong for a path: a path holding something that is not a socket and a refused permission never
+        change, so retrying one spends the whole connect deadline on an answer that is already final. A
+        handshake that timed out or was reset reached the socket, so the server rather than the path was
+        not ready, and the base reads that one correctly.
         """
+        if isinstance(raised, TimeoutError | ConnectionResetError):
+            return super()._refusal(raised, address)
         if isinstance(raised, OSError) and not isinstance(raised, InvalidHandshake | ConnectionClosed):
             cold = self._socket_may_still_appear(self._socket(address), raised)
             return wire.Refusal.COLD if cold else wire.Refusal.FINAL
