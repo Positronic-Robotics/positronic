@@ -9,8 +9,8 @@ both directions.
 
 Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
 (``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, physical gripper
-polarity and joint-range check, mount pose survey (``base_pose``), teleop latency, and the chain going limp
-on close (``zero_torque_mode``).
+polarity and joint-range check, mount pose survey (``base_pose``), teleop latency, the chain going limp
+on close (``zero_torque_mode``), and the teardown stow settling onto ``YAM_STOW_JOINTS`` before torque is cut.
 """
 
 import contextlib
@@ -47,6 +47,9 @@ _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limi
 _IK_ROT_TOL = 1e-2  # radians
 # Where the driver leaves the chain when it takes control: the menagerie "home" keyframe, folded up and back.
 _PARK_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
+# Where the driver lays the chain at teardown, before it loses torque. Zeros put joints 2 and 3 on their
+# lower stops, so the brakeless chain rests on the mechanism and drops nowhere when it goes limp.
+YAM_STOW_JOINTS = np.zeros(6)
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -163,6 +166,9 @@ class _Chain(DriverRun[command.CommandType]):
     _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
     _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
+    _PARK_TOL = 0.005  # radians; how close the measured pose must sit to the park target for the park to end
+    _PARK_ATTEMPTS = 6  # how many settle-and-correct passes a park makes before it gives up
+    _PARK_MAX_CORRECTION = 0.05  # radians of total reference bias around the park pose
 
     def __init__(
         self,
@@ -243,16 +249,20 @@ class _Chain(DriverRun[command.CommandType]):
             abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
         )
 
-    def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
+    def move_to(
+        self, target: np.ndarray, grip: float, *, at_teardown: bool = False
+    ) -> Generator[pimm.Command, None, MoveStatus]:
         """Ramp the chain to ``target``, yielding until it reads back there. Drive with ``yield from``.
 
         The vendor's own ``move_joints`` blocks the world for the whole ramp and never reads where the chain got to.
+        ``at_teardown`` keeps the ramp running though ``should_stop`` is set, so the safety park still reaches
+        its pose on shutdown.
         """
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
             started = self.clock.now()
             while not self._arrived(obs := self.observations(), target, grip):
-                if self.should_stop.value:
+                if self.should_stop.value and not at_teardown:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
                 if elapsed > self._MOVE_TIME_S + self._SETTLE_S:
@@ -273,13 +283,58 @@ class _Chain(DriverRun[command.CommandType]):
         self.publish(self.observations())
         return MoveStatus.ARRIVED
 
-    def park(self, grip: float) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Ramp the chain to the park pose, and return the joints and grip to hold."""
+    def _park(
+        self, grip: float, target: np.ndarray, *, at_teardown: bool
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
+        """Settle the chain onto ``target``, biasing the reference to close the gap the position servo holds.
+
+        The servo holds the arm a little short of its reference, so a single move leaves the joints hanging
+        above ``target``. Each pass measures that residual and biases the reference past it — bounded by
+        ``_PARK_MAX_CORRECTION`` so it cannot keep loading a mechanical stop — until the measured pose is
+        within ``_PARK_TOL`` of ``target``. Raises ``TimeoutError`` if the passes run out first.
+        """
+        goal = np.asarray(target, dtype=np.float64)
+        reference = goal.copy()
+        for _ in range(self._PARK_ATTEMPTS):
+            try:
+                if (yield from self.move_to(reference, grip, at_teardown=at_teardown)) is MoveStatus.GAVE_UP:
+                    return self.hold_where_it_stopped()
+            except TimeoutError:
+                # A biased reference can lie past a mechanical stop; judge the measured pose, not the ramp.
+                logger.debug('Parking reference was not reached; checking the measured pose')
+            settle_until = self.clock.now() + self._SETTLE_S
+            while self.clock.now() < settle_until:
+                if self.should_stop.value and not at_teardown:
+                    return self.hold_where_it_stopped()
+                self.vendor.command_joint_pos(np.append(reference, 1.0 - grip))
+                obs = self.observations()
+                self.encode(obs, RobotStatus.BUSY)
+                self.out.emit(self.state)
+                self.grip_out.emit(self._grip(obs))
+                yield self.limiter.wait()
+            error = self.observations()[_JOINT_POS] - goal
+            if np.all(np.abs(error) < self._PARK_TOL):
+                self.vendor.command_joint_pos(np.append(reference, 1.0 - grip))
+                self.moves.errored = False
+                self.publish(self.observations())
+                logger.info('Arm parked')
+                return goal, grip
+            reference = np.clip(goal - error, goal - self._PARK_MAX_CORRECTION, goal + self._PARK_MAX_CORRECTION)
+        error = self.observations()[_JOINT_POS] - goal
+        raise TimeoutError(f'the arm is still {np.max(np.abs(error)):.3f} rad from the park pose')
+
+    def park(
+        self, grip: float, target: np.ndarray, *, at_teardown: bool = False
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
+        """Settle the chain onto ``target`` and return the joints and grip to hold. A chain that cannot reach
+        the pose reads ERROR and holds where it stopped; the run ends either way (``_opened`` gives the handle
+        back and drops the chain limp)."""
+        logger.info('Moving the arm to the park pose')
         try:
-            if (yield from self.move_to(_PARK_JOINTS, grip)) is MoveStatus.ARRIVED:
-                return _PARK_JOINTS, grip
+            return (yield from self._park(grip, target, at_teardown=at_teardown))
         # rules-allow: swallowed-error — a chain that will not park reads ERROR; it does not end the run
         except Exception as exc:
+            self.moves.errored = True
             logger.error(f'The chain did not reach the park pose, it is not where the driver put it: {exc}')
         return self.hold_where_it_stopped()
 
@@ -368,25 +423,32 @@ class Robot(pimm.ControlSystem):
             }
             self.robot_meta.emit(meta)
 
-            q_target, grip_target = yield from chain.park(0.0)  # nothing has asked for a grip yet
+            grip_target = 0.0
+            try:
+                # Taking control, lift the chain to the ready pose. Nothing has asked for a grip yet.
+                q_target, grip_target = yield from chain.park(0.0, _PARK_JOINTS)
 
-            while not should_stop.value:
-                if (grip := pimm.value_updated(self.target_grip)) is not None:
-                    grip_target = float(grip)
+                while not should_stop.value:
+                    if (grip := pimm.value_updated(self.target_grip)) is not None:
+                        grip_target = float(grip)
 
-                q = chain.observations()[_JOINT_POS]
-                asked = chain.moves.next_request()
-                if isinstance(asked, pimm.calls.Call):
-                    q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
-                elif asked is not None:
-                    with log_failure(asked):
-                        q_target = chain.to_joints(asked, q)
+                    q = chain.observations()[_JOINT_POS]
+                    asked = chain.moves.next_request()
+                    if isinstance(asked, pimm.calls.Call):
+                        q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
+                    elif asked is not None:
+                        with log_failure(asked):
+                            q_target = chain.to_joints(asked, q)
 
-                chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
+                    chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
-                # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
-                chain.publish(chain.observations())
-                yield chain.limiter.wait()
+                    # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
+                    chain.publish(chain.observations())
+                    yield chain.limiter.wait()
+            finally:
+                # Lay the brakeless chain onto its joint stops before ``_opened`` cuts torque. In a finally,
+                # so no exit can skip it; pimm pumps a generator's finally to completion, so its yields run.
+                yield from chain.park(grip_target, YAM_STOW_JOINTS, at_teardown=True)
 
 
 class _FakeYam:
