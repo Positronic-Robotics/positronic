@@ -113,6 +113,7 @@ class _Observation:
         return state
 
     def frames(self, cameras: list[str], image_size: int) -> ModelRequest:
+        """One image prompt, tagged by observation until its PNG payloads are pruned."""
         content: list[str | BinaryContent] = []
         for camera in cameras:
             image = Image.fromarray(self.images[camera])
@@ -281,21 +282,12 @@ class LLMPolicy(Policy):
             self._failures = 0
             return (calls[0], data) if data is not None else None
 
-        @staticmethod
-        def _has_images(message: ModelRequest) -> bool:
-            return any(
-                isinstance(part, UserPromptPart)
-                and not isinstance(part.content, str)
-                and any(isinstance(item, BinaryContent) for item in part.content)
-                for part in message.parts
-            )
-
         def _prune_images(self) -> None:
             observations = list(
                 dict.fromkeys(
                     message.metadata[keys.OBS_TIME_NS]
                     for message in self._messages
-                    if isinstance(message, ModelRequest) and message.metadata is not None and self._has_images(message)
+                    if isinstance(message, ModelRequest) and message.metadata is not None
                 )
             )
             retained = set(observations[-self._policy.image_horizon :])
@@ -306,19 +298,12 @@ class LLMPolicy(Policy):
                     or message.metadata[keys.OBS_TIME_NS] in retained
                 ):
                     continue
-                parts = [
-                    replace(
-                        part,
-                        content=[
-                            '[older camera frame omitted]' if isinstance(item, BinaryContent) else item
-                            for item in part.content
-                        ],
-                    )
-                    if isinstance(part, UserPromptPart) and not isinstance(part.content, str)
-                    else part
-                    for part in message.parts
+                (part,) = message.parts
+                assert isinstance(part, UserPromptPart) and not isinstance(part.content, str)
+                content = [
+                    '[older camera frame omitted]' if isinstance(item, BinaryContent) else item for item in part.content
                 ]
-                self._messages[index] = replace(message, parts=parts)
+                self._messages[index] = replace(message, parts=[replace(part, content=content)], metadata=None)
 
         @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
         def _request(self) -> ModelResponse:
@@ -326,7 +311,7 @@ class LLMPolicy(Policy):
             if self._pictures:
                 self._messages.append(self._obs.frames(self._pictures, self._policy.image_size))
                 self._pictures = []
-            self._prune_images()
+                self._prune_images()
             return self._policy.endpoint.request(list(self._messages), self._policy._tools)
 
         def _accept(

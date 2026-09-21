@@ -114,7 +114,7 @@ After validating the task in simulation, use the same policy with `positronic-in
 
 ```bash
 uv run --extra llm pytest positronic/vendors/llm/tests
-uv run --extra llm-openai --extra llm-anthropic --extra llm-google pytest positronic/vendors/llm/tests
+uv run --extra llm-openai pytest positronic/vendors/llm/tests
 ```
 
-The core suite runs without provider SDKs. Provider integration tests skip when their SDK is absent; installing all three extras exercises every HTTP adapter. Tests mock HTTP, check native reasoning/image replay and client cleanup, validate retries, deadlines, motion and episode shutdown, and run the full harness/recorder with a deterministic robot. They need no API credentials or hardware.
+The core suite uses Pydantic AI's in-process test model without provider SDKs. One mocked OpenAI-compatible HTTP integration test checks endpoint configuration, images, tools, and client cleanup; it skips when the OpenAI SDK is absent. Policy tests cover history retention, deadlines, errors, motion, budgets, and recording, including the full harness with a deterministic robot. Provider-specific serialization and SDK retries are handled by Pydantic AI. Tests need no API credentials or hardware.

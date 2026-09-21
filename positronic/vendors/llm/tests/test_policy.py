@@ -12,6 +12,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -166,16 +167,23 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
 def test_retained_history_prunes_images_by_observation(model, images, image_horizon):
     requests, replies = model
     policy = LLMPolicy(Endpoint('test'), Motion(), images=images, image_horizon=image_horizon)
+    pictured, motion_replies = [], []
     with session(policy) as (active, rt):
         for time_ns in range(1, 5):
-            if images is Images.ON_DEMAND:
+            if images is Images.ALWAYS or time_ns != 3:
+                pictured.append(time_ns)
+            if images is Images.ON_DEMAND and time_ns != 3:
                 replies.extend(
                     ModelResponse([ToolCallPart('take_pic', {'cameras': [camera], 'note': 'Inspect camera.'})])
                     for camera in policy.camera_keys
                 )
-            replies.append(move())
+            reply = move()
+            reply.parts = [ThinkingPart('Check the scene.', signature='native-signature'), *reply.parts]
+            reply.provider_response_id = f'reply-{time_ns}'
+            motion_replies.append(reply)
+            replies.append(reply)
             complete(active, rt, observation(time_ns))
-            expected_frames = 2 * min(time_ns, image_horizon)
+            expected_frames = 2 * min(len(pictured), image_horizon)
             assert len(frames(active._messages)) == expected_frames
             assert len(frames(requests[-1][0])) == expected_frames
         retained = [
@@ -183,9 +191,12 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
             for message in active._messages
             if isinstance(message, ModelRequest) and message.metadata is not None and frames([message])
         ]
-        assert set(retained) == set(range(5 - image_horizon, 5))
+        assert set(retained) == set(pictured[-image_horizon:])
         assert '[older camera frame omitted]' in str(active._messages)
         assert len([message for message in active._messages if isinstance(message, ModelResponse)]) == len(requests)
+        assert all(reply in active._messages for reply in motion_replies)
+    first_pictures = next(messages for messages, _ in requests if frames(messages))
+    assert len(frames(first_pictures)) == (2 if images is Images.ALWAYS else 1)
 
 
 @pytest.mark.parametrize(

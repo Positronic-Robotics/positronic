@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        extra: [llm, llm-openai, llm-anthropic, llm-google]
+        extra: [llm, llm-openai]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
