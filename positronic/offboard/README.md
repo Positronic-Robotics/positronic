@@ -264,13 +264,14 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 
 ```python
 from positronic.offboard.server import PolicyServer
+from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 server = PolicyServer(pipeline)
-server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
+server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
 `serve` takes the wires that sessions arrive on. Each wire carries the address it binds, reads its own

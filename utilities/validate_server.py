@@ -26,14 +26,6 @@ def _infer_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _policy_address_args(address: wire_module.SessionAddress) -> list[str]:
-    """The flags that rebuild ``address`` in the eval subprocess, spelled as its own wire's."""
-    if isinstance(address, wire_module.UnixSocketAddress):
-        return [f'--policy.address=@{_SOCKET_ADDRESS}', f'--policy.address.uds={address.uds}']
-    assert isinstance(address, wire_module.HostPortAddress), f'{type(address).__name__} spells no policy flags'
-    return [f'--policy.address.host={address.host}', f'--policy.address.port={address.port}']
-
-
 def _build_inference_command(
     *,
     uv_path: str,
@@ -64,6 +56,14 @@ def _build_inference_command(
     ]
 
 
+def _policy_address_args(address: wire_module.SessionAddress) -> list[str]:
+    """The flags that rebuild ``address`` in the eval subprocess, spelled as its own wire's."""
+    if isinstance(address, wire_module.UnixSocketAddress):
+        return [f'--policy.address=@{_SOCKET_ADDRESS}', f'--policy.address.uds={address.uds}']
+    assert isinstance(address, wire_module.HostPortAddress), f'{type(address).__name__} spells no policy flags'
+    return [f'--policy.address.host={address.host}', f'--policy.address.port={address.port}']
+
+
 @cfn.config(
     eval='.sim.positronic.stack_cubes',
     output_dir='',
@@ -92,7 +92,13 @@ def main(
     Example:
 
         AUTH_TOKEN=<endpoint token> uv run --locked python utilities/validate_server.py \\
-            --wire=websocket_tls --host=<endpoint-managed-host> --port=443 \\
+            --wire=websocket_tls --address.host=<endpoint-managed-host> --address.port=443 \\
+            --output_dir=s3://runs/server_validation/021225/
+
+    A server on this machine answers on a socket, which is a different address:
+
+        uv run --locked python utilities/validate_server.py --wire=websocket_unix \\
+            --address=@positronic.cfg.policy.socket_address --address.uds=/run/policy.sock \\
             --output_dir=s3://runs/server_validation/021225/
 
     This will execute commands like:
