@@ -41,9 +41,9 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
 
 
-def arm_channel(channel: str, arm: str | None) -> str:
-    """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
-    return channel if arm is None else f'{channel}.{arm}'
+def arm_channel(channel: str, arm: str) -> str:
+    """``channel`` for the arm named ``arm``."""
+    return f'{channel}.{arm}'
 
 
 COMMAND_TYPE = 'type'
