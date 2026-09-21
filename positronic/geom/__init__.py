@@ -342,9 +342,12 @@ class Rotation(metaclass=RotationMeta):
         Returns:
             Rotation object representing the same rotation
         """
+        rotvec = np.asarray(rotvec)
+        if rotvec.shape != (3,):
+            raise ValueError(f'Rotation vector must have shape (3,), got {rotvec.shape}')
         angle = float(np.linalg.norm(rotvec))
         scale = 0.5 * np.sinc(angle / (2 * np.pi))
-        return cls.from_quat(np.concatenate(([np.cos(angle / 2)], scale * np.asarray(rotvec))))
+        return cls.from_quat(np.concatenate(([np.cos(angle / 2)], scale * rotvec)))
 
     @classmethod
     def from_rot6d(cls, rot6d: np.ndarray) -> Rotation:

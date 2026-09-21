@@ -5217,15 +5217,19 @@ lerobot-0-3-3 = [
     { name = "torch" },
 ]
 llm = [
+    { name = "pillow" },
     { name = "pydantic-ai-slim" },
 ]
 llm-anthropic = [
+    { name = "pillow" },
     { name = "pydantic-ai-slim", extra = ["anthropic"] },
 ]
 llm-google = [
+    { name = "pillow" },
     { name = "pydantic-ai-slim", extra = ["google"] },
 ]
 llm-openai = [
+    { name = "pillow" },
     { name = "pydantic-ai-slim", extra = ["openai"] },
 ]
 molmoact2 = [
@@ -5300,6 +5304,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.42" },
     { name = "opentelemetry-exporter-otlp-json-file", marker = "extra == 'telemetry'", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.42" },
+    { name = "pillow", marker = "extra == 'llm'" },
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },

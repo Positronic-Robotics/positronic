@@ -120,6 +120,7 @@ telemetry = [
     "opentelemetry-sdk>=1.42",
 ]
 llm = [
+    "pillow",
     "pydantic-ai-slim>=1.107.1,<2",
 ]
 llm-openai = ["positronic[llm]", "pydantic-ai-slim[openai]"]

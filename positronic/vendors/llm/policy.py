@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -252,7 +253,7 @@ class _Conversation:
             for part in message.parts
         )
 
-    def _outgoing(self) -> list[ModelMessage]:
+    def _prune_images(self) -> None:
         observations = list(
             dict.fromkeys(
                 message.metadata[keys.OBS_TIME_NS]
@@ -261,14 +262,12 @@ class _Conversation:
             )
         )
         retained = set(observations[-self.policy.image_horizon :])
-        outgoing = []
-        for message in self.messages:
+        for index, message in enumerate(self.messages):
             if (
                 not isinstance(message, ModelRequest)
                 or message.metadata is None
                 or message.metadata[keys.OBS_TIME_NS] in retained
             ):
-                outgoing.append(message)
                 continue
             parts = [
                 replace(
@@ -282,8 +281,7 @@ class _Conversation:
                 else part
                 for part in message.parts
             ]
-            outgoing.append(replace(message, parts=parts))
-        return outgoing
+            self.messages[index] = replace(message, parts=parts)
 
     @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
     def request(self, call: int) -> ModelResponse:
@@ -293,7 +291,8 @@ class _Conversation:
         self.transcript.write(
             'request', call=call, cameras=sorted(self._revealed), **{keys.OBS_TIME_NS: self.obs.time_ns}
         )
-        response = self.policy.endpoint.request(self._outgoing(), self.policy._tools)
+        self._prune_images()
+        response = self.policy.endpoint.request(list(self.messages), self.policy._tools)
         self.transcript.write(
             'response',
             call=call,
@@ -387,10 +386,16 @@ class LLMPolicy(Policy):
                 self._answer, self._cancelled = None, False
                 if cancelled:
                     self._conversation = None
-                response = answer.result()
-                if cancelled:
-                    self._transcript.write('discarded', call=self._calls)
+                    error = None
+                    try:
+                        answer.result()
+                    except Exception as exc:
+                        # A cancelled request no longer contributes to the episode; record its failure for inspection.
+                        logging.exception('Discarding failed cancelled LLM request %s', self._calls)
+                        error = f'{type(exc).__name__}: {exc}'
+                    self._transcript.write('discarded', call=self._calls, error=error)
                     return None
+                response = answer.result()
                 assert self._conversation is not None
                 decision = self._conversation.respond(response, self._calls)
                 if decision is not None:

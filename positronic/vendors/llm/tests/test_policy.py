@@ -2,6 +2,7 @@ import io
 import json
 import threading
 from contextlib import contextmanager
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -161,6 +162,33 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
 
 
+@pytest.mark.parametrize('images', list(Images))
+@pytest.mark.parametrize('image_horizon', [1, 2])
+def test_retained_history_prunes_images_by_observation(model, images, image_horizon):
+    requests, replies = model
+    policy = LLMPolicy(Endpoint('test'), Motion(), images=images, image_horizon=image_horizon)
+    with session(policy) as (active, rt):
+        for time_ns in range(1, 5):
+            if images is Images.ON_DEMAND:
+                replies.extend(
+                    ModelResponse([ToolCallPart('take_pic', {'cameras': [camera], 'note': 'Inspect camera.'})])
+                    for camera in policy.camera_keys
+                )
+            replies.append(move())
+            complete(active, rt, observation(time_ns))
+            expected_frames = 2 * min(time_ns, image_horizon)
+            assert len(frames(active._history)) == expected_frames
+            assert len(frames(requests[-1][0])) == expected_frames
+        retained = [
+            message.metadata[keys.OBS_TIME_NS]
+            for message in active._history
+            if isinstance(message, ModelRequest) and message.metadata is not None and frames([message])
+        ]
+        assert set(retained) == set(range(5 - image_horizon, 5))
+        assert '[older camera frame omitted]' in str(active._history)
+        assert len([message for message in active._history if isinstance(message, ModelResponse)]) == len(requests)
+
+
 @pytest.mark.parametrize(
     'reply',
     [
@@ -258,13 +286,18 @@ def test_finished_session_stays_idle_after_cancellation_and_new_session_starts_f
 
 @pytest.mark.parametrize('cancel_before_answer', [True, False])
 @pytest.mark.parametrize('follow_up', [False, True])
-def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, cancel_before_answer, follow_up):
+@pytest.mark.parametrize('error', [None, TimeoutError('API timed out'), RuntimeError('API unavailable')])
+def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(
+    model, caplog, cancel_before_answer, follow_up, error
+):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
     def delayed():
         entered.set()
         assert release.wait(5)
+        if error is not None:
+            raise error
         return move()
 
     if follow_up:
@@ -289,13 +322,30 @@ def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(model, ca
         rt.wait(5)
         if cancel_before_answer:
             assert active(observation(), 12) is None
+        assert not rt.owes_an_answer
         complete(active, rt, observation(20), 20)
         assert active.meta['stop_reason'] == 'done'
         events = [event['event'] for event in active.meta['transcript']]
+        if error is not None:
+            discarded = next(event for event in active.meta['transcript'] if event['event'] == 'discarded')
+            assert discarded['error'] == f'{type(error).__name__}: {error}'
+            assert any(record.levelname == 'ERROR' and record.exc_info[1] is error for record in caplog.records)
     assert len(requests) == 2 + int(follow_up)
     assert 'Reassess' in str(requests[-1][0])
     assert any(isinstance(part, SystemPromptPart) for message in requests[-1][0] for part in message.parts)
     assert 'discarded' in events
+
+
+@pytest.mark.parametrize('error', [TimeoutError('API timed out'), RuntimeError('API unavailable')])
+def test_active_request_failure_propagates(model, error):
+    requests, replies = model
+    replies.append(Mock(side_effect=error))
+    with session(LLMPolicy(Endpoint('test'), Motion())) as (active, rt):
+        with pytest.raises(type(error), match=str(error)):
+            complete(active, rt, observation())
+        assert not rt.owes_an_answer
+        assert not any(event['event'] == 'discarded' for event in active.meta['transcript'])
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize(

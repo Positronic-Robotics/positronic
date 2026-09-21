@@ -231,6 +231,11 @@ class TestRotation(unittest.TestCase):
         expected_result = Rotation.from_quat([1.0, 0.0, 0.0, 0.0])
         np.testing.assert_array_almost_equal(q.as_quat, expected_result.as_quat)
 
+    def test_from_rotvec_rejects_invalid_shapes(self):
+        for shape in [(), (0,), (2,), (4,), (1, 3), (3, 1)]:
+            with self.subTest(shape=shape), self.assertRaisesRegex(ValueError, r'shape \(3,\)'):
+                Rotation.from_rotvec(np.ones(shape))
+
     def test_from_rotvec_x_axis_90_degrees_returns_correct_rotation(self):
         rotvec = np.array([np.pi / 2, 0.0, 0.0])  # 90 degrees around x-axis
         q = Rotation.from_rotvec(rotvec)

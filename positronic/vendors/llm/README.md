@@ -28,7 +28,7 @@ Use `--charge_inference_time=True` to count API latency against simulated trial 
 | `anthropic:` | `llm-anthropic` | `ANTHROPIC_API_KEY` |
 | `google:` | `llm-google` | `GOOGLE_API_KEY` (also accepts `GEMINI_API_KEY`) |
 
-The `llm` extra installs only the Pydantic AI core. Each provider extra adds only that provider's SDK dependencies. Other [Pydantic AI providers](https://ai.pydantic.dev/models/overview/) work without policy changes when their dependencies are installed. Choose a model that supports images and function calls; incompatible models raise errors.
+The `llm` extra installs the Pydantic AI core and Pillow for image encoding. Each provider extra adds only that provider's SDK dependencies. Other [Pydantic AI providers](https://ai.pydantic.dev/models/overview/) work without policy changes when their dependencies are installed. Choose a model that supports images and function calls; incompatible models raise errors.
 
 Use provider environment variables for supported endpoint overrides, such as `OPENAI_BASE_URL` for an OpenAI-compatible service. For further customization, a Python config can pass an already configured Pydantic AI `Model` to `llm(model=...)`. For example:
 
@@ -92,7 +92,7 @@ Defaults are experimental bounds for supervised testing:
 | `image_horizon` | Most recent 2 observations containing images |
 | `images` | `always` |
 
-Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. Older images are removed from outgoing history while text, tool results, and native reasoning metadata remain.
+Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. Older images are removed from stored and outgoing history while text, tool results, and native reasoning metadata remain.
 
 Translation is linear and rotation follows the shortest spherical interpolation. A returned move starts from the latest measured pose. Oversized translation and rotation are clamped independently to the per-move limits, preserving the translation direction and shortest rotation path. A timestamp-only end marker gives the final command one sampling period before the next decision. The tool result and recorded acceptance contain the bounded target, whether it was clamped, and the trajectory duration including that final period. The next observation reports that target alongside the measured state; scheduling a target does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
@@ -104,7 +104,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one model invocation can be in flight. Faults mark its reply for discard. Follow-up invocations start only when the control loop calls the session. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including any SDK retries within its timeout, before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
+Only one model invocation can be in flight. Faults mark its reply for discard. Failures from cancelled invocations are logged and recorded as discarded when the session resumes; failures from active invocations propagate. Follow-up invocations start only when the control loop calls the session. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including any SDK retries within its timeout, before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
 
 ## Supervised hardware
 
