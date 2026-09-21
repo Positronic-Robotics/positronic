@@ -79,17 +79,18 @@ def _absolute_url(url: str, whose: str) -> None:
         raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
 
 
-# The serialisation context key under which a password serialises as itself. The client's own send
+# The serialisation context key that emits a registry password as plaintext. The client's own send
 # path sets it, and nothing else does.
-SENDING = 'sending'
+REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
 
 class RegistryCredential(BaseModel):
     """What opens the registry ONE image reference names, so the platform can read a private image.
 
-    The password is a `SecretStr`, and it serialises as itself only under the `SENDING` context the
-    client's own send path sets. Every other dump, log line and `repr` of a plan carries a mask, and
-    a Python dump carries the `SecretStr` itself, so a caller that serialises a plan by hand raises.
+    The password is a `SecretStr`, and it serialises as itself only under the
+    `REVEAL_REGISTRY_PASSWORD` context the client's own send path sets. Every other dump, log line
+    and `repr` of a plan carries a mask, and a Python dump carries the `SecretStr` itself, so a
+    caller that serialises a plan by hand raises.
     """
 
     model_config = INPUT_MODEL_CONFIG
@@ -101,7 +102,8 @@ class RegistryCredential(BaseModel):
     def _password(self, password: SecretStr, info: SerializationInfo) -> str:
         """A Python dump holds the `SecretStr` itself, so a caller that serialises one by hand
         raises rather than writing the value."""
-        return password.get_secret_value() if (info.context or {}).get(SENDING) else str(password)
+        reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
+        return password.get_secret_value() if reveal else str(password)
 
 
 # The one cascading property an endpoint states for itself; `Cascade` holds the rest. Derived, so

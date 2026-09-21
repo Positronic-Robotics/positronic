@@ -9,7 +9,7 @@ from platform_client.enums import EndpointKind, Placement
 from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
-    SENDING,
+    REVEAL_REGISTRY_PASSWORD,
     Cascade,
     Endpoint,
     EvalPlan,
@@ -501,7 +501,7 @@ def test_only_the_send_path_serialises_the_password_as_itself():
         'eval': 'robolab.public_subset',
         'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)],
     })
-    sent = plan.model_dump(mode='json', context={SENDING: True})
+    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
     assert sent['endpoints'][0]['image_credential']['password'] == A_PASSWORD
     assert A_PASSWORD not in json.dumps(plan.model_dump(mode='json'))
     assert A_PASSWORD not in plan.model_dump_json()

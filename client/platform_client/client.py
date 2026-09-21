@@ -21,7 +21,7 @@ from platform_client import routes
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
-from platform_client.eval_plan import SENDING, EvalPlan
+from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.requests import (
     CancelRequest,
@@ -227,9 +227,9 @@ class PlatformClient:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
     def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
-        # `SENDING` lets a registry password serialise as itself: this dump carries the request.
-        # Every other dump of a plan masks the value (`eval_plan.RegistryCredential`).
-        body = request.model_dump(mode='json', context={SENDING: True})
+        # This dump carries the request, so it emits a registry password as plaintext. Every
+        # other dump of a plan masks it (`eval_plan.RegistryCredential`).
+        body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
         return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
 
     def _send(
