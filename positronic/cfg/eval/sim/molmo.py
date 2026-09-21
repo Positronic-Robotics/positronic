@@ -7,7 +7,7 @@ from positronic.cfg.eval import number_trials, spec
 from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
 from positronic.eval import Eval, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import CAMERAS, MolmoAdapter
@@ -48,7 +48,7 @@ def benchmarks(
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
     proxy = RemoteEnvControlSystem(MolmoAdapter(), serve_molmo_spaces())
-    embodiment = remote_franka_embodiment(
+    embodiment = remote_embodiment(
         proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}

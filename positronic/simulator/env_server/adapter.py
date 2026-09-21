@@ -8,6 +8,7 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Any, final
 
 import numpy as np
@@ -104,20 +105,24 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 
 
 class WireCommandAdapter(EnvAdapter):
-    """An adapter whose action is the shared wire payload ``{'command': <tagged dict>, 'grip': float}``.
+    """An adapter whose action is the shared wire payload: one ``{'name', 'command', 'grip'}`` entry per arm.
 
     The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
-    arrives and fires a relative delta once, and flattens the held arm command (a pose as ``[t(3), R(9)]``,
-    joint positions, or per-step joint deltas) plus the gripper closure into one payload.
+    arrives and fires a relative delta once, and flattens each arm's held command (a pose as ``[t(3), R(9)]``,
+    joint positions, or per-step joint deltas) plus that arm's gripper closure into one entry.
     All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
     the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
     around it) and keep the task, observation and terminal mappings to themselves.
     """
 
-    def __init__(self, env_control_frame: geom.Transform3D | None = None):
+    def __init__(self, env_control_frame: geom.Transform3D | None = None, arms: Sequence[str | None] = (None,)):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
-        ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
+        ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it.
+        ``arms`` names the arms the env drives, in the order the action lists them; the default is the one
+        unnamed arm of a single-arm embodiment, whose channels are the bare ``robot_command``/``target_grip``.
+        """
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
+        self.arms = tuple(arms)
         self._reset_command_state()
 
     def _reset_command_state(self) -> None:
@@ -136,15 +141,20 @@ class WireCommandAdapter(EnvAdapter):
         for name, msg in commands.items():
             if msg.updated:
                 self._held[name] = msg.data
+        return {protocol.ACTION_ARMS: [self._arm_action(arm) for arm in self.arms]}
+
+    def _arm_action(self, arm: str | None) -> dict[str, Any]:
+        """One arm's wire entry, from whatever it holds; an arm nobody has commanded yet holds nothing."""
         # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
         # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
         # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
         # one step the arm holds its measured pose.
-        cmd = self._held.get(keys.ROBOT_COMMAND)
+        channel = keys.arm_channel(keys.ROBOT_COMMAND, arm)
+        cmd = self._held.get(channel)
         if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
-            self._held.pop(keys.ROBOT_COMMAND)
-        grip = float(self._held.get(keys.TARGET_GRIP, 0.0))
+            self._held.pop(channel)
         return {
+            protocol.ARM_NAME: arm,
             protocol.ACTION_COMMAND: _wire_command(_in_env_control_frame(cmd, self.env_control_frame)),
-            protocol.ACTION_GRIP: grip,
+            protocol.ACTION_GRIP: float(self._held.get(keys.arm_channel(keys.TARGET_GRIP, arm), 0.0)),
         }

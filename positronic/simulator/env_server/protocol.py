@@ -36,6 +36,10 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
+# An action carries one entry per arm the embodiment drives, each naming the arm it moves; an embodiment
+# with one arm leaves it unnamed and sends a list of one.
+ACTION_ARMS = 'arms'
+ARM_NAME = 'name'  # The arm's name, or ``None`` for the sole arm of a one-armed embodiment.
 ACTION_COMMAND = 'command'
 ACTION_GRIP = 'grip'  # Closure in [0, 1].
 
@@ -53,6 +57,22 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
+
+
+def sole_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
+    """An action for one unnamed arm — the shape a single-arm embodiment sends."""
+    return {ACTION_ARMS: [{ARM_NAME: None, ACTION_COMMAND: command, ACTION_GRIP: grip}]}
+
+
+def sole_arm(action: dict[str, Any]) -> dict[str, Any]:
+    """The one arm entry of ``action``, for an env whose model has a single arm.
+
+    Raises when the client drives a different number of arms than the env has, which no env can act on.
+    """
+    arms = action[ACTION_ARMS]
+    if len(arms) != 1:
+        raise ValueError(f'this env drives one arm, the action carries {len(arms)}')
+    return arms[0]
 
 
 def _pack(obj):

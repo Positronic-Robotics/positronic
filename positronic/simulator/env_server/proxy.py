@@ -9,14 +9,14 @@ back — so only raw arrays cross the boundary and the World's virtual clock adv
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
@@ -138,28 +138,40 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         return result
 
 
-def remote_franka_embodiment(
+def remote_embodiment(
     proxy: RemoteEnvControlSystem,
     camera_dict: Mapping[str, object],
     *,
     descriptor: str,
+    arms: Sequence[str | None] = (None,),
     static_meta: dict[str, Any] | None = None,
 ) -> Embodiment:
-    """The canonical Franka embodiment over a remote env proxy.
+    """The canonical embodiment over a remote env proxy, driving the arms ``arms`` names.
 
-    Every remote benchmark exposes the same channels — ``robot_state``/``grip``/one image per ``camera_dict``
-    entry, ``robot_command``/``target_grip`` — so their wiring lives here; ``static_meta`` adds the
-    embodiment's robot-model payload on top of the canonical signal map (supplied client-side when the env
-    server cannot import positronic to emit it via ``robot_meta``).
+    Every remote benchmark exposes the same channels — ``robot_state``/``grip`` and
+    ``robot_command``/``target_grip`` per arm, one image per ``camera_dict`` entry — so their wiring lives
+    here. ``arms`` defaults to the single unnamed arm, whose channels are the bare names; naming an arm
+    suffixes every channel of that arm with it. ``static_meta`` adds the embodiment's robot-model payload on
+    top of the signal map derived from ``arms`` (supplied client-side when the env server cannot import
+    positronic to emit it via ``robot_meta``).
     """
+    states = [keys.arm_channel(keys.ROBOT_STATE, arm) for arm in arms]
+    grips = [keys.arm_channel(keys.GRIP, arm) for arm in arms]
+    commanded = [keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms]
+    target_grips = [keys.arm_channel(keys.TARGET_GRIP, arm) for arm in arms]
     observations = {
-        keys.ROBOT_STATE: Observation(proxy.observations[keys.ROBOT_STATE], Serializers.robot_state),
-        keys.GRIP: Observation(proxy.observations[keys.GRIP], None),
+        **{name: Observation(proxy.observations[name], Serializers.robot_state) for name in states},
+        **{name: Observation(proxy.observations[name], None) for name in grips},
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(proxy.commands[keys.ROBOT_COMMAND], Serializers.robot_command),
-        keys.TARGET_GRIP: Command(proxy.commands[keys.TARGET_GRIP], None),
+        **{name: Command(proxy.commands[name], Serializers.robot_command) for name in commanded},
+        **{name: Command(proxy.commands[name], None) for name in target_grips},
+    }
+    signal_meta = {
+        eval_keys.JOINT_SIGNALS: [f'{name}{keys.JOINTS_SUFFIX}' for name in states],
+        eval_keys.POSE_SIGNALS: [f'{name}{keys.EE_POSE_SUFFIX}' for name in states]
+        + [f'{name}{keys.POSE_SUFFIX}' for name in commanded],
     }
     return Embodiment(
         descriptor=descriptor,
@@ -167,7 +179,7 @@ def remote_franka_embodiment(
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
         prepare_handlers={eval_keys.SCENE: proxy.env_reset},
-        static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
+        static_meta={**signal_meta, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),
         simulated=True,

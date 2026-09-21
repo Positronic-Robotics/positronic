@@ -35,7 +35,7 @@ import keys
 import numpy as np
 import torch
 from isaaclab.app import AppLauncher
-from protocol import decode
+from protocol import ACTION_COMMAND, ACTION_GRIP, decode, sole_arm
 from server import EnvProtocol, EnvServer
 
 
@@ -281,9 +281,10 @@ class RobolabEnv(EnvProtocol):
         while not self._timeline.is_playing():
             self._kit_app.update()
         act = torch.zeros(1, 8, device=self._env.device)
-        act[0, :7] = self._joint_targets(action['command'])
+        wire = sole_arm(action)
+        act[0, :7] = self._joint_targets(wire[ACTION_COMMAND])
         # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
-        act[0, 7] = float(action['grip'])
+        act[0, 7] = float(wire[ACTION_GRIP])
         obs, _reward, _term, _trunc, _info = self._env.step(act)
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps

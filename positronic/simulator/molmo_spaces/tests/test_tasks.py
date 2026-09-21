@@ -193,13 +193,12 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
     assert policy.last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
     for logical, candidates in CAMERAS.items():
         np.testing.assert_array_equal(policy.last_obs[logical], env.observation[candidates[-1]])
-    commands = [
-        action for action in env.actions if action[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-    ]
+    arms = [protocol.sole_arm(action) for action in env.actions]
+    commands = [arm for arm in arms if arm[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS]
     assert commands, 'the policy command never reached the environment'
-    for action in commands:
-        np.testing.assert_array_equal(action[protocol.ACTION_COMMAND][protocol.COMMAND_JOINT_POS], joints)
-        assert action[protocol.ACTION_GRIP] == 0.0
+    for arm in commands:
+        np.testing.assert_array_equal(arm[protocol.ACTION_COMMAND][protocol.COMMAND_JOINT_POS], joints)
+        assert arm[protocol.ACTION_GRIP] == 0.0
 
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 1
