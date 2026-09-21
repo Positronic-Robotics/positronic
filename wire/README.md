@@ -56,8 +56,8 @@ out on the members that name one.
   transport that carries this wire's sessions: over HTTP for the network members, and over the
   socket itself for `websocket_unix`. It carries the same `headers` as `dial`, so an edge that
   authenticates on them lets the read through, and refuses in `dial`'s own vocabulary. The gRPC
-  members raise `ValueError`: their port carries sessions alone, and a server that serves gRPC
-  serves its websocket wire, where the catalogue answers. No caller builds a URL or a transport.
+  members raise `ValueError`: their port carries sessions alone. A server that answers the catalogue
+  serves an HTTP-capable wire beside the gRPC one. No caller builds a URL or a transport.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,

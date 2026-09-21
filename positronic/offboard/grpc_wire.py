@@ -121,8 +121,8 @@ class GrpcWire(server_wire.Wire):
     async def start(
         self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
     ) -> None:
-        """Bind the gRPC port. ``api`` goes unserved: this port carries sessions alone, and a server
-        that serves gRPC serves its websocket wire, where the catalogue answers."""
+        """Bind the gRPC port. ``api`` goes unserved: this port carries sessions alone. A server that
+        answers the catalogue serves an HTTP-capable wire beside this one."""
 
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
