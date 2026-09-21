@@ -152,9 +152,8 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    ``wire`` names the transport (``positronic_wire.registry.CLIENT_WIRES``) and ``address`` is that
-    wire's own: where the server is, the checkpoint it serves — the one it pinned, where the model is
-    empty — and the session params as written. ``headers`` carry the credentials.
+    ``wire`` names the transport (``positronic_wire.registry.CLIENT_WIRES``) and ``address`` is the one
+    that wire dials. ``headers`` carry the credentials.
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the

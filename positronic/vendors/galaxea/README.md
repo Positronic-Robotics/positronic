@@ -148,7 +148,7 @@ localhost URL works for clients running directly on the GPU host:
 
 ```bash
 uv run --locked positronic eval run --eval=.real.droid.pick_place \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --output_dir=/path/to/evaluation-recordings
 ```
 
@@ -162,7 +162,7 @@ Use a unique output directory for each run:
 ```bash
 IMAGE_TAG=latest docker compose -f docker/docker-compose.yml run --rm robolab-eval \
   --eval=.sim.robolab.banana_in_bowl --eval.trial_count=1 \
-  --policy=.remote --policy.host=galaxea-server --policy.port=8000 \
+  --policy=.remote --policy.address.host=galaxea-server --policy.address.port=8000 \
   --output_dir=s3://inference/tmp/galaxea-robolab/<run-id>/
 ```
 

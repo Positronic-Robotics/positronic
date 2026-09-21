@@ -200,6 +200,6 @@ def test_a_refusal_from_a_path_that_is_not_a_socket_is_final(tmp_path):
 
 
 def test_a_socket_address_refuses_a_relative_path():
-    """`--policy.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
+    """`--policy.address.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
     with pytest.raises(ValueError, match='relative socket path'):
         wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')

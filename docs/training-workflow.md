@@ -221,7 +221,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` (default, binds to all interfaces) |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket, which takes `.uds` and names no host and no port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 
-The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
+The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.address.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
 
 ### Checking Server Status
 

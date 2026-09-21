@@ -95,8 +95,8 @@ def main(
     This will execute commands like:
 
         uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes --policy=.authed_remote \\
-            --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \\
-            --policy.model=checkpoint-123 --output_dir=s3://runs/server_validation/021225/checkpoint-123/
+            --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \\
+            --policy.address.model=checkpoint-123 --output_dir=s3://runs/server_validation/021225/checkpoint-123/
     """
     uv_path = shutil.which('uv')
     if uv_path is None:

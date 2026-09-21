@@ -506,10 +506,7 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-# What a server binds when nobody says otherwise: the websocket wire on every interface, and no gRPC.
-# Each wire carries the address it binds, so a deployment overrides a wire rather than a flag.
-# Every argument is named, so the CLI can address one field of one wire: configuronic walks parameter
-# names, and a positional argument has none.
+# Named rather than positional: configuronic addresses an override by parameter name.
 websocket = cfn.Config(
     websocket_wire.WebsocketWire, served_address=cfn.Config(server_wire.ServedHostPort, host='0.0.0.0', port=8000)
 )

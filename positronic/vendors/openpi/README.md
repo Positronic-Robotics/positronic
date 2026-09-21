@@ -219,12 +219,13 @@ To evaluate the policy, run the inference client locally using the unified `.rem
 ```bash
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=vm-h100 --policy.port=8000 \
+  --policy.address.host=vm-h100 --policy.address.port=8000 \
   --eval.timeout=20 \
   --output_dir=~/datasets/inference_logs
 ```
 
-- `--policy.host` and `--policy.port`: the inference server; `--policy.wire=websocket_tls` behind a TLS front.
+- `--policy.address.host` and `--policy.address.port`: the inference server; `--policy.wire=websocket_tls`
+  behind a TLS front.
 
 A `droid` server emits `JointDelta` commands; the driver applies each to the live joints.
 

@@ -162,7 +162,7 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
         return wire.netloc(address, self.DEFAULT_PORT)
 
     def handshake_url(self, address: wire.HostPortAddress) -> str:
-        """The URL the upgrade asks for. It is what this wire dials, unless the wire dials a socket."""
+        """The URL the upgrade asks for, which this wire also dials."""
         query = f'?{address.query}' if address.query else ''
         return f'{self.SCHEME}://{self.netloc(address)}{address.path}{query}'
 

@@ -25,7 +25,7 @@ In a separate terminal, run inference inside the simulation:
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --output_dir=~/datasets/demo_run
 ```
 
@@ -234,7 +234,7 @@ Test the server with the same client as the demo:
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.host=localhost --policy.port=8000
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000
 ```
 
 ### Slow-loading or subprocess models

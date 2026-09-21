@@ -52,7 +52,7 @@ Forwards all arguments to `positronic eval run`. Serve the policy first
     --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
     --eval.trial_count=10 \
     --policy=@positronic.cfg.policy.authed_remote \
-    --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+    --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
     --output_dir=s3://<your-bucket>/evals/robolab_banana/
 EOF
   exit 1

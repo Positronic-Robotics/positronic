@@ -135,7 +135,7 @@ class ClientWire(abc.ABC, Generic[AddressT]):
     def session_url(self, address: AddressT) -> str:
         """``address`` as this wire names one session, for a log and for an error.
 
-        What a wire dials is its own: a member whose library takes this spelling dials it, and one
+        Each wire dials its own way: a member whose library takes this spelling dials it, and one
         that takes a target or a socket dials that instead.
         """
 

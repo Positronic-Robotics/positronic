@@ -27,7 +27,8 @@ server side.
   `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it
   to a Unix socket instead. `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=9001` serves the gRPC wire beside it,
   on an address of its own.
-- `websocket_unix` reaches a server on the same machine, over no network, and `--policy.uds` dials it.
+- `websocket_unix` reaches a server on the same machine, over no network, and
+  `--policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=…` dials it.
   A caller names the wire and then fills that wire's address, so a socket address carries no host and no
   port at all — on either end. Both paths are absolute: a relative one is resolved against whatever
   directory each side was started from, and the address refuses it. A socket is same-machine by
@@ -92,9 +93,9 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
 
-Each wire from the table above carries the same route. What changes is how a caller names the
-server: `websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a
-target, and `websocket_unix` a socket path and no authority at all.
+Each wire from the table above carries the same route, and each names the server its own way:
+`websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a target, and
+`websocket_unix` a socket path and no authority at all.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
@@ -120,8 +121,8 @@ Rules:
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
-The client names each part: `--policy=.remote --policy.wire=websocket --policy.host=gpu-host --policy.port=8000
---policy.model=<model_id> --policy.query='codec.fps=10'`, and forwards the query string verbatim. Credentials stay a
+The client names each part: `--policy=.remote --policy.wire=websocket --policy.address.host=gpu-host --policy.address.port=8000
+--policy.address.model=<model_id> --policy.address.query='codec.fps=10'`, and forwards the query string verbatim. Credentials stay a
 separate `headers` argument.
 
 ### Session Flow
@@ -245,7 +246,7 @@ cd docker && docker compose run --rm --service-ports groot-server droid \
 # Client connects the same way
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=localhost --policy.port=8000
+  --policy.address.host=localhost --policy.address.port=8000
 ```
 
 **Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.

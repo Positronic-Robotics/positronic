@@ -302,7 +302,7 @@ Run inference from your laptop or robot host with `positronic eval run`
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -345,7 +345,7 @@ export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
 
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -374,7 +374,7 @@ stays under it.
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.nebius_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -460,7 +460,7 @@ bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
   --policy=@positronic.cfg.policy.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 

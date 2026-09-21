@@ -199,12 +199,12 @@ fi
 
 # The front terminates TLS on 443 for both wires, so a rig names the TLS member of each.
 GRPC_BANNER=""
-POLICY_ARGS="--policy.wire=websocket_tls --policy.host=${URL#https://} --policy.port=443"
+POLICY_ARGS="--policy.wire=websocket_tls --policy.address.host=${URL#https://} --policy.address.port=443"
 POLICY_NOTE="Point a rig at the websocket wire:"
 if [ -n "$GRPC_PORT" ]; then
   GRPC_BANNER="  gRPC host:     ${GRPC_HOST} (TLS, port 443)
 "
-  POLICY_ARGS="--policy.wire=grpc_tls --policy.host=${GRPC_HOST} --policy.port=443"
+  POLICY_ARGS="--policy.wire=grpc_tls --policy.address.host=${GRPC_HOST} --policy.address.port=443"
   POLICY_NOTE="Point a rig at either wire; through this front an 846 KiB observation
 round-trips in about 6 ms over gRPC and about 60 ms over the websocket:"
 fi
