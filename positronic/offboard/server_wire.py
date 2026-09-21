@@ -8,6 +8,7 @@ import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from fastapi import APIRouter
 from starlette.datastructures import QueryParams
 
 from . import keys
@@ -90,8 +91,12 @@ class Wire(abc.ABC):
         """Where this wire serves, known once ``start`` returns: a bound port, or the socket path."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
+    async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
         """Bind, and give every accepted session to ``session``.
+
+        ``api`` is the server's own HTTP routes, the model catalogue among them. A wire whose
+        transport carries HTTP serves them beside its sessions; one that does not ignores them, and
+        says so.
 
         Raises when the address is taken: a port another process holds, or a socket path a live
         server is already serving on.

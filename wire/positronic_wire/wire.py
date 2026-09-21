@@ -16,9 +16,10 @@ from typing import ClassVar, Generic, Self, TypeVar
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The model catalogue, served under the HTTP API.
+# The model catalogue, served under the HTTP API: the route it answers on, and the key it answers under.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
+MODELS_KEY = 'models'
 
 
 def session_path(model: str = '') -> str:
@@ -139,12 +140,13 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         """
 
     @abc.abstractmethod
-    def api_url(self, address: AddressT) -> str | None:
-        """The server's HTTP API beside this wire, or ``None`` where the wire's port carries sessions alone."""
+    def list_models(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> list[str]:
+        """The models the server at ``address`` serves, read over this wire's own transport.
 
-    def api_socket(self, address: AddressT) -> Path | None:
-        """The Unix socket ``api_url`` answers on, or ``None`` where it answers over the network."""
-        return None
+        ``headers`` are the ones ``dial`` sends, so an edge that authenticates on them lets the read
+        through. Raises ``ConnectRefused`` when the catalogue does not answer, in the terms ``dial``
+        uses, and ``ValueError`` on a wire whose transport carries sessions alone.
+        """
 
     @abc.abstractmethod
     def dial(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> 'ClientConnection':

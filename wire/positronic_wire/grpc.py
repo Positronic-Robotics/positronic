@@ -244,9 +244,16 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def api_url(self, address: wire.HostPortAddress) -> None:
-        """None: the HTTP API answers on the server's own port."""
-        return None
+    def list_models(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> list[str]:
+        """Raises: this wire's port carries sessions alone, and the catalogue is an HTTP route.
+
+        A server that serves gRPC serves its websocket wire too, and the catalogue is read there.
+        """
+        raise ValueError(
+            f'{self.NAME} carries sessions alone; list the models on the websocket wire the same server serves'
+        )
 
     def channel(self, target: str) -> grpc.Channel:
         return grpc.insecure_channel(target, options=_client_options())

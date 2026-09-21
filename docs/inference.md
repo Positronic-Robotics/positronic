@@ -57,7 +57,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.model=checkpoint-20000 --policy.query='codec.fps=10&local.pad_start=false'
 ```
 
-**A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.uds=/run/policy.sock` dials the socket `serve --uds /run/policy.sock` bound, over no network. `--policy.model` and `--policy.query` name a checkpoint and session params as they do on any other wire; `--policy.host` and `--policy.port` play no part, because this wire's address has neither. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
+**A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.uds=/run/policy.sock` dials the socket a server bound with `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock`, over no network. `--policy.model` and `--policy.query` name a checkpoint and session params as they do on any other wire; `--policy.host` and `--policy.port` play no part, because this wire's address has neither. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
 
 **Credentials stay off the command line.** A token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 

@@ -104,7 +104,7 @@ inside `checkpoints/g05-droid/`. Start the server on the GPU host:
 
 ```bash
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml \
-  run --rm --service-ports --use-aliases galaxea-server --port=8000
+  run --rm --service-ports --use-aliases galaxea-server --websocket.served_address.port=8000
 ```
 
 The published API binds to `127.0.0.1:8000` on the Docker host. Use Docker Engine
@@ -130,7 +130,7 @@ the server in the Positronic environment with an explicit localhost bind:
 
 ```bash
 uv run --locked python -m positronic.vendors.galaxea.server \
-  --host=127.0.0.1 --port=8000 \
+  --websocket.served_address.host=127.0.0.1 --websocket.served_address.port=8000 \
   --pipeline.source.galaxea_root=/path/to/GalaxeaVLA \
   --pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
 ```

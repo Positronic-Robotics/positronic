@@ -13,7 +13,7 @@
 # memory after the URL appears.
 #
 # The endpoint serves the websocket wire on 8000, and the gRPC wire on the port
-# `--grpc_port` names. The create declares the gRPC port as an ordinary HTTP port;
+# `--grpc.served_address.port` names. The create declares the gRPC port as an ordinary HTTP port;
 # a `/tcp` port gets a front gRPC refuses. The offboard README says what each
 # front does to a session.
 #
@@ -104,14 +104,20 @@ esac
 WS_PORT=8000
 
 # gRPC is the server's opt-in wire, so the endpoint declares its port only where one is served. A
-# caller's own --grpc_port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket wire alone.
+# caller's own --grpc.served_address.port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket
+# wire alone.
 ARGS=" $* "
 case "$ARGS" in
-  *" --grpc_port="*) GRPC_PORT=${ARGS#*--grpc_port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
-  *" --grpc_port "*) GRPC_PORT=${ARGS#*--grpc_port }; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *" --grpc.served_address.port="*)
+    GRPC_PORT=${ARGS#*--grpc.served_address.port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *" --grpc="*)
+    # The caller named the gRPC wire and left its port at the wire's own default.
+    GRPC_PORT=8001 ;;
   *)
     GRPC_PORT=${NEBIUS_GRPC_PORT-9000}
-    if [ -n "$GRPC_PORT" ]; then set -- "$@" "--grpc_port=${GRPC_PORT}"; fi
+    if [ -n "$GRPC_PORT" ]; then
+      set -- "$@" "--grpc=@positronic.offboard.server.grpc" "--grpc.served_address.port=${GRPC_PORT}"
+    fi
     ;;
 esac
 

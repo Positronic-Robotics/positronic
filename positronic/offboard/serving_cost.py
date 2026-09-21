@@ -133,7 +133,7 @@ def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, reques
 def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
     """Serve ``pipeline`` on a free loopback port, and hand back what stops it."""
     server = PolicyServer(pipeline)
-    ws = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
+    ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
     ready = threading.Event()
     thread = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
     thread.start()

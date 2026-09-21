@@ -394,8 +394,8 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
         def session_url(self, address):
             return client_wire.session_url(address)
 
-        def api_url(self, address):
-            return client_wire.api_url(address)
+        def list_models(self, address, headers, open_timeout):
+            return client_wire.list_models(address, headers, open_timeout)
 
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))

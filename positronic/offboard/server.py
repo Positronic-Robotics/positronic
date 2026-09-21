@@ -297,7 +297,7 @@ class PolicyServer:
             raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
-        return {'models': self._source.get_models()}
+        return {wire.MODELS_KEY: self._source.get_models()}
 
     def _session_pipeline(self, params: dict[str, Any]) -> Pipeline:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -470,7 +470,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized)
+                    await w.start(self._serve_session, self._authorized, self.api)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
@@ -506,25 +506,45 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None, uds=None)
+# What a server binds when nobody says otherwise: the websocket wire on every interface, and no gRPC.
+# Each wire carries the address it binds, so a deployment overrides a wire rather than a flag.
+# Every argument is named, so the CLI can address one field of one wire: configuronic walks parameter
+# names, and a positional argument has none.
+websocket = cfn.Config(
+    websocket_wire.WebsocketWire, served_address=cfn.Config(server_wire.ServedHostPort, host='0.0.0.0', port=8000)
+)
+grpc = cfn.Config(grpc_wire.GrpcWire, served_address=cfn.Config(server_wire.ServedHostPort, host='0.0.0.0', port=8001))
+
+
+@cfn.config()
+def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
+    """The Unix socket a wire binds, named on the command line.
+
+    configuronic hands every flag through as it was typed, so the path is built here rather than
+    where it is read.
+    """
+    return websocket_wire.ServedUnixSocket(Path(uds))
+
+
+@cfn.config(websocket=websocket, grpc=None, recording_dir=None, idle_timeout_min=None)
 def serve(
     pipeline: cfn.Config,
-    host: str,
-    port: int,
+    websocket: server_wire.Wire | None,
+    grpc: server_wire.Wire | None,
     recording_dir: str | None,
     idle_timeout_min: float | None,
-    grpc_port: int | None,
-    uds: str | None,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
-    Only the sockets and the recording taps are flags of their own; everything the served model is —
-    codec, source, checkpoint — is reached through the pipeline itself. GR00T selects checkpoints with
-    ``--pipeline.source.model_source=...``; LeRobot and OpenPI use ``--pipeline.source.checkpoints_dir=...``.
+    Everything the served model is — codec, source, checkpoint — is reached through the pipeline
+    itself. GR00T selects checkpoints with ``--pipeline.source.model_source=...``; LeRobot and OpenPI
+    use ``--pipeline.source.checkpoints_dir=...``.
 
-    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README). ``uds`` binds
-    the websocket wire to that Unix socket path instead of ``host`` and ``port``; the gRPC wire still
-    binds ``host``, so a socket-served websocket beside a gRPC port is still reachable over the network.
+    Each wire carries the address it binds, and this binds what it is given::
+
+        --websocket.served_address.port=9000
+        --websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/p.sock
+        --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
@@ -535,8 +555,4 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    socket_path = None if uds is None else Path(uds)
-    wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api, uds=socket_path)]
-    if grpc_port is not None:
-        wires.append(grpc_wire.GrpcWire(host, grpc_port))
-    server.serve(wires)
+    server.serve([w for w in (websocket, grpc) if w is not None])

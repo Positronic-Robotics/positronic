@@ -233,7 +233,7 @@ flow to your account directly via the API key — they aren't synced to S3.
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
 Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
 the contact address. The server listens on port 8000 for the WebSocket wire, and on port 9000 for
-the gRPC one, so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one, and
+the gRPC one, so the endpoint returns two URLs. `--grpc.served_address.port=<port>` moves the second one, and
 `NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
 survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
 gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and

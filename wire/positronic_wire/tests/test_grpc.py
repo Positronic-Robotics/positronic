@@ -178,7 +178,13 @@ def test_the_tls_member_opens_a_secure_channel(monkeypatch):
 )
 def test_a_grpc_session_is_named_by_its_target_and_no_scheme(client_wire, address, spelled):
     assert client_wire.session_url(address) == spelled
-    assert client_wire.api_url(address) is None
+
+
+@pytest.mark.parametrize('client_wire', [client_grpc.GrpcClientWire(), client_grpc.GrpcTlsClientWire()])
+def test_a_grpc_member_refuses_the_catalogue_because_its_port_carries_sessions_alone(client_wire):
+    """The catalogue is an HTTP route, and a server that serves gRPC serves its websocket wire too."""
+    with pytest.raises(ValueError, match='carries sessions alone'):
+        client_wire.list_models(_ADDRESS, None, 1.0)
 
 
 class _ManualChannel:

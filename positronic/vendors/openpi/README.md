@@ -139,10 +139,10 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
 - `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
-- `--port`: (Optional) Port to serve on (default: 8000)
-- `--uds`: (Optional) Absolute Unix socket path for the WebSocket wire, in place of `--host`/`--port`, for a
-  client on the same machine. `--grpc_port`, if set, still binds `--host`
-- `--grpc_port`: (Optional) Port for the gRPC wire, served beside the websocket one
+- `--websocket.served_address.port`: (Optional) WebSocket wire port (default: 8000)
+- `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=<path>`: (Optional) bind the
+  WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
+- `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
 - `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity

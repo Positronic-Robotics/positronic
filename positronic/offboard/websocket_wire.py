@@ -154,25 +154,22 @@ WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(server_wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same address.
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the API answers beside it.
 
-    ``uds`` binds a Unix socket path in place of ``host:port``. The socket file stays after ``stop``: a
-    successor reads it as stale, where an unlink here could take a path that successor has claimed.
+    ``served_address`` is what this binds: a host and a port, or a Unix socket path. A socket file
+    stays after ``stop``, where an unlink could take a path a successor has claimed.
     """
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter, uds: Path | None = None):
-        # A relative path is resolved against whatever directory the server was started from, so the path
-        # an operator wrote and the path a client dials would part company on the next start.
-        if uds is not None and not uds.is_absolute():
-            raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
-        self._host = host
-        self._port = port
-        self._uds = uds
-        self._api = api
+    def __init__(self, served_address: server_wire.ServedAddress):
+        if isinstance(served_address, ServedUnixSocket) and not served_address.uds.is_absolute():
+            # A relative path is resolved against whatever directory the server was started from, so the
+            # path an operator wrote and the path a client dials would part company on the next start.
+            raise ValueError(f'{served_address.uds!r} is a relative socket path; bind an absolute one')
+        self._binds = served_address
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
         self._served_address: server_wire.ServedAddress | None = None
@@ -183,22 +180,28 @@ class WebsocketWire(server_wire.Wire):
         assert self._served_address is not None, 'The websocket wire has not started'
         return self._served_address
 
-    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
+    async def start(
+        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+    ) -> None:
         self._served = False
-        if self._uds is not None:
-            self._sockets = [claim_socket_path(self._uds)]
-            self._served_address = ServedUnixSocket(self._uds)
-            bound_port = 0
+        binds = self._binds
+        if isinstance(binds, ServedUnixSocket):
+            self._sockets = [claim_socket_path(binds.uds)]
+            self._served_address = binds
+            bound_port, host = 0, ''
         else:
-            self._sockets = _listening_sockets(self._host, self._port)
+            assert isinstance(binds, server_wire.ServedHostPort), f'{type(binds).__name__} names no address to bind'
+            host = binds.host
+            self._sockets = _listening_sockets(host, binds.port)
+            # A wire asked for port 0 binds any free one, so what it serves on is known only now.
             bound_port = self._sockets[0].getsockname()[1]
-            self._served_address = server_wire.ServedHostPort(self._host, bound_port)
+            self._served_address = server_wire.ServedHostPort(host, bound_port)
         app = FastAPI()
-        app.include_router(self._api)
+        app.include_router(api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,
-            host=self._host,
+            host=host,
             port=bound_port,
             log_level='info',
             ws=WS_IMPL,

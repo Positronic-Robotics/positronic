@@ -113,57 +113,31 @@ def test_the_tls_member_dials_wss_and_probes_it():
 
 
 @pytest.mark.parametrize(
-    ('client_wire', 'address', 'session_url', 'api_url'),
+    ('client_wire', 'address', 'session_url'),
     [
-        (
-            websocket.WebsocketClientWire(),
-            _ADDRESS,
-            'ws://localhost:8000/api/v1/session',
-            'http://localhost:8000/api/v1',
-        ),
-        (
-            websocket.WebsocketClientWire(),
-            dataclasses.replace(_ADDRESS, port=80),
-            'ws://localhost/api/v1/session',
-            'http://localhost/api/v1',
-        ),
-        (
-            websocket.WebsocketTlsClientWire(),
-            dataclasses.replace(_ADDRESS, port=443),
-            'wss://localhost/api/v1/session',
-            'https://localhost/api/v1',
-        ),
+        (websocket.WebsocketClientWire(), _ADDRESS, 'ws://localhost:8000/api/v1/session'),
+        (websocket.WebsocketClientWire(), dataclasses.replace(_ADDRESS, port=80), 'ws://localhost/api/v1/session'),
+        (websocket.WebsocketTlsClientWire(), dataclasses.replace(_ADDRESS, port=443), 'wss://localhost/api/v1/session'),
         (
             websocket.WebsocketTlsClientWire(),
             dataclasses.replace(_ADDRESS, port=8443),
             'wss://localhost:8443/api/v1/session',
-            'https://localhost:8443/api/v1',
         ),
-        (
-            websocket.WebsocketClientWire(),
-            dataclasses.replace(_ADDRESS, host='::1'),
-            'ws://[::1]:8000/api/v1/session',
-            'http://[::1]:8000/api/v1',
-        ),
+        (websocket.WebsocketClientWire(), dataclasses.replace(_ADDRESS, host='::1'), 'ws://[::1]:8000/api/v1/session'),
         (
             websocket.WebsocketClientWire(),
             dataclasses.replace(_ADDRESS, host='127.0.0.1'),
             'ws://127.0.0.1:8000/api/v1/session',
-            'http://127.0.0.1:8000/api/v1',
         ),
         (
             websocket.WebsocketClientWire(),
             dataclasses.replace(_ADDRESS, path=wire.session_path('10000'), query='codec.fps=10&pad=false'),
             'ws://localhost:8000/api/v1/session/10000?codec.fps=10&pad=false',
-            'http://localhost:8000/api/v1',
         ),
     ],
 )
-def test_the_member_spells_the_session_and_the_api_and_leaves_out_its_default_port(
-    client_wire, address, session_url, api_url
-):
+def test_the_member_spells_the_session_and_leaves_out_its_default_port(client_wire, address, session_url):
     assert client_wire.session_url(address) == session_url
-    assert client_wire.api_url(address) == api_url
 
 
 def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_authority():
@@ -173,14 +147,6 @@ def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_authority():
 
     assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session/10000?fps=10'
     assert unix.handshake_url(address) == 'ws://localhost/api/v1/session/10000?fps=10'
-    assert unix.api_url(address) == 'http://localhost/api/v1'
-    assert unix.api_socket(address) == Path('/run/policy.sock')
-
-
-def test_a_member_that_dials_the_network_names_no_socket():
-    """A session that opens over TCP reads the catalogue over TCP, and its address cannot name a socket."""
-    assert websocket.WebsocketClientWire().api_socket(_ADDRESS) is None
-    assert websocket.WebsocketTlsClientWire().api_socket(_ADDRESS) is None
 
 
 def test_each_member_declares_the_address_it_dials():

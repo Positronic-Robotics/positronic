@@ -15,19 +15,23 @@ server side.
 
 | Wire | `--policy.wire` | Where it answers |
 |---|---|---|
-| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the server's `port`, beside the HTTP routes |
-| WebSocket on a Unix socket | `websocket_unix` | the server's `uds` path, beside the same HTTP routes |
-| gRPC | `grpc` | the server's `grpc_port`, sessions alone |
-| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same `grpc_port` |
+| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the HTTP routes |
+| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same HTTP routes |
+| gRPC | `grpc` | the gRPC wire's own port, sessions alone |
+| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same port |
 
-- A client names its wire; nothing reads one off a URL. The WebSocket wire is the default. A server serves
-  gRPC only when `grpc_port` names a port.
-- `websocket_unix` reaches a server on the same machine, over no network. `serve --uds /run/policy.sock`
-  binds that path in place of `host` and `port`, and `--policy.uds` dials it. A caller names the wire and
-  then fills that wire's address, so a socket address carries no host and no port at all. Both paths are
-  absolute: a relative one is resolved against whatever directory each side was started from, and the
-  address refuses it. A socket is same-machine by construction, so there is no TLS member beside it, and
-  `--uds` leaves the gRPC wire on host and port.
+- A client names its wire; nothing reads one off a URL. The WebSocket wire is the default, and a server
+  serves gRPC only where `--grpc` names that wire.
+- Each server wire carries the address it binds, and `serve` binds what it is given:
+  `--websocket.served_address.port=9000` moves the WebSocket wire, and
+  `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it
+  to a Unix socket instead. `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=9001` serves the gRPC wire beside it,
+  on an address of its own.
+- `websocket_unix` reaches a server on the same machine, over no network, and `--policy.uds` dials it.
+  A caller names the wire and then fills that wire's address, so a socket address carries no host and no
+  port at all — on either end. Both paths are absolute: a relative one is resolved against whatever
+  directory each side was started from, and the address refuses it. A socket is same-machine by
+  construction, so there is no TLS member beside it.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
@@ -277,7 +281,7 @@ which has no port at all.
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--uds`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--websocket`, `--grpc`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. It takes the wire and the address that wire

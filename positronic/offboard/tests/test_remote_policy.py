@@ -1,4 +1,3 @@
-import contextlib
 import dataclasses
 import pathlib
 import threading
@@ -6,7 +5,6 @@ import time
 from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
-import httpx
 import numpy as np
 import pytest
 from positronic_wire import websocket, wire
@@ -37,13 +35,16 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
+        self.catalogue_reads: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
+        self.models: list[str] = []
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
         return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
 
-    def api_url(self, address: wire.HostPortAddress) -> str:
-        return f'http://{wire.netloc(address, 0)}{wire.API_PATH}'
+    def list_models(self, address: wire.HostPortAddress, headers, open_timeout: float) -> list[str]:
+        self.catalogue_reads.append((address, headers, open_timeout))
+        return self.models
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -114,15 +115,6 @@ class TestPrepareObs:
         assert result[keys.TASK] == 'pick cube'
 
 
-@contextlib.contextmanager
-def _catalogue_call(models: list[str]):
-    """``httpx.Client`` patched so ``list_models`` reads ``models``. Yields the class and its ``get``."""
-    with patch('positronic.offboard.client.httpx.Client') as client_cls:
-        get = client_cls.return_value.__enter__.return_value.get
-        get.return_value.json.return_value = {'models': models}
-        yield client_cls, get
-
-
 class TestInferenceClientHeaders:
     def test_default_headers_empty(self):
         assert InferenceClient(websocket.WebsocketClientWire(), _ADDRESS).headers is None
@@ -153,36 +145,16 @@ class TestInferenceClientHeaders:
 
         assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
-    def test_list_models_passes_headers(self):
+    def test_the_catalogue_read_hands_the_wire_the_headers_and_the_open_timeout(self):
+        """The client owns neither the URL nor the transport now: it asks the wire, with what it dials with."""
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with _catalogue_call(['m1']) as (_client_cls, get):
-            client = InferenceClient(websocket.WebsocketClientWire(), _ADDRESS, headers=headers)
+        fake = _FakeWire()
+        fake.models = ['m1']
 
-            models = client.list_models()
+        client = InferenceClient(fake, _ADDRESS, headers=headers, open_timeout=3.0)
 
-            assert models == ['m1']
-            assert get.call_args.kwargs['headers'] == headers
-
-    def test_list_models_without_headers_passes_none(self):
-        with _catalogue_call([]) as (_client_cls, get):
-            InferenceClient(websocket.WebsocketClientWire(), _ADDRESS).list_models()
-
-            assert get.call_args.kwargs['headers'] is None
-
-    def test_list_models_over_the_network_builds_no_transport_of_its_own(self):
-        with _catalogue_call([]) as (client_cls, _get):
-            InferenceClient(websocket.WebsocketClientWire(), _ADDRESS).list_models()
-
-            assert client_cls.call_args.kwargs['transport'] is None
-
-    def test_list_models_over_a_socket_reads_the_catalogue_through_that_socket(self):
-        """The catalogue is an HTTP route beside the session, so it has to take the socket too."""
-        address = wire.UnixSocketAddress(pathlib.Path('/run/policy.sock'), wire.SESSION_PATH, '')
-        with _catalogue_call([]) as (client_cls, _get):
-            InferenceClient(websocket.WebsocketUnixClientWire(), address).list_models()
-
-            transport = client_cls.call_args.kwargs['transport']
-            assert isinstance(transport, httpx.HTTPTransport)
+        assert client.list_models() == ['m1']
+        assert fake.catalogue_reads == [(_ADDRESS, headers, 3.0)]
 
 
 def test_every_session_dials_the_same_address():
@@ -285,7 +257,6 @@ def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_th
     policy = RemotePolicy('websocket_tls', 'example.com', 443, model='10000', query='fps=2.5', headers=headers)
     client = policy._endpoint._client
     assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
-    assert client.api_url == 'https://example.com/api/v1'
     assert client.headers == headers
 
 

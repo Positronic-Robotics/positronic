@@ -5,7 +5,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-import httpx
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
@@ -164,7 +163,6 @@ class InferenceClient:
         self._wire = client_wire
         self._address = address
         self.session_url = client_wire.session_url(address)
-        self.api_url = client_wire.api_url(address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -208,12 +206,5 @@ class InferenceClient:
             backoff = min(backoff * 2, 30.0)
 
     def list_models(self) -> list[str]:
-        """List available models from the server."""
-        if self.api_url is None:
-            raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        api_socket = self._wire.api_socket(self._address)
-        transport = None if api_socket is None else httpx.HTTPTransport(uds=str(api_socket))
-        with httpx.Client(transport=transport) as client:
-            response = client.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
-        response.raise_for_status()
-        return response.json()['models']
+        """The models this server serves, read by the wire on the transport it carries sessions on."""
+        return self._wire.list_models(self._address, self.headers, self.open_timeout)

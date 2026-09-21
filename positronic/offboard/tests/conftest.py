@@ -52,17 +52,19 @@ def start_server() -> Generator[StartServer, None, None]:
 
     Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
     serves the gRPC wire beside the websocket one. ``uds`` binds the websocket wire to that socket path
-    instead, as ``serve --uds`` does; the port it reports is then 0.
+    instead, as a socket-bound websocket wire does; the port it reports is then 0.
     """
     running: list[tuple[PolicyServer, threading.Thread]] = []
 
     def start(pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, **server_kwargs)
-        socket_path = None if uds is None else Path(uds)
-        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api, uds=socket_path)]
+        binds: server_wire.ServedAddress = (
+            server_wire.ServedHostPort(host, 0) if uds is None else websocket_wire.ServedUnixSocket(Path(uds))
+        )
+        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(binds)]
         if grpc:
-            wires.append(grpc_wire.GrpcWire(host, 0))
+            wires.append(grpc_wire.GrpcWire(server_wire.ServedHostPort(host, 0)))
         ready = threading.Event()
         thread = threading.Thread(target=server.serve, args=(wires, ready.set), daemon=True)
         thread.start()
