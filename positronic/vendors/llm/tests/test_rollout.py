@@ -124,7 +124,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
         target_x = before['position_m'][0] + min(distance, Motion().max_translation)
-        assert before['position_m'][0] < after['position_m'][0] <= target_x
+        assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
         assert after['previous_target']['x'] == pytest.approx(target_x)
         assert after['gripper'] == pytest.approx(0.2)
         remaining = target_x - after['position_m'][0]

@@ -390,7 +390,7 @@ def test_delayed_motion_starts_at_delivery_pose_and_is_anchored_at_delivery(mode
         assert trajectory
         assert 5 < trajectory[0][keys.ACTION_TIMESTAMP] < trajectory[-1][keys.ACTION_TIMESTAMP]
         assert current_x < trajectory[0][keys.ROBOT_COMMAND].pose.translation[0] < expected_x
-        assert trajectory[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
+        assert trajectory[-2][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
         assert active(observation(), 5_100_000_000) is None
 
 
@@ -404,7 +404,7 @@ def test_clamped_target_is_reported_and_recorded_without_a_correction(model, req
         trajectory = active(observation(1, x=current_x), 1)
         assert trajectory
         assert len(requests) == 1
-        assert trajectory[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
+        assert trajectory[-2][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
         assert complete(active, rt, observation(2, x=current_x), 2) == []
         events = active.meta['transcript']
     assert len(requests) == 2

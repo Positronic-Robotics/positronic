@@ -71,7 +71,7 @@ class Motion:
         steps = math.ceil(duration * self.fps)
         times = np.arange(1, steps + 1) / self.fps
         fractions = times / times[-1]
-        return target, [
+        trajectory = [
             {
                 keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
                 keys.TARGET_GRIP: target.gripper,
@@ -79,3 +79,6 @@ class Motion:
             }
             for fraction, timestamp in zip(fractions, times, strict=True)
         ]
+        # A timestamp-only entry marks chunk expiry after the final command's sampling period.
+        trajectory.append({keys.ACTION_TIMESTAMP: float(times[-1] + 1 / self.fps)})
+        return target, trajectory
