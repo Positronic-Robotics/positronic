@@ -136,12 +136,13 @@ _PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 class Endpoint(Cascade):
     """One policy to run, and where it comes from.
 
-    A `remote` endpoint is an address the caller provides. A `served` endpoint names the checkpoint
-    it serves (`spec`) and has no `url`: the platform starts it and records the address. `provider`
-    names what starts it, and the platform derives one from `spec` when the entry names none. An
-    `image` endpoint names the container image the platform runs the policy from, and
-    `image_credential` opens the registry when that image is not public. An entry on a task carrying
-    no locator at all names one of the plan's endpoints.
+    * `remote` — the caller provides the address, as `url`.
+    * `served` — `spec` names the checkpoint, and the platform starts it and records the address.
+      `provider` names what starts it, and the platform derives one from `spec` when the entry
+      names none.
+    * `image` — `image` names the container the platform runs the policy from, and
+      `image_credential` opens the registry that serves it to no anonymous caller.
+    * no locator at all — the entry sits on a task and names one of the plan's endpoints.
     """
 
     name: str = Field(min_length=1)

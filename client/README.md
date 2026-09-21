@@ -105,8 +105,7 @@ A policy image is one endpoint of a plan: `--policy-image` states an `image` end
 the eval whose tasks it runs. `plan_of_image` builds that shape.
 
 An `image` endpoint whose registry serves no anonymous caller states `image_credential`, which
-names the registry user and the FILE the password is in. A plan holds the path; the send path
-reads the file, so nothing that renders or refuses a plan holds the password.
+names the registry user and the FILE the password is in.
 
 ```yaml
 endpoints:
