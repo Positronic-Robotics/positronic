@@ -36,10 +36,7 @@ class _Arm:
 class AbcEnv(EnvProtocol):
     """An ABC task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
-    Built from the reset token's task and camera size and cached; ``reset`` rebuilds when either changes, then
-    draws a world from the trial's seed. ``step`` maps each arm's forwarded command into ABC's joint action and
-    returns its raw observation plus the full physics state — the privileged ground truth, so success is
-    recomputable downstream — and whether the task evaluator has called the episode won.
+    ``reset`` rebuilds the env when the token's task or camera size changes.
     """
 
     def __init__(self):
@@ -151,7 +148,6 @@ class AbcEnv(EnvProtocol):
 
     def _observe(self, obs: dict[str, Any]) -> dict[str, Any]:
         self._sync_sites()
-        # ABC lays its state out as ``[joints(6), aperture]`` per arm, in the order it names its robots.
         per_arm = np.asarray(obs[mapping.ABC_OBS_STATE]).reshape(len(self._arms), mapping.ARM_JOINTS + 1)
         payload: dict[str, Any] = {mapping.OBS_SIM_STATE: self._physics_state()}
         for index, arm in enumerate(self._arms):
