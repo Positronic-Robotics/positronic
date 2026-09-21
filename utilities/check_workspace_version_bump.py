@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -25,25 +25,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 BASE_REV_ENV = 'RATCHET_BASE'
 
-ROOT_MANIFEST = 'pyproject.toml'
+ROOT_MANIFEST = PurePosixPath('pyproject.toml')
 
 
 class Member(NamedTuple):
     """A workspace member the root pins: the directory it ships from, and the name the root pins it by."""
 
-    directory: str
+    # Repository-relative, as git names paths.
+    directory: PurePosixPath
     distribution: str
     # The package the root imports from it, named in a failure so the reader knows what a missing pin costs.
     package: str
 
     @property
-    def manifest(self) -> str:
-        return f'{self.directory}/pyproject.toml'
+    def manifest(self) -> PurePosixPath:
+        return self.directory / 'pyproject.toml'
 
 
 MEMBERS = (
-    Member('client', 'positronic-platform-client', 'platform_client'),
-    Member('wire', 'positronic-wire', 'positronic_wire'),
+    Member(PurePosixPath('client'), 'positronic-platform-client', 'platform_client'),
+    Member(PurePosixPath('wire'), 'positronic-wire', 'positronic_wire'),
 )
 
 # Changes that cannot reach the installed wheel. A test is NOT here: it ships inside the package
@@ -73,7 +74,7 @@ def resolve_merge_base(ref: str) -> str | None:
     return run_git('rev-parse', ref) or None
 
 
-def is_later_version(was: str, is_now: str, manifest: str = 'the manifest') -> bool:
+def is_later_version(was: str, is_now: str, manifest: PurePosixPath) -> bool:
     """Whether `is_now` is a LATER version than `was`, by the ordering the index will use.
 
     PEP 440 through `packaging`, not a hand-rolled tuple: the index resolves these versions by that
@@ -89,7 +90,7 @@ def is_later_version(was: str, is_now: str, manifest: str = 'the manifest') -> b
         raise SystemExit(f'ERROR - {manifest} version is not PEP 440: {exc}') from exc
 
 
-def declared_version(text: str, *, guarded: str | None = None) -> str | None:
+def declared_version(text: str, *, guarded: PurePosixPath | None = None) -> str | None:
     """The `version` a pyproject declares under `[project]`, or None where it declares none.
 
     Parsed out of TOML rather than scanned for as text, like the pin below: to a scan a `version`
@@ -144,7 +145,7 @@ def pinned_version(text: str, distribution: str) -> str | None:
     return None
 
 
-def changed_paths(base: str) -> list[str] | None:
+def changed_paths(base: str) -> list[PurePosixPath] | None:
     """Every path this change touches against `base` — working tree, index, and new files.
 
     A brand-new module is what a `diff` alone misses, and it is exactly what a wire change looks
@@ -155,13 +156,12 @@ def changed_paths(base: str) -> list[str] | None:
         return None
     staged = run_git('diff', '--name-only', '--cached', base, '--') or ''
     untracked = run_git('ls-files', '--others', '--exclude-standard') or ''
-    return sorted({p for p in (tracked + '\n' + staged + '\n' + untracked).splitlines() if p.strip()})
+    return sorted({PurePosixPath(p) for p in (tracked + '\n' + staged + '\n' + untracked).splitlines() if p.strip()})
 
 
-def shipped_changes(paths: list[str], member: Member) -> list[str]:
+def shipped_changes(paths: list[PurePosixPath], member: Member) -> list[PurePosixPath]:
     """The changed paths under the member's directory that could alter what an install runs."""
-    prefix = f'{member.directory}/'
-    return [p for p in paths if p.startswith(prefix) and not p.endswith(EXEMPT_SUFFIXES)]
+    return [p for p in paths if p.is_relative_to(member.directory) and p.suffix not in EXEMPT_SUFFIXES]
 
 
 def check(base: str) -> list[str]:
@@ -173,7 +173,7 @@ def check(base: str) -> list[str]:
     return [failure for member in MEMBERS for failure in check_member(member, base, paths, root)]
 
 
-def check_member(member: Member, base: str, paths: list[str] | None, root: str) -> list[str]:
+def check_member(member: Member, base: str, paths: list[PurePosixPath] | None, root: str) -> list[str]:
     """Every way this change leaves `member`, its version and the root's pin on it out of step."""
     failures: list[str] = []
     now = declared_version((REPO_ROOT / member.manifest).read_text(), guarded=member.manifest)

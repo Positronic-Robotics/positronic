@@ -1,5 +1,7 @@
 """The gate that keeps each workspace member's code, its version, and the root's pin on it in step."""
 
+from pathlib import PurePosixPath
+
 import pytest
 
 from utilities import check_workspace_version_bump as gate
@@ -8,35 +10,35 @@ CLIENT, WIRE = gate.MEMBERS
 
 
 def test_a_later_version_is_later():
-    assert gate.is_later_version('0.1.0', '0.2.0')
-    assert gate.is_later_version('0.1.0', '0.1.1')
-    assert gate.is_later_version('0.9.0', '0.10.0')  # numeric, so 10 is not read as older than 9
+    assert gate.is_later_version('0.1.0', '0.2.0', CLIENT.manifest)
+    assert gate.is_later_version('0.1.0', '0.1.1', CLIENT.manifest)
+    assert gate.is_later_version('0.9.0', '0.10.0', CLIENT.manifest)  # numeric, so 10 is not read as older than 9
 
 
 def test_an_unchanged_or_backwards_version_is_not_later():
-    assert not gate.is_later_version('0.2.0', '0.2.0')
-    assert not gate.is_later_version('0.2.0', '0.1.0')
+    assert not gate.is_later_version('0.2.0', '0.2.0', CLIENT.manifest)
+    assert not gate.is_later_version('0.2.0', '0.1.0', CLIENT.manifest)
 
 
 def test_a_padded_zero_is_the_same_version():
     # packaging reads 1.0 and 1.0.0 as one version, so a release "bumped" that way ships as its
     # predecessor and `skip-existing` skips it.
-    assert not gate.is_later_version('1.0', '1.0.0')
-    assert not gate.is_later_version('1.0.0', '1.0')
+    assert not gate.is_later_version('1.0', '1.0.0', CLIENT.manifest)
+    assert not gate.is_later_version('1.0.0', '1.0', CLIENT.manifest)
 
 
 def test_pre_releases_order_the_way_the_index_orders_them():
     # PEP 440, which a hand-rolled tuple gets backwards in both directions: a release candidate
     # PRECEDES its release, and rc10 FOLLOWS rc2.
-    assert gate.is_later_version('1.0rc1', '1.0')
-    assert not gate.is_later_version('1.0', '1.0rc1')
-    assert gate.is_later_version('1.0rc2', '1.0rc10')
-    assert not gate.is_later_version('1.0rc10', '1.0rc2')
+    assert gate.is_later_version('1.0rc1', '1.0', CLIENT.manifest)
+    assert not gate.is_later_version('1.0', '1.0rc1', CLIENT.manifest)
+    assert gate.is_later_version('1.0rc2', '1.0rc10', CLIENT.manifest)
+    assert not gate.is_later_version('1.0rc10', '1.0rc2', CLIENT.manifest)
 
 
 def test_a_version_the_index_could_not_read_fails_closed():
     with pytest.raises(SystemExit):
-        gate.is_later_version('0.1.0', 'not-a-version')
+        gate.is_later_version('0.1.0', 'not-a-version', CLIENT.manifest)
 
 
 def test_the_declared_version_is_read_from_a_manifest():
@@ -114,21 +116,20 @@ def test_a_manifest_that_does_not_parse_fails_closed():
 
 def test_only_shipped_paths_under_the_client_demand_a_bump():
     paths = [
-        'client/platform_client/responses.py',
-        'client/README.md',
-        'positronic/cli/eval/submit.py',
-        'pyproject.toml',
+        PurePosixPath('client/platform_client/responses.py'),
+        PurePosixPath('client/README.md'),
+        PurePosixPath('positronic/cli/eval/submit.py'),
+        PurePosixPath('pyproject.toml'),
     ]
     # The README ships in the wheel but cannot change what an install runs; the two paths outside
     # `client/` belong to the root distribution, which carries its own version.
-    assert gate.shipped_changes(paths, CLIENT) == ['client/platform_client/responses.py']
+    assert gate.shipped_changes(paths, CLIENT) == [PurePosixPath('client/platform_client/responses.py')]
 
 
 def test_a_client_test_counts_as_shipped():
     # It sits inside the package directory, so two revisions behind one version would differ.
-    assert gate.shipped_changes(['client/platform_client/tests/test_models.py'], CLIENT) == [
-        'client/platform_client/tests/test_models.py'
-    ]
+    test = PurePosixPath('client/platform_client/tests/test_models.py')
+    assert gate.shipped_changes([test], CLIENT) == [test]
 
 
 def test_the_wire_pin_is_read_beside_the_client_pin():
@@ -138,6 +139,14 @@ def test_the_wire_pin_is_read_beside_the_client_pin():
 
 
 def test_a_change_under_one_member_is_that_members_alone():
-    paths = ['wire/positronic_wire/grpc.py', 'wire/README.md', 'client/platform_client/routes.py']
-    assert gate.shipped_changes(paths, WIRE) == ['wire/positronic_wire/grpc.py']
-    assert gate.shipped_changes(paths, CLIENT) == ['client/platform_client/routes.py']
+    wire, readme, client = (
+        PurePosixPath('wire/positronic_wire/grpc.py'),
+        PurePosixPath('wire/README.md'),
+        PurePosixPath('client/platform_client/routes.py'),
+    )
+    assert gate.shipped_changes([wire, readme, client], WIRE) == [wire]
+    assert gate.shipped_changes([wire, readme, client], CLIENT) == [client]
+
+
+def test_a_sibling_directory_sharing_the_prefix_is_not_the_member():
+    assert gate.shipped_changes([PurePosixPath('wireless/x.py'), PurePosixPath('wire.py')], WIRE) == []
