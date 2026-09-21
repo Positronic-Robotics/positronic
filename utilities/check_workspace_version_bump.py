@@ -1,18 +1,19 @@
-"""Keep the published client, its version, and the root's pin on it in step.
+"""Keep each published workspace member, its version, and the root's pin on it in step.
 
-`positronic` requires `positronic-platform-client==<version>`, and the release workflow publishes
-the client first with `skip-existing`. That flag is what makes republishing an unchanged client a
-no-op rather than a failed release, and it is also the hole: if `client/` changes and its version
-does not, PyPI keeps the old wheel, the publish step reports success, and the root release then goes
-out depending on a version whose bytes are not the ones in this repository. Nothing fails — a fresh
-install just gets the old client, which is why this is caught here rather than at release time.
+`positronic` requires `positronic-platform-client==<version>` and `positronic-wire==<version>`, and
+the release workflow publishes each member first with `skip-existing`. That flag is what makes
+republishing an unchanged member a no-op rather than a failed release, and it is also the hole: if
+a member's directory changes and its version does not, PyPI keeps the old wheel, the publish step
+reports success, and the root release then goes out depending on a version whose bytes are not the
+ones in this repository. Nothing fails — a fresh install just gets the old member, which is why
+this is caught here rather than at release time.
 
-Two things are checked, and it takes both to close it:
+Two things are checked per member, and it takes both to close it:
 
-1. A change under `client/` bumps `client/pyproject.toml`'s `version`. Without this the new code
-   never reaches the index, because `skip-existing` skips a version already published.
-2. The root's `positronic-platform-client==` pin names exactly that version. Without this the
-   client publishes fine and the root ships depending on the previous one.
+1. A change under the member's directory bumps its `pyproject.toml`'s `version`. Without this the
+   new code never reaches the index, because `skip-existing` skips a version already published.
+2. The root's `==` pin on the member names exactly that version. Without this the member publishes
+   fine and the root ships depending on the previous one.
 
 The version must INCREASE, not merely differ: a version already published under other code is worse
 than no bump at all, since the index will keep whichever bytes got there first.
@@ -21,7 +22,7 @@ Judged against `--base` (else `$RATCHET_BASE`, else `origin/main`), at the merge
 landed on the base side meanwhile is not this change's to claim.
 
 Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable base, or a base with no
-`client/pyproject.toml` (the client's own first commit) — so an offline commit is never blocked and
+manifest for the member (the member's own first commit) — so an offline commit is never blocked and
 CI, which always has the base sha, is where the gate holds. A manifest that is present and
 unreadable fails closed: that is a corrupt guarded file, not an absence.
 
@@ -42,6 +43,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
@@ -51,11 +53,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 BASE_REV_ENV = 'RATCHET_BASE'
 
-# The directory the distribution ships, its manifest, and the name the root pins it by.
-CLIENT_DIR = 'client'
-CLIENT_MANIFEST = 'client/pyproject.toml'
 ROOT_MANIFEST = 'pyproject.toml'
-DISTRIBUTION = 'positronic-platform-client'
+
+
+class Member(NamedTuple):
+    """A workspace member the root pins: the directory it ships from, and the name the root pins it by."""
+
+    directory: str
+    distribution: str
+    # The package the root imports from it, named in a failure so the reader knows what a missing pin costs.
+    package: str
+
+    @property
+    def manifest(self) -> str:
+        return f'{self.directory}/pyproject.toml'
+
+
+MEMBERS = (
+    Member('client', 'positronic-platform-client', 'platform_client'),
+    Member('wire', 'positronic-wire', 'positronic_wire'),
+)
 
 # Changes that cannot reach the installed wheel. A test is NOT here: it ships inside the package
 # directory, and a reader comparing two revisions may expect the same code behind the same version.
@@ -84,7 +101,7 @@ def resolve_merge_base(ref: str) -> str | None:
     return run_git('rev-parse', ref) or None
 
 
-def is_later_version(was: str, is_now: str) -> bool:
+def is_later_version(was: str, is_now: str, manifest: str = 'the manifest') -> bool:
     """Whether `is_now` is a LATER version than `was`, by the ordering the index will use.
 
     PEP 440 through `packaging`, not a hand-rolled tuple: the index resolves these versions by that
@@ -97,7 +114,7 @@ def is_later_version(was: str, is_now: str) -> bool:
         return Version(is_now) > Version(was)
     except InvalidVersion as exc:
         # Fails closed, and says which value the index would have refused too.
-        raise SystemExit(f'ERROR - {CLIENT_MANIFEST} version is not PEP 440: {exc}') from exc
+        raise SystemExit(f'ERROR - {manifest} version is not PEP 440: {exc}') from exc
 
 
 def declared_version(text: str, *, guarded: str | None = None) -> str | None:
@@ -121,8 +138,8 @@ def declared_version(text: str, *, guarded: str | None = None) -> str | None:
     return version if isinstance(version, str) else None
 
 
-def pinned_version(text: str) -> str | None:
-    """The version the root manifest pins the client at, or None where it pins none.
+def pinned_version(text: str, distribution: str) -> str | None:
+    """The version the root manifest pins `distribution` at, or None where it pins none.
 
     Read as a requirement out of parsed TOML rather than scanned for as text: to a scan a
     commented-out line reads as a live pin, so a dependency deleted the way one usually is — its
@@ -144,11 +161,11 @@ def pinned_version(text: str) -> str | None:
             requirement = Requirement(entry)
         except InvalidRequirement:
             continue
-        if canonicalize_name(requirement.name) != canonicalize_name(DISTRIBUTION):
+        if canonicalize_name(requirement.name) != canonicalize_name(distribution):
             continue
         # Only `==<version>` alone, and unconditionally, is a pin: anything else resolves to whatever
-        # the index offers, and a marker (`; python_version < '3'`) leaves the client uninstalled on
-        # every interpreter this project supports, where the CLI imports `platform_client` regardless.
+        # the index offers, and a marker (`; python_version < '3'`) leaves the member uninstalled on
+        # every interpreter this project supports, where the root imports it regardless.
         specifiers = list(requirement.specifier)
         if requirement.marker is None and len(specifiers) == 1 and specifiers[0].operator == '==':
             return specifiers[0].version
@@ -169,60 +186,67 @@ def changed_paths(base: str) -> list[str] | None:
     return sorted({p for p in (tracked + '\n' + staged + '\n' + untracked).splitlines() if p.strip()})
 
 
-def shipped_changes(paths: list[str]) -> list[str]:
-    """The changed paths under `client/` that could alter what an install runs."""
-    prefix = f'{CLIENT_DIR}/'
+def shipped_changes(paths: list[str], member: Member) -> list[str]:
+    """The changed paths under the member's directory that could alter what an install runs."""
+    prefix = f'{member.directory}/'
     return [p for p in paths if p.startswith(prefix) and not p.endswith(EXEMPT_SUFFIXES)]
 
 
 def check(base: str) -> list[str]:
-    """Every way this change leaves the client, its version and the root's pin out of step."""
-    failures: list[str] = []
-    now = declared_version((REPO_ROOT / CLIENT_MANIFEST).read_text(), guarded=CLIENT_MANIFEST)
-    if now is None:
-        raise SystemExit(f'ERROR - {CLIENT_MANIFEST} declares no readable `version`, so the gate cannot judge it.')
+    """Every way this change leaves a member, its version and the root's pin out of step."""
+    paths = changed_paths(base)
+    if paths is None:
+        print(f'NOTE - could not diff against {base}; skipping the version-bump gate.', file=sys.stderr)
+    root = (REPO_ROOT / ROOT_MANIFEST).read_text()
+    return [failure for member in MEMBERS for failure in check_member(member, base, paths, root)]
 
-    # 2. The pin travels with the version whether or not this change touched the client, so it is
+
+def check_member(member: Member, base: str, paths: list[str] | None, root: str) -> list[str]:
+    """Every way this change leaves `member`, its version and the root's pin on it out of step."""
+    failures: list[str] = []
+    now = declared_version((REPO_ROOT / member.manifest).read_text(), guarded=member.manifest)
+    if now is None:
+        raise SystemExit(f'ERROR - {member.manifest} declares no readable `version`, so the gate cannot judge it.')
+
+    # 2. The pin travels with the version whether or not this change touched the member, so it is
     #    checked first and unconditionally: a bump that forgets the pin is the same stale install.
-    pinned = pinned_version((REPO_ROOT / ROOT_MANIFEST).read_text())
+    pinned = pinned_version(root, member.distribution)
     if pinned is None:
-        # Not an absence to skip past: the CLI imports `platform_client`, so a root that no longer
-        # names an exact version resolves whatever the index offers — the same stale-or-incompatible
+        # Not an absence to skip past: the root imports the package, so a root that no longer names
+        # an exact version resolves whatever the index offers — the same stale-or-incompatible
         # install this gate exists to refuse, reached by deleting the pin instead of by lagging it.
         failures.append(
-            f'{ROOT_MANIFEST} declares no `{DISTRIBUTION}=={{version}}`, yet the CLI imports '
-            f'`platform_client`. A release would resolve whatever the index offers. Pin it at {now}, '
+            f'{ROOT_MANIFEST} declares no `{member.distribution}=={{version}}`, yet the root imports '
+            f'`{member.package}`. A release would resolve whatever the index offers. Pin it at {now}, '
             f'or drop this gate along with the dependency.'
         )
     elif pinned != now:
         failures.append(
-            f'{ROOT_MANIFEST} pins {DISTRIBUTION}=={pinned} while {CLIENT_MANIFEST} declares {now}. '
-            f'A release would publish the client as {now} and then publish the root depending on '
-            f'{pinned} — the previous wheel. Move the pin to {now}.'
+            f'{ROOT_MANIFEST} pins {member.distribution}=={pinned} while {member.manifest} declares {now}. '
+            f'A release would publish {member.distribution} as {now} and then publish the root depending '
+            f'on {pinned} — the previous wheel. Move the pin to {now}.'
         )
 
-    paths = changed_paths(base)
     if paths is None:
-        print(f'NOTE - could not diff against {base}; skipping the version-bump gate.', file=sys.stderr)
         return failures
-    edited = shipped_changes(paths)
+    edited = shipped_changes(paths, member)
     if not edited:
         return failures
 
     # 1. Changed code needs a version the index has never seen, or `skip-existing` keeps the old one.
-    before = run_git('show', f'{base}:{CLIENT_MANIFEST}')
+    before = run_git('show', f'{base}:{member.manifest}')
     if before is None:
-        print(f'NOTE - {base} carries no {CLIENT_MANIFEST}; skipping the version-bump gate.', file=sys.stderr)
+        print(f'NOTE - {base} carries no {member.manifest}; skipping the version-bump gate.', file=sys.stderr)
         return failures
     was = declared_version(before)
     if was is None:
-        print(f'NOTE - {base}:{CLIENT_MANIFEST} declares no readable `version`; skipping.', file=sys.stderr)
+        print(f'NOTE - {base}:{member.manifest} declares no readable `version`; skipping.', file=sys.stderr)
         return failures
-    if not is_later_version(was, now):
+    if not is_later_version(was, now, member.manifest):
         moved = 'still' if was == now else f'moved BACKWARDS from {was} to'
         failures.append(
-            f'{len(edited)} file(s) changed under {CLIENT_DIR}/ with `version` {moved} {now}. '
-            f'Bump it in {CLIENT_MANIFEST} (and the root pin with it): the release publishes with '
+            f'{len(edited)} file(s) changed under {member.directory}/ with `version` {moved} {now}. '
+            f'Bump it in {member.manifest} (and the root pin with it): the release publishes with '
             f'`skip-existing`, so republishing {now} is a silent no-op and the root would ship '
             f'depending on bytes this repository no longer contains. First changed file: {edited[0]}'
         )
@@ -238,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     ref = resolve_base_ref(args.base, os.environ.get(BASE_REV_ENV))
     base = resolve_merge_base(ref)
     if base is None:
-        print(f'NOTE - {ref} does not resolve; skipping the client version gate.', file=sys.stderr)
+        print(f'NOTE - {ref} does not resolve; skipping the workspace version gate.', file=sys.stderr)
         return 0
     failures = check(base)
     for failure in failures:

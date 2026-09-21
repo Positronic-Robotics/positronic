@@ -6,28 +6,25 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
-from http import HTTPStatus
 from typing import Any
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, MagicMock
 
 import configuronic as cfn
 import httpx
 import pytest
-from websockets.datastructures import Headers
-from websockets.exceptions import InvalidStatus
-from websockets.http11 import Response
+from positronic_wire import wire
+from positronic_wire.websocket import WebsocketClientConnection
 from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import protocol, websocket_wire, wire
+from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
-from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
@@ -59,7 +56,7 @@ class _StubSource(ModelSource):
 _A_MOMENT_IDLE = 0.5
 
 
-class _FailingWire(wire.Wire):
+class _FailingWire(server_wire.Wire):
     """Serves for ``after`` seconds, then raises."""
 
     def __init__(self, after: float):
@@ -70,7 +67,7 @@ class _FailingWire(wire.Wire):
     def endpoint(self) -> wire.Endpoint:
         return wire.Endpoint('localhost', 0)
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         pass
 
     async def serve(self) -> None:
@@ -81,14 +78,14 @@ class _FailingWire(wire.Wire):
         self.stopped = True
 
 
-class _UnbindableWire(wire.Wire):
+class _UnbindableWire(server_wire.Wire):
     """A wire whose port is taken."""
 
     @property
     def endpoint(self) -> wire.Endpoint:
         raise AssertionError('it never bound')
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         raise OSError('that port is taken')
 
     async def serve(self) -> None:
@@ -762,29 +759,6 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
     with pytest.raises(httpx.HTTPStatusError):
         client.list_models()
-
-
-@pytest.mark.parametrize(
-    ('status', 'refusal'),
-    [
-        (HTTPStatus.FORBIDDEN, wire.Refusal.FORBIDDEN),
-        (HTTPStatus.TOO_MANY_REQUESTS, wire.Refusal.COLD),
-        (HTTPStatus.SERVICE_UNAVAILABLE, wire.Refusal.COLD),
-        (HTTPStatus.BAD_GATEWAY, wire.Refusal.COLD),
-        (HTTPStatus.UNAUTHORIZED, wire.Refusal.FINAL),
-        (HTTPStatus.NOT_FOUND, wire.Refusal.FINAL),
-    ],
-)
-def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal):
-    refused_upgrade = InvalidStatus(Response(status, 'refused', Headers()))
-    with (
-        patch('positronic.offboard.websocket_wire.connect', side_effect=refused_upgrade),
-        pytest.raises(wire.ConnectRefused) as refused,
-    ):
-        address = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
-        websocket_wire.WebsocketClientWire().dial(address, None, 1.0)
-    assert refused.value.refusal is refusal
-    assert refused.value.__cause__ is refused_upgrade
 
 
 @pytest.mark.endpoint

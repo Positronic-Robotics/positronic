@@ -23,13 +23,14 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
+from positronic_wire import wire
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.offboard import protocol, websocket_wire, wire
+from positronic.offboard import protocol, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session

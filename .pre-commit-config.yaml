@@ -46,13 +46,13 @@ repos:
         files: '^(uv\.lock|stubs/mujoco/.*|utilities/generate_mujoco_stubs\.py)$'
         pass_filenames: false
         stages: [pre-commit]
-      - id: client-version-bump
-        name: a changed client declares a new version, and the root pins it
-        # Reads git and both manifests, so takes no filenames. Scoped to the paths that can put the
-        # three out of step: the shipped client, its manifest, and the root's pin.
-        entry: uv run --locked python3 utilities/check_client_version_bump.py
+      - id: workspace-version-bump
+        name: a changed workspace member declares a new version, and the root pins it
+        # Reads git and the manifests, so takes no filenames. Scoped to the paths that can put a
+        # member out of step: its shipped directory, its manifest, and the root's pin.
+        entry: uv run --locked python3 utilities/check_workspace_version_bump.py
         language: system
-        files: '^(client/.*|pyproject\.toml)$'
+        files: '^(client/.*|wire/.*|pyproject\.toml)$'
         pass_filenames: false
         stages: [pre-commit]
       - id: basedpyright-baseline-ratchet

@@ -1,18 +1,18 @@
 import logging
 import time
-import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Self
 
 import httpx
+from positronic_wire import wire, wires
+from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
 
-from . import protocol, wire, wires
+from . import protocol
 from .protocol import deserialise, serialise, typed_commands
-from .wire import ClientWire
 
 logger = logging.getLogger(__name__)
 
@@ -137,21 +137,6 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-def _session_path(path: str, url: str) -> str:
-    """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
-
-    A URL naming no model — a bare host, or the endpoint with or without a trailing slash — addresses the
-    endpoint itself, which serves whatever the server pinned.
-    """
-    if path.rstrip('/') in ('', wire.SESSION_PATH):
-        return wire.SESSION_PATH
-    if not path.startswith(f'{wire.SESSION_PATH}/'):
-        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    # Kept as written, percent-encoding included: a trailing slash is part of the id, and an id that is
-    # itself a path (a HuggingFace repo) keeps its slashes as separators.
-    return path
-
-
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
@@ -197,22 +182,7 @@ class InferenceClient:
         without TLS. The port defaults to 443 with TLS and to 80 without. The model id and the query reach
         the server as written, and every session opened here carries them.
         """
-        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        selected = wires.BY_SCHEME.get(split.scheme)
-        if selected is None:
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
-        client_wire, scheme = selected
-        address = wire.SessionAddress(
-            host=split.hostname,
-            port=wire.default_port(scheme.secure) if split.port is None else split.port,
-            path=_session_path(split.path, url),
-            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
-            # wrote the URL knows whether `true` means the bool or the string.
-            query=split.query,
-            secure=scheme.secure,
-        )
+        client_wire, address = wires.from_url(url)
         return cls(
             client_wire,
             address,

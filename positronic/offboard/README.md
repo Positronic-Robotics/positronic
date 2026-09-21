@@ -9,7 +9,9 @@ The protocol connects any hardware to any model. All Positronic inference server
 ### Wires
 
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
-the same order.
+the same order. The client side of each wire, and the facts both ends share, ship as the
+`positronic-wire` distribution ([wire/README.md](../../wire/README.md)); this package holds the
+server side.
 
 | Wire | URL | Port |
 |---|---|---|

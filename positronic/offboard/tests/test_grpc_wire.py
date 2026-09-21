@@ -11,7 +11,6 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
-from typing import cast
 from unittest.mock import ANY, MagicMock
 
 import configuronic as cfn
@@ -22,8 +21,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 from cryptography.x509.oid import NameOID
+from positronic_wire import grpc as client_grpc
+from positronic_wire import wire
 
-from positronic.offboard import grpc_wire, wire
+from positronic.offboard import grpc_wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, bearer
@@ -318,56 +319,6 @@ def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, m
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
-@pytest.mark.parametrize(
-    ('code', 'details', 'refusal'),
-    [
-        (grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token', wire.Refusal.FORBIDDEN),
-        (grpc.StatusCode.UNAVAILABLE, 'connection refused', wire.Refusal.COLD),
-        (grpc.StatusCode.RESOURCE_EXHAUSTED, '', wire.Refusal.COLD),
-        (grpc.StatusCode.DEADLINE_EXCEEDED, '', wire.Refusal.COLD),
-        (grpc.StatusCode.UNAVAILABLE, 'Cannot check peer: missing selected ALPN property', wire.Refusal.FINAL),
-        (grpc.StatusCode.UNAVAILABLE, 'CERTIFICATE_VERIFY_FAILED', wire.Refusal.FINAL),
-        (
-            grpc.StatusCode.UNAVAILABLE,
-            'address lookup failed for gpu-host:443: Domain name not found',
-            wire.Refusal.FINAL,
-        ),
-        (
-            grpc.StatusCode.UNAVAILABLE,
-            'address lookup failed for gpu-host:443: DNS server returned answer with no data',
-            wire.Refusal.FINAL,
-        ),
-        (
-            grpc.StatusCode.UNAVAILABLE,
-            'address lookup failed for gpu-host:443: Timeout while contacting DNS servers',
-            wire.Refusal.COLD,
-        ),
-        (
-            grpc.StatusCode.RESOURCE_EXHAUSTED,
-            'received metadata size exceeds hard limit (value length 200000 vs. 16384)',
-            wire.Refusal.FINAL,
-        ),
-        (
-            grpc.StatusCode.RESOURCE_EXHAUSTED,
-            'CLIENT: Received message larger than max (85 vs. 10)',
-            wire.Refusal.FINAL,
-        ),
-        (
-            grpc.StatusCode.RESOURCE_EXHAUSTED,
-            'Sent message larger than max (20000000 vs. 16777216)',
-            wire.Refusal.FINAL,
-        ),
-        (grpc.StatusCode.UNIMPLEMENTED, '', wire.Refusal.FINAL),
-        (grpc.StatusCode.INTERNAL, '', wire.Refusal.FINAL),
-    ],
-)
-def test_a_status_that_refuses_the_call_reads_as_its_http_status_does(code, details, refusal):
-    status = MagicMock()
-    status.code.return_value = code
-    status.details.return_value = details
-    assert grpc_wire._refusal(status) is refusal
-
-
 def test_an_unknown_scheme_is_refused():
     with pytest.raises(ValueError, match='Unsupported scheme'):
         InferenceClient.from_url('tcp://gpu-host:9000')
@@ -379,19 +330,6 @@ def test_a_grpc_url_names_the_session_port_alone(url):
     assert client.session_url == f'{url}/api/v1/session'
     with pytest.raises(ValueError, match='carries sessions alone'):
         client.list_models()
-
-
-@pytest.mark.parametrize(
-    ('url', 'target', 'secure'),
-    [
-        ('grpc://gpu-host', 'gpu-host:80', False),
-        ('grpcs://gpu-host', 'gpu-host:443', True),
-        ('grpcs://gpu-host:9000', 'gpu-host:9000', True),
-    ],
-)
-def test_the_scheme_fixes_the_port_and_the_tls(url, target, secure):
-    client = InferenceClient.from_url(url)
-    assert (f'{client._address.host}:{client._address.port}', client._address.secure) == (target, secure)
 
 
 @pytest.mark.parametrize(
@@ -421,7 +359,7 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
 
 def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
     served, _policy = both_wires
-    budget = grpc_wire._REFUSAL_PROBE_SEC / 2
+    budget = client_grpc._REFUSAL_PROBE_SEC / 2
     session = InferenceClient.from_url(grpc_url(served), open_timeout=budget, connect_deadline=0.0).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [1, 2, 3]}]
@@ -429,35 +367,10 @@ def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
         session.close()
 
 
-def _dialled_target(host: str, monkeypatch) -> str:
-    """The gRPC target ``dial`` builds for ``host``, without opening a channel."""
-    targets = []
-
-    def refuse(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
-        targets.append(target)
-        raise wire.ConnectRefused(wire.Refusal.FINAL, 'this test opens no channel')
-
-    monkeypatch.setattr(grpc_wire, '_ready_channel', refuse)
-    address = wire.SessionAddress(host, 9000, wire.SESSION_PATH, '', secure=False)
-    with pytest.raises(wire.ConnectRefused):
-        grpc_wire.GrpcClientWire().dial(address, None, 1.0)
-    return targets[0]
-
-
-def test_an_ipv6_host_dials_in_brackets(monkeypatch):
-    """An address holds the host raw; the dial target carries the brackets gRPC's syntax needs."""
-    assert _dialled_target('::1', monkeypatch) == '[::1]:9000'
-
-
-@pytest.mark.parametrize('host', ['127.0.0.1', 'gpu-host'])
-def test_a_host_that_is_no_ipv6_literal_dials_unchanged(host, monkeypatch):
-    assert _dialled_target(host, monkeypatch) == f'{host}:9000'
-
-
 def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
     """The bind target carries the brackets gRPC's syntax needs, and a session opens on the bound server."""
-    assert grpc_wire._target('::', 9000) == '[::]:9000'
-    assert grpc_wire._target('0.0.0.0', 9000) == '0.0.0.0:9000'
+    assert client_grpc.target('::', 9000) == '[::]:9000'
+    assert client_grpc.target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
     policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
@@ -488,6 +401,9 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
             opened.append(client_wire.dial(address, headers, open_timeout))
             return opened[-1]
 
+        def probe(self, address, open_timeout):
+            return client_wire.probe(address, open_timeout)
+
     client._wire = _Recording()
     with pytest.raises(RuntimeError):
         client.new_session()
@@ -502,7 +418,7 @@ _SILENCE_SEC = 8.0
 @pytest.fixture
 def chatty_client(monkeypatch) -> None:
     """Pings every 500 ms, and a silence of seconds stands in for one of minutes."""
-    monkeypatch.setattr(grpc_wire, '_PING_EVERY_MS', 500)
+    monkeypatch.setattr(client_grpc, 'PING_EVERY_MS', 500)
 
 
 def _silent_then_infer(served: Served) -> list[dict]:
@@ -523,7 +439,7 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
     start_server, make_mock_policy, chatty_client, monkeypatch
 ):
     """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``, and the session is lost."""
-    monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(grpc_wire._MESSAGE_SIZE_OPTIONS))
+    monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(client_grpc.MESSAGE_SIZE_OPTIONS))
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
     with pytest.raises(wire.PeerDisconnected, match='Too many pings'):
@@ -544,21 +460,21 @@ def test_a_certificate_the_client_cannot_verify_is_not_retried(both_wires, tls_e
     port, _root = tls_edge(both_wires[0].host, both_wires[0].grpc_port)
     unrelated, _key = _self_signed(EDGE_HOST)
     _trust_only(monkeypatch, unrelated)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[0])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', client_grpc._UNUSABLE_EDGE_DETAILS[0])
 
 
 def test_a_certificate_that_covers_another_host_is_not_retried(both_wires, tls_edge, monkeypatch):
     """The client trusts this root, and the edge presents a certificate for an address nobody dialled."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, certificate_host='127.0.0.2')
     _trust_only(monkeypatch, root)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[2])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', client_grpc._UNUSABLE_EDGE_DETAILS[2])
 
 
 def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monkeypatch):
     """A front over a raw TCP port terminates TLS and names no ALPN protocol, and gRPC refuses it."""
     port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, alpn=False)
     _trust_only(monkeypatch, root)
-    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', grpc_wire._UNUSABLE_EDGE_DETAILS[1])
+    _surfaces_at_once(f'grpcs://{EDGE_HOST}:{port}', client_grpc._UNUSABLE_EDGE_DETAILS[1])
 
 
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
@@ -577,7 +493,7 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
     """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires
     address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
-    conn = grpc_wire.GrpcClientWire().dial(address, None, 10.0)
+    conn = client_grpc.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         # The server refuses the model in a frame, then ends the stream with that status.
@@ -588,114 +504,11 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
         conn.close()
 
 
-class _ManualChannel:
-    """A channel whose request consumer advances as gRPC's own does: it takes the next frame only once
-    the test has written the one before it."""
-
-    def __init__(self):
-        self._taken: queue.SimpleQueue[bytes] = queue.SimpleQueue()
-        self._writes: queue.SimpleQueue[bool] = queue.SimpleQueue()
-        self._responses: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
-
-    def stream_stream(self, path, request_serializer=None, response_deserializer=None):
-        def call(requests, metadata=None) -> '_ManualChannel':
-            threading.Thread(target=self._consume, args=(requests,), daemon=True).start()
-            return self
-
-        return call
-
-    def _consume(self, requests) -> None:
-        for message in requests:
-            self._taken.put(message)
-            self._writes.get()
-        # The client half-closed, so the server ends the stream and the response iterator finishes.
-        self._responses.put(None)
-
-    def __iter__(self):
-        while (message := self._responses.get()) is not None:
-            yield message
-
-    def cancel(self) -> None: ...
-
-    def close(self) -> None:
-        self._responses.put(None)
-
-    def taken(self, timeout: float) -> bytes:
-        """The frame gRPC has taken from the iterator and not yet written."""
-        return self._taken.get(timeout=timeout)
-
-    def write(self) -> None:
-        """Finish the write gRPC is on, which is what lets it ask for the next frame."""
-        self._writes.put(True)
-
-    def end(self) -> None:
-        """End the call, as a dropped connection does."""
-        self._responses.put(None)
-
-
-class _Sender:
-    """One ``send`` on a thread of its own, and what it did."""
-
-    def __init__(self, conn: grpc_wire.GrpcClientConnection):
-        self.outcome: Exception | None = None
-        self.returned = threading.Event()
-        threading.Thread(target=self._send, args=(conn,), daemon=True).start()
-
-    def _send(self, conn: grpc_wire.GrpcClientConnection) -> None:
-        try:
-            conn.send(b'frame')
-        except Exception as e:
-            self.outcome = e
-        finally:
-            self.returned.set()
-
-
-def _manual_connection() -> tuple[_ManualChannel, grpc_wire.GrpcClientConnection]:
-    """A connection whose channel the test drives by hand; the fake serves the members the connection uses."""
-    channel = _ManualChannel()
-    return channel, grpc_wire.GrpcClientConnection(cast(grpc.Channel, channel), 'manual', ())
-
-
-def test_a_send_returns_only_once_grpc_has_written_the_frame():
-    channel, conn = _manual_connection()
-    sender = _Sender(conn)
-    assert channel.taken(timeout=5.0) == b'frame'
-    assert not sender.returned.wait(0.3), 'the send returned while the frame was still unwritten'
-    channel.write()
-    assert sender.returned.wait(5.0), 'the send never returned'
-    assert sender.outcome is None
-    conn.close()
-
-
-def test_a_send_on_a_call_that_ends_mid_write_raises_a_lost_peer():
-    """Nothing bounds the wait but the call itself, so its end has to release the send."""
-    channel, conn = _manual_connection()
-    sender = _Sender(conn)
-    assert channel.taken(timeout=5.0) == b'frame'
-    channel.end()
-    assert sender.returned.wait(5.0), 'the send waited on a write the ended call can never make'
-    assert isinstance(sender.outcome, wire.PeerDisconnected)
-
-
-@pytest.mark.timeout(10.0)
-def test_a_send_after_a_failed_send_raises_at_once():
-    """The failed send records the end, so the next one does not wait for a receipt that never comes."""
-    channel, conn = _manual_connection()
-    sender = _Sender(conn)
-    assert channel.taken(timeout=5.0) == b'frame'
-    channel.end()
-    assert sender.returned.wait(5.0), 'the send waited on a write the ended call can never make'
-    refused = time.monotonic()
-    with pytest.raises(wire.PeerDisconnected):
-        conn.send(b'again')
-    assert time.monotonic() - refused < 1.0, 'the second send waited instead of raising'
-
-
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires
     address = wire.SessionAddress(served.host, served.grpc_port, f'{wire.SESSION_PATH}/unknown-model', '', False)
-    conn = grpc_wire.GrpcClientWire().dial(address, None, 10.0)
+    conn = client_grpc.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
         with pytest.raises(wire.PeerDisconnected):

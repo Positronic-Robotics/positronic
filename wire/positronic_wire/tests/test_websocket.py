@@ -1,0 +1,93 @@
+"""The client side of the websocket wire, driven without a server."""
+
+import socket
+import ssl
+from http import HTTPStatus
+from unittest.mock import patch
+
+import pytest
+from positronic_wire import websocket, wire
+from websockets.datastructures import Headers
+from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidStatus
+from websockets.http11 import Response
+
+_ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '', secure=False)
+
+
+def _refused_upgrade(status: HTTPStatus) -> InvalidStatus:
+    return InvalidStatus(Response(status, 'refused', Headers()))
+
+
+@pytest.mark.parametrize(
+    ('status', 'refusal'),
+    [
+        (HTTPStatus.FORBIDDEN, wire.Refusal.FORBIDDEN),
+        (HTTPStatus.TOO_MANY_REQUESTS, wire.Refusal.COLD),
+        (HTTPStatus.SERVICE_UNAVAILABLE, wire.Refusal.COLD),
+        (HTTPStatus.BAD_GATEWAY, wire.Refusal.COLD),
+        (HTTPStatus.UNAUTHORIZED, wire.Refusal.FINAL),
+        (HTTPStatus.NOT_FOUND, wire.Refusal.FINAL),
+    ],
+)
+def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal):
+    refused_upgrade = _refused_upgrade(status)
+    with (
+        patch('positronic_wire.websocket.connect', side_effect=refused_upgrade),
+        pytest.raises(wire.ConnectRefused) as refused,
+    ):
+        websocket.WebsocketClientWire().dial(_ADDRESS, None, 1.0)
+    assert refused.value.refusal is refusal
+    assert refused.value.__cause__ is refused_upgrade
+
+
+@pytest.mark.parametrize(
+    ('raised', 'refusal'),
+    [
+        (TimeoutError('timed out'), wire.Refusal.COLD),
+        (ssl.SSLError('reset'), wire.Refusal.COLD),
+        (ConnectionClosedError(None, None), wire.Refusal.COLD),
+        (InvalidHandshake('dropped'), wire.Refusal.COLD),
+        (ssl.SSLCertVerificationError('unknown issuer'), wire.Refusal.FINAL),
+        (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.FINAL),
+        (socket.gaierror(-2, 'Name or service not known'), wire.Refusal.FINAL),
+    ],
+)
+def test_a_handshake_that_does_not_open_is_a_refusal_naming_the_url(raised, refusal):
+    with (
+        patch('positronic_wire.websocket.connect', side_effect=raised),
+        pytest.raises(wire.ConnectRefused, match='ws://localhost:8000/api/v1/session') as refused,
+    ):
+        websocket.WebsocketClientWire().dial(_ADDRESS, None, 1.0)
+    assert refused.value.refusal is refusal
+    assert refused.value.__cause__ is raised
+
+
+def test_a_probe_asks_the_host_root_and_a_status_of_any_kind_is_an_answer():
+    with patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(HTTPStatus.NOT_FOUND)) as connect:
+        assert websocket.WebsocketClientWire().probe(_ADDRESS._replace(query='fps=10'), 1.0) is None
+    assert connect.call_args.args == ('ws://localhost:8000',)
+
+
+@pytest.mark.parametrize('status', [HTTPStatus.FORBIDDEN, HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND])
+def test_a_probe_reads_a_server_status_as_the_server(status):
+    with patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(status)):
+        assert websocket.WebsocketClientWire().probe(_ADDRESS, 1.0) is None
+
+
+@pytest.mark.parametrize(
+    'status', [HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.TOO_MANY_REQUESTS]
+)
+def test_a_probe_reads_a_gateway_status_as_cold(status):
+    with patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(status)):
+        assert websocket.WebsocketClientWire().probe(_ADDRESS, 1.0) is wire.Refusal.COLD
+
+
+def test_a_probe_reads_a_handshake_that_opened_as_the_server():
+    with patch('positronic_wire.websocket.connect') as connect:
+        assert websocket.WebsocketClientWire().probe(_ADDRESS, 1.0) is None
+    connect.return_value.close.assert_called_once()
+
+
+def test_a_probe_of_a_port_nothing_answers_on_is_final():
+    with patch('positronic_wire.websocket.connect', side_effect=ConnectionRefusedError(111, 'refused')):
+        assert websocket.WebsocketClientWire().probe(_ADDRESS, 1.0) is wire.Refusal.FINAL
