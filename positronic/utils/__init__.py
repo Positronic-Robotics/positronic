@@ -167,7 +167,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         - command: Raw command-line arguments (sys.argv)
         - python: Python version
         - platform: Platform string
-        - package_version: Positronic package version (if available)
+        - positronic_version: Positronic distribution version
         - git.positronic: the installed positronic revision (a wheel names the commit it was built
           from; an editable install names its checkout)
         - git.current: the git state of the working directory, where it differs

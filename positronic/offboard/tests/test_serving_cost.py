@@ -32,8 +32,8 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
     payloads = capture(_ticks(12), stack, model, requests=2)
     assert payloads, 'the stack sent nothing'
 
-    host, port, *_ = start_server(stack | remote(compress_images=True) | PolicySource(model))
-    session = InferenceClient.from_url(f'ws://{host}:{port}').new_session()
+    served = start_server(stack | remote(compress_images=True) | PolicySource(model))
+    session = InferenceClient(*served.ws()).new_session()
     try:
         rows = replay(session, payloads, compress_images=True)
     finally:

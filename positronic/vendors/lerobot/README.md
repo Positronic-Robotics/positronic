@@ -45,7 +45,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 # 4. Run inference
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.url=localhost:8000
+  --policy.host=localhost --policy.port=8000
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.

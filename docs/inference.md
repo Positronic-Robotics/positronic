@@ -36,29 +36,28 @@ Check server: `curl http://localhost:8000/api/v1/models` returns available model
 # Simulation
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.url=localhost:8000 \
+  --policy.host=localhost --policy.port=8000 \
   --output_dir=~/datasets/inference_logs/exp_v1
 
 # Hardware — the same command against a rig's eval
 uv run positronic eval run --eval=.real.droid.pick_place \
   --policy=.remote \
-  --policy.url=gpu-server:8000 \
+  --policy.host=gpu-server --policy.port=8000 \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
 `--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
 
-**One URL is the whole endpoint.** `--policy.url` carries the host, port, TLS, model id, and session params, so a server can be handed out as a single string:
+**Five flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `grpc` or `grpc_tls`; the `_tls` members dial a TLS front. `--policy.host` and `--policy.port` are the server (`8000` is every vendor server's websocket default; a TLS front answers on `443`). `--policy.model` is the checkpoint, and naming none serves the one the server pinned at startup. `--policy.query` carries the session params:
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
+  --policy.wire=websocket_tls --policy.host=gpu-server --policy.port=443 \
+  --policy.model=checkpoint-20000 --policy.query='codec.fps=10&local.pad_start=false'
 ```
 
-Accepted forms: `host`, `host:port`, and `scheme://host[:port][/api/v1/session[/<model_id>]]`, each with an optional query. The scheme settles the wire and the TLS: `http`/`https` and `ws`/`wss` take the websocket wire, `grpc`/`grpcs` the gRPC one, and the `s` forms are the TLS ones. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's websocket default). Naming no model id serves the checkpoint the server pinned at startup.
-
-**Credentials stay out of the URL, and out of the command line.** The URL is meant to be safe to paste around, so a token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
+**Credentials stay off the command line.** A token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
 - `.authed_remote` — a bearer token read from `AUTH_TOKEN`, which it raises about when that is unset. Every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates is gated this way, whether the server checks the token itself or a proxy in front of it does.
 - `.nebius_remote` — the same header, with the Nebius token fetched for you (see [the Nebius workflow README](../workflows/nebius/README.md#authenticated-inference)).
@@ -67,12 +66,12 @@ Accepted forms: `host`, `host:port`, and `scheme://host[:port][/api/v1/session[/
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.file_authed_remote \
-  --policy.url=https://<endpoint-managed-url> \
+  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
   --policy.headers.path=~/.config/endpoint/headers.json \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
+**Session parameters** are `--policy.query`, a query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
 The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
@@ -111,7 +110,7 @@ Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/infere
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by pointing `--policy.url` at different `/api/v1/session/<checkpoint>` paths. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
+Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by naming each with `--policy.model`. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

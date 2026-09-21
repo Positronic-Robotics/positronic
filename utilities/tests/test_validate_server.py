@@ -1,29 +1,46 @@
-import pytest
-
-from utilities.validate_server import _model_url
+from utilities.validate_server import _build_inference_command
 
 
-@pytest.mark.parametrize(
-    ('url', 'expected'),
-    [
-        ('localhost:8000', 'localhost:8000/api/v1/session/m'),
-        ('https://host', 'https://host/api/v1/session/m'),
-        ('https://host/', 'https://host/api/v1/session/m'),
-        # A URL already naming a session addresses the endpoint, not a path to append under.
-        ('https://host/api/v1/session', 'https://host/api/v1/session/m'),
-        ('https://host/api/v1/session/other', 'https://host/api/v1/session/m'),
-        # Session params belong to the connection, so they outlive the model the URL points at.
-        ('https://host?fps=10', 'https://host/api/v1/session/m?fps=10'),
-        ('ws://host:9000/api/v1/session?pad=false', 'ws://host:9000/api/v1/session/m?pad=false'),
-    ],
-)
-def test_every_accepted_url_form_addresses_the_model(url, expected):
-    assert _model_url(url, 'm') == expected
+def _command(**overrides) -> list[str]:
+    arguments = {
+        'uv_path': 'uv',
+        'eval_ref': '.sim.positronic.stack_cubes',
+        'wire_name': 'websocket_tls',
+        'host': 'gpu-host',
+        'port': 443,
+        'query': '',
+        'policy_ref': '.authed_remote',
+        'model_id': 'm',
+        'output_dir': 's3://runs/m',
+        'extra_args': [],
+    }
+    return _build_inference_command(**{**arguments, **overrides})
 
 
-def test_a_path_shaped_model_id_keeps_its_separators():
-    assert _model_url('https://host', 'GEAR/DreamZero') == 'https://host/api/v1/session/GEAR/DreamZero'
+def test_the_command_names_the_wire_the_server_and_the_model_as_policy_flags():
+    command = _command()
+    assert command[:6] == ['uv', 'run', '--locked', 'positronic', 'eval', 'run']
+    assert command[6:] == [
+        '--eval=.sim.positronic.stack_cubes',
+        '--policy=.authed_remote',
+        '--policy.wire=websocket_tls',
+        '--policy.host=gpu-host',
+        '--policy.port=443',
+        '--policy.model=m',
+        '--output_dir=s3://runs/m',
+    ]
 
 
-def test_a_model_id_that_would_end_the_path_is_encoded():
-    assert _model_url('https://host', 's3://b/ckpt#1') == 'https://host/api/v1/session/s3%3A//b/ckpt%231'
+def test_session_params_reach_the_command_only_where_there_are_any():
+    assert '--policy.query=fps=10' in _command(query='fps=10')
+    assert not any(part.startswith('--policy.query') for part in _command(query=''))
+
+
+def test_a_path_shaped_model_id_reaches_the_command_as_written():
+    """The policy percent-encodes the id itself, so the flag carries it as the server advertised it."""
+    assert '--policy.model=GEAR/DreamZero' in _command(model_id='GEAR/DreamZero')
+    assert '--policy.model=s3://b/ckpt#1' in _command(model_id='s3://b/ckpt#1')
+
+
+def test_extra_arguments_follow_the_output_dir():
+    assert _command(extra_args=['--eval.trial_count=3'])[-1] == '--eval.trial_count=3'

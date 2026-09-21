@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
+from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from positronic.offboard import websocket_wire, wire
+from positronic.offboard import websocket_wire
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import PolicyServer
 from positronic.policy.layers import ChunkedSchedule

@@ -1,18 +1,18 @@
 import logging
 import time
-import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Self
+from typing import Any
 
 import httpx
+from positronic_wire import wire
+from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
 
-from . import protocol, wire, wires
+from . import protocol
 from .protocol import deserialise, serialise, typed_commands
-from .wire import ClientWire
 
 logger = logging.getLogger(__name__)
 
@@ -137,27 +137,12 @@ class _ConnectRetries:
         return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
-def _session_path(path: str, url: str) -> str:
-    """The session path a URL names: ``/api/v1/session``, plus the model id it addresses, if any.
-
-    A URL naming no model — a bare host, or the endpoint with or without a trailing slash — addresses the
-    endpoint itself, which serves whatever the server pinned.
-    """
-    if path.rstrip('/') in ('', wire.SESSION_PATH):
-        return wire.SESSION_PATH
-    if not path.startswith(f'{wire.SESSION_PATH}/'):
-        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    # Kept as written, percent-encoding included: a trailing slash is part of the id, and an id that is
-    # itself a path (a HuggingFace repo) keeps its slashes as separators.
-    return path
-
-
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
-    ``from_url`` reads the wire and the address off one URL. ``headers`` carry the credentials; the address
-    carries none. ``open_timeout`` bounds one TCP/TLS handshake, ``connect_deadline`` the retries until a
-    cold backend answers, and ``infer_timeout`` one inference round trip.
+    ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one TCP/TLS
+    handshake, ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one
+    inference round trip.
     """
 
     def __init__(
@@ -178,49 +163,6 @@ class InferenceClient:
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
-
-    @classmethod
-    def from_url(
-        cls,
-        url: str,
-        *,
-        headers: dict[str, str] | None = None,
-        open_timeout: float = DEFAULT_OPEN_TIMEOUT,
-        connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
-        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-    ) -> Self:
-        """The client one URL names.
-
-        The URL is ``host``, ``host:port`` or ``scheme://host[:port][/api/v1/session[/<model_id>]]``, each
-        with an optional ``?query``. The scheme selects the wire and whether the session runs over TLS
-        (``wires.BY_SCHEME`` lists them); a URL with no scheme takes the wire that lists the empty scheme,
-        without TLS. The port defaults to 443 with TLS and to 80 without. The model id and the query reach
-        the server as written, and every session opened here carries them.
-        """
-        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        selected = wires.BY_SCHEME.get(split.scheme)
-        if selected is None:
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
-        client_wire, scheme = selected
-        address = wire.SessionAddress(
-            host=split.hostname,
-            port=wire.default_port(scheme.secure) if split.port is None else split.port,
-            path=_session_path(split.path, url),
-            # Forwarded verbatim: the server reads each param value as a JSON literal, and only whoever
-            # wrote the URL knows whether `true` means the bool or the string.
-            query=split.query,
-            secure=scheme.secure,
-        )
-        return cls(
-            client_wire,
-            address,
-            headers=headers,
-            open_timeout=open_timeout,
-            connect_deadline=connect_deadline,
-            infer_timeout=infer_timeout,
-        )
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
@@ -251,8 +193,6 @@ class InferenceClient:
             # A status handshake the server did not finish: a backend that is not ready.
             except (TimeoutError, wire.PeerDisconnected) as e:
                 refusal, not_ready = wire.Refusal.COLD, e
-            except OSError as e:
-                raise type(e)(f'{e} (connecting to {self.session_url})') from e
             if retries.take(refusal) is _ConnectOutcome.SURFACE:
                 raise not_ready
             if time.monotonic() >= deadline:

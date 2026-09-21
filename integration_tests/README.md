@@ -53,7 +53,7 @@ From the repository root:
 
 ```bash
 uv run --locked python integration_tests/act_stack.py run \
-  --url=http://localhost:18024 --output_dir=/tmp/act-integration-run
+  --host=localhost --port=18024 --output_dir=/tmp/act-integration-run
 ```
 
 The output directory must be new. Recordings and one eval log per seed remain there on success or

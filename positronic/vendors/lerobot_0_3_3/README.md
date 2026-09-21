@@ -40,7 +40,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 # 4. Run inference
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.url=localhost:8000
+  --policy.host=localhost --policy.port=8000
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
@@ -111,7 +111,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 
 **Available pipelines:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
 
-**Session params:** clients can tune pipeline arguments per session via query params on the session URL — e.g. `--policy.url='localhost:8000?codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
+**Session params:** clients can tune pipeline arguments per session via `--policy.query` — e.g. `--policy.query='codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
 **Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 

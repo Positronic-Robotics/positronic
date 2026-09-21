@@ -1,93 +1,16 @@
-"""The websocket wire, and the two ends of a websocket session."""
+"""The server side of the websocket wire."""
 
 import socket
-import ssl
-from collections.abc import Mapping
-from http import HTTPStatus
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
+from positronic_wire import wire
 from starlette.datastructures import QueryParams
-from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
-from websockets.sync.client import connect
-from websockets.sync.connection import Connection
 
-from . import wire
+from . import server_wire
 
 
-class WebsocketClientConnection(wire.ClientConnection):
-    """A client's end of one websocket session."""
-
-    def __init__(self, websocket: Connection):
-        self._websocket = websocket
-
-    def send(self, message: bytes) -> None:
-        try:
-            self._websocket.send(message)
-        except ConnectionClosed as e:
-            raise wire.PeerDisconnected(str(e)) from e
-
-    def recv(self, timeout: float | None = None) -> bytes:
-        try:
-            message = self._websocket.recv(timeout=timeout)
-        except ConnectionClosed as e:
-            raise wire.PeerDisconnected(str(e)) from e
-        assert isinstance(message, bytes), f'A frame is bytes, and this one is {type(message).__name__}'
-        return message
-
-    def close(self) -> str:
-        state_before_close = self._websocket.state.name
-        self._websocket.close()
-        # A close that times out still reaches CLOSED locally; only the close code says the server answered.
-        return f'state {state_before_close} -> {self._websocket.state.name}, close code {self._websocket.close_code}'
-
-
-def _status_refusal(status_code: int) -> wire.Refusal:
-    """What a non-101 answer to the upgrade says about the server."""
-    if status_code == HTTPStatus.FORBIDDEN:
-        return wire.Refusal.FORBIDDEN
-    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR or status_code == HTTPStatus.TOO_MANY_REQUESTS:
-        return wire.Refusal.COLD
-    return wire.Refusal.FINAL
-
-
-class WebsocketClientWire(wire.ClientWire):
-    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
-
-    SCHEME = 'ws'
-    SECURE_SCHEME = 'wss'
-    # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
-    ALIASES = (wire.Scheme('', secure=False), wire.Scheme('http', secure=False), wire.Scheme('https', secure=True))
-
-    def api_url(self, address: wire.SessionAddress) -> str:
-        return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
-
-    def dial(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
-    ) -> WebsocketClientConnection:
-        """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
-        try:
-            # A proxy closes a connection it has read nothing from, often after 60 s, and one inference sends
-            # nothing until it answers. The pings keep it open.
-            websocket = connect(
-                self.session_url(address),
-                open_timeout=open_timeout,
-                additional_headers=headers,
-                ping_interval=20.0,
-                max_size=wire.MAX_MESSAGE_BYTES,
-            )
-        except InvalidStatus as e:
-            raise wire.ConnectRefused(_status_refusal(e.response.status_code), str(e)) from e
-        except ssl.SSLCertVerificationError as e:
-            raise wire.ConnectRefused(wire.Refusal.FINAL, str(e)) from e
-        # A timed-out connect, a reset TLS handshake, a refused upgrade, a dropped handshake: a backend that is
-        # not ready.
-        except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
-            raise wire.ConnectRefused(wire.Refusal.COLD, str(e)) from e
-        return WebsocketClientConnection(websocket)
-
-
-class WebsocketServerConnection(wire.ServerConnection):
+class WebsocketServerConnection(server_wire.ServerConnection):
     """A server's end of one websocket session, over an accepted ``WebSocket``."""
 
     def __init__(self, websocket: WebSocket, endpoint: wire.Endpoint):
@@ -156,7 +79,7 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
 WS_IMPL = 'websockets-sansio'
 
 
-class WebsocketWire(wire.Wire):
+class WebsocketWire(server_wire.Wire):
     """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
@@ -177,7 +100,7 @@ class WebsocketWire(wire.Wire):
         assert self._endpoint is not None, 'The websocket wire has not started'
         return self._endpoint
 
-    async def start(self, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         self._served = False
         self._sockets = _listening_sockets(self._host, self._port)
         self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
@@ -195,7 +118,9 @@ class WebsocketWire(wire.Wire):
         )
         self._server = uvicorn.Server(config)
 
-    def _route_sessions(self, app: FastAPI, session: wire.SessionHandler, authorized: wire.Authorized) -> None:
+    def _route_sessions(
+        self, app: FastAPI, session: server_wire.SessionHandler, authorized: server_wire.Authorized
+    ) -> None:
         async def require_auth(websocket: WebSocket) -> None:
             """Refuse before ``accept()``. An unauthorized peer never reaches the session handshake."""
             if not authorized(websocket.headers):
