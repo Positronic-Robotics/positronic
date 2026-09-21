@@ -137,8 +137,8 @@ def test_an_endpoint_refuses_every_per_task_property():
     """Every property `Cascade` carries but the count, driven over the model rather than a list.
 
     A set that repeats its names passes a membership check and goes on passing once the model
-    carries a name nothing added to it. The coverage assert is what a rename or an addition fails
-    on, and it covers the one name the refused set still spells as a string.
+    carries a name nothing added to it. A rename or an addition fails the coverage assert, which
+    also covers the one name the refused set still spells as a string.
     """
     assert _ENDPOINT_OVERRIDES in Cascade.model_fields
     assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
@@ -151,7 +151,7 @@ def test_an_endpoint_refuses_every_per_task_property():
 
 
 def test_an_endpoint_states_the_one_property_it_overrides():
-    """The boundary of the rule above: the count is the cascading property an endpoint may state."""
+    """The boundary of the rule above: an endpoint may state the count."""
     assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
 
 
@@ -438,12 +438,9 @@ def test_plan_of_image_carries_the_credential_onto_its_one_endpoint():
 
 
 def test_a_refused_endpoint_reports_no_password():
-    """A model-level validator is handed the whole input dict, before any field is coerced.
-
-    So the password the error would echo is the plaintext the caller typed, which `SecretStr`
-    reaches nowhere: a command that prints the exception writes it to the terminal, and a `logging`
-    call that takes the exception writes it to the log.
-    """
+    """A model-level validator is handed the whole input dict, before any field is coerced, so the
+    password the error would echo is the plaintext the caller typed and `SecretStr` reaches it
+    nowhere."""
     with pytest.raises(ValidationError) as caught:
         Endpoint.model_validate(an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL))
     error = caught.value

@@ -99,12 +99,8 @@ class RegistryCredential(BaseModel):
 
     @field_serializer('password', when_used='json')
     def _password(self, password: SecretStr, info: SerializationInfo) -> str:
-        """The value where this dump IS the request carrying it, and a mask everywhere else.
-
-        A plan is dumped to be logged, stored and compared as well as to be sent, so a password that
-        serialised by default would travel into all four. `when_used='json'` leaves a Python dump
-        holding the `SecretStr` itself, so a caller that serialises one by hand raises.
-        """
+        """A Python dump holds the `SecretStr` itself, so a caller that serialises one by hand
+        raises rather than writing the value."""
         return password.get_secret_value() if (info.context or {}).get(SENDING) else str(password)
 
 

@@ -131,9 +131,8 @@ ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.running,
 })
 
-# Never on the wire: a caller-facing model carrying one of these is a gateway that forgot. Named
-# here because the enum owns which of its own members are internal; a second copy goes stale the
-# next time one joins.
+# Never on the wire: a caller-facing model carrying one of these is a gateway that forgot. The
+# enum owns which of its members are internal, so a second copy goes stale when one joins.
 INTERNAL_STATUSES: frozenset[SubmissionStatus] = frozenset({SubmissionStatus.submitting, SubmissionStatus.mirroring})
 
 # Decided and immutable.
