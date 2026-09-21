@@ -1,13 +1,9 @@
 """ABC behind the env-server protocol: a standalone server for its bimanual YAM tasks.
 
-positronic pins MuJoCo 3.5 and ABC needs 3.8, so this never shares positronic's venv: the launcher builds an
-interpreter of ABC's own and starts this script in it, with the positronic-free ``server``, ``protocol``,
-``arm_action`` and ``mapping`` modules on ``PYTHONPATH``.
-
-The client-side ``AbcAdapter`` forwards a held command per arm; this server solves it against the scene's own
-model and speaks ABC's 14-value joint action. A Cartesian goal is solved to joints with damped-least-squares
-IK on the arm's control site, from the posture the arm is in. The reset token carries the task and the camera
-size the scene is built for, plus the per-trial seed that draws the world.
+Runs in ABC's own interpreter, which the launcher builds, with ``server``, ``protocol``, ``arm_action`` and
+``mapping`` on ``PYTHONPATH``. It speaks ABC's 14-value joint action: a Cartesian goal reaches it as
+damped-least-squares IK on the arm's control site, from the posture the arm is in. The reset token carries
+the task, the camera size the scene is built for, and the per-trial seed that draws the world.
 """
 
 import argparse

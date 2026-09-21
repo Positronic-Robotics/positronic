@@ -25,17 +25,9 @@ def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     """An ABC eval on the bimanual i2rt YAM: the embodiment proxies a remote ABC env, the task carries the scene.
 
     ``task`` selects from ABC's catalogue by canonical name, alias or prompt, and takes a list to sweep several;
-    unbound it sweeps every task ABC lists. The assets a task's scene loads are downloaded before the server
-    starts, so an unbound ``task`` fetches all of them.
-
-    The instruction is never pinned: the task reads its language live from the env, which reports it in every
-    reset's meta — ABC draws a fresh directive per episode on the tasks that carry one. The per-trial seed
-    draws the world the trial runs in.
-
-    Each arm reports ``robot_state.{side}`` and ``grip.{side}`` and takes ``robot_command.{side}`` and
-    ``target_grip.{side}``, the flat per-arm names the real ``yam_bimanual`` embodiment shares. ABC's full
-    physics state is the privileged ground truth (recorded, never fed to the policy), so success is
-    recomputable downstream; the live success also rides the trial's terminal.
+    unbound it sweeps every task ABC lists, whose assets are then all downloaded before the server starts. Each
+    arm carries the flat per-arm channels the real ``yam_bimanual`` embodiment shares. ABC's full physics state
+    is the privileged ground truth, recorded and never fed to the policy.
     """
     selection = None if task is None else [task] if isinstance(task, str) else list(task)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(selection))
@@ -44,7 +36,6 @@ def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_wid
         camera_dict,
         descriptor='remote.abc.yam_bimanual',
         arms=mapping.ARMS,
-        # ABC measures and drives each arm at the site the YAM driver names ``DEFAULT_FRAME``.
         static_meta={roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME},
     )
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}

@@ -28,8 +28,8 @@ _ABC_SRC = _ABC_CACHE / 'src'
 
 # ABC declares ``requires-python = ">=3.10"``, so uv would otherwise inherit positronic's interpreter.
 _ABC_PYTHON = '3.12'
-# What the simulator and the asset installer import, at ABC's own bounds. Installing the project instead would
-# pull its CUDA torch and mujoco-warp, which only the policy and the batched renderer need.
+# What the simulator and the asset installer import, at ABC's own bounds. Installing the project would pull
+# its CUDA torch and mujoco-warp, which only the policy and the batched renderer need.
 _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
 # The isolated env server requires these independently of ABC's dependencies.
 _WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
