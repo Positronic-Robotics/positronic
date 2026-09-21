@@ -1,7 +1,6 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
 import functools
-import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -53,25 +52,21 @@ class _OneValuePerKey(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-# PyYAML quotes what it read back at the reader, in both quote styles.
-_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+def _refusal(exc: yaml.YAMLError) -> str:
+    """Why the plan was refused, and where, in this file's own words.
 
-
-def _diagnostic_without_document_text(exc: yaml.YAMLError) -> str:
-    """What the parser refused, and where, but no text it read from the file.
-
-    PyYAML renders the offending source line onto the mark, and names an alias, an anchor or a tag
-    in the message itself. Each of those sits in value position, where a plan states a registry
-    password, so every quoted run is dropped. The key `_KeyGivenTwice` names is a plan field.
+    PyYAML renders what it read into the mark's snippet and into `problem`: a source line, an
+    alias, an anchor, a tag. A plan states a registry password, so none of that text is printed,
+    and a refusal says where the parser stopped rather than what it disliked. `_KeyGivenTwice`
+    carries this file's own message, whose key `_plan_field_names` has already cleared.
     """
-    if not isinstance(exc, yaml.MarkedYAMLError):
-        return 'the file does not parse'
-    mark = exc.problem_mark or exc.context_mark
-    where = f'line {mark.line + 1}, column {mark.column + 1}' if mark is not None else ''
-    said = [part for part in (exc.context, exc.problem) if part]
-    if not isinstance(exc, _KeyGivenTwice):
-        said = [_QUOTED.sub("'...'", part) for part in said]
-    return ', '.join([*said, where] if where else said)
+    mark = None
+    if isinstance(exc, yaml.MarkedYAMLError):
+        mark = exc.problem_mark or exc.context_mark
+    where = f', at line {mark.line + 1}, column {mark.column + 1}' if mark is not None else ''
+    if isinstance(exc, _KeyGivenTwice):
+        return f'{exc.problem}{where}'
+    return f'it reads as neither YAML nor JSON{where}'
 
 
 def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
@@ -85,7 +80,7 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
     except OSError as exc:
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
-        raise SystemExit(f'{path} reads as neither YAML nor JSON: {_diagnostic_without_document_text(exc)}') from exc
+        raise SystemExit(f'{path}: {_refusal(exc)}') from exc
     for field, stated in ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias)):
         if stated is None or not isinstance(payload, dict):
             continue

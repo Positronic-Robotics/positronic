@@ -213,11 +213,13 @@ def test_a_file_that_reads_as_neither_yaml_nor_json_says_so(platform, run_comman
     assert platform.seen is None
 
 
-REGISTRY_PASSWORD = 'a-registry-password'
+# No run of this appears in a temp path or in the words a refusal is built from, so a match is the
+# password and nothing else.
+REGISTRY_PASSWORD = 'Zx9QvT7Lm2Rk'
 
 
-# Each puts the password where PyYAML quotes what it read: on the error's mark, or, for the last
-# three, inside the message itself as the alias, anchor or tag it could not resolve.
+# Each puts the password somewhere PyYAML quotes what it read: on the error's mark, or inside the
+# message as the alias, anchor, tag or repeated key it could not resolve.
 BROKEN_CREDENTIALS = {
     'given twice': f'      password: {REGISTRY_PASSWORD}\n      password: {REGISTRY_PASSWORD}\n',
     'a tab before the value': f'      password:\t{REGISTRY_PASSWORD}\n',
@@ -226,6 +228,7 @@ BROKEN_CREDENTIALS = {
     'an undefined alias': f'      password: *{REGISTRY_PASSWORD}\n',
     'a duplicate anchor': f'      password: &{REGISTRY_PASSWORD} x\n      other: &{REGISTRY_PASSWORD} y\n',
     'an unknown tag': f'      password: !{REGISTRY_PASSWORD} x\n',
+    'a tag carrying a URI escape': f"      password: !a%22b'{REGISTRY_PASSWORD} x\n",
     'a repeated mapping key': f'      password:\n        {REGISTRY_PASSWORD}: a\n        {REGISTRY_PASSWORD}: b\n',
 }
 
@@ -241,12 +244,15 @@ def a_plan_with_a_broken_credential(how: str) -> str:
 
 
 @pytest.mark.parametrize('how', sorted(BROKEN_CREDENTIALS))
-def test_a_malformed_plan_does_not_print_its_registry_password(platform, run_command, tmp_path: Path, how: str):
-    # Parsing runs before any model, so the masking on the model cannot reach these.
+def test_a_malformed_plan_prints_no_part_of_its_registry_password(platform, run_command, tmp_path: Path, how: str):
+    # A refusal is built from this file's own words and a position, so no run of the password can
+    # reach it. Four characters catch a partial echo that a search for the whole string would miss.
     payload = a_plan_with_a_broken_credential(how)
     with pytest.raises(SystemExit) as refusal:
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
-    assert REGISTRY_PASSWORD not in str(refusal.value)
+    message = str(refusal.value)
+    runs = {REGISTRY_PASSWORD[at : at + 4] for at in range(len(REGISTRY_PASSWORD) - 3)}
+    assert not [run_of_the_password for run_of_the_password in runs if run_of_the_password in message]
     assert platform.seen is None
 
 
