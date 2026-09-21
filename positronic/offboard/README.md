@@ -49,8 +49,8 @@ server side.
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route and stays on the server's `port`. `InferenceClient.list_models`
-refuses a gRPC wire.
+`/api/v1/models` is an HTTP route. It answers on the address the WebSocket wire binds: a port, or a
+Unix socket. `InferenceClient.list_models` refuses a gRPC wire.
 
 ### Authentication
 
