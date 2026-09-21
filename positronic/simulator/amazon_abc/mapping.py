@@ -1,0 +1,49 @@
+"""Shared task selection and wire conversions for the client and the ABC server.
+
+This module must work in an isolated interpreter without Positronic installed.
+"""
+
+from typing import Any
+
+import numpy as np
+
+# The arms ABC drives, in the order its 14-value action concatenates them.
+ARMS = ('left', 'right')
+ARM_JOINTS = 6
+# The site each arm is measured and driven at. It sits where the YAM driver's ``DEFAULT_FRAME`` does, so a
+# pose means the same thing on this sim and on the rig.
+CONTROL_SITE = '{arm}_grasp_site'
+JOINT = '{arm}_joint{index}'
+
+# What the eval selects, and what a task record answers with.
+SELECT_TASKS = 'tasks'
+TASK_NAME = 'name'
+TASK_PROMPT = 'prompt'
+
+# The reset token.
+TOKEN_TASK = 'task'
+TOKEN_SEED = 'seed'
+TOKEN_CAMERA_HEIGHT = 'camera_height'
+TOKEN_CAMERA_WIDTH = 'camera_width'
+
+# The scene meta a reset reports. ABC rewrites the prompt per episode on its directive tasks.
+META_TASK = 'task'
+
+# What ABC's own observation and step info carry.
+ABC_OBS_STATE = 'state'  # ``[joints(6), aperture]`` per arm, in the order ABC names its robots.
+ABC_OBS_IMAGES = 'images'
+ABC_OBS_PROMPT = 'prompt'
+ABC_INFO_SUCCESS = 'task_success'
+
+# The raw observation this server reports. Every name but the physics state is per arm.
+OBS_JOINT_POS = 'joint_pos'
+OBS_JOINT_VEL = 'joint_vel'
+OBS_EEF_POS = 'eef_pos'  # ABC world coordinates, metres.
+OBS_EEF_QUAT = 'eef_quat'  # ABC world orientation, wxyz.
+OBS_GRIP = 'grip'  # Closure in [0, 1].
+OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
+
+
+def invert_grip(value: Any) -> float:
+    """Between positronic's closure (1 closed) and i2rt's aperture (1 open); the two are inverses."""
+    return 1.0 - float(np.clip(value, 0.0, 1.0))
