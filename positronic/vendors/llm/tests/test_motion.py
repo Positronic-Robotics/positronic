@@ -103,3 +103,18 @@ def test_invalid_tool_numbers_cannot_reach_motion(change):
 def test_invalid_motion_configuration_fails(change):
     with pytest.raises(ValueError):
         Motion(**change)
+
+
+@pytest.mark.parametrize('change', [{'fps': 0.1}, {'max_translation': 0.5}, {'max_translation': 0.45, 'fps': 1.25}])
+def test_motion_duration_bound_includes_sampling_and_expiry(change):
+    with pytest.raises(ValueError, match='10 second trajectory'):
+        Motion(**change)
+
+
+@pytest.mark.parametrize(('fps', 'max_translation'), [(0.2, 0.05), (2, 0.475)])
+def test_motion_can_expire_at_duration_bound(fps, max_translation):
+    motion = Motion(max_translation=max_translation, fps=fps)
+    start = geom.Transform3D([0, 0, 0])
+    target = MoveTo(x=max_translation, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0, note='approach')
+    _, trajectory = motion.trajectory(start, target)
+    assert trajectory[-1] == {keys.ACTION_TIMESTAMP: pytest.approx(10)}

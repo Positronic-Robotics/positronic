@@ -45,7 +45,8 @@ class Motion:
         for name, value in vars(self).items():
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be finite and positive')
-        if max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps) > 10:
+        duration = max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps)
+        if duration > 10 or math.ceil(duration * self.fps) / self.fps + 1 / self.fps > 10:
             raise ValueError('Motion limits must fit within a 10 second trajectory')
 
     def _clamp(self, start: geom.Transform3D, target: MoveTo) -> MoveTo:
