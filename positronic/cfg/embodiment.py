@@ -68,6 +68,7 @@ def yam(robot_arm, cameras):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
@@ -84,6 +85,7 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     gravity_comp_factor: list[float] | None,
     cameras,
+    park_after_idle_s: float | None,
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -98,7 +100,10 @@ def yam_bimanual(
 
     arms = {
         side: yam_driver.Robot(
-            channel, base_pose=geom.Transform3D(mounts[side]), gravity_comp_factor=gravity_comp_factor
+            channel,
+            base_pose=geom.Transform3D(mounts[side]),
+            gravity_comp_factor=gravity_comp_factor,
+            park_after_idle_s=park_after_idle_s,
         )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }

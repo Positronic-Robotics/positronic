@@ -75,14 +75,14 @@ def _install_i2rt_stub() -> None:
         LINEAR_4310 = 'linear_4310'
 
     get_robot = types.ModuleType(f'{I2RT}.robots.get_robot')
-    get_robot.get_yam_robot = lambda *args, **kwargs: None
+    get_robot.__dict__.update(get_yam_robot=lambda *args, **kwargs: None)
     utils = types.ModuleType(f'{I2RT}.robots.utils')
-    utils.GripperType = GripperType
+    utils.__dict__.update(GripperType=GripperType)
 
     robots = types.ModuleType(f'{I2RT}.robots')
     robots.__dict__.update(get_robot=get_robot, utils=utils)
     package = types.ModuleType(I2RT)
-    package.robots = robots
+    package.__dict__.update(robots=robots)
 
     sys.modules.update({
         I2RT: package,
