@@ -92,7 +92,9 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
 
-Each wire from the table above takes the same path; only the scheme and the port change.
+Each wire from the table above carries the same route. What changes is how a caller names the
+server: `websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a
+target, and `websocket_unix` a socket path and no authority at all.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
@@ -270,13 +272,25 @@ server = PolicyServer(pipeline)
 server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
 ```
 
-`serve` takes the wires that sessions arrive on. Each wire binds its own address, reads its own route
-for the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host,
-port)` to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model
-catalogue, and answers it wherever it carries sessions. A wire names where it bound in its
-`served_address` property: `ServedHostPort` for a host and a port — a wire asked for port 0 binds any
-free one, and `ws.served_address.port` is the port it took — or `ServedUnixSocket` for a socket path,
-which has no port at all.
+`serve` takes the wires that sessions arrive on. Each wire carries the address it binds, reads its own
+route for the model a session asks for, and checks its own session headers:
+
+```python
+from positronic.offboard import grpc_wire, server_wire, websocket_wire
+
+wires = [
+    websocket_wire.WebsocketWire(server_wire.ServedHostPort('0.0.0.0', 8000)),
+    # or on this machine only: websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(Path('/run/p.sock')))
+    grpc_wire.GrpcWire(server_wire.ServedHostPort('0.0.0.0', 8001)),
+]
+server.serve(wires)
+```
+
+`serve` hands every wire the model catalogue it owns; a wire whose transport carries HTTP answers it
+beside its sessions, and the gRPC wire, whose port carries sessions alone, does not. A wire names
+where it bound in its `served_address` property: `ServedHostPort` for a host and a port — a wire
+asked for port 0 binds any free one, and `ws.served_address.port` is the port it took — or
+`ServedUnixSocket` for a socket path, which has no port at all.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 

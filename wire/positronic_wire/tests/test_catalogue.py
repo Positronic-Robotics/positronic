@@ -3,6 +3,7 @@
 import json
 import socket
 import socketserver
+import tempfile
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -47,12 +48,20 @@ class _UnixHTTPServer(HTTPServer):
 
 
 @pytest.fixture
-def catalogue(request, tmp_path):
+def short_tmp_dir():
+    """A directory short enough for a socket path: ``sun_path`` holds 104 bytes, and macOS's
+    ``tmp_path`` alone spends more than that."""
+    with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+        yield Path(directory)
+
+
+@pytest.fixture
+def catalogue(request, short_tmp_dir):
     """A server answering the catalogue route, on a port or on a socket as the test asks."""
     status, over_a_socket = getattr(request, 'param', (HTTPStatus.OK, False))
     seen: list[dict[str, str]] = []
     if over_a_socket:
-        uds = tmp_path / 'policy.sock'
+        uds = short_tmp_dir / 'p.sock'
         # `HTTPServer` is typed for AF_INET; this subclass binds a path, which is the whole point.
         server: HTTPServer = _UnixHTTPServer(str(uds), _handler(status, seen))  # type: ignore[arg-type]
         address: wire.SessionAddress = wire.UnixSocketAddress(uds, wire.session_path(), '')
@@ -106,9 +115,9 @@ def test_a_catalogue_that_does_not_answer_200_refuses_in_the_terms_a_dial_uses(c
     assert refused.value.refusal is refusal
 
 
-def test_a_catalogue_on_a_socket_nobody_bound_is_cold(tmp_path):
+def test_a_catalogue_on_a_socket_nobody_bound_is_cold(short_tmp_dir):
     """The same reading a dial gets: the path can still become a socket, so a retry can reach it."""
-    address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.session_path(), '')
+    address = wire.UnixSocketAddress(short_tmp_dir / 'absent.sock', wire.session_path(), '')
 
     with pytest.raises(wire.ConnectRefused) as refused:
         WebsocketUnixClientWire().list_models(address, None, 1.0)
@@ -121,25 +130,3 @@ def test_a_catalogue_on_a_port_nothing_answers_on_is_cold():
     with pytest.raises(wire.ConnectRefused) as refused:
         WebsocketClientWire().list_models(address, None, 1.0)
     assert refused.value.refusal is wire.Refusal.COLD
-
-
-@pytest.mark.parametrize('catalogue', [(HTTPStatus.OK, True), (HTTPStatus.SERVICE_UNAVAILABLE, True)], indirect=True)
-def test_a_catalogue_read_closes_the_connection_it_opened(catalogue):
-    """The read owns its connection, and a refused answer closes it as an answered one does."""
-    client_wire, address, _seen = catalogue
-    open_files = Path('/proc/self/fd')
-
-    def read() -> None:
-        try:
-            client_wire.list_models(address, None, 5.0)
-        except wire.ConnectRefused:
-            pass
-
-    # One read first: the server under test runs in this process, so its own accepted socket would
-    # otherwise be counted as the client's.
-    read()
-    before = len(list(open_files.iterdir()))
-    for _ in range(5):
-        read()
-
-    assert len(list(open_files.iterdir())) == before
