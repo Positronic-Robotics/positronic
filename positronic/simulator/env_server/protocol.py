@@ -36,9 +36,15 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
-# The command channels of a single-arm env. The wire cannot import positronic's ``keys``; a test pins them equal.
+# The command channels of one arm. The wire cannot import positronic's ``keys``; a test pins them equal.
 ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
+
+
+def arm_channel(channel: str, arm: str | None) -> str:
+    """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
+    return channel if arm is None else f'{channel}.{arm}'
+
 
 COMMAND_TYPE = 'type'
 COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
