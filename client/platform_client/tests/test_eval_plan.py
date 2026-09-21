@@ -7,8 +7,10 @@ import json
 import pytest
 from platform_client.enums import EndpointKind, Placement
 from platform_client.eval_plan import (
-    _ENDPOINT_MAY_STATE,
+    _ENDPOINT_OVERRIDES,
+    _PER_TASK_ONLY,
     SENDING,
+    Cascade,
     Endpoint,
     EvalPlan,
     RegistryCredential,
@@ -121,9 +123,36 @@ def test_an_endpoint_reads_back_from_its_own_dump():
     assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
 
 
-def test_the_fields_an_endpoint_may_state_are_fields_it_declares():
-    # A name here the model does not carry would let the per-task field of that name through.
-    assert _ENDPOINT_MAY_STATE <= set(Endpoint.model_fields)
+A_PER_TASK_VALUE = {
+    'cap_per_episode_sec': 60,
+    'policy_preset': 'other',
+    'tote_placement': 'left',
+    'camera_vantage': 'phail',
+    'external_cameras': {'side': 'left'},
+    'clutter': {'count_min': 1, 'count_max': 2},
+}
+
+
+def test_an_endpoint_refuses_every_per_task_property():
+    """Every property `Cascade` carries but the count, driven over the model rather than a list.
+
+    A set that repeats its names passes a membership check and goes on passing once the model
+    carries a name nothing added to it. The coverage assert is what a rename or an addition fails
+    on, and it covers the one name the refused set still spells as a string.
+    """
+    assert _ENDPOINT_OVERRIDES in Cascade.model_fields
+    assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
+    # An endpoint's own fields do not cascade, so a field added to `Endpoint` — `image_credential`
+    # among them — is stated on one with nothing to add here.
+    assert not _PER_TASK_ONLY & (set(Endpoint.model_fields) - set(Cascade.model_fields))
+    for name, value in A_PER_TASK_VALUE.items():
+        with pytest.raises(ValidationError, match='per-task properties'):
+            Endpoint.model_validate({**BASELINE, name: value})
+
+
+def test_an_endpoint_states_the_one_property_it_overrides():
+    """The boundary of the rule above: the count is the cascading property an endpoint may state."""
+    assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
 
 
 def test_a_scene_is_flat_on_every_level():
@@ -356,8 +385,8 @@ def test_an_entry_that_names_no_image_may_state_no_credential():
 
 
 def test_a_per_task_entry_states_a_credential_for_the_image_it_names():
-    """`_ENDPOINT_MAY_STATE` admits it, so the count rule does not read it as a per-task property."""
-    assert 'image_credential' in _ENDPOINT_MAY_STATE
+    """An endpoint's own field, so the count rule does not read it as a per-task property."""
+    assert 'image_credential' not in _PER_TASK_ONLY
     plan = EvalPlan.model_validate({
         'tasks': [{'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=A_CREDENTIAL)]}],
         'episodes_per_endpoint': 4,
@@ -406,6 +435,48 @@ def test_plan_of_image_carries_the_credential_onto_its_one_endpoint():
     credential = plan.endpoints[0].image_credential
     assert credential is not None
     assert credential.password.get_secret_value() == A_PASSWORD
+
+
+def test_a_refused_endpoint_reports_no_password():
+    """A model-level validator is handed the whole input dict, before any field is coerced.
+
+    So the password the error would echo is the plaintext the caller typed, which `SecretStr`
+    reaches nowhere: a command that prints the exception writes it to the terminal, and a `logging`
+    call that takes the exception writes it to the log.
+    """
+    with pytest.raises(ValidationError) as caught:
+        Endpoint.model_validate(an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL))
+    error = caught.value
+    assert A_PASSWORD not in str(error)
+    assert A_PASSWORD not in repr(error)
+    # Hiding the input costs the echoed value alone; the error still says what was wrong.
+    assert 'has no host' in str(error)
+
+
+def test_a_refused_plan_reports_no_password():
+    """The shape a caller validates: the endpoint is nested, and the error names its place."""
+    with pytest.raises(ValidationError) as caught:
+        EvalPlan.model_validate({
+            'eval': 'robolab.public_subset',
+            'endpoints': [an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL)],
+        })
+    error = caught.value
+    assert A_PASSWORD not in str(error)
+    assert A_PASSWORD not in repr(error)
+    assert 'endpoints.0' in str(error)
+
+
+def test_a_caller_that_asks_for_the_input_is_given_it():
+    """The boundary of the rule above: `errors()` and `json()` carry the input on request.
+
+    Pydantic takes `include_input` per call rather than from the model, so this is the caller's to
+    drop, and the config reaches only what a model renders on its own.
+    """
+    with pytest.raises(ValidationError) as caught:
+        Endpoint.model_validate(an_image_endpoint(url='not-absolute', image_credential=A_CREDENTIAL))
+    error = caught.value
+    assert A_PASSWORD in repr(error.errors())
+    assert A_PASSWORD not in repr(error.errors(include_input=False))
 
 
 def test_a_plan_serialised_by_hand_refuses_to_write_the_password():

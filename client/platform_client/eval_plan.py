@@ -12,12 +12,11 @@ import httpx
 from platform_client.enums import CameraVantage, EndpointKind, Placement
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
+from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, SerializationInfo, field_serializer, model_validator
-
-_FORBID_EXTRA = ConfigDict(extra='forbid')
+from pydantic import BaseModel, Field, SecretStr, SerializationInfo, field_serializer, model_validator
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
@@ -33,7 +32,7 @@ class Clutter(BaseModel):
     `medium_cap` medium ones, and the rest small.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     count_min: int = Field(default=4, ge=0)
     count_max: int = Field(default=8, ge=0)
@@ -55,7 +54,7 @@ class Cascade(BaseModel):
     level under it. `random` draws a side at this level even when a level above states one.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     # Episodes each endpoint of each task under this level takes.
     episodes_per_endpoint: int | None = Field(default=None, ge=1)
@@ -93,7 +92,7 @@ class RegistryCredential(BaseModel):
     a Python dump carries the `SecretStr` itself, so a caller that serialises a plan by hand raises.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     username: str = Field(min_length=1)
     password: SecretStr = Field(min_length=1)
@@ -109,17 +108,10 @@ class RegistryCredential(BaseModel):
         return password.get_secret_value() if (info.context or {}).get(SENDING) else str(password)
 
 
-# A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
-_ENDPOINT_MAY_STATE = frozenset({
-    'name',
-    'kind',
-    'url',
-    'provider',
-    'spec',
-    'image',
-    'image_credential',
-    'episodes_per_endpoint',
-})
+# The one cascading property an endpoint states for itself; `Cascade` holds the rest. Derived, so
+# a property added to `Cascade`, or a field added to `Endpoint`, needs no edit here.
+_ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
+_PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 
 
 class Endpoint(Cascade):
@@ -193,13 +185,13 @@ class Endpoint(Cascade):
         fields = type(self).model_fields
         stated = sorted(
             name
-            for name in self.model_fields_set - _ENDPOINT_MAY_STATE
+            for name in self.model_fields_set & _PER_TASK_ONLY
             if getattr(self, name) != fields[name].get_default(call_default_factory=True)
         )
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '
-                'an endpoint overrides only episodes_per_endpoint'
+                f'an endpoint overrides only {_ENDPOINT_OVERRIDES}'
             )
         return self
 

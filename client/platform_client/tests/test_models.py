@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import get_args
 
 import pytest
+from platform_client import config, eval_plan, requests
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     INTERNAL_STATUSES,
@@ -21,6 +22,7 @@ from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBod
 from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -258,6 +260,24 @@ def test_ids_and_statuses_leave_as_wire_values():
     assert row['status'] == 'errored'
     assert row['reason_code'] == 'image_unpullable'
     assert row['received_at'].startswith('2026-03-04T05:06:07')
+
+
+def test_every_model_built_from_input_declares_its_fields_and_hides_them_from_its_errors():
+    """A model-level validator is handed the raw input, which a `SecretStr` field has not masked.
+
+    Three of these carry a credential today — the registry password, the identity `users.register`
+    presents, and the key the record holds — and which three it is changes. Walking the modules is
+    what covers a model added to one of them, and a field added to a model.
+    """
+    for module in (eval_plan, requests, config):
+        declared = [
+            member
+            for member in vars(module).values()
+            if isinstance(member, type) and issubclass(member, BaseModel) and member.__module__ == module.__name__
+        ]
+        assert declared, module.__name__
+        for model in declared:
+            assert model.model_config == INPUT_MODEL_CONFIG, f'{module.__name__}.{model.__name__}'
 
 
 def test_a_request_rejects_an_unknown_field():
