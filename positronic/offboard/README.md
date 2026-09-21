@@ -280,22 +280,27 @@ which has no port at all.
 The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--uds`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
 
 ### `client.InferenceClient`
-A Python client for connecting to an inference server. It takes the wire and the session address as values
-(`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the model and the
-session params, so serving another model means another client.
+A Python client for connecting to an inference server. It takes the wire and the address that wire
+dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the model
+and the session params, so serving another model means another client. Each wire names its own
+address type, and the client refuses one built for another wire.
 
 ```python
+from pathlib import Path
+
 from positronic.offboard.client import InferenceClient
 from positronic_wire import registry
-from positronic_wire.wire import SessionAddress, session_path
+from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
 
 # The server's pinned checkpoint, with no session params
-client = InferenceClient(registry.client_wire('websocket'), SessionAddress('localhost', 8000, session_path(), ''))
+client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path(), ''))
 # A named model, tuned for every session this client opens
-# client = InferenceClient(registry.client_wire('websocket'), SessionAddress('localhost', 8000, session_path('model_a'), 'codec.fps=10'))
+# client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path('model_a'), 'codec.fps=10'))
 # The same session on the gRPC wire, on a LAN and behind a TLS edge
-# client = InferenceClient(registry.client_wire('grpc'), SessionAddress('localhost', 9000, session_path('model_a'), ''))
-# client = InferenceClient(registry.client_wire('grpc_tls'), SessionAddress('gpu-host', 443, session_path('model_a'), ''))
+# client = InferenceClient(registry.client_wire('grpc'), HostPortAddress('localhost', 9000, session_path('model_a'), ''))
+# client = InferenceClient(registry.client_wire('grpc_tls'), HostPortAddress('gpu-host', 443, session_path('model_a'), ''))
+# A server on this machine: the socket wire's address names the socket, and no host and no port
+# client = InferenceClient(registry.client_wire('websocket_unix'), UnixSocketAddress(Path('/run/policy.sock'), session_path(), ''))
 
 session = client.new_session()
 meta = session.metadata

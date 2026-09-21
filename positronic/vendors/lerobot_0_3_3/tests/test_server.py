@@ -2,10 +2,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
-from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from positronic.offboard import websocket_wire
+from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.protocol import deserialise
 from positronic.policy.executor import blocking
 from positronic.policy.layers import ChunkedSchedule
@@ -57,7 +56,7 @@ class _DummyWebSocket:
 
     def as_connection(self) -> websocket_wire.WebsocketServerConnection:
         """What the websocket wire hands the server for one session it has accepted."""
-        return websocket_wire.WebsocketServerConnection(self, wire.Endpoint('localhost', 8000))
+        return websocket_wire.WebsocketServerConnection(self, server_wire.ServedHostPort('localhost', 8000))
 
 
 def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
