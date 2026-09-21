@@ -392,3 +392,39 @@ attempt = spec.model_copy(update={'artifact_location': moved})
 attempt = spec.model_copy()
 attempt.artifact_location = moved
 ```
+
+### per-wire-code
+
+Don't write code that knows one transport — gRPC, a WebSocket, a Unix socket — anywhere but inside
+that transport's wire implementation, on either end. A wire encapsulates everything specific to its
+transport: the library it dials with, the exception types that library raises, its status codes and
+metadata keys, the path a probe asks for, the URL schemes that select it. Code outside a wire speaks
+to every transport through the interface all wires share, and reads the wire's own answer.
+
+The tell is a transport's name in a module that is not a wire: an `import grpc` beside an
+`if scheme == 'grpc'`, a table keyed by scheme, an exception matched by its library's name, a copy of
+a wire's probe path, a predicate that asks whether a URL is one transport and gates a code path on
+it, a version floor standing in for "the other side dials this transport". Each restates a wire's
+fact where the wire cannot keep it true, and a transport added later has to find every copy.
+
+Ask the wire instead. The scheme table lists every scheme and whether it names TLS; the client wire
+dials and probes; one exception type says a session did not open. Where the wire offers no verb for
+what the caller needs, add the verb to the wire interface and implement it in every wire, rather than
+branching on the transport at the call site.
+
+Three things are not this: a wire implementation and its tests; the one place that composes the
+wires a process serves or dials — a server's list of wires, the client's scheme table; and a
+deployment's own configuration of a transport it serves — the port a gRPC wire binds, the flag that
+names it — which is data a deployment states, not a code path that branches on it.
+
+```python
+# Bad — the caller reads the scheme to pick a library, and matches the library's error by name
+handshake = {name: url for name, url in endpoints.items() if not speaks_grpc(url)}
+websockets.connect(ws_url(url))
+if f'{type(e).__module__}.{type(e).__name__}' in {'grpc.RpcError', 'websockets.InvalidHandshake'}: ...
+
+# Good — the wire the URL selects dials it, and one exception type says it did not open
+client_wire, address = wires.from_url(url)
+client_wire.probe(address, open_timeout)
+if isinstance(e, (wire.ConnectRefused, wire.PeerDisconnected)): ...
+```
