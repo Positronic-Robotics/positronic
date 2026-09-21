@@ -1,6 +1,7 @@
 import collections.abc as cabc
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -156,6 +157,9 @@ class RemotePolicy(Policy):
     server, ``model`` the checkpoint it serves — empty for the one it pinned — and ``query`` the session
     params as written. ``headers`` carry the credentials.
 
+    ``uds`` is the Unix socket a same-machine server bound, which the ``websocket_unix`` wire dials in
+    place of the network; ``host`` then only stands for the server in the handshake sent over it.
+
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
     ``remote`` marker. The declared layers are built here, once, and every session runs through
@@ -172,11 +176,12 @@ class RemotePolicy(Policy):
         *,
         model: str = '',
         query: str = '',
+        uds: str | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        address = SessionAddress(host, port, session_path(model), query)
+        address = SessionAddress(host, port, session_path(model), query, None if uds is None else Path(uds))
         client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
         self._endpoint = _Endpoint(client)
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None

@@ -7,6 +7,7 @@ CLIENT_WIRES: dict[str, wire.ClientWire] = {
     for client_wire in (
         websocket.WebsocketClientWire(),
         websocket.WebsocketTlsClientWire(),
+        websocket.WebsocketUnixClientWire(),
         grpc.GrpcClientWire(),
         grpc.GrpcTlsClientWire(),
     )

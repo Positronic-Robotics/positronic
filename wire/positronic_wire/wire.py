@@ -9,6 +9,7 @@ import abc
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar, NamedTuple
 
 # The server's HTTP API, and the route a session opens on under it.
@@ -39,12 +40,16 @@ class SessionAddress(NamedTuple):
     ``path`` is ``session_path(model)``, and ``query`` carries the session params as written: the server
     reads each value as a JSON literal, and only whoever wrote the query knows whether ``true`` means the
     bool or the string.
+
+    ``uds`` is the Unix socket a same-machine session opens on, and the socket wire is the one wire that
+    reads it. ``host`` and ``port`` still stand for the server in the handshake that wire sends.
     """
 
     host: str
     port: int
     path: str
     query: str
+    uds: Path | None = None
 
 
 # The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
@@ -73,10 +78,11 @@ class ConnectRefused(Exception):
 
 
 class Endpoint(NamedTuple):
-    """Where a wire serves."""
+    """Where a wire serves. A wire bound to a Unix socket names its path in ``uds``, and its port is 0."""
 
     host: str
     port: int
+    uds: Path | None = None
 
 
 class ClientWire(abc.ABC):

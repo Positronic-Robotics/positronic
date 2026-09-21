@@ -1,6 +1,10 @@
 """The server side of the websocket wire."""
 
+import errno
+import os
 import socket
+import stat
+from pathlib import Path
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
@@ -74,21 +78,88 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
     return sockets
 
 
+# The probe bounds its wait, and reads a wait that runs out as a live server: a server whose backlog is
+# full holds a connect open, and an unbounded one would stall startup.
+LIVE_SOCKET_PROBE_SEC = 1.0
+
+
+def _is_stale_socket(path: Path) -> bool:
+    """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+
+    A live socket, a probe that runs out of time against a full backlog, and a path that holds something
+    other than a socket are none of them stale.
+    """
+    try:
+        if not stat.S_ISSOCK(os.stat(path).st_mode):
+            return False
+    except FileNotFoundError:
+        return False
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(LIVE_SOCKET_PROBE_SEC)
+        try:
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def claim_socket_path(path: Path) -> socket.socket:
+    """Bind and listen on ``path``, and return the socket, or refuse a path a live server holds.
+
+    A live path is refused: the bind precedes any probe, so the loser fails on ``EADDRINUSE`` and the
+    probe reads the holder as live. An absent or a stale path holds no such claim. A socket is bound
+    before it listens, and a probe in that window reads the binder as stale. Two starters on one path
+    can then both unlink and rebind, and the first serves a socket nothing links to. Give each path
+    one starter. Serve the returned socket by its descriptor: a server handed the path instead binds
+    again, and unlinks this claim.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        try:
+            sock.bind(str(path))
+        except OSError as taken:
+            if taken.errno != errno.EADDRINUSE:
+                raise
+            if not _is_stale_socket(path):
+                raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
+            os.unlink(path)
+            sock.bind(str(path))
+        # The mode is the deployment's, through its umask: widening it here would open the socket to
+        # every local account that can reach the directory.
+        sock.listen()
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 # uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
 # (measured by positronic/offboard/serving_cost.py).
 WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(server_wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same address.
+
+    ``uds`` binds a Unix socket path in place of ``host:port``. The socket file stays after ``stop``: a
+    successor reads it as stale, where an unlink here could take a path that successor has claimed.
+    """
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter):
+    def __init__(self, host: str, port: int, api: APIRouter, uds: str | Path | None = None):
+        # A relative path is resolved against whatever directory the server was started from, so the path
+        # an operator wrote and the path a client dials would part company on the next start.
+        uds = None if uds is None else Path(uds)
+        if uds is not None and not uds.is_absolute():
+            raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
         self._host = host
         self._port = port
+        self._uds = uds
         self._api = api
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
@@ -102,8 +173,12 @@ class WebsocketWire(server_wire.Wire):
 
     async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         self._served = False
-        self._sockets = _listening_sockets(self._host, self._port)
-        self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
+        if self._uds is not None:
+            self._sockets = [claim_socket_path(self._uds)]
+            self._endpoint = wire.Endpoint(self._host, 0, uds=self._uds)
+        else:
+            self._sockets = _listening_sockets(self._host, self._port)
+            self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
         app = FastAPI()
         app.include_router(self._api)
         self._route_sessions(app, session, authorized)

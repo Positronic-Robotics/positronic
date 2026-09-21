@@ -3,6 +3,7 @@
 import socket
 import ssl
 from http import HTTPStatus
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -160,3 +161,20 @@ def test_the_member_spells_the_session_and_the_api_and_leaves_out_its_default_po
 ):
     assert client_wire.session_url(address) == session_url
     assert client_wire.api_url(address) == api_url
+
+
+def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_port():
+    """A socket has no port, so neither the log nor the handshake's Host header may claim one."""
+    address = wire.SessionAddress('localhost', 8000, wire.session_path('10000'), 'fps=10', Path('/run/policy.sock'))
+    unix = websocket.WebsocketUnixClientWire()
+
+    assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session/10000?fps=10'
+    assert unix.handshake_url(address) == 'ws://localhost/api/v1/session/10000?fps=10'
+    assert unix.api_url(address) == 'http://localhost/api/v1'
+
+
+def test_the_socket_wire_refuses_an_address_naming_no_socket():
+    address = wire.SessionAddress('localhost', 8000, wire.session_path(), '')
+
+    with pytest.raises(ValueError, match='names none'):
+        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)

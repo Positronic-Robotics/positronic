@@ -46,7 +46,7 @@ dependencies = [
     # The client side of both wires and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
-    "positronic-wire==0.1.0",
+    "positronic-wire==0.2.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",

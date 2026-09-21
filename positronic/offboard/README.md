@@ -13,14 +13,20 @@ the same order. The client side of each wire, and the facts both ends share, shi
 `positronic-wire` distribution ([wire/README.md](../../wire/README.md)); this package holds the
 server side.
 
-| Wire | `--policy.wire` | Port |
+| Wire | `--policy.wire` | Where it answers |
 |---|---|---|
 | WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the server's `port`, beside the HTTP routes |
+| WebSocket on a Unix socket | `websocket_unix` | the server's `uds` path, beside the same HTTP routes |
 | gRPC | `grpc` | the server's `grpc_port`, sessions alone |
 | gRPC over TLS | `grpc_tls` | a TLS edge in front of that same `grpc_port` |
 
 - A client names its wire; nothing reads one off a URL. The WebSocket wire is the default. A server serves
   gRPC only when `grpc_port` names a port.
+- `websocket_unix` reaches a server on the same machine, over no network. `serve --uds /run/policy.sock`
+  binds that path in place of `host` and `port`, and `--policy.uds` dials it; `--policy.host` then only
+  stands for the server in the handshake sent over the socket. Both paths are absolute: a relative one is
+  resolved against whatever directory each side was started from. A socket is same-machine by
+  construction, so there is no TLS member beside it, and `--uds` leaves the gRPC wire on host and port.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,

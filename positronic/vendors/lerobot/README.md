@@ -109,6 +109,8 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 | `--pipeline.source.device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--uds` | Absolute Unix socket path for the WebSocket wire, in place of `--host`/`--port` | `None` | `/run/policy.sock` |
+| `--grpc_port` | Port for the gRPC wire, served beside the websocket one | `None` | `8001` |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 

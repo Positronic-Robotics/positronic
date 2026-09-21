@@ -8,7 +8,7 @@ ends of a wire share. It is one distribution, installable on its own, with `grpc
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.1.0"
+uv add "positronic-wire==0.2.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -32,8 +32,8 @@ one interface and reads one answer. A wire over TLS is a member of its own, so n
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, `SessionAddress(host, port, path, query)`, `Endpoint`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
-| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, `SessionAddress(host, port, path, query, uds)`, `Endpoint`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, and the call both ends agree on: `SERVICE`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
@@ -45,7 +45,7 @@ needs.
 ## The client interface
 
 `ClientWire` has two facts and four verbs. `NAME` is what a caller selects it by: `websocket`,
-`websocket_tls`, `grpc`, `grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
+`websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
 
 - `session_url(address)` — the session as this wire spells it, for the dial and for the log. The
   websocket members write `ws://` or `wss://`, because their library takes a URL; the gRPC members
@@ -67,6 +67,14 @@ needs.
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries. A
 `SessionAddress` is `host`, `port`, `path` (`session_path(model)`) and `query`, as written; a
 caller that records an endpoint records those four and the wire's name, never a URL.
+
+`uds` is the fifth field, and `websocket_unix` is the one member that reads it: an absolute path to a
+Unix socket a server on the same machine bound, dialled instead of the network. `host` still stands for
+the server in the handshake sent over that socket, and no port is claimed there. A socket is
+same-machine by construction, so no TLS member sits beside it. An `OSError` the socket raises is `COLD`
+only where the path could still become a socket — it is absent, or a refusal comes from a socket a
+server is restarting on; a misspelt path, a path holding something that is not a socket and a refused
+permission are `FINAL`, because no retry reaches them.
 
 ## What each consumer pays
 
