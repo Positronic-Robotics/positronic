@@ -118,11 +118,13 @@ class RegistryCredential(BaseModel):
     def password(self) -> str:
         """The password, read at the moment it is sent.
 
-        Surrounding whitespace goes, so a file written with `echo` carries no trailing newline into
-        the request. A file that changed since the plan was read raises, and the CLI reports a
-        `ValueError` from a send as a refusal.
+        One trailing line ending goes, so a file written with `echo` carries no newline into the
+        request. Everything else the file holds is the password, an edge space included. A file
+        that changed since the plan was read raises, and the CLI reports a `ValueError` from a
+        send as a refusal.
         """
-        password = self.password_file.read_text().strip()
+        held = self.password_file.read_text()
+        password = held.removesuffix('\n').removesuffix('\r')
         if not password:
             raise ValueError(f'{self.password_file} holds no password')
         return password

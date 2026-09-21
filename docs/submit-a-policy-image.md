@@ -87,7 +87,8 @@ uv run positronic eval run --eval=<eval> \
 
 - The password is in the file and never on the command line, where every `ps` on the machine
   reads it and every shell history keeps it.
-- Surrounding whitespace goes, so a file written with `echo` needs no trimming.
+- One trailing line ending goes, so a file written with `echo` needs no trimming. Everything
+  else in the file is the password, a leading or trailing space included.
 - Give the credential read on that one repository. A registry issues a token for exactly this:
   Docker Hub calls it an access token, and a cloud registry a service account key.
 - The credential opens the registry for the copy and for nothing else. It is not written to the

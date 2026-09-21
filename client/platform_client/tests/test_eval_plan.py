@@ -558,3 +558,33 @@ def test_a_password_file_nothing_may_read_is_refused(tmp_path: Path):
             )
     finally:
         unreadable.chmod(0o600)
+
+
+def test_the_password_keeps_the_spaces_at_its_own_edges(tmp_path: Path):
+    padded = tmp_path / 'registry-password'
+    padded.write_text('  a password with edges  \n')
+    endpoint = Endpoint.model_validate(
+        an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(padded)})
+    )
+    assert endpoint.image_credential is not None
+    assert endpoint.image_credential.password() == '  a password with edges  '
+
+
+def test_a_file_with_no_trailing_newline_is_the_password_whole(tmp_path: Path):
+    bare = tmp_path / 'registry-password'
+    bare.write_text('no-newline-here')
+    endpoint = Endpoint.model_validate(
+        an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(bare)})
+    )
+    assert endpoint.image_credential is not None
+    assert endpoint.image_credential.password() == 'no-newline-here'
+
+
+def test_a_windows_line_ending_goes_with_the_newline(tmp_path: Path):
+    written_on_windows = tmp_path / 'registry-password'
+    written_on_windows.write_bytes(b'a-password\r\n')
+    endpoint = Endpoint.model_validate(
+        an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(written_on_windows)})
+    )
+    assert endpoint.image_credential is not None
+    assert endpoint.image_credential.password() == 'a-password'
