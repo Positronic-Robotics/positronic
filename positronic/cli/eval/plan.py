@@ -36,8 +36,8 @@ class _OneValuePerKey(yaml.SafeLoader):
     """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
     two caps, and the one it keeps is a typo, so a repeated key is refused.
 
-    This runs over every mapping in the file, so a key is not always a plan field. One that is not
-    is text a caller wrote, and goes unnamed.
+    This runs over every mapping in the file, so a key is not always a plan field. A key the plan
+    does not declare is a caller's own text, and goes unnamed.
     """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:

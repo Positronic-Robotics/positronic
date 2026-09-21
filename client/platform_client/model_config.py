@@ -2,8 +2,8 @@
 `ValidationError` does not echo the input.
 
 Pydantic validates a model over its raw input, so a `SecretStr` field masks nothing in a
-`ValidationError`. The hiding reaches `str` and `repr` alone; `errors()` and `json()` take
-`include_input` from the caller.
+`ValidationError`. The hiding reaches `str` and `repr` alone. `errors()` and `json()` take
+`include_input` from the caller, so a caller that asks for the input is given it.
 """
 
 from __future__ import annotations
