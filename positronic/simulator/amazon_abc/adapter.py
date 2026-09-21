@@ -1,9 +1,4 @@
-"""``AbcAdapter``: the canonical embodiment contract <-> ABC's raw per-arm payloads, client-side.
-
-Runs in positronic's interpreter (the ``AbcEnv`` server runs in ABC's). The command side is
-``WireCommandAdapter``'s forwarding, one channel per arm; the IK that bridges pose<->joint commands lives
-server-side where the MuJoCo model is. The frames already agree, so nothing is re-expressed on the way through.
-"""
+"""``AbcAdapter``: the canonical embodiment contract <-> ABC's raw per-arm payloads, client-side."""
 
 from typing import Any
 

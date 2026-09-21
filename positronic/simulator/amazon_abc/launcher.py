@@ -1,9 +1,7 @@
 """Launches the ABC env server as a subprocess and owns its lifetime.
 
-positronic starts the server: the env runs in an interpreter of its own, built once beside the pinned ABC
-checkout, because ABC needs MuJoCo 3.8 where positronic locks 3.5. The positronic-free ``env_server`` package,
-this package and the checkout ride ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``, the
-shared ``mapping``, and ``abc_sim`` without dragging in positronic.
+The server runs in an interpreter of its own, built once beside the pinned ABC checkout: ABC needs MuJoCo 3.8
+and positronic locks 3.5.
 """
 
 import fcntl
@@ -28,14 +26,12 @@ _ABC_SRC = _ABC_CACHE / 'src'
 
 # ABC declares ``requires-python = ">=3.10"``, so uv would otherwise inherit positronic's interpreter.
 _ABC_PYTHON = '3.12'
-# What the simulator and the asset installer import, at ABC's own bounds. Installing the project would pull
-# its CUDA torch and mujoco-warp, which only the policy and the batched renderer need.
+# Installing the ABC project itself would pull its CUDA torch and mujoco-warp.
 _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
 # The isolated env server requires these independently of ABC's dependencies.
 _WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
 
-# ABC's own asset installer: it resolves a task to the packages its scene loads, and verifies each archive
-# against the manifest it ships. Assets are untracked, so forcing the checkout onto the pin leaves them.
+# Assets are untracked, so forcing the checkout onto the pin leaves them.
 _PREPARE_SCRIPT = 'prepare.py'
 _PREPARE_ONE_TASK = '--sim-task'
 _PREPARE_EVERY_TASK = '--sim'
