@@ -302,7 +302,7 @@ def main(
     with opened as measured:
         print(f'stack: {json.dumps(measured.stack.to_spec())}')
         # The declared stack chooses for a named server; the flags do it here, so nothing unasked-for is sent.
-        selected = None if server_url else cameras
+        selected = None if server_host else cameras
         payloads = capture(observations(chosen, rate_hz, selected), measured.stack, model, requests)
         if not payloads:
             raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
