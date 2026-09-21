@@ -54,7 +54,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 )
                 out = {protocol.FRAME_DONE: False}
                 for _ in range(steps):
-                    hold = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
+                    hold = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
                     out = conn.step(hold)
                     adapter.observations(out[protocol.FRAME_OBS])
                     _check_sim_state(adapter, out[protocol.FRAME_OBS])

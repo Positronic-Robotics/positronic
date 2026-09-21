@@ -36,8 +36,9 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
-ACTION_COMMAND = 'command'
-ACTION_GRIP = 'grip'  # Closure in [0, 1].
+# The command channels of a single-arm env. The wire cannot import positronic's ``keys``; a test pins them equal.
+ROBOT_COMMAND = 'robot_command'
+TARGET_GRIP = 'target_grip'
 
 COMMAND_TYPE = 'type'
 COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
@@ -53,6 +54,19 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
+
+
+def single_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
+    """The action of a single-arm embodiment."""
+    return {ROBOT_COMMAND: command, TARGET_GRIP: grip}
+
+
+def single_arm(action: dict[str, Any]) -> dict[str, Any]:
+    """``action`` as a single-arm env reads it; raises on a channel such an env cannot drive."""
+    extra = set(action) - {ROBOT_COMMAND, TARGET_GRIP}
+    if extra:
+        raise ValueError(f'a single-arm env cannot act on channels {sorted(extra)}')
+    return action
 
 
 def _pack(obj):

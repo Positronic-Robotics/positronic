@@ -7,11 +7,17 @@ A key one package owns lives in that package's own ``keys`` module instead: a tr
 the robot model's in ``drivers.roboarm.keys``, and so on.
 """
 
+JOINTS_SUFFIX = '.q'
+JOINT_VEL_SUFFIX = '.dq'
+EE_POSE_SUFFIX = '.ee_pose'
+POSE_SUFFIX = '.pose'
+STATUS_SUFFIX = '.status'
+
 # The arm's command channel, and the signals a recorded command unfolds into. The suffixes are the
 # serializer's (see ``Serializers.robot_command`` and ``expand_suffixed``), so the names derive from the
 # channel rather than restating it.
 ROBOT_COMMAND = 'robot_command'
-TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
+TARGET_EE_POSE = f'{ROBOT_COMMAND}{POSE_SUFFIX}'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
@@ -26,15 +32,17 @@ def is_robot_command(name: str) -> bool:
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
 
 
+def arm_channel(channel: str, arm: str | None) -> str:
+    """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
+    return channel if arm is None else f'{channel}.{arm}'
+
+
 # The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
 # suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
 ROBOT_STATE = 'robot_state'
-JOINTS = f'{ROBOT_STATE}.q'
-JOINT_VEL = f'{ROBOT_STATE}.dq'
-EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# The arm's ``RobotStatus``. The suffix is named on its own because a consumer picks the entry out by it on a
-# rig whose arms are ``robot_state.{side}``.
-STATUS_SUFFIX = '.status'
+JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
+JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
+EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 TASK = 'task'

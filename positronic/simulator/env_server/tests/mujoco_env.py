@@ -25,7 +25,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.protocol import COMMAND_DELTA, COMMAND_JOINT_DELTA, COMMAND_JOINT_POS, COMMAND_POSE
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
 from positronic.utils import package_assets_path
@@ -133,7 +133,8 @@ class MujocoEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        command = action[protocol.ACTION_COMMAND]
+        wire = protocol.single_arm(action)
+        command = wire[protocol.ROBOT_COMMAND]
         match command[protocol.COMMAND_TYPE]:
             case protocol.HOLD:
                 cmd = None
@@ -149,7 +150,7 @@ class MujocoEnv(EnvProtocol):
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
         if cmd is not None:
             self._cmd_emit.emit(cmd)
-        self._grip_emit.emit(float(action[protocol.ACTION_GRIP]))
+        self._grip_emit.emit(float(wire[protocol.TARGET_GRIP]))
         self._advance(self._timestep)
         return {
             protocol.FRAME_OBS: self._read_obs(),
@@ -211,7 +212,7 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
-    embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
+    embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
     plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
     return Eval(
         embodiment,

@@ -27,7 +27,7 @@ from positronic.simulator.molmo_spaces.tests import parity_record
 
 # The native reference runs in the MolmoSpaces interpreter.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
-_HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
+_HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
