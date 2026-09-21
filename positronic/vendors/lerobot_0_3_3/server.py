@@ -10,7 +10,7 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 from pimm.logging import init_logging
-from positronic import keys
+from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -79,34 +79,87 @@ class LerobotSource(ModelSource):
 
 
 lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
-ee_codec = codecs.compose_data.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
 
 
 # No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
 # so none has a transform to declare.
-@cfn.config(codec=ee_codec, source=lerobot_source, fps=15.0, horizon_sec=1.0)
-def pipeline(codec: Codec, source: ModelSource, fps: float, horizon_sec: float | None):
+@cfn.config(**{
+    'source': lerobot_source,
+    'obs': codecs.general_obs,
+    'obs.state_name': 'observation.state',
+    'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
+    'obs.image_mappings': {'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE},
+    'obs.image_size': (224, 224),
+    'action': codecs.absolute_pos_action,
+})
+def pipeline(
+    obs: Codec,
+    action: Codec,
+    source: ModelSource,
+    fps: float = 15.0,
+    horizon_sec: float | None = 1.0,
+    binarize_grip: tuple[str, ...] | None = None,
+    flip_grip: bool = False,
+    ee_frame: geom.Transform3D | None = None,
+) -> Pipeline:
     return Pipeline(
         source=source,
         local=Sequential(StopOnFault(), ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
-        codec=codec,
+        codec=codecs.compose_data(
+            obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame
+        ),
     )
 
 
 ee = pipeline
-joints = pipeline.override(codec=ee_codec.override(obs=codecs.joints_obs))
-ee_traj = pipeline.override(codec=ee_codec.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,)))
-joints_traj = pipeline.override(
-    codec=ee_codec.override(
-        obs=codecs.joints_obs,
-        action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
-        binarize_grip=(keys.GRIP,),
-    )
-)
-joints_ik = pipeline.override(codec=ee_codec.override(obs=codecs.joints_obs, action=codecs.ik_joints_action))
-joints_ik_sim = joints_ik.override(**{'codec.action.solver': 'lm'})
+joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}})
+ee_traj = pipeline.override(**{
+    'action.tgt_ee_pose_key': keys.EE_POSE,
+    'action.tgt_grip_key': keys.GRIP,
+    'binarize_grip': (keys.GRIP,),
+})
+joints_traj = pipeline.override(**{
+    'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'action': codecs.absolute_joints_action,
+    'action.tgt_joints_key': keys.JOINTS,
+    'action.tgt_grip_key': keys.GRIP,
+    'binarize_grip': (keys.GRIP,),
+})
+joints_ik = pipeline.override(**{
+    'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'action': codecs.ik_joints_action,
+    'action.solver': 'dls_limits',
+})
+joints_ik_sim = pipeline.override(**{
+    'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'action': codecs.ik_joints_action,
+    'action.solver': 'lm',
+})
 # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
-ee_flip = pipeline.override(codec=ee_codec.override(flip_grip=True))
+ee_flip = pipeline.override(flip_grip=True)
+
+
+phail = pipeline.override(**{
+    'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/',
+    'action': codecs.phail_v1_execution,
+    'action.action': codecs.absolute_pos_action,
+})
+sim_stack = pipeline.override(**{
+    'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/',
+    'flip_grip': True,
+})
+demo = pipeline.override(**{
+    'source.checkpoints_dir': 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/',
+    'obs': codecs.general_obs,
+    'obs.state_name': 'observation.state',
+    'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
+    'obs.image_mappings': {'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE},
+    'obs.image_size': (224, 224),
+    'action': codecs.absolute_pos_action,
+    'flip_grip': True,
+    'fps': 15.0,
+    'horizon_sec': 1.0,
+})
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
@@ -120,20 +173,9 @@ COMMANDS = {
     'joints_ik': serve.override(pipeline=joints_ik),
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
     'ee_flip': serve.override(pipeline=ee_flip),
-    'phail': serve.override(
-        pipeline=ee.override(
-            codec=ee_codec.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action)),
-            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'},
-        )
-    ),
-    'sim_stack': serve.override(
-        pipeline=ee_flip.override(**{'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/'})
-    ),
-    'demo': serve.override(
-        pipeline=ee_flip.override(**{
-            'source.checkpoints_dir': 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
-        })
-    ),
+    'phail': serve.override(pipeline=phail),
+    'sim_stack': serve.override(pipeline=sim_stack),
+    'demo': serve.override(pipeline=demo),
 }
 
 
