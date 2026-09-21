@@ -1,9 +1,9 @@
 """The config for every model built from caller input: an unknown field is refused, and a
 `ValidationError` does not echo the input.
 
-Pydantic validates a model over its raw input, so a `SecretStr` field masks nothing in a
-`ValidationError`. The hiding reaches `str` and `repr` alone. `errors()` and `json()` take
-`include_input` from the caller, so a caller that asks for the input is given it.
+A `SecretStr` field masks nothing in a `ValidationError`, because pydantic validates a model
+over its raw input. The hiding reaches `str` and `repr`, and `errors()` and `json()` take
+`include_input` from the caller.
 """
 
 from __future__ import annotations
