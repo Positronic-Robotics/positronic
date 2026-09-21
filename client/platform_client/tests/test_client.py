@@ -27,7 +27,7 @@ from platform_client.enums import (
     SubmissionStatus,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, RegistryCredential, TaskNode, plan_of_image
+from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, credential_from_file, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
@@ -195,15 +195,12 @@ def test_create_submission_sends_the_run_defining_fields():
 
 
 def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_path):
-    """The request carries the password as plaintext: a masked password opens no registry. The send
-    path reads the file, so the plan holds a path until this call."""
+    """The request carries the password as plaintext: a masked password opens no registry."""
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
     password_file = tmp_path / 'registry-password'
     password_file.write_text('the-registry-password\n')
     plan = plan_of_image(
-        PolicyImage('org/policy:v1'),
-        EvalRef('fake.smoke'),
-        credential=RegistryCredential(username='a-reader', password_file=password_file),
+        PolicyImage('org/policy:v1'), EvalRef('fake.smoke'), credential=credential_from_file('a-reader', password_file)
     )
 
     make_client(gateway).create_submission(plan)

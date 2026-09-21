@@ -3,10 +3,8 @@
 Not a command of its own: running an eval is one act, and where it runs is an argument to it.
 """
 
-from pathlib import Path
-
 from platform_client.enums import NO_RESULT_STATUSES
-from platform_client.eval_plan import RegistryCredential, plan_of_image
+from platform_client.eval_plan import RegistryCredential, credential_from_file, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
@@ -21,7 +19,7 @@ def _credential(username: str | None, password_file: str | None) -> RegistryCred
         raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
     if username is None or password_file is None:
         return None
-    return RegistryCredential(username=username, password_file=Path(password_file))
+    return credential_from_file(username, password_file)
 
 
 def submit(
@@ -52,8 +50,7 @@ def submit(
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
             credential=_credential(registry_username, registry_password_file),
         )
-    # The send is inside the refusal too: it reads the password file, which may have changed.
-    with refusing_bad_input(), gateway(platform_url) as client:
+    with gateway(platform_url) as client:
         submission = client.create_submission(plan)
     print(f'submission {submission.submission_id} ({submission.status.name})')
     if submission.policy_image_digest is not None:
