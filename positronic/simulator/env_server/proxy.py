@@ -148,12 +148,12 @@ def remote_embodiment(
 ) -> Embodiment:
     """The canonical embodiment over a remote env proxy, driving the arms ``arms`` names.
 
-    Every remote benchmark exposes the same channels — ``robot_state``/``grip`` and
-    ``robot_command``/``target_grip`` per arm, one image per ``camera_dict`` entry — so their wiring lives
-    here. ``arms`` defaults to the single unnamed arm, whose channels are the bare names; naming an arm
-    suffixes every channel of that arm with it. ``static_meta`` adds the embodiment's robot-model payload on
-    top of the signal map derived from ``arms`` (supplied client-side when the env server cannot import
-    positronic to emit it via ``robot_meta``).
+    This wiring is shared: every remote benchmark exposes the same channels — ``robot_state``/``grip`` and
+    ``robot_command``/``target_grip`` per arm, one image per ``camera_dict`` entry. ``arms`` defaults to the
+    single unnamed arm, whose channels are the bare names; naming an arm suffixes every channel of that arm
+    with it. ``static_meta`` adds the embodiment's robot-model payload on top of the signal map derived from
+    ``arms`` (supplied client-side when the env server cannot import positronic to emit it via
+    ``robot_meta``).
     """
     states = [keys.arm_channel(keys.ROBOT_STATE, arm) for arm in arms]
     grips = [keys.arm_channel(keys.GRIP, arm) for arm in arms]
