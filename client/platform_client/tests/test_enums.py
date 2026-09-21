@@ -11,7 +11,6 @@ from enum import IntEnum
 
 import pytest
 from platform_client.enums import (
-    ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
     CameraVantage,
@@ -58,13 +57,11 @@ REASON_CODE_VALUES = {
 SUBMISSION_STATUS_VALUES = {
     'INVALID': 0,
     'pending': 1,
-    'submitting': 2,
     'running': 3,
     'finished': 4,
     'errored': 5,
     'cancelled': 6,
     'blocked': 7,
-    'mirroring': 8,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
@@ -110,11 +107,19 @@ def test_no_value_is_reused(enum_cls: type[IntEnum], expected: dict[str, int]):
     assert len(set(expected.values())) == len(expected)
 
 
-def test_the_status_sets_partition_the_decided_from_the_undecided():
-    # `blocked` is the third case: undecided like an active one, and holding no slot, so it belongs
-    # to neither set. Naming it here keeps the three together covering every status.
-    assert ACTIVE_STATUSES & TERMINAL_STATUSES == frozenset()
-    assert SubmissionStatus.blocked not in ACTIVE_STATUSES | TERMINAL_STATUSES
-    assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
-        SubmissionStatus.INVALID
-    }
+def test_every_status_is_terminal_or_still_in_flight():
+    # `blocked` is in flight too: it is undecided, and a later report moves it on. Naming the
+    # in-flight ones here fails when a status arrives that belongs to neither camp.
+    in_flight = {SubmissionStatus.pending, SubmissionStatus.running, SubmissionStatus.blocked}
+    assert in_flight & TERMINAL_STATUSES == frozenset()
+    assert in_flight | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
+
+
+def test_the_platform_only_states_are_absent():
+    # The platform holds `submitting` at 2 and `mirroring` at 8, and reports both as `pending`.
+    # Both values stay unused here: a member taking one reads every stored row of that state as
+    # something else.
+    assert {m.name for m in SubmissionStatus}.isdisjoint({'submitting', 'mirroring'})
+    for value in (2, 8):
+        with pytest.raises(ValueError):
+            SubmissionStatus(value)

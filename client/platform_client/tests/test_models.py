@@ -9,7 +9,6 @@ import pytest
 from platform_client import config, eval_plan, requests
 from platform_client.boards import BoardRef
 from platform_client.enums import (
-    INTERNAL_STATUSES,
     BoardVisibility,
     ErrorCode,
     KeyStatus,
@@ -409,12 +408,8 @@ def test_the_published_field_names_are_ones_every_variant_declares(variant: type
 
 
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():
-    # `submitting` is an internal state the union has no variant for; a gateway building a pending
-    # view from such a record must fail here rather than emit a tag no caller can route.
     with pytest.raises(ValidationError):
-        PendingSubmissionView(
-            id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.submitting
-        )
+        PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.running)
 
 
 def test_a_view_keeps_its_own_tag():
@@ -430,11 +425,10 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
-    # Every status a caller can see carries a variant. This catches one added without one;
-    # `INTERNAL_STATUSES` never reach a caller and INVALID is the unset sentinel.
-    internal = {SubmissionStatus.INVALID} | INTERNAL_STATUSES
+    # Every status carries a variant. This catches one added without one; INVALID is the unset
+    # sentinel and has no wire form.
     assert {get_args(variant)[1].tag for variant in variants} == {
-        slug_of(status) for status in SubmissionStatus if status not in internal
+        slug_of(status) for status in SubmissionStatus if status is not SubmissionStatus.INVALID
     }
 
 
@@ -660,12 +654,13 @@ def test_a_scale_of_zero_is_refused_at_the_boundary():
         QuotaLimit.model_validate(payload)
 
 
-@pytest.mark.parametrize('status', sorted(slug_of(status) for status in INTERNAL_STATUSES))
+@pytest.mark.parametrize('status', ['mirroring', 'submitting'])
 @pytest.mark.parametrize(
     'model, field', [(SubmissionCreateResponse, {'submission_id': 'ff'}), (CancelResponse, {'refunded': False})]
 )
-def test_no_internal_state_reaches_a_caller(model: type[BaseModel], field: dict, status: str):
-    # The gateway reports each of these as `pending`, so a payload that carries one is refused.
+def test_a_platform_only_status_is_refused(model: type[BaseModel], field: dict, status: str):
+    # These are the platform's own states, spelled here because `SubmissionStatus` carries neither.
+    # `Slugged` reads its vocabulary off the members, so neither slug names a wire value.
     with pytest.raises(ValidationError):
         model.model_validate(field | {'status': status})
 

@@ -1,6 +1,7 @@
 """The closed sets a caller sees: error codes, terminal reason codes, submission and key status.
 
-The values are stored durably, so members are append-only forever: add, never renumber or reuse.
+The values are stored durably: add a member with the next free value, and never renumber or
+reuse one.
 `INVALID = 0` is the unset/parse-failure sentinel; the wire form is the slug (`platform_client.slug`).
 """
 
@@ -61,24 +62,21 @@ class ReasonCode(IntEnum):
 
 @unique
 class SubmissionStatus(IntEnum):
-    """The lifecycle: mirroring -> pending -> submitting -> running -> finished|errored|cancelled.
+    """The lifecycle a caller sees: pending -> running -> finished|errored|cancelled.
 
     `blocked` interrupts it at any point before an end state, and a later report moves it on.
-    `mirroring` and `submitting` are internal states: the gateway reports both as `pending`. A
-    submission starts at `mirroring` where the platform takes its own copy of the image first, and
-    at `pending` otherwise.
     """
 
     INVALID = 0
     pending = 1
-    submitting = 2
+    # 2 and 8 hold platform states that no caller sees. This enum and the platform store the same
+    # integers, so the gaps stay.
     running = 3
     finished = 4
     errored = 5
     cancelled = 6
     # It waits on what `reason` names, and a later report moves it on.
     blocked = 7
-    mirroring = 8
 
 
 @unique
@@ -121,18 +119,6 @@ class BoardVisibility(IntEnum):
     public = 1
     tenant = 2
 
-
-# Charged, undecided, still holding a concurrency slot. `blocked` is charged and undecided too, and
-# holds no slot, so it is in neither this set nor the terminal one.
-ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
-    SubmissionStatus.mirroring,
-    SubmissionStatus.pending,
-    SubmissionStatus.submitting,
-    SubmissionStatus.running,
-})
-
-# The gateway reports each of these as `pending`; a caller never sees one.
-INTERNAL_STATUSES: frozenset[SubmissionStatus] = frozenset({SubmissionStatus.submitting, SubmissionStatus.mirroring})
 
 # Decided and immutable.
 TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
