@@ -143,6 +143,16 @@ class _SafeInputs:
         reading = self._reading
         return sorted(reading.triggered) if reading.sampled else []
 
+    @property
+    def confirmed_clear(self) -> bool:
+        """Whether a reading IS in hand and found every safe input clear.
+
+        An unread box answers False, and so does one whose last sample failed: `triggered` flattens
+        both to an empty list, and a caller that may not act on an unknown state cannot use it.
+        """
+        reading = self._reading
+        return reading.sampled and not reading.triggered
+
     @staticmethod
     def _triggered(reading: object) -> bool:
         """Whether Desk reports a safe input as triggered.
@@ -312,6 +322,24 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
             self._refusals = 0
 
+    def clear_held_fault(self) -> None:
+        """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
+
+        A reflex latches libfranka into ``Reflex`` mode, where the arm rejects every move, and the latch
+        outlives the error flags ``state().error`` reads — a refused goal is the only sign of it here.
+        Recovery clears the latch and commands no motion; it runs only on a reading that found every safe
+        input clear, because a person may hold the arm and only they release it. An unread control box is
+        left alone too: a stale or missing reading names no input, which is not the same as a clear one.
+        """
+        if not self._refused or not self.safe_inputs.confirmed_clear:
+            return
+        logger.info('The arm is rejecting moves; clearing the fault it holds before it takes another')
+        if not self.robot.recover_from_errors():
+            raise RuntimeError(
+                'the arm holds a fault that rejects every move, and the recovery did not clear it: '
+                'clear the error in Desk, then start the run again'
+            )
+
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
@@ -336,6 +364,7 @@ class _Arm(DriverRun[command.CommandType]):
             return abandoned() or expired()
 
         try:
+            self.clear_held_fault()
             self.command_target(target, mode)
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 st = self.robot.state()
