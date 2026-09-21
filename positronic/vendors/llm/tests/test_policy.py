@@ -11,7 +11,6 @@ from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -177,16 +176,16 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
             replies.append(move())
             complete(active, rt, observation(time_ns))
             expected_frames = 2 * min(time_ns, image_horizon)
-            assert len(frames(active._history)) == expected_frames
+            assert len(frames(active._messages)) == expected_frames
             assert len(frames(requests[-1][0])) == expected_frames
         retained = [
             message.metadata[keys.OBS_TIME_NS]
-            for message in active._history
+            for message in active._messages
             if isinstance(message, ModelRequest) and message.metadata is not None and frames([message])
         ]
         assert set(retained) == set(range(5 - image_horizon, 5))
-        assert '[older camera frame omitted]' in str(active._history)
-        assert len([message for message in active._history if isinstance(message, ModelResponse)]) == len(requests)
+        assert '[older camera frame omitted]' in str(active._messages)
+        assert len([message for message in active._messages if isinstance(message, ModelResponse)]) == len(requests)
 
 
 @pytest.mark.parametrize(
@@ -284,56 +283,30 @@ def test_finished_session_stays_idle_after_cancellation_and_new_session_starts_f
     assert len(requests) == 2
 
 
-@pytest.mark.parametrize('cancel_before_answer', [True, False])
-@pytest.mark.parametrize('follow_up', [False, True])
-@pytest.mark.parametrize('error', [None, TimeoutError('API timed out'), RuntimeError('API unavailable')])
-def test_fault_discards_delayed_answer_and_keeps_one_request_in_flight(
-    model, caplog, cancel_before_answer, follow_up, error
-):
+@pytest.mark.parametrize('status', [RobotStatus.BUSY, RobotStatus.ERROR])
+def test_fault_pauses_commands_without_discarding_pending_reply(model, status):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
     def delayed():
         entered.set()
         assert release.wait(5)
-        if error is not None:
-            raise error
-        return move()
+        return move(0.04)
 
-    if follow_up:
-        replies.append(ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]))
-    replies.extend([delayed, finish()])
-    policy = (StopOnFault() | ChunkedSchedule()).wrap(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND))
-    with session(policy) as (active, rt):
+    replies.append(delayed)
+    with session(llm(model='test')) as (active, rt):
         assert active(observation(), 0) is None
-        if follow_up:
-            rt.wait(5)
-            assert active(observation(), 0) is None
         assert entered.wait(5)
-        for tick in range(10):
-            assert active(observation(), tick) is None
-        if not cancel_before_answer:
-            release.set()
-            rt.wait(5)
-        fault = observation() | {keys.ROBOT_STATUS: RobotStatus.ERROR}
-        assert active(fault, 10) == []
-        assert active(observation(), 11) is None
+        fault = observation(1) | {keys.ROBOT_STATUS: status}
+        assert active(fault, 1) == []
         release.set()
         rt.wait(5)
-        if cancel_before_answer:
-            assert active(observation(), 12) is None
+        assert active(fault, 2) == []
+        trajectory = active(observation(3, x=0.02), 3)
+        assert trajectory
+        assert trajectory[-2][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
         assert not rt.owes_an_answer
-        complete(active, rt, observation(20), 20)
-        assert active.meta['stop_reason'] == 'done'
-        events = [event['event'] for event in active.meta['transcript']]
-        if error is not None:
-            discarded = next(event for event in active.meta['transcript'] if event['event'] == 'discarded')
-            assert discarded['error'] == f'{type(error).__name__}: {error}'
-            assert any(record.levelname == 'ERROR' and record.exc_info[1] is error for record in caplog.records)
-    assert len(requests) == 2 + int(follow_up)
-    assert 'Reassess' in str(requests[-1][0])
-    assert any(isinstance(part, SystemPromptPart) for message in requests[-1][0] for part in message.parts)
-    assert 'discarded' in events
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize('error', [TimeoutError('API timed out'), RuntimeError('API unavailable')])
@@ -344,7 +317,6 @@ def test_active_request_failure_propagates(model, error):
         with pytest.raises(type(error), match=str(error)):
             complete(active, rt, observation())
         assert not rt.owes_an_answer
-        assert not any(event['event'] == 'discarded' for event in active.meta['transcript'])
     assert len(requests) == 1
 
 
@@ -356,7 +328,7 @@ def test_active_request_failure_propagates(model, error):
         ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]),
     ],
 )
-def test_rollout_close_discards_late_reply_without_follow_up_requests(model, monkeypatch, late_response):
+def test_rollout_close_waits_for_request_without_processing_reply(model, monkeypatch, late_response):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
@@ -382,32 +354,7 @@ def test_rollout_close_discards_late_reply_without_follow_up_requests(model, mon
         rollout.close()
     assert len(requests) == 1
     events = [e['event'] for e in rollout.session.meta['transcript']]
-    assert events.index('response') < events.index('discarded')
-    assert 'accepted' not in events
-
-
-def test_metadata_snapshot_excludes_response_arriving_after_cancellation(model):
-    _, replies = model
-    entered, release = threading.Event(), threading.Event()
-
-    def delayed():
-        entered.set()
-        assert release.wait(5)
-        return move()
-
-    replies.append(delayed)
-    with session(LLMPolicy(Endpoint('test'), Motion())) as (active, rt):
-        assert active(observation(), 0) is None
-        assert entered.wait(5)
-        active.cancel()
-        recorded_meta = active.meta
-        serialized = json.dumps(recorded_meta)
-        release.set()
-        rt.wait(5)
-        assert active(observation(), 1) is None
-        assert json.dumps(recorded_meta) == serialized
-        assert not any(e['event'] == 'response' for e in recorded_meta['transcript'])
-        assert any(e['event'] == 'discarded' for e in active.meta['transcript'])
+    assert events == ['instructions', 'observation', 'request']
 
 
 @pytest.mark.parametrize('bad', [move('invalid'), ModelResponse([TextPart('I will move.')])])
@@ -458,7 +405,7 @@ def test_clamped_target_is_reported_and_recorded_without_a_correction(model, req
         assert complete(active, rt, observation(2, x=current_x), 2) == []
         events = active.meta['transcript']
     assert len(requests) == 2
-    assert not any(e['event'] in ('rejected', 'discarded') for e in events)
+    assert not any(e['event'] == 'rejected' for e in events)
     response = next(e for e in events if e['event'] == 'response')
     assert response['tools'][0]['arguments']['x'] == requested_x
     accepted = next(e for e in events if e['event'] == 'accepted')

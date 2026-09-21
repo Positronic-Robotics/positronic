@@ -57,7 +57,7 @@ Provider-specific behavior follows the library defaults. The example explicitly 
 
 ## Control contract
 
-The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. Each worker job encodes any requested images and makes one model invocation, which may include SDK network retries. The session processes the reply on a later control-loop call and decides whether to request a correction or picture, play a move, or remain idle. Picture and correction requests share the decision's frozen observation. Once the scheduled waypoints play, the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
+The default config wraps the policy in `StopOnFault | ChunkedSchedule`. A decision sees one frozen observation. Each worker job encodes any requested images and makes one model invocation, which may include SDK network retries. The session owns the conversation and transcript. It processes the reply on a later control-loop call and decides whether to request a correction or picture, play a move, or remain idle. Picture and correction requests share the decision's frozen observation. Once the scheduled waypoints play, the next decision receives measured state again. An accepted target does not prove that the hand arrived: each subsequent observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
@@ -96,15 +96,15 @@ Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_
 
 Translation is linear and rotation follows the shortest spherical interpolation. A returned move starts from the latest measured pose. Oversized translation and rotation are clamped independently to the per-move limits, preserving the translation direction and shortest rotation path. A timestamp-only end marker gives the final command one sampling period before the next decision. The tool result and recorded acceptance contain the bounded target, whether it was clamped, and the trajectory duration including that final period. The next observation reports that target alongside the measured state; scheduling a target does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
-## Recordings and cancellation
+## Recordings and lifecycle
 
 Each session buffers a compact transcript and exposes a snapshot through `Session.meta`. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Without an output directory, the transcript remains in memory.
 
-Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted/discarded decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
+Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
 
-The recorded snapshot contains events available when the episode finishes. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
+The session records responses when it consumes them. The recorded snapshot contains events available when the episode finishes; an unconsumed response is absent even if its API call has completed. Later responses and session cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one model invocation can be in flight. Faults mark its reply for discard. Failures from cancelled invocations are logged and recorded as discarded when the session resumes; failures from active invocations propagate. Follow-up invocations start only when the control loop calls the session. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including any SDK retries within its timeout, before the session closes. Cancellation does not promise to stop provider billing for a request already sent.
+Only one model invocation can be in flight. `StopOnFault` clears scheduled commands while the robot is unavailable. The LLM session inherits the default no-op `cancel()`: it keeps its conversation and pending reply, which it processes when the robot becomes available again. API failures propagate. Follow-up invocations start only when the control loop calls the session. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including any SDK retries within its timeout, before the session closes.
 
 ## Supervised hardware
 
@@ -117,4 +117,4 @@ uv run --extra llm pytest positronic/vendors/llm/tests
 uv run --extra llm-openai --extra llm-anthropic --extra llm-google pytest positronic/vendors/llm/tests
 ```
 
-The core suite runs without provider SDKs. Provider integration tests skip when their SDK is absent; installing all three extras exercises every HTTP adapter. Tests mock HTTP, check native reasoning/image replay and client cleanup, validate retries, deadlines, motion and cancellation, and run the full harness/recorder with a deterministic robot. They need no API credentials or hardware.
+The core suite runs without provider SDKs. Provider integration tests skip when their SDK is absent; installing all three extras exercises every HTTP adapter. Tests mock HTTP, check native reasoning/image replay and client cleanup, validate retries, deadlines, motion and episode shutdown, and run the full harness/recorder with a deterministic robot. They need no API credentials or hardware.
