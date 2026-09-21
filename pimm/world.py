@@ -6,6 +6,7 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
+import signal
 import sys
 import time
 import traceback
@@ -224,9 +225,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
     """Signal receiver companion for :class:`MultiprocessEmitter`.
 
     The receiver lazily initialises shared-memory views when the transport mode
-    switches and keeps the last queue message as a fallback. Weak references
-    back to the emitter let the receiver clear the emitter's cleanup hook on
-    close without introducing cycles or non-picklable state.
+    switches and keeps the last queue message as a fallback.
     """
 
     def __init__(
@@ -464,8 +463,16 @@ class _CallAnsweringLoop:
 
 
 def _bg_wrapper(
-    run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
+    run_func: ControlLoop,
+    stop_event: EventClass,
+    clock: Clock,
+    name: str,
+    parent_component_levels: Mapping[str, int],
+    shutdown_timeout_s: float | None,
 ):
+    if shutdown_timeout_s is None:
+        # Ctrl-C stops the parent World; the device must complete its own shutdown before losing control.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
@@ -512,6 +519,8 @@ class World:
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
+        self._shutdown_timeouts = {}
+        self._foreground_shutdown: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
         self._connections = []
@@ -520,16 +529,23 @@ class World:
         self.entered = True
         return self
 
+    def _drive(self, loop: Iterator[Command]) -> None:
+        real_time = not isinstance(self._clock, VirtualClock)
+        for command in loop:
+            if real_time:
+                # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
+                time.sleep(command.seconds if isinstance(command, Sleep) else 0)
+
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
         logger.info('Stopping background processes...')
         self.request_stop()
 
+        self._drive(self._interleave(self._foreground_shutdown))
+
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
-            # Control systems run teardown (with-blocks in run()) after the stop signal, and some drivers may
-            # need tens of seconds to park their hardware, so give them the time before resorting to SIGTERM.
-            process.join(timeout=90)
+            process.join(timeout=self._shutdown_timeouts[process])
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
@@ -596,7 +612,9 @@ class World:
         resolving at one instant with no loop ever sleeping or finishing, the clock cannot advance —
         a stall (a hang in virtual time, a busy-spin on a wall clock) that ``interleave`` warns about.
         """
-        iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
+        yield from self._interleave([iter(loop(self.should_stop_reader(), self._clock)) for loop in loops])
+
+    def _interleave(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
@@ -842,8 +860,13 @@ class World:
                 # Wrap the underlying transport receiver before binding it into the logical receiver.
                 logical._bind(receiver_wrp(physical))
 
-        self.start_in_subprocess(*[_CallAnsweringLoop(cs) for cs in spawned])
-        return self.interleave(*[_CallAnsweringLoop(cs) for cs in in_process])
+        for cs in spawned:
+            self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_timeout_s=cs.shutdown_timeout_s)
+        loops = [_CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock) for cs in in_process]
+        self._foreground_shutdown.extend(
+            loop for cs, loop in zip(in_process, loops, strict=True) if cs.shutdown_timeout_s is None
+        )
+        return self._interleave(loops)
 
     def run(
         self,
@@ -857,17 +880,12 @@ class World:
         there is nothing to wait for — just pump as fast as the machine allows.
 
         Runs until the scheduler is exhausted: when any loop finishes — here or in a
-        background process — it sets ``should_stop``, and the others still run once more
-        to observe it and finalize (flush the episode, close the policy) before the
-        iterator ends.
+        background process — it sets ``should_stop``. The scheduler continues until every
+        remaining loop completes its shutdown.
         """
-        real_time = not isinstance(self._clock, VirtualClock)
-        for command in self.start(main_process, background):
-            if real_time:
-                # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
-                time.sleep(command.seconds if isinstance(command, Sleep) else 0)
+        self._drive(self.start(main_process, background))
 
-    def start_in_subprocess(self, *background_loops: ControlLoop):
+    def start_in_subprocess(self, *background_loops: ControlLoop, shutdown_timeout_s: float | None = 90.0):
         """Starts background control loops. Can be called multiple times for different control loops.
 
         Use `start` whenever possible, as this method is internal.
@@ -881,7 +899,7 @@ class World:
             # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels),
+                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels, shutdown_timeout_s),
                 daemon=True,
                 name=name,
             )
@@ -899,6 +917,7 @@ class World:
                     'inside the background process or run them in the main process.'
                 ) from e
             self.background_processes.append(p)
+            self._shutdown_timeouts[p] = shutdown_timeout_s
             logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
