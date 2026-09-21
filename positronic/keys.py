@@ -38,8 +38,8 @@ def arm_channel(channel: str, arm: str | None) -> str:
     """``channel`` as one arm drives it: the bare channel for an unnamed arm, ``channel.{arm}`` otherwise.
 
     An embodiment with one arm leaves it unnamed, so its channels are ``robot_command``/``robot_state``; one
-    with several names each, so they are ``robot_command.left`` and so on. The suffixes a serializer adds
-    follow the result, which is why they are named apart (``JOINTS_SUFFIX`` and its neighbours).
+    with several names each, so they are ``robot_command.left`` and so on. A serializer's suffix follows the
+    result: ``robot_state.left`` records ``robot_state.left.q``.
     """
     return channel if arm is None else f'{channel}.{arm}'
 
