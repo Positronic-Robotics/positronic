@@ -261,7 +261,7 @@ def test_a_malformed_plan_prints_no_part_of_its_registry_password(platform, run_
 
 
 def test_a_malformed_plan_still_says_where_the_fault_is(platform, run_command, tmp_path: Path):
-    # The position is what the redaction keeps: a refusal naming no line sends the author hunting.
+    # The redaction keeps the position: a refusal naming no line sends the author hunting.
     payload = a_plan_with_a_broken_credential('given twice')
     with pytest.raises(SystemExit, match=r'line \d+, column \d+'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))

@@ -210,9 +210,9 @@ ID_FIELD = 'id'
 
 
 class _TaggedView(BaseModel):
-    """One `submissions.get` variant. Its `status` default IS the tag the union selects it by, so a
-    payload carrying any other status belongs to a different variant and is refused rather than
-    validated into this one.
+    """One `submissions.get` variant. The union selects it by its `status` default, so a payload
+    carrying any other status belongs to a different variant and is refused rather than validated
+    into this one.
     """
 
     status: Slugged[SubmissionStatus]

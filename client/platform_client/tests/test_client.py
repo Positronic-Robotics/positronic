@@ -196,7 +196,7 @@ def test_create_submission_sends_the_run_defining_fields():
 
 def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_path):
     """The request carries the password as plaintext: a masked password opens no registry. The send
-    path is what reads the file, so the plan holds a path until this call."""
+    path reads the file, so the plan holds a path until this call."""
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
     password_file = tmp_path / 'registry-password'
     password_file.write_text('the-registry-password\n')
