@@ -16,7 +16,7 @@ def test_every_member_is_registered_under_its_own_name():
     }
     for name, client_wire in registry.CLIENT_WIRES.items():
         assert client_wire.NAME == name
-        assert isinstance(client_wire.DEFAULT_PORT, int)
+        assert issubclass(client_wire.ADDRESS, wire.SessionAddress)
 
 
 @pytest.mark.parametrize(

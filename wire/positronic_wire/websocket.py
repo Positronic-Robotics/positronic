@@ -1,5 +1,6 @@
 """The client side of the websocket wire."""
 
+import abc
 import os
 import socket
 import ssl
@@ -7,6 +8,7 @@ import stat
 from collections.abc import Mapping
 from http import HTTPStatus
 from pathlib import Path
+from typing import ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
@@ -68,34 +70,22 @@ def _refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.R
     return wire.Refusal.COLD
 
 
-class WebsocketClientWire(wire.ClientWire):
-    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
+class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
+    """What every websocket member shares: one session per connection, and how a refused one reads."""
 
-    NAME = 'websocket'
-    DEFAULT_PORT = 80
-    # The URL schemes this wire writes: the session upgrades from HTTP, and the API answers on it.
-    SCHEME = 'ws'
-    API_SCHEME = 'http'
+    # The URL scheme this wire writes for a session.
+    SCHEME: ClassVar[str]
 
-    def _refusal(
-        self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.SessionAddress
-    ) -> wire.Refusal:
+    def _refusal(self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.AddressT) -> wire.Refusal:
         """What a handshake that did not open says about the server, in this wire's terms."""
         return _refusal_of(raised)
 
-    def handshake_url(self, address: wire.SessionAddress) -> str:
-        """The URL the upgrade asks for. It is what this wire dials, unless the wire dials a socket."""
-        query = f'?{address.query}' if address.query else ''
-        return f'{self.SCHEME}://{self.netloc(address)}{address.path}{query}'
-
-    def session_url(self, address: wire.SessionAddress) -> str:
-        return self.handshake_url(address)
-
-    def api_url(self, address: wire.SessionAddress) -> str:
-        return f'{self.API_SCHEME}://{self.netloc(address)}{wire.API_PATH}'
+    @abc.abstractmethod
+    def _connect(self, address: wire.AddressT, **settings) -> Connection:
+        """One opened websocket on ``address``, however this wire reaches it."""
 
     def dial(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float
     ) -> WebsocketClientConnection:
         """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         url = self.session_url(address)
@@ -113,19 +103,15 @@ class WebsocketClientWire(wire.ClientWire):
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (connecting to {url})') from e
         return WebsocketClientConnection(websocket)
 
-    def _connect(self, address: wire.SessionAddress, **settings) -> Connection:
-        """One opened websocket on ``address``, however this wire reaches it."""
-        return connect(self.handshake_url(address), **settings)
-
     def probe(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """A handshake on the host's root, which no server upgrades.
+        """A handshake on the server's root, which no server upgrades.
 
         The server refuses that upgrade with 403, and nothing else answers 403 there: an edge that refuses a
         credential answers 401. So 403 is the server, and every other status reads as ``dial`` reads it.
         """
-        root = address._replace(path='', query='')
+        root = address.at_root()
         try:
             self._connect(root, open_timeout=open_timeout, additional_headers=headers).close()
         except InvalidStatus as e:
@@ -137,6 +123,35 @@ class WebsocketClientWire(wire.ClientWire):
         return None
 
 
+class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
+    """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
+
+    NAME = 'websocket'
+    ADDRESS = wire.HostPortAddress
+    DEFAULT_PORT = 80
+    # The URL schemes this wire writes: the session upgrades from HTTP, and the API answers on it.
+    SCHEME = 'ws'
+    API_SCHEME = 'http'
+
+    def netloc(self, address: wire.HostPortAddress) -> str:
+        """``host:port``, less the port this wire defaults to."""
+        return wire.netloc(address, self.DEFAULT_PORT)
+
+    def handshake_url(self, address: wire.HostPortAddress) -> str:
+        """The URL the upgrade asks for. It is what this wire dials, unless the wire dials a socket."""
+        query = f'?{address.query}' if address.query else ''
+        return f'{self.SCHEME}://{self.netloc(address)}{address.path}{query}'
+
+    def session_url(self, address: wire.HostPortAddress) -> str:
+        return self.handshake_url(address)
+
+    def api_url(self, address: wire.HostPortAddress) -> str:
+        return f'{self.API_SCHEME}://{self.netloc(address)}{wire.API_PATH}'
+
+    def _connect(self, address: wire.HostPortAddress, **settings) -> Connection:
+        return connect(self.handshake_url(address), **settings)
+
+
 class WebsocketTlsClientWire(WebsocketClientWire):
     """The websocket wire over TLS: the same session behind an edge that terminates it."""
 
@@ -146,27 +161,36 @@ class WebsocketTlsClientWire(WebsocketClientWire):
     API_SCHEME = 'https'
 
 
-class WebsocketUnixClientWire(WebsocketClientWire):
+class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     """The websocket wire over a Unix socket: the same session, reached on a path instead of a port.
 
-    ``SessionAddress.uds`` is the socket, and ``host`` stands for the server in the handshake this wire
-    sends over it. A socket is same-machine by construction, so there is no TLS member beside this one.
+    A socket is same-machine by construction, so there is no TLS member beside this one.
     """
 
     NAME = 'websocket_unix'
+    ADDRESS = wire.UnixSocketAddress
+    SCHEME = 'ws'
+    API_SCHEME = 'http'
+    # A socket names no authority, so the handshake and the API carry this in place of one. The server
+    # reads the route and ignores it, and no name is resolved: the connection is already open.
+    STANDS_FOR_THE_SERVER = 'localhost'
 
-    def netloc(self, address: wire.SessionAddress) -> str:
-        """The host alone: a socket has no port, so the handshake must not claim one."""
-        return wire.bracket_ipv6(address.host)
+    def handshake_url(self, address: wire.UnixSocketAddress) -> str:
+        """The URL the upgrade asks for, under the name that stands in for the socket."""
+        query = f'?{address.query}' if address.query else ''
+        return f'{self.SCHEME}://{self.STANDS_FOR_THE_SERVER}{address.path}{query}'
 
-    def session_url(self, address: wire.SessionAddress) -> str:
+    def session_url(self, address: wire.UnixSocketAddress) -> str:
         """The socket and the route on it, as this wire names one session."""
         query = f'?{address.query}' if address.query else ''
         return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
 
-    def api_socket(self, address: wire.SessionAddress) -> Path:
+    def api_url(self, address: wire.UnixSocketAddress) -> str:
+        return f'{self.API_SCHEME}://{self.STANDS_FOR_THE_SERVER}{wire.API_PATH}'
+
+    def api_socket(self, address: wire.UnixSocketAddress) -> Path:
         """The session's own socket: the API answers on it beside the sessions."""
-        return self._socket(address)
+        return address.uds
 
     @staticmethod
     def _socket_may_still_appear(uds: Path, raised: OSError) -> bool:
@@ -186,7 +210,7 @@ class WebsocketUnixClientWire(WebsocketClientWire):
             return False
 
     def _refusal(
-        self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.SessionAddress
+        self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.UnixSocketAddress
     ) -> wire.Refusal:
         """A path that may still become a socket is cold; a path that cannot is final.
 
@@ -199,20 +223,10 @@ class WebsocketUnixClientWire(WebsocketClientWire):
         if isinstance(raised, TimeoutError | ConnectionResetError):
             return super()._refusal(raised, address)
         if isinstance(raised, OSError) and not isinstance(raised, InvalidHandshake | ConnectionClosed):
-            cold = self._socket_may_still_appear(self._socket(address), raised)
+            cold = self._socket_may_still_appear(address.uds, raised)
             return wire.Refusal.COLD if cold else wire.Refusal.FINAL
         return super()._refusal(raised, address)
 
-    @classmethod
-    def _socket(cls, address: wire.SessionAddress) -> Path:
-        if address.uds is None:
-            raise ValueError(f'{cls.NAME} dials a Unix socket; SessionAddress.uds names none')
-        # A relative path is resolved against the directory this process was started from, so it names a
-        # different socket to each caller.
-        if not address.uds.is_absolute():
-            raise ValueError(f'{address.uds!r} is a relative socket path; dial an absolute one')
-        return address.uds
-
-    def _connect(self, address: wire.SessionAddress, **settings) -> Connection:
-        # The handshake asks for the route and the query under a host that stands in for the socket.
-        return unix_connect(str(self._socket(address)), uri=self.handshake_url(address), **settings)
+    def _connect(self, address: wire.UnixSocketAddress, **settings) -> Connection:
+        # The handshake asks for the route and the query under a name that stands in for the socket.
+        return unix_connect(str(address.uds), uri=self.handshake_url(address), **settings)

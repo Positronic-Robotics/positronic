@@ -4,27 +4,42 @@ The client side, and the facts both ends share, are ``positronic_wire``.
 """
 
 import abc
+import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from positronic_wire.wire import Endpoint
 from starlette.datastructures import QueryParams
 
 from . import keys
 
 
-class ServerConnection(abc.ABC):
-    """A server's end of one open session."""
+class ServedAddress(abc.ABC):
+    """Where a wire serves, and how a session served there names that in its own metadata.
+
+    A wire that binds a host and a port and one that binds a socket answer with different keys, so each
+    writes its own; nothing reads one kind of address and decides.
+    """
 
     @property
-    def endpoint_meta(self) -> dict[str, Any]:
-        """Where this wire serves, as a session's metadata names it.
+    @abc.abstractmethod
+    def meta(self) -> dict[str, Any]:
+        """The metadata keys this address writes into every session served on it."""
 
-        A socket path is not a host, so a wire that bound one names it and neither of the other keys.
-        """
-        if self.endpoint.uds is not None:
-            return {keys.UDS: str(self.endpoint.uds)}
-        return {keys.HOST: self.endpoint.host, keys.PORT: self.endpoint.port}
+
+@dataclasses.dataclass(frozen=True)
+class ServedHostPort(ServedAddress):
+    """A wire serving on a host and a port. The port is known once the wire has bound."""
+
+    host: str
+    port: int
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {keys.HOST: self.host, keys.PORT: self.port}
+
+
+class ServerConnection(abc.ABC):
+    """A server's end of one open session."""
 
     @property
     @abc.abstractmethod
@@ -33,7 +48,7 @@ class ServerConnection(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def endpoint(self) -> Endpoint:
+    def served_address(self) -> ServedAddress:
         """Where the wire that accepted this session serves."""
 
     @property
@@ -71,8 +86,8 @@ class Wire(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def endpoint(self) -> Endpoint:
-        """Where this wire serves. The port is known once ``start`` returns."""
+    def served_address(self) -> ServedAddress:
+        """Where this wire serves. A bound port is known once ``start`` returns."""
 
     @abc.abstractmethod
     async def start(self, session: SessionHandler, authorized: Authorized) -> None:

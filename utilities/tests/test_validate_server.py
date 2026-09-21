@@ -6,8 +6,7 @@ def _command(**overrides) -> list[str]:
         'uv_path': 'uv',
         'eval_ref': '.sim.positronic.stack_cubes',
         'wire_name': 'websocket_tls',
-        'host': 'gpu-host',
-        'port': 443,
+        'address_args': ['--policy.host=gpu-host', '--policy.port=443'],
         'query': '',
         'policy_ref': '.authed_remote',
         'model_id': 'm',
@@ -15,6 +14,15 @@ def _command(**overrides) -> list[str]:
         'extra_args': [],
     }
     return _build_inference_command(**{**arguments, **overrides})
+
+
+def test_a_socket_wire_names_its_socket_and_neither_a_host_nor_a_port():
+    """The wire's own address reaches the eval subprocess, so a socket run names no host and no port."""
+    command = _command(wire_name='websocket_unix', address_args=['--policy.uds=/run/policy.sock'])
+
+    assert '--policy.wire=websocket_unix' in command
+    assert '--policy.uds=/run/policy.sock' in command
+    assert not [flag for flag in command if flag.startswith(('--policy.host', '--policy.port'))]
 
 
 def test_the_command_names_the_wire_the_server_and_the_model_as_policy_flags():

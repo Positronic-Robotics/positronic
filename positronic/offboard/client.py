@@ -147,7 +147,7 @@ class InferenceClient:
 
     def __init__(
         self,
-        client_wire: ClientWire,
+        client_wire: ClientWire[Any],
         address: wire.SessionAddress,
         *,
         headers: dict[str, str] | None = None,
@@ -155,6 +155,11 @@ class InferenceClient:
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
+        if not isinstance(address, client_wire.ADDRESS):
+            raise ValueError(
+                f'{client_wire.NAME} dials a {client_wire.ADDRESS.__name__}, and this is a '
+                f'{type(address).__name__}; build the address the wire names'
+            )
         self._wire = client_wire
         self._address = address
         self.session_url = client_wire.session_url(address)

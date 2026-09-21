@@ -1,33 +1,46 @@
 """The server side of the websocket wire."""
 
+import dataclasses
 import errno
 import os
 import socket
 import stat
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from . import server_wire
+from . import keys, server_wire
+
+
+@dataclasses.dataclass(frozen=True)
+class ServedUnixSocket(server_wire.ServedAddress):
+    """A wire serving on a Unix socket. It names no host and no port, because a socket has neither."""
+
+    uds: Path
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {keys.UDS: str(self.uds)}
 
 
 class WebsocketServerConnection(server_wire.ServerConnection):
     """A server's end of one websocket session, over an accepted ``WebSocket``."""
 
-    def __init__(self, websocket: WebSocket, endpoint: wire.Endpoint):
+    def __init__(self, websocket: WebSocket, served_address: server_wire.ServedAddress):
         self._websocket = websocket
-        self._endpoint = endpoint
+        self._served_address = served_address
 
     @property
     def peer(self) -> str:
         return str(self._websocket.client)
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedAddress:
+        return self._served_address
 
     @property
     def query_params(self) -> QueryParams:
@@ -162,29 +175,32 @@ class WebsocketWire(server_wire.Wire):
         self._api = api
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
-        self._endpoint: wire.Endpoint | None = None
+        self._served_address: server_wire.ServedAddress | None = None
+        self._bound_port = 0
         self._served = False
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        assert self._endpoint is not None, 'The websocket wire has not started'
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedAddress:
+        assert self._served_address is not None, 'The websocket wire has not started'
+        return self._served_address
 
     async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         self._served = False
         if self._uds is not None:
             self._sockets = [claim_socket_path(self._uds)]
-            self._endpoint = wire.Endpoint(self._host, 0, uds=self._uds)
+            self._served_address = ServedUnixSocket(self._uds)
+            self._bound_port = 0
         else:
             self._sockets = _listening_sockets(self._host, self._port)
-            self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
+            self._bound_port = self._sockets[0].getsockname()[1]
+            self._served_address = server_wire.ServedHostPort(self._host, self._bound_port)
         app = FastAPI()
         app.include_router(self._api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,
             host=self._host,
-            port=self._endpoint.port,
+            port=self._bound_port,
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
@@ -203,11 +219,11 @@ class WebsocketWire(server_wire.Wire):
         async def serve_pinned_model(websocket: WebSocket) -> None:
             """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
             await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.endpoint), None)
+            await session(WebsocketServerConnection(websocket, self.served_address), None)
 
         async def serve_named_model(websocket: WebSocket, model_id: str) -> None:
             await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.endpoint), model_id)
+            await session(WebsocketServerConnection(websocket, self.served_address), model_id)
 
         auth = [Depends(require_auth)]
         app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)

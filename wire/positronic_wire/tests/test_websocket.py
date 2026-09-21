@@ -1,5 +1,6 @@
 """The client side of the websocket wire, driven without a server."""
 
+import dataclasses
 import socket
 import ssl
 from http import HTTPStatus
@@ -12,7 +13,7 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidStatus
 from websockets.http11 import Response
 
-_ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '')
+_ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
 
 def _refused_upgrade(status: HTTPStatus) -> InvalidStatus:
@@ -67,7 +68,9 @@ def test_a_handshake_that_does_not_open_is_a_refusal_naming_the_url(raised, refu
 
 def test_a_probe_asks_the_host_root_with_the_headers():
     with patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(HTTPStatus.FORBIDDEN)) as connect:
-        probed = websocket.WebsocketClientWire().probe(_ADDRESS._replace(query='fps=10'), {'Modal-Key': 'k'}, 3.0)
+        probed = websocket.WebsocketClientWire().probe(
+            dataclasses.replace(_ADDRESS, query='fps=10'), {'Modal-Key': 'k'}, 3.0
+        )
     assert probed is None
     assert connect.call_args.args == ('ws://localhost:8000',)
     assert connect.call_args.kwargs == {'open_timeout': 3.0, 'additional_headers': {'Modal-Key': 'k'}}
@@ -96,7 +99,7 @@ def test_a_probe_reads_a_handshake_that_opened_as_the_server():
 
 
 def test_a_probe_of_a_port_nothing_answers_on_is_cold():
-    assert websocket.WebsocketClientWire().probe(_ADDRESS._replace(port=1), None, 1.0) is wire.Refusal.COLD
+    assert websocket.WebsocketClientWire().probe(dataclasses.replace(_ADDRESS, port=1), None, 1.0) is wire.Refusal.COLD
 
 
 def test_the_tls_member_dials_wss_and_probes_it():
@@ -120,37 +123,37 @@ def test_the_tls_member_dials_wss_and_probes_it():
         ),
         (
             websocket.WebsocketClientWire(),
-            _ADDRESS._replace(port=80),
+            dataclasses.replace(_ADDRESS, port=80),
             'ws://localhost/api/v1/session',
             'http://localhost/api/v1',
         ),
         (
             websocket.WebsocketTlsClientWire(),
-            _ADDRESS._replace(port=443),
+            dataclasses.replace(_ADDRESS, port=443),
             'wss://localhost/api/v1/session',
             'https://localhost/api/v1',
         ),
         (
             websocket.WebsocketTlsClientWire(),
-            _ADDRESS._replace(port=8443),
+            dataclasses.replace(_ADDRESS, port=8443),
             'wss://localhost:8443/api/v1/session',
             'https://localhost:8443/api/v1',
         ),
         (
             websocket.WebsocketClientWire(),
-            _ADDRESS._replace(host='::1'),
+            dataclasses.replace(_ADDRESS, host='::1'),
             'ws://[::1]:8000/api/v1/session',
             'http://[::1]:8000/api/v1',
         ),
         (
             websocket.WebsocketClientWire(),
-            _ADDRESS._replace(host='127.0.0.1'),
+            dataclasses.replace(_ADDRESS, host='127.0.0.1'),
             'ws://127.0.0.1:8000/api/v1/session',
             'http://127.0.0.1:8000/api/v1',
         ),
         (
             websocket.WebsocketClientWire(),
-            _ADDRESS._replace(path=wire.session_path('10000'), query='codec.fps=10&pad=false'),
+            dataclasses.replace(_ADDRESS, path=wire.session_path('10000'), query='codec.fps=10&pad=false'),
             'ws://localhost:8000/api/v1/session/10000?codec.fps=10&pad=false',
             'http://localhost:8000/api/v1',
         ),
@@ -163,9 +166,9 @@ def test_the_member_spells_the_session_and_the_api_and_leaves_out_its_default_po
     assert client_wire.api_url(address) == api_url
 
 
-def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_port():
-    """A socket has no port, so neither the log nor the handshake's Host header may claim one."""
-    address = wire.SessionAddress('localhost', 8000, wire.session_path('10000'), 'fps=10', Path('/run/policy.sock'))
+def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_authority():
+    """A socket names no host and no port, so the log names the socket and the handshake a stand-in."""
+    address = wire.UnixSocketAddress(Path('/run/policy.sock'), wire.session_path('10000'), 'fps=10')
     unix = websocket.WebsocketUnixClientWire()
 
     assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session/10000?fps=10'
@@ -174,12 +177,17 @@ def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_port():
     assert unix.api_socket(address) == Path('/run/policy.sock')
 
 
-def test_a_member_that_dials_the_network_names_no_socket_whatever_the_address_carries():
-    """A session that opens over TCP reads the catalogue over TCP: one address cannot mean both."""
-    address = _ADDRESS._replace(uds=Path('/run/policy.sock'))
+def test_a_member_that_dials_the_network_names_no_socket():
+    """A session that opens over TCP reads the catalogue over TCP, and its address cannot name a socket."""
+    assert websocket.WebsocketClientWire().api_socket(_ADDRESS) is None
+    assert websocket.WebsocketTlsClientWire().api_socket(_ADDRESS) is None
 
-    assert websocket.WebsocketClientWire().api_socket(address) is None
-    assert websocket.WebsocketTlsClientWire().api_socket(address) is None
+
+def test_each_member_declares_the_address_it_dials():
+    """A caller builds the address its wire names, and the other wire's address is a type error."""
+    assert websocket.WebsocketClientWire().ADDRESS is wire.HostPortAddress
+    assert websocket.WebsocketTlsClientWire().ADDRESS is wire.HostPortAddress
+    assert websocket.WebsocketUnixClientWire().ADDRESS is wire.UnixSocketAddress
 
 
 @pytest.mark.parametrize(
@@ -194,7 +202,7 @@ def test_a_member_that_dials_the_network_names_no_socket_whatever_the_address_ca
 def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raised, refusal, tmp_path):
     """A timeout and a reset reached the socket, so they read as they do on a port. An absent path is
     cold because a misspelt one and a socket nobody has bound yet look the same from here."""
-    address = wire.SessionAddress('localhost', 0, wire.session_path(), '', tmp_path / 'absent.sock')
+    address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.session_path(), '')
 
     with (
         patch('positronic_wire.websocket.unix_connect', side_effect=raised),
@@ -205,16 +213,7 @@ def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raise
     assert refused.value.__cause__ is raised
 
 
-def test_the_socket_wire_refuses_an_address_naming_no_socket():
-    address = wire.SessionAddress('localhost', 8000, wire.session_path(), '')
-
-    with pytest.raises(ValueError, match='names none'):
-        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
-
-
-def test_the_socket_wire_refuses_a_relative_socket_path():
-    """`--policy.uds=policy.sock` reaches here as a relative path, which names a socket per caller."""
-    address = wire.SessionAddress('localhost', 8000, wire.session_path(), '', Path('policy.sock'))
-
+def test_a_socket_address_refuses_a_relative_path():
+    """`--policy.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
     with pytest.raises(ValueError, match='relative socket path'):
-        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
+        wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')

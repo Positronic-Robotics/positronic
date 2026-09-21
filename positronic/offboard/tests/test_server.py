@@ -68,8 +68,8 @@ class _FailingWire(server_wire.Wire):
         self.stopped = False
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return wire.Endpoint('localhost', 0)
+    def served_address(self) -> server_wire.ServedHostPort:
+        return server_wire.ServedHostPort('localhost', 0)
 
     async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         pass
@@ -86,7 +86,7 @@ class _UnbindableWire(server_wire.Wire):
     """A wire whose port is taken."""
 
     @property
-    def endpoint(self) -> wire.Endpoint:
+    def served_address(self) -> server_wire.ServedHostPort:
         raise AssertionError('it never bound')
 
     async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
@@ -115,6 +115,13 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
+def _bound_port(bound: websocket_wire.WebsocketWire) -> int:
+    """The port a wire bound. A wire serving a socket bound none, and no test here asks one for a port."""
+    served = bound.served_address
+    assert isinstance(served, server_wire.ServedHostPort), 'the wire bound a socket, not a port'
+    return served.port
+
+
 def _rebind_and_release(host: str, port: int) -> None:
     """Bind ``host`` on ``port`` and let it go again. It raises while anything else holds the port."""
     for sock in websocket_wire._listening_sockets(host, port):
@@ -128,7 +135,7 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_po
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener holds the port, and a fresh bind to it raises.
-    _rebind_and_release('localhost', bound.endpoint.port)
+    _rebind_and_release('localhost', _bound_port(bound))
 
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_policy):
@@ -143,7 +150,7 @@ def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollbac
     assert not serving.is_alive(), 'the first serve did not end'
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
-    _rebind_and_release('localhost', bound.endpoint.port)
+    _rebind_and_release('localhost', _bound_port(bound))
 
 
 def test_a_host_with_two_addresses_binds_each_of_them_on_one_port(monkeypatch):
@@ -187,10 +194,10 @@ def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(mak
     asyncio.run(bound.start(MagicMock(), lambda _headers: True))
     try:
         assert len(bound._sockets) == 1
-        assert bound.endpoint.port == bound._sockets[0].getsockname()[1] != 0
+        assert _bound_port(bound) == bound._sockets[0].getsockname()[1] != 0
     finally:
         asyncio.run(bound.stop())
-    _rebind_and_release('127.0.0.1', bound.endpoint.port)
+    _rebind_and_release('127.0.0.1', _bound_port(bound))
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
@@ -583,7 +590,7 @@ def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_se
 def test_a_probe_of_a_socket_nothing_has_bound_is_cold(socket_path):
     """A path no server has bound yet can still become one, so the probe says to wait rather than refuse."""
     client_wire = registry.client_wire('websocket_unix')
-    address = wire.SessionAddress('localhost', 0, wire.session_path(), '', pathlib.Path(socket_path))
+    address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.session_path(), '')
 
     assert client_wire.probe(address, None, 1.0) is wire.Refusal.COLD
 
@@ -601,7 +608,7 @@ def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(
 
     client = InferenceClient(*served.unix())
 
-    assert str(client._address.uds) == uds
+    assert str(served.uds) == uds
     assert client.list_models() == ['stub']
     session = client.new_session()
     try:
@@ -613,7 +620,7 @@ def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(
 def _dial_socket(uds: str, **settings) -> InferenceClient:
     """A client for a socket no server need have bound yet, as a co-located one is built."""
     client_wire = registry.client_wire('websocket_unix')
-    address = wire.SessionAddress('localhost', 0, wire.session_path(), '', pathlib.Path(uds))
+    address = wire.UnixSocketAddress(pathlib.Path(uds), wire.session_path(), '')
     return InferenceClient(client_wire, address, **settings)
 
 
@@ -967,7 +974,7 @@ _LIVE_HOST = os.environ.get(ENDPOINT_HOST_ENV)
 def authed_endpoint(start_server, make_mock_policy) -> tuple[tuple[wire.ClientWire, wire.SessionAddress], str]:
     """An authenticated server's wire and session address, and the token gating it."""
     if _LIVE_HOST:
-        address = wire.SessionAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
+        address = wire.HostPortAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
         return (registry.client_wire(os.environ[ENDPOINT_WIRE_ENV]), address), os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)

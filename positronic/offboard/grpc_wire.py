@@ -31,20 +31,20 @@ class GrpcServerConnection(server_wire.ServerConnection):
         requests: AsyncIterator[bytes],
         context: grpc.aio.ServicerContext,
         headers: Mapping[str, str],
-        endpoint: wire.Endpoint,
+        served_address: server_wire.ServedHostPort,
     ):
         self._requests = requests
         self._context = context
         self._headers = headers
-        self._endpoint = endpoint
+        self._served_address = served_address
 
     @property
     def peer(self) -> str:
         return self._context.peer()
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedHostPort:
+        return self._served_address
 
     @property
     def session_path(self) -> str:
@@ -111,19 +111,19 @@ class GrpcWire(server_wire.Wire):
         self._host = host
         self._port = port
         self._server: grpc.aio.Server | None = None
-        self._endpoint: wire.Endpoint | None = None
+        self._served_address: server_wire.ServedHostPort | None = None
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        assert self._endpoint is not None, 'The gRPC wire has not started'
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedHostPort:
+        assert self._served_address is not None, 'The gRPC wire has not started'
+        return self._served_address
 
     async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):
                 await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
-            conn = GrpcServerConnection(requests, context, headers, self.endpoint)
+            conn = GrpcServerConnection(requests, context, headers, self.served_address)
             try:
                 await session(conn, model_id_of(conn.session_path))
             except Exception as e:
@@ -140,7 +140,7 @@ class GrpcWire(server_wire.Wire):
             # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.
             raise OSError(f'gRPC could not bind {target(self._host, self._port)}')
         self._server = server
-        self._endpoint = wire.Endpoint(self._host, bound)
+        self._served_address = server_wire.ServedHostPort(self._host, bound)
         await server.start()
         logger.info(f'gRPC sessions on {self._host}:{bound}')
 

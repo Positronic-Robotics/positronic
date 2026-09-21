@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import pathlib
 import threading
 import time
@@ -27,29 +28,29 @@ from positronic.policy.spec import PolicySource, remote
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
-class _FakeWire(wire.ClientWire):
+class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     """A client wire that answers each dial from ``outcomes``: a connection to return, or a refusal to raise."""
 
     NAME = 'fake'
-    DEFAULT_PORT = 80
+    ADDRESS = wire.HostPortAddress
 
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
-        self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
+        self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
 
-    def session_url(self, address: wire.SessionAddress) -> str:
+    def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
-        return f'fake://{self.netloc(address)}{address.path}{query}'
+        return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
 
-    def api_url(self, address: wire.SessionAddress) -> str:
-        return f'http://{self.netloc(address)}{wire.API_PATH}'
+    def api_url(self, address: wire.HostPortAddress) -> str:
+        return f'http://{wire.netloc(address, 0)}{wire.API_PATH}'
 
     def probe(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         return None
 
-    def dial(self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float):
+    def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         self.dials.append((address, headers, open_timeout))
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, wire.ConnectRefused):
@@ -57,7 +58,7 @@ class _FakeWire(wire.ClientWire):
         return outcome
 
 
-_ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '')
+_ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
 
 def _mock_session(metadata=None):
@@ -176,7 +177,7 @@ class TestInferenceClientHeaders:
 
     def test_list_models_over_a_socket_reads_the_catalogue_through_that_socket(self):
         """The catalogue is an HTTP route beside the session, so it has to take the socket too."""
-        address = _ADDRESS._replace(uds=pathlib.Path('/run/policy.sock'))
+        address = wire.UnixSocketAddress(pathlib.Path('/run/policy.sock'), wire.SESSION_PATH, '')
         with _catalogue_call([]) as (client_cls, _get):
             InferenceClient(websocket.WebsocketUnixClientWire(), address).list_models()
 
@@ -185,7 +186,7 @@ class TestInferenceClientHeaders:
 
 
 def test_every_session_dials_the_same_address():
-    address = wire.SessionAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
+    address = wire.HostPortAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
     fake = _FakeWire(MagicMock(), MagicMock())
     with patch('positronic.offboard.client.InferenceSession'):
         client = InferenceClient(fake, address)
@@ -260,9 +261,20 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 2 * len(one_session)
 
 
+def test_a_client_refuses_a_wire_handed_the_other_wire_address():
+    """The registry answers by name, so the type cannot catch this one; the client does, before it dials."""
+    socket_address = wire.UnixSocketAddress(pathlib.Path('/run/policy.sock'), wire.SESSION_PATH, '')
+
+    with pytest.raises(ValueError, match='websocket dials a HostPortAddress'):
+        InferenceClient(websocket.WebsocketClientWire(), socket_address)
+
+    with pytest.raises(ValueError, match='websocket_unix dials a UnixSocketAddress'):
+        InferenceClient(websocket.WebsocketUnixClientWire(), _ADDRESS)
+
+
 def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
     """Nothing listens on port 1; the refused connect is a backend that is not ready, and the deadline ends it."""
-    address = _ADDRESS._replace(port=1)
+    address = dataclasses.replace(_ADDRESS, port=1)
     client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='ws://localhost:1'):
         client.new_session()

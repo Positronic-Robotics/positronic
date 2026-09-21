@@ -27,8 +27,7 @@ def _build_inference_command(
     uv_path: str,
     eval_ref: str,
     wire_name: str,
-    host: str,
-    port: int,
+    address_args: list[str],
     query: str,
     policy_ref: str,
     model_id: str,
@@ -45,8 +44,7 @@ def _build_inference_command(
         f'--eval={eval_ref}',
         f'--policy={policy_ref}',
         f'--policy.wire={wire_name}',
-        f'--policy.host={host}',
-        f'--policy.port={port}',
+        *address_args,
         f'--policy.model={model_id}',
         *([f'--policy.query={query}'] if query else []),
         f'--output_dir={output_dir}',
@@ -63,6 +61,7 @@ def _build_inference_command(
     wire='websocket',
     host='localhost',
     port=8000,
+    uds=None,
     query='',
 )
 def main(
@@ -74,13 +73,15 @@ def main(
     wire: str,
     host: str,
     port: int,
+    uds: str | None,
     query: str,
 ):
     """Validate an inference server by iterating all available models and running inference for each.
 
-    ``wire``, ``host`` and ``port`` name the server as ``RemotePolicy`` takes them; ``wire`` is a websocket
-    one, since this lists the models first and the gRPC port carries sessions alone. A gated server also
-    needs its bearer token exported as ``AUTH_TOKEN``.
+    ``wire`` names the transport and the rest fill that wire's address: ``host`` and ``port`` for a
+    network wire, ``uds`` for ``websocket_unix``, which reaches a server on this machine. ``wire`` is a
+    websocket one, since this lists the models first and the gRPC port carries sessions alone. A gated
+    server also needs its bearer token exported as ``AUTH_TOKEN``.
 
     Example:
 
@@ -108,8 +109,14 @@ def main(
     token = os.environ.get(AUTH_TOKEN_ENV)
     policy_ref = '.authed_remote' if token else '.remote'
 
+    # Name the wire, then fill that wire's address. ``InferenceClient`` refuses the other wire's.
     client_wire = registry.client_wire(wire)
-    address = wire_module.SessionAddress(host, port, wire_module.SESSION_PATH, query)
+    address: wire_module.SessionAddress = (
+        wire_module.UnixSocketAddress(Path(uds), wire_module.SESSION_PATH, query)
+        if uds is not None
+        else wire_module.HostPortAddress(host, port, wire_module.SESSION_PATH, query)
+    )
+    address_args = [f'--policy.uds={uds}'] if uds is not None else [f'--policy.host={host}', f'--policy.port={port}']
     client = InferenceClient(client_wire, address, headers=bearer_headers.instantiate() if token else None)
     print(f'Connecting to {client.session_url}...')
     try:
@@ -126,8 +133,7 @@ def main(
             uv_path=uv_path,
             eval_ref=eval,
             wire_name=wire,
-            host=host,
-            port=port,
+            address_args=address_args,
             query=query,
             policy_ref=policy_ref,
             model_id=model_id,

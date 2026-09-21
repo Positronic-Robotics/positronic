@@ -384,7 +384,7 @@ class PolicyServer:
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
             meta = {
-                **conn.endpoint_meta,
+                **conn.served_address.meta,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,

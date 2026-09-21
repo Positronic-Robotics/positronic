@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pos3
 from positronic_wire import registry
-from positronic_wire.wire import SessionAddress, session_path
+from positronic_wire.wire import HostPortAddress, SessionAddress, UnixSocketAddress, session_path
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
@@ -157,8 +157,8 @@ class RemotePolicy(Policy):
     server, ``model`` the checkpoint it serves — empty for the one it pinned — and ``query`` the session
     params as written. ``headers`` carry the credentials.
 
-    ``uds`` is the Unix socket a same-machine server bound, which the ``websocket_unix`` wire dials in
-    place of the network; ``host`` then only stands for the server in the handshake sent over it.
+    A caller names the wire, then fills that wire's address: ``wire=websocket host=… port=…``, or
+    ``wire=websocket_unix uds=…`` for a server on this machine, which names no host and no port.
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
@@ -181,7 +181,11 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        address = SessionAddress(host, port, session_path(model), query, None if uds is None else Path(uds))
+        address: SessionAddress = (
+            UnixSocketAddress(Path(uds), session_path(model), query)
+            if uds is not None
+            else HostPortAddress(host, port, session_path(model), query)
+        )
         client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
         self._endpoint = _Endpoint(client)
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None

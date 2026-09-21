@@ -6,11 +6,12 @@ spells whatever its library takes.
 """
 
 import abc
+import dataclasses
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import ClassVar, Generic, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
@@ -34,22 +35,57 @@ def bracket_ipv6(host: str) -> str:
     return f'[{host}]' if ':' in host else host
 
 
-class SessionAddress(NamedTuple):
-    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
+class SessionAddress(abc.ABC):
+    """Where one session opens. Each wire declares the address it dials, and takes no other.
 
     ``path`` is ``session_path(model)``, and ``query`` carries the session params as written: the server
     reads each value as a JSON literal, and only whoever wrote the query knows whether ``true`` means the
-    bool or the string.
-
-    ``uds`` is the Unix socket a same-machine session opens on, and only the socket wire reads it.
-    ``host`` and ``port`` still stand for the server in the handshake that wire sends.
+    bool or the string. Every wire carries both; how a wire names the server is its own.
     """
+
+    path: str
+    query: str
+
+    @abc.abstractmethod
+    def at_root(self) -> 'Self':
+        """The same server, with no route and no params: what a probe asks for."""
+
+
+@dataclasses.dataclass(frozen=True)
+class HostPortAddress(SessionAddress):
+    """A session on a server reached over the network. ``host`` is raw: each wire spells it itself."""
 
     host: str
     port: int
     path: str
     query: str
-    uds: Path | None = None
+
+    def at_root(self) -> 'Self':
+        return dataclasses.replace(self, path='', query='')
+
+
+@dataclasses.dataclass(frozen=True)
+class UnixSocketAddress(SessionAddress):
+    """A session on a server on this machine, opened on the socket it bound.
+
+    A socket is same-machine by construction, so the address names no host and no port.
+    """
+
+    uds: Path
+    path: str
+    query: str
+
+    def __post_init__(self) -> None:
+        # A relative path is resolved against the directory each process was started from, so it names a
+        # different socket to each caller.
+        if not self.uds.is_absolute():
+            raise ValueError(f'{self.uds!r} is a relative socket path; name an absolute one')
+
+    def at_root(self) -> 'Self':
+        return dataclasses.replace(self, path='', query='')
+
+
+AddressT = TypeVar('AddressT', bound=SessionAddress)
 
 
 # The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
@@ -77,32 +113,25 @@ class ConnectRefused(Exception):
         self.refusal = refusal
 
 
-class Endpoint(NamedTuple):
-    """Where a wire serves. A wire bound to a Unix socket names its path in ``uds``, and its port is 0."""
-
-    host: str
-    port: int
-    uds: Path | None = None
+def netloc(address: HostPortAddress, default_port: int) -> str:
+    """``host:port``, less the port the wire defaults to."""
+    host = bracket_ipv6(address.host)
+    return host if address.port == default_port else f'{host}:{address.port}'
 
 
-class ClientWire(abc.ABC):
-    """The client side of one wire: what it is called, how it spells a session, and how it dials one.
+class ClientWire(abc.ABC, Generic[AddressT]):
+    """The client side of one wire: what it is called, the address it dials, and how it dials one.
 
     A wire over TLS is a member of its own, not a flag on the plain one.
     """
 
     # The name a caller selects this wire by.
     NAME: ClassVar[str]
-    # The port a session opens on where the caller names none, and the one a URL leaves out.
-    DEFAULT_PORT: ClassVar[int]
-
-    def netloc(self, address: SessionAddress) -> str:
-        """``host:port``, less the port this wire defaults to."""
-        host = bracket_ipv6(address.host)
-        return host if address.port == self.DEFAULT_PORT else f'{host}:{address.port}'
+    # The address this wire dials. A caller that built another wire's address is refused by it.
+    ADDRESS: ClassVar[type[SessionAddress]]
 
     @abc.abstractmethod
-    def session_url(self, address: SessionAddress) -> str:
+    def session_url(self, address: AddressT) -> str:
         """``address`` as this wire names one session, for a log and for an error.
 
         What a wire dials is its own: a member whose library takes this spelling dials it, and one
@@ -110,21 +139,19 @@ class ClientWire(abc.ABC):
         """
 
     @abc.abstractmethod
-    def api_url(self, address: SessionAddress) -> str | None:
+    def api_url(self, address: AddressT) -> str | None:
         """The server's HTTP API beside this wire, or ``None`` where the wire's port carries sessions alone."""
 
-    def api_socket(self, address: SessionAddress) -> Path | None:
+    def api_socket(self, address: AddressT) -> Path | None:
         """The Unix socket ``api_url`` answers on, or ``None`` where it answers over the network."""
         return None
 
     @abc.abstractmethod
-    def dial(
-        self, address: SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
-    ) -> 'ClientConnection':
+    def dial(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> 'ClientConnection':
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
 
     @abc.abstractmethod
-    def probe(self, address: SessionAddress, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:
+    def probe(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:
         """Whether a server answers at ``address``, without opening a session.
 
         ``headers`` are the ones ``dial`` sends: an edge that authenticates on them lets the probe through to

@@ -31,7 +31,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.offboard import protocol, websocket_wire
+from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
@@ -139,7 +139,9 @@ def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
     thread.start()
     if not ready.wait(timeout=30.0):
         raise RuntimeError('the probe server never came up')
-    return server, thread, ws.endpoint.port
+    served = ws.served_address
+    assert isinstance(served, server_wire.ServedHostPort), 'the probe server binds a port, not a socket'
+    return server, thread, served.port
 
 
 def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_images: bool) -> list[dict[str, float]]:
@@ -228,7 +230,7 @@ def main(
 
     server, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
     try:
-        address = wire.SessionAddress('127.0.0.1', port, wire.SESSION_PATH, '')
+        address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')
         session = InferenceClient(WebsocketClientWire(), address).new_session()
         try:
             replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed

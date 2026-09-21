@@ -1,5 +1,6 @@
 """The client side of the gRPC wire, driven without a server."""
 
+import dataclasses
 import queue
 import threading
 import time
@@ -62,7 +63,7 @@ def test_a_status_that_refuses_the_call_reads_as_its_http_status_does(code, deta
     assert client_grpc._refusal(status) is refusal
 
 
-_ADDRESS = wire.SessionAddress('gpu-host', 9000, wire.SESSION_PATH, '')
+_ADDRESS = wire.HostPortAddress('gpu-host', 9000, wire.SESSION_PATH, '')
 
 
 def _dialled_target(host: str, monkeypatch) -> str:
@@ -75,7 +76,7 @@ def _dialled_target(host: str, monkeypatch) -> str:
 
     monkeypatch.setattr(client_grpc, '_ready_channel', refuse)
     with pytest.raises(wire.ConnectRefused):
-        client_grpc.GrpcClientWire().dial(_ADDRESS._replace(host=host), None, 1.0)
+        client_grpc.GrpcClientWire().dial(dataclasses.replace(_ADDRESS, host=host), None, 1.0)
     return targets[0]
 
 
@@ -139,7 +140,8 @@ def test_a_probe_carries_the_headers_as_metadata_and_closes_the_channel(monkeypa
 def test_a_port_that_never_answers_is_cold():
     """Nothing listens on port 1; the call never reaches a server."""
     assert (
-        client_grpc.GrpcClientWire().probe(_ADDRESS._replace(host='localhost', port=1), None, 0.2) is wire.Refusal.COLD
+        client_grpc.GrpcClientWire().probe(dataclasses.replace(_ADDRESS, host='localhost', port=1), None, 0.2)
+        is wire.Refusal.COLD
     )
 
 
@@ -168,10 +170,10 @@ def test_the_tls_member_opens_a_secure_channel(monkeypatch):
         (client_grpc.GrpcClientWire(), _ADDRESS, 'gpu-host:9000/api/v1/session'),
         (
             client_grpc.GrpcClientWire(),
-            _ADDRESS._replace(host='::1', query='fps=10'),
+            dataclasses.replace(_ADDRESS, host='::1', query='fps=10'),
             '[::1]:9000/api/v1/session?fps=10',
         ),
-        (client_grpc.GrpcTlsClientWire(), _ADDRESS._replace(port=443), 'gpu-host:443/api/v1/session'),
+        (client_grpc.GrpcTlsClientWire(), dataclasses.replace(_ADDRESS, port=443), 'gpu-host:443/api/v1/session'),
     ],
 )
 def test_a_grpc_session_is_named_by_its_target_and_no_scheme(client_wire, address, spelled):

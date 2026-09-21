@@ -3,7 +3,7 @@ import tempfile
 import threading
 from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,21 +28,19 @@ class Served(NamedTuple):
     grpc_port: int | None
     uds: Path | None = None
 
-    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The websocket wire, and this server's session on it: ``InferenceClient(*served.ws())``."""
-        return WebsocketClientWire(), wire.SessionAddress(self.host, self.port, wire.session_path(model), query)
+        return WebsocketClientWire(), wire.HostPortAddress(self.host, self.port, wire.session_path(model), query)
 
-    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The gRPC wire, and this server's session on it."""
         assert self.grpc_port is not None, 'the server serves no gRPC wire'
-        return GrpcClientWire(), wire.SessionAddress(self.host, self.grpc_port, wire.session_path(model), query)
+        return GrpcClientWire(), wire.HostPortAddress(self.host, self.grpc_port, wire.session_path(model), query)
 
-    def unix(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+    def unix(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.UnixSocketAddress]:
         """The socket wire, and this server's session on the socket it bound."""
         assert self.uds is not None, 'the server bound no socket'
-        return WebsocketUnixClientWire(), wire.SessionAddress(
-            self.host, self.port, wire.session_path(model), query, self.uds
-        )
+        return WebsocketUnixClientWire(), wire.UnixSocketAddress(self.uds, wire.session_path(model), query)
 
 
 StartServer = Callable[..., Served]
@@ -71,8 +69,15 @@ def start_server() -> Generator[StartServer, None, None]:
         running.append((server, thread))
         if not ready.wait(timeout=10.0):
             raise RuntimeError('Server failed to start')
+        served = wires[0].served_address
+        bound = served.port if isinstance(served, server_wire.ServedHostPort) else 0
+        grpc_served = wires[1].served_address if grpc else None
         return Served(
-            host, wires[0].endpoint.port, server, wires[1].endpoint.port if grpc else None, wires[0].endpoint.uds
+            host,
+            bound,
+            server,
+            grpc_served.port if isinstance(grpc_served, server_wire.ServedHostPort) else None,
+            served.uds if isinstance(served, websocket_wire.ServedUnixSocket) else None,
         )
 
     yield start

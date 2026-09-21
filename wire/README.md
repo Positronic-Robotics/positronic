@@ -8,7 +8,7 @@ ends of a wire share. It is one distribution, installable on its own, with `grpc
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.2.0"
+uv add "positronic-wire==0.3.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -32,7 +32,7 @@ one interface and reads one answer. A wire over TLS is a member of its own, so n
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, `SessionAddress(host, port, path, query, uds)`, `Endpoint`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, `netloc`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, and the call both ends agree on: `SERVICE`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
@@ -68,19 +68,29 @@ needs.
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`.
 
-`registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries. A
-`SessionAddress` is `host`, `port`, `path` (`session_path(model)`), `query` and `uds`, as written; a
-caller that records an endpoint records those five and the wire's name, never a URL.
+`registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
 
-`uds` is the fifth field, and only `websocket_unix` reads it: an absolute path to a
-Unix socket a server on the same machine bound, dialled instead of the network. `host` still stands for
-the server in the handshake sent over that socket, and no port is claimed there. A socket is
-same-machine by construction, so no TLS member sits beside it. An absent path is `COLD`: the client
-cannot tell a misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A
-refusal from a socket a server is restarting on is `COLD` too. A path holding something that is not a
-socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed out
-or was reset reached the socket, so the server rather than the path was not ready, and it reads `COLD`
-as it does on a port.
+**Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
+type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
+`HostPortAddress` — `host`, `port`, `path` (`session_path(model)`), `query`, as written.
+`websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. A record that names an
+endpoint carries the wire's name and that wire's fields, never a URL, and no address carries a field
+a wire ignores.
+
+`uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
+the network. The address refuses a relative path when it is built, because a relative one names a
+different socket to each caller. It names no host and no port, because a socket has neither: the
+handshake carries `localhost` as a stand-in the server never resolves. A socket is same-machine by
+construction, so no TLS member sits beside it. An absent path is `COLD`: the client cannot tell a
+misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A refusal
+from a socket a server is restarting on is `COLD` too. A path holding something that is not a
+socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed
+out or was reset reached the socket, so the server rather than the path was not ready, and it reads
+`COLD` as it does on a port.
+
+Typing carries the split: a wire handed the other wire's address is a type error at the call site.
+`registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
+before it dials, and names both in the refusal.
 
 ## What each consumer pays
 
@@ -143,13 +153,14 @@ raise a constant naming the version that first dialled it.
 A consumer moves onto the wire in this order, each step green on its own:
 
 1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
-   local copies, the tables keyed by scheme, and every read of a URL scheme. An endpoint record
-   names its wire, host, port, model and query. Report the registry's names in the deploy handshake
-   and retire any per-transport version floor.
+   local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
+   names its wire, then that wire's address** — host, port, model and query for a network wire, the
+   socket path for `websocket_unix`. Report the registry's names in the deploy handshake and retire
+   any per-transport version floor.
 2. Replace the transport-specific dial with `probe`, and the exception-name match with
    `isinstance(raised, (wire.ConnectRefused, wire.PeerDisconnected, TimeoutError))`.
-3. Move the consumer's own transports — a partner's wire, a socket-path address — into their own
-   `ClientWire` subclasses, registered by name beside the wire's own.
+3. Move the consumer's own transports into their own `ClientWire` subclasses, each declaring the
+   address it dials, registered by name beside the wire's own.
 4. Deploy the pinned side at the commit that carries the wire, then the checkout side.
 
 ## What is not shared
