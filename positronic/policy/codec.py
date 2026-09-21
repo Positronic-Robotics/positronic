@@ -112,10 +112,13 @@ class Codec:
             next(run)
             return run
 
+        encode = telemetry.traced(
+            telemetry_keys.SPAN_POLICY_ENCODE, **{telemetry_keys.ATTR_CODEC: type(self).__name__}
+        )(self.encode)
+
+        @telemetry.traced(telemetry.component_name(self))
         def call(obs: Obs) -> Any:
-            codec_name = {telemetry_keys.ATTR_CODEC: type(self).__name__}
-            with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
-                encoded = self.encode(dict(obs))
+            encoded = encode(dict(obs))
             result = function(encoded)
             if isinstance(result, Step):
                 return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result

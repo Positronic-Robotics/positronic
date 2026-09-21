@@ -9,7 +9,6 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from contextvars import ContextVar
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
+from positronic import telemetry
 from positronic.offboard import keys as offboard_keys
 from positronic.policy.base import Obs
 from positronic.policy.spec import Model, ModelSource, Pipeline
@@ -163,8 +163,6 @@ class _ServedTiming:
     in that answer.
     """
 
-    _current: ContextVar['_ServedTiming'] = ContextVar('served_timing')
-
     def __init__(self) -> None:
         self._opened = time.time_ns()
         self._phases: dict[str, float] = {}
@@ -185,23 +183,18 @@ class _ServedTiming:
         """The phases closed so far, under the span bracketing them."""
         return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
 
+    def _record_span(self, name: str, start_ns: int, end_ns: int) -> None:
+        key = protocol.timing_key(name)
+        index = 2
+        while key in self._phases:
+            key = protocol.timing_key(f'{name}_{index}')
+            index += 1
+        self._record(key, start_ns, end_ns)
+
     def infer(self, function: Callable[[Obs], Any], obs: Obs) -> Any:
         """Bind this request's timing for the duration of the call."""
-        token = self._current.set(self)
-        try:
+        with telemetry.timings_to(self._record_span):
             return function(obs)
-        finally:
-            self._current.reset(token)
-
-    @classmethod
-    def wrap_model(cls, model: Model) -> Callable[[Obs], Any]:
-        """Time the model alone within the request bound by ``infer``."""
-
-        def predict(obs: Obs) -> Any:
-            with cls._current.get().phase(protocol.TIMING_MODEL):
-                return model(obs)
-
-        return predict
 
 
 class PolicyServer:
@@ -340,7 +333,7 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            infer = _ServedTiming.wrap_model(model)
+            infer = telemetry.traced(protocol.MODEL_CALL)(model.__call__)
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
             await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))

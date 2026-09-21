@@ -428,6 +428,8 @@ def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, mo
             assert session.infer({'duration_ns': model_ms * 1_000_000}) == [{'value': index} for index in range(4)]
             assert session.served_timing[protocol.TIMING_MODEL] == model_ms
             assert session.served_timing[protocol.TIMING_INFER] == model_ms + 8
+            assert session.served_timing[protocol.timing_key('timed_codec')] == model_ms + 8
+            assert session.served_timing[protocol.timing_key(telemetry_keys.SPAN_POLICY_ENCODE)] == 3
             with pytest.raises(RuntimeError, match='model failed'):
                 session.infer({'duration_ns': 11_000_000, 'fail': True})
             assert session.served_timing == {}
@@ -574,7 +576,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
-def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport):
+def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
     server = start_server(Pipeline(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
@@ -583,16 +585,29 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
         if transport == 'websocket'
         else f'grpc://{server.host}:{server.grpc_port}'
     )
-    run = runtime.start(RemotePolicy(url))
-    try:
-        first = run.send({})
-        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
-        completed = run.send({})
-        assert isinstance(first, Step) and isinstance(completed, Step)
-        commands = dict(first.commands) | dict(completed.commands)
-        command = commands[keys.ROBOT_COMMAND]
-        assert isinstance(command, CartesianPosition)
-        np.testing.assert_allclose(command.pose.translation, [0.4, 0.0, 0.6])
-    finally:
-        runtime.close()
-        run.close()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
+        run = runtime.start(RemotePolicy(url))
+        try:
+            first = run.send({})
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            completed = run.send({})
+            assert isinstance(first, Step) and isinstance(completed, Step)
+            commands = dict(first.commands) | dict(completed.commands)
+            command = commands[keys.ROBOT_COMMAND]
+            assert isinstance(command, CartesianPosition)
+            np.testing.assert_allclose(command.pose.translation, [0.4, 0.0, 0.6])
+        finally:
+            runtime.close()
+            run.close()
+    spans = {s.span_id: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
+    [span] = [s for s in spans.values() if s.name == telemetry_keys.SPAN_WIRE_RECV]
+    for parent_name in (
+        telemetry_keys.SPAN_POLICY_INFER,
+        telemetry_keys.SPAN_POLICY_SUBMIT,
+        'chunked_schedule',
+        'remote_policy',
+    ):
+        assert span.parent_id is not None
+        span = spans[span.parent_id]
+        assert span.name == parent_name
+    assert span.parent_id is None

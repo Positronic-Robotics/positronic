@@ -1,5 +1,5 @@
 import collections.abc as cabc
-import time
+from contextlib import closing
 from functools import partial
 from typing import Any
 
@@ -47,13 +47,12 @@ def round_trip(
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
         prepared = prepare_obs(obs, compress_images)
-    infer_start_ns = time.time_ns()
-    try:
-        return session.infer(prepared)
-    finally:
-        # The server's timing fields ride on the round-trip span under the ``served.`` prefix.
-        served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
-        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns(), **served)
+    with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
+        try:
+            return session.infer(prepared)
+        finally:
+            served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
+            telemetry.set_attrs(span, **served)
 
 
 class RemotePolicy(Policy):
@@ -96,6 +95,13 @@ class RemotePolicy(Policy):
             if not isinstance(stack, Processor):
                 raise ValueError('The declared client stack must be a processor')
             infer = partial(round_trip, session, compress_images=bool(meta.get(offboard_keys.COMPRESS_IMAGES)))
-            yield from stack.run(runtime, infer)
+            with closing(runtime.start(stack, infer)) as run:
+                obs = yield
+                while True:
+                    try:
+                        step = run.send(obs)
+                    except StopIteration:
+                        return
+                    obs = yield step
         finally:
             session.close()

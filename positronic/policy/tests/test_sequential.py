@@ -1,9 +1,11 @@
 """Composition order, metadata, and execution of mixed processor and codec stacks."""
 
 import threading
+from contextlib import nullcontext
 
 import pytest
 
+from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
 from positronic.policy.codec import Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
@@ -55,7 +57,7 @@ def test_sequential_combines_component_metadata():
     assert Sequential(NamedStop(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
 
 
-def test_mixed_sequence_preserves_order_step_timing_and_empty_commands():
+def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path):
     events = []
     caller_thread = threading.get_ident()
 
@@ -94,14 +96,60 @@ def test_mixed_sequence_preserves_order_step_timing_and_empty_commands():
     stack = Sequential(TraceCodec('outer', 2), Forward(), TraceCodec('inner', 3))
     assert stack.meta() == {'codec.outer': 2, 'codec.inner': 3}
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-    run = runtime.start(stack, infer)
-    try:
-        assert run.send({'value': 1}) == Step({'value': 11}, 123)
-        assert events == ['outer.encode', 'processor', 'inner.encode', 'infer', 'inner.decode', 'outer.decode']
-        events.clear()
-        assert run.send({'value': 1, 'skip': True}) == Step({}, 123)
-        assert events == ['outer.encode', 'processor']
-    finally:
-        runtime.close()
-        run.close()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'mixed-stack'):
+        run = runtime.start(stack, infer)
+        try:
+            assert run.send({'value': 1}) == Step({'value': 11}, 123)
+            assert events == ['outer.encode', 'processor', 'inner.encode', 'infer', 'inner.decode', 'outer.decode']
+            with telemetry.span('between_calls'):
+                events.clear()
+            assert run.send({'value': 1, 'skip': True}) == Step({}, 123)
+            assert events == ['outer.encode', 'processor']
+        finally:
+            runtime.close()
+            run.close()
     assert events[-1] == 'processor.close'
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    roots = sorted((s for s in spans if s.parent_id is None), key=lambda s: s.start_ns)
+    assert [s.name for s in roots] == ['sequential', 'between_calls', 'sequential']
+    assert roots[0].end_ns <= roots[1].start_ns <= roots[1].end_ns <= roots[2].start_ns
+    parent = roots[0]
+    for name in ('trace_codec', 'forward', 'trace_codec'):
+        [child] = [s for s in spans if s.parent_id == parent.span_id and s.name == name]
+        assert parent.start_ns <= child.start_ns <= child.end_ns <= parent.end_ns
+        parent = child
+
+
+@pytest.mark.parametrize('finish', ['close', 'return', 'error'])
+@pytest.mark.parametrize('timed', [False, True])
+def test_generator_forwards_exceptions_and_closes(finish, timed):
+    closed = []
+
+    class Recover(Policy):
+        def run(self, runtime):
+            try:
+                yield
+                try:
+                    yield Step({}, 1)
+                except ValueError:
+                    yield Step({}, 2)
+            finally:
+                closed.append(True)
+
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
+        run = runtime.start(Recover())
+        try:
+            if finish != 'close':
+                assert run.send({}) == Step({}, 1)
+                assert run.throw(ValueError('recover')) == Step({}, 2)
+                if finish == 'return':
+                    with pytest.raises(StopIteration):
+                        run.send({})
+                else:
+                    with pytest.raises(RuntimeError, match='failed'):
+                        run.throw(RuntimeError('failed'))
+        finally:
+            runtime.close()
+            run.close()
+    assert closed == [True]

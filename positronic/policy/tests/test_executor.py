@@ -7,8 +7,9 @@ from typing import cast
 
 import pytest
 
+from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
-from positronic.policy.base import NotAnswered
+from positronic.policy.base import NotAnswered, Policy, Step
 from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
@@ -25,6 +26,45 @@ def executors():
     yield make
     for runtime in created:
         runtime.close()
+
+
+def test_worker_span_keeps_parent_after_processor_yields(executors, tmp_path):
+    runtime, _ = executors()
+    release = threading.Event()
+
+    def work():
+        assert release.wait(timeout=5)
+        with telemetry.span('worker_child'):
+            return 42
+
+    class Submit(Policy):
+        def run(self, runtime):
+            yield
+            answer = runtime.submit(work)
+            yield Step({}, 1)
+            assert answer.result() == 42
+            yield Step({}, 2)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'async-stack'):
+        run = runtime.start(Submit())
+        try:
+            assert run.send({}) == Step({}, 1)
+            release.set()
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            assert run.send({}) == Step({}, 2)
+        finally:
+            release.set()
+            runtime.close()
+            run.close()
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    calls = sorted((s for s in spans if s.name == 'submit'), key=lambda s: s.start_ns)
+    [worker] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
+    [child] = [s for s in spans if s.name == 'worker_child']
+    assert len(calls) == 2
+    assert all(s.parent_id is None for s in calls)
+    assert worker.parent_id == calls[0].span_id
+    assert child.parent_id == worker.span_id
+    assert calls[0].end_ns <= child.start_ns <= child.end_ns <= worker.end_ns <= calls[1].start_ns
 
 
 @pytest.mark.parametrize('read_first', [False, True])

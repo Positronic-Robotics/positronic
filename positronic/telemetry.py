@@ -20,9 +20,8 @@ Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<proce
 machine-load sample per line). The env server writes its own set; nothing rides over the wire.
 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
-The span helpers no-op while unbound (an eval recording nowhere binds nothing), so a call site carries no
-``None`` check. The pass-level report is an offline reduce over the raw files
-(``positronic.cli.eval.timing_report``).
+Spans need no caller-side check: without an exporter or a ``timings_to`` sink they emit nothing.
+The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
 
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
 ``telemetry`` extra adds the OTel SDK and pynvml; ``bind`` and ``StatsSampler`` raise without it, and a
@@ -33,6 +32,7 @@ import functools
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -107,6 +107,7 @@ GPU_PROC_UTIL_PCT = 'proc_util_pct'
 # - The stack stands in for OTel's ambient context, which does not survive the scheduler's generator hops.
 _provider: 'TracerProvider | None' = None
 _anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
+_active_span: ContextVar[Span | None] = ContextVar('positronic_active_span', default=None)
 
 
 # The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
@@ -257,12 +258,12 @@ def _anchor_context() -> Any:
 
 
 def _anchor_parent() -> Any:
-    """The parent context for a span opened outside an active one: ``None`` where the current span belongs to
-    this provider's trace, so a nested span parents ambiently."""
+    """Use the ambient parent only within an owned trace; otherwise use the explicit anchor."""
     anchors = _anchors.get()
-    if anchors:
+    parent = anchors[-1] if anchors else _active_span.get()
+    if parent is not None:
         current = trace.get_current_span().get_span_context()
-        if current.is_valid and current.trace_id == anchors[-1].get_span_context().trace_id:
+        if current.is_valid and current.trace_id == parent.get_span_context().trace_id:
             return None
     return _anchor_context()
 
@@ -278,19 +279,60 @@ def set_attrs(span: Span, **attrs: Any) -> None:
     span.set_attributes(_encode_attrs(attrs))
 
 
-def span(name: str, **attrs: Any):
-    """A wall-clock span named ``name``, entered as the current span for the enclosed block. A no-op while
-    unbound."""
-    return _tracer().start_as_current_span(name, context=_anchor_parent(), attributes=_encode_attrs(attrs))
+_timing_sink: ContextVar[Callable[[str, int, int], None] | None] = ContextVar('timing_sink', default=None)
+
+
+def enabled() -> bool:
+    """Whether an exporter or a timing sink is active."""
+    return _provider is not None or _timing_sink.get() is not None
+
+
+@contextmanager
+def timings_to(sink: Callable[[str, int, int], None]) -> Iterator[None]:
+    """Send scoped spans' names and wall-clock bounds to ``sink``, even without a file exporter."""
+    token = _timing_sink.set(sink)
+    try:
+        yield
+    finally:
+        _timing_sink.reset(token)
+
+
+@contextmanager
+def span(name: str, **attrs: Any) -> Iterator[Span]:
+    """Time a block and make it the parent of nested spans. Inert without an exporter or timing sink."""
+    if not enabled():
+        yield trace.INVALID_SPAN
+        return
+    sink = _timing_sink.get()
+    started = time.time_ns() if sink is not None else 0
+    try:
+        with _tracer().start_as_current_span(
+            name, context=_anchor_parent(), attributes=_encode_attrs(attrs)
+        ) as current:
+            token = _active_span.set(current)
+            try:
+                yield current
+            finally:
+                _active_span.reset(token)
+    finally:
+        if sink is not None:
+            sink(name, started, time.time_ns())
+
+
+def component_name(component: object) -> str:
+    """The component's class name in snake_case, without a leading underscore."""
+    name = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', type(component).__name__.lstrip('_'))
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
 
 def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator form of ``span`` for a function whose whole body is one span: run the call inside a span
-    named ``name``. A no-op while unbound, like ``span``."""
+    """Decorator form of ``span``, timing the whole function call."""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not enabled():
+                return func(*args, **kwargs)
             with span(name, **attrs):
                 return func(*args, **kwargs)
 
@@ -300,9 +342,7 @@ def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[.
 
 
 def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
-    """Record an already-elapsed span with explicit wall-clock bounds — for a phase whose emit is decided only
-    after it ran (a policy round-trip that turned out to be a real inference, not a scheduler replay). Parents
-    like ``span``. A no-op while unbound."""
+    """Record a completed span with explicit wall-clock bounds. Parents like ``span``; needs an exporter."""
     recorded = _tracer().start_span(
         name, context=_anchor_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
     )

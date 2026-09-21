@@ -11,8 +11,10 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, auto
+from functools import partial
 from typing import Any, ParamSpec, TypeVar
 
+from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Answer, NotAnswered, Runtime
 
 P = ParamSpec('P')
@@ -150,9 +152,12 @@ class Executor(Runtime):
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         context = contextvars.copy_context()
 
-        def work() -> T:
-            return context.run(function, *args, **kwargs)
+        def invoke() -> T:
+            return function(*args, **kwargs)
 
+        if telemetry.enabled():
+            invoke = telemetry.traced(telemetry_keys.SPAN_POLICY_SUBMIT)(invoke)
+        work = partial(context.run, invoke)
         answer = (
             _ChargedAnswer(self._pool, self._clock, work)
             if self._simulated and self._charge_inference_time

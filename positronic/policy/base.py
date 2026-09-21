@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
+from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
 from attr import dataclass
 from typing_extensions import TypeAliasType
+
+from positronic import telemetry
 
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
@@ -68,7 +71,6 @@ class Runtime(ABC):
     At episode shutdown, drain submitted work before closing live generators whose resources it may use.
 
     TODO: Define how generators report episode metadata.
-    TODO: Expose per-processor and submitted-call timings through the runtime.
     """
 
     @property
@@ -83,16 +85,45 @@ class Runtime(ABC):
         """The current tick number."""
         pass
 
+    @staticmethod
+    def _timed_run(run: ProcessorRun[InputT, OutputT], name: str) -> ProcessorRun[InputT, OutputT]:
+        """Time each resumption, leaving no span active while the generator is suspended."""
+        result = None
+        try:
+            while True:
+                try:
+                    value = yield result
+                except GeneratorExit:
+                    raise
+                except BaseException as exc:
+                    resume = partial(run.throw, exc)
+                else:
+                    resume = partial(run.send, value)
+                with telemetry.span(name):
+                    try:
+                        result = resume()
+                    except StopIteration:
+                        return
+        finally:
+            run.close()
+
     def start(
         self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT]:
-        """Create and prime an episode generator. The caller owns its closure."""
+        """Create and prime an episode generator. The caller owns its closure.
+
+        Bind telemetry before starting processors; timing wrappers are selected at startup.
+        """
         run = processor.run(self, *args, **kwargs)
         initial = next(run)
         if initial is not None:
             run.close()
             raise AssertionError('a processor must yield None before receiving its first input')
-        return run
+        if not telemetry.enabled():
+            return run
+        timed = self._timed_run(run, telemetry.component_name(processor))
+        next(timed)
+        return timed
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...

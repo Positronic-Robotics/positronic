@@ -26,9 +26,8 @@ SPAN_MATERIALIZE = 'materialize'
 SPAN_POLICY_INFER = 'policy.infer'
 SPAN_RECORD_IO = 'record.io'
 
-# The rig-side stack between the harness and the wire. `policy.call` opens on every control tick,
-# including the ones a scheduling layer answers without inferring.
-SPAN_POLICY_CALL = 'policy.call'
+# Work submitted to a worker; its parent is the processor call that submitted it.
+SPAN_POLICY_SUBMIT = 'policy.submit'
 SPAN_POLICY_ENCODE = 'policy.encode'
 SPAN_POLICY_PREPARE = 'policy.prepare'
 SPAN_WIRE_SEND = 'wire.send'
@@ -47,9 +46,6 @@ ATTR_SERVED_PREFIX = 'served.'
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
-# Whether a `policy.call` came back with a trajectory. The tick that STARTS a round trip answers False
-# too, that trip being asynchronous; it is the tick carrying a `policy.encode`.
-ATTR_POLICY_ANSWERED = 'policy.answered'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.

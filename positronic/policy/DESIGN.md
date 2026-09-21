@@ -271,7 +271,7 @@ whole definition and sends it to the rig as a description.
   changing what an already-served policy does (as much as possible).
 - A description the rig cannot honor is refused at the handshake.
 
-### Recording
+### Recording and logging
 
 A system split between a rig and a server is hard to debug. Data flows
 in two dimensions — through time and through the layers — and the
@@ -291,6 +291,8 @@ placed on three timelines: the call number, control time, and wall time.
   distinct across sessions and stable across runs.
 - Inference functions record too: into the recording itself, or into storage of
   their own, joined later.
+- Timing is part of logging: the framework records wall-clock spans for processor
+  calls, codecs, and background jobs, preserving parent-child links.
 - The framework makes the best effort not to consume control time, and recording adds no failure path.
 
 ## API
@@ -393,10 +395,6 @@ closes what it made itself. `close` never travels through the chain.
 
 ## Deferred, not to decide now
 
-- TODO: Restore automatic component timing from PR #748 for processor calls,
-  complete codec calls, and the harness's `policy.call`. Export component spans
-  to telemetry and server component durations in inference responses, without
-  requiring instrumentation in each component.
 - The shape of the robot description, and a server's ability to refuse one.
 - The exact wire protocol a server must support — the handshake that
   delivers the description, the inference calls, and the versioning that
