@@ -65,15 +65,41 @@ together load the model in 151 s.
   manifest index with an `unknown/unknown` attestation entry beside the image.
 - Push to Docker Hub when your base is `positro/*`. The base layers cross-mount from the public
   repository, so only your layers upload. Another registry re-uploads all of them.
-- The image must be public.
+- A public repository needs nothing else. A private one takes a credential, below.
+
+### A private image
+
+Push to a private repository and hand the platform a read-only credential for it. The platform
+copies the image into its own registry, runs it from there, and discards the credential. Nothing
+of yours stays readable to anyone else, and the run pulls from our side.
+
+Write the password into a file of its own and name the file:
+
+```bash
+mkdir -p ~/.config/positronic
+install -m 600 /dev/null ~/.config/positronic/registry-password
+printf %s "<the registry access token>" > ~/.config/positronic/registry-password
+uv run positronic eval run --eval=<eval> \
+    --policy-image=<registry>/<you>/<image>@sha256:<digest> \
+    --registry-username=<user> \
+    --registry-password-file=~/.config/positronic/registry-password
+```
+
+- The password is in the file and never on the command line, where every `ps` on the machine
+  reads it and every shell history keeps it.
+- Surrounding whitespace goes, so a file written with `echo` needs no trimming.
+- Give the credential read on that one repository. A registry issues a token for exactly this:
+  Docker Hub calls it an access token, and a cloud registry a service account key.
+- The credential opens the registry for the copy and for nothing else. It is not written to the
+  run's VM, and the policy container never sees it.
 
 ## Life of a submission
 
 1. The platform resolves your image reference to a digest at submission and records it as
    `policy_image_digest`. The run uses those bytes.
-2. It refuses an image it cannot pull anonymously (`image_unpullable`), and one whose compressed
-   size, config and layers summed, is over 30 GB (`image_too_large`). Both are charged to your
-   quota.
+2. It refuses an image it cannot pull — anonymously, or with the credential you named
+   (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 30 GB
+   (`image_too_large`). Both are charged to your quota.
 3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
    server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
    run's bearer token. An image with no start command runs the base image's `CMD ["bash"]`, which
@@ -145,6 +171,8 @@ uv run positronic eval list
 ```
 
 - Pin by digest. A tag is resolved at submission, so a tag can name bytes you did not test.
+- A private image adds `--registry-username` and `--registry-password-file`; see
+  [A private image](#a-private-image).
 - Reuse the transaction key on a retry. The same key returns the original submission; a retry
   without one spends quota again. The same key with a different request is refused as a conflict.
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The

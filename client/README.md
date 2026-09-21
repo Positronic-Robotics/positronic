@@ -104,6 +104,20 @@ image, and how to build, test and submit it.
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
 the eval whose tasks it runs. `plan_of_image` builds that shape.
 
+An `image` endpoint whose registry serves no anonymous caller states `image_credential`, which
+names the registry user and the FILE the password is in. A plan holds the path; the send path
+reads the file, so nothing that renders or refuses a plan holds the password.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    image: registry.example.com/you/policy@sha256:...
+    image_credential:
+      username: a-reader
+      password_file: ~/.config/positronic/registry-password
+```
+
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
 evals a submission can name. A customer grant adds the rig's evals and tasks, filtered to the entries

@@ -6,6 +6,7 @@ Unknown fields are rejected, so a misspelled field is a 422.
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Self
 
 import httpx
@@ -16,7 +17,7 @@ from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, Field, SecretStr, SerializationInfo, field_serializer, model_validator
+from pydantic import BaseModel, Field, SerializationInfo, field_validator, model_serializer, model_validator
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
@@ -85,21 +86,46 @@ REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
 
 class RegistryCredential(BaseModel):
-    """The username and password that open the registry one image endpoint names.
+    """The username, and the file holding the password, that open the registry one image endpoint
+    names.
 
-    A JSON dump masks the password unless the `REVEAL_REGISTRY_PASSWORD` context is set. A Python
-    dump holds the `SecretStr`, which `json.dumps` refuses.
+    A plan names the file and never the password, so nothing that reads, renders or refuses a plan
+    holds the secret to echo. The send path reads the file and the wire carries `password`; every
+    other JSON dump carries `password_file` and reads back as this model.
     """
 
     model_config = INPUT_MODEL_CONFIG
 
     username: str = Field(min_length=1)
-    password: SecretStr = Field(min_length=1)
+    password_file: Path
 
-    @field_serializer('password', when_used='json')
-    def _password(self, password: SecretStr, info: SerializationInfo) -> str:
-        reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
-        return password.get_secret_value() if reveal else str(password)
+    @field_validator('password_file')
+    @classmethod
+    def _readable_now(cls, path: Path) -> Path:
+        # Checked when the plan is read, so a mistyped path is refused there rather than mid-send.
+        path = path.expanduser()
+        if not path.is_file():
+            raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
+        if path.stat().st_size == 0:
+            raise ValueError(f'{path} is empty')
+        return path
+
+    def password(self) -> str:
+        """The password, read at the moment it is sent.
+
+        Surrounding whitespace goes, so a file written with `echo` carries no trailing newline into
+        the request.
+        """
+        password = self.password_file.read_text().strip()
+        if not password:
+            raise ValueError(f'{self.password_file} holds no password')
+        return password
+
+    @model_serializer(mode='plain', when_used='json')
+    def _dump(self, info: SerializationInfo) -> dict[str, str]:
+        if (info.context or {}).get(REVEAL_REGISTRY_PASSWORD):
+            return {'username': self.username, 'password': self.password()}
+        return {'username': self.username, 'password_file': str(self.password_file)}
 
 
 # An endpoint overrides one cascading property; every other property of `Cascade` is per task.

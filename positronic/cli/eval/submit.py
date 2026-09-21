@@ -3,14 +3,25 @@
 Not a command of its own: running an eval is one act, and where it runs is an argument to it.
 """
 
+from pathlib import Path
+
 from platform_client.enums import NO_RESULT_STATUSES
-from platform_client.eval_plan import plan_of_image
+from platform_client.eval_plan import RegistryCredential, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
+
+
+def _credential(username: str | None, password_file: str | None) -> RegistryCredential | None:
+    """The credential that opens a private registry, from the two flags that state it."""
+    if (username is None) != (password_file is None):
+        raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
+    if username is None or password_file is None:
+        return None
+    return RegistryCredential(username=username, password_file=Path(password_file))
 
 
 def submit(
@@ -20,6 +31,8 @@ def submit(
     alias: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    registry_username: str | None = None,
+    registry_password_file: str | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -27,7 +40,9 @@ def submit(
     that runs them, and the catalogue expands that name. Naming one the platform does not offer
     answers with the ones it does. An image pinned by digest runs the bytes you tested, while a
     mutable tag is resolved at submission time. Repeating a submission under one `transaction_key`
-    returns the original instead of spending another day's quota.
+    returns the original instead of spending another day's quota. An image the platform cannot
+    pull anonymously takes a credential: `registry_username` and `registry_password_file`, the file
+    the password is in.
     """
     with refusing_bad_input():
         plan = plan_of_image(
@@ -35,6 +50,7 @@ def submit(
             EvalRef(eval_name),
             alias=alias,
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
+            credential=_credential(registry_username, registry_password_file),
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)

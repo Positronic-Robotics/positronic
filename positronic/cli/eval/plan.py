@@ -37,7 +37,7 @@ class _OneValuePerKey(yaml.SafeLoader):
     two caps, and the one it keeps is a typo, so a repeated key is refused.
 
     This runs over every mapping in the file, so a key is not always a plan field. One that is not
-    may be a value a caller wrote, a registry password among them, and goes unnamed.
+    is text a caller wrote, and goes unnamed.
     """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
@@ -56,9 +56,9 @@ def _refusal(exc: yaml.YAMLError) -> str:
     """Why the plan was refused, and where, in this file's own words.
 
     PyYAML renders what it read into the mark's snippet and into `problem`: a source line, an
-    alias, an anchor, a tag. A plan states a registry password, so none of that text is printed,
-    and a refusal says where the parser stopped rather than what it disliked. `_KeyGivenTwice`
-    carries this file's own message, whose key `_plan_field_names` has already cleared.
+    alias, an anchor, a tag. None of that text is printed: a plan is a caller's own file, so a
+    refusal says where the parser stopped rather than what it disliked. `_KeyGivenTwice` carries
+    this file's own message, whose key `_plan_field_names` has already cleared.
     """
     mark = None
     if isinstance(exc, yaml.MarkedYAMLError):

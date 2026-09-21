@@ -234,7 +234,11 @@ BROKEN_CREDENTIALS = {
 
 
 def a_plan_with_a_broken_credential(how: str) -> str:
-    """A plan whose registry password sits where the parser will quote it back."""
+    """A plan carrying a password a caller pasted into it, where the parser would quote it back.
+
+    A plan names a password file rather than a password, so this is a caller's mistake rather than
+    the documented shape. The refusal still prints none of it.
+    """
     broken = BROKEN_CREDENTIALS[how]
     return (
         f'tasks:\n  - {SPOONS}\nendpoints:\n  - name: baseline\n'

@@ -170,3 +170,58 @@ def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):
 
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert f'submission {ID} (pending)' in capsys.readouterr().out
+
+
+def a_password_file(tmp_path, password: str = 'the-registry-password\n'):
+    path = tmp_path / 'registry-password'
+    path.write_text(password)
+    return path
+
+
+def test_a_private_image_sends_the_credential_the_registry_asks_for(platform, run_command, tmp_path):
+    # The file is what the caller names; the request is where the password itself first appears.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+    password_file = a_password_file(tmp_path)
+
+    run_command(
+        run,
+        eval='fake.smoke',
+        policy_image='org/p:v1',
+        registry_username='a-reader',
+        registry_password_file=str(password_file),
+    )
+
+    assert platform.body['endpoints'][0]['image_credential'] == {
+        'username': 'a-reader',
+        'password': 'the-registry-password',
+    }
+
+
+def test_a_public_image_sends_no_credential(platform, run_command):
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert platform.body['endpoints'][0]['image_credential'] is None
+
+
+def test_half_a_credential_is_refused_before_the_submission(platform, run_command, tmp_path):
+    with pytest.raises(SystemExit, match='pass both'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', registry_username='a-reader')
+    with pytest.raises(SystemExit, match='pass both'):
+        run_command(
+            run, eval='fake.smoke', policy_image='org/p:v1', registry_password_file=str(a_password_file(tmp_path))
+        )
+    assert platform.seen is None
+
+
+def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platform, run_command, tmp_path):
+    with pytest.raises(SystemExit, match='is not a file'):
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file=str(tmp_path / 'never-written'),
+        )
+    assert platform.seen is None

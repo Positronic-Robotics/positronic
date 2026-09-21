@@ -45,7 +45,7 @@ from platform_client.responses import (
     SubmissionListResponse,
 )
 from platform_client.tasks import TaskRef
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
 BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
@@ -194,13 +194,16 @@ def test_create_submission_sends_the_run_defining_fields():
     assert gateway.body()['transaction_key'] is None
 
 
-def test_create_submission_sends_a_registry_password_the_platform_can_use():
-    """The request carries the password as plaintext: a masked password opens no registry."""
+def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_path):
+    """The request carries the password as plaintext: a masked password opens no registry. The send
+    path is what reads the file, so the plan holds a path until this call."""
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
+    password_file = tmp_path / 'registry-password'
+    password_file.write_text('the-registry-password\n')
     plan = plan_of_image(
         PolicyImage('org/policy:v1'),
         EvalRef('fake.smoke'),
-        credential=RegistryCredential(username='a-reader', password=SecretStr('the-registry-password')),
+        credential=RegistryCredential(username='a-reader', password_file=password_file),
     )
 
     make_client(gateway).create_submission(plan)

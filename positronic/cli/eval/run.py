@@ -291,6 +291,8 @@ def run(
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    registry_username: str | None = None,
+    registry_password_file: str | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -301,7 +303,9 @@ def run(
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
     in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
     the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads;
-    a run here answers the dataset it wrote.
+    a run here answers the dataset it wrote. ``--registry-username`` and
+    ``--registry-password-file`` open a registry that serves ``--policy-image`` to no anonymous
+    caller.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -319,6 +323,7 @@ def run(
         '--timing': timing or None,
     }
     rig_only = {'--policy-url': policy_url, '--tasks': tasks, '--episodes': episodes, '--cap': cap, '--preset': preset}
+    platform_only = {'--registry-username': registry_username, '--registry-password-file': registry_password_file}
     source = plan_source(eval, from_file)
 
     if isinstance(eval, Eval) or policy is not None:
@@ -329,6 +334,7 @@ def run(
                 '--platform-url': platform_url,
                 '--from-file': from_file,
                 **rig_only,
+                **platform_only,
             },
             'local',
         )
@@ -347,11 +353,19 @@ def run(
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
-        return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
+        return submit(
+            eval,
+            policy_image,
+            alias=alias,
+            transaction_key=transaction_key,
+            platform_url=platform_url,
+            registry_username=registry_username,
+            registry_password_file=registry_password_file,
+        )
 
     if source is not None or any(given(value) for value in rig_only.values()):
         # The rig records under the client's own prefix, so it has no output of its own to name.
-        _refuse(local_only, 'rig')
+        _refuse({**local_only, **platform_only}, 'rig')
         return _file_for_the_rig(
             eval,
             source,
