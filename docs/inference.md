@@ -48,7 +48,7 @@ uv run positronic eval run --eval=.real.droid.pick_place \
 
 `--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
 
-**Six flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `websocket_unix`, `grpc` or `grpc_tls`; the `_tls` members dial a TLS front, and `websocket_unix` a Unix socket (below). `--policy.host` and `--policy.port` are the server (`8000` is every vendor server's websocket default; a TLS front answers on `443`), and `--policy.uds` is the socket path that replaces them on `websocket_unix`. `--policy.model` is the checkpoint, and naming none serves the one the server pinned at startup. `--policy.query` carries the session params:
+**Flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `websocket_unix`, `grpc` or `grpc_tls`; the `_tls` members dial a TLS front, and `websocket_unix` a Unix socket (below). `--policy.host` and `--policy.port` are the server (`8000` is every vendor server's websocket default; a TLS front answers on `443`), and `--policy.uds` is the socket path that replaces them on `websocket_unix`. `--policy.model` is the checkpoint, and naming none serves the one the server pinned at startup. `--policy.query` carries the session params:
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \

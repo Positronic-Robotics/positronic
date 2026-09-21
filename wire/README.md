@@ -45,7 +45,7 @@ needs.
 ## The client interface
 
 `NAME` is what a caller selects a wire by: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
-`grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out. The verbs follow.
+`grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
