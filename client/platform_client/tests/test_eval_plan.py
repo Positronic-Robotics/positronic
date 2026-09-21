@@ -606,8 +606,8 @@ def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
 
 
 def test_a_plan_file_states_the_file_and_never_the_password(credential: dict):
-    """`read_plan` validates under `FROM_A_PLAN_FILE`, which is what keeps the secret out of a file
-    every error path quotes."""
+    """`FROM_A_PLAN_FILE` keeps the secret out of a file every error path quotes. `read_plan`
+    validates under it."""
     stated = {'username': 'a-reader', 'password': A_PASSWORD}
     payload = {'eval': 'robolab.public_subset', 'endpoints': [an_image_endpoint(image_credential=stated)]}
 

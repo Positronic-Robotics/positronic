@@ -140,8 +140,7 @@ class RegistryCredential(BaseModel):
     def secret(self) -> str:
         """The password itself, read at the moment it is sent.
 
-        One trailing line ending goes, so a file written with `echo` carries no newline into the
-        request. Everything else the file holds is the password, an edge space included.
+        One trailing line ending comes off the file, and nothing else does.
         """
         if self.password is not None:
             return self.password.get_secret_value()
