@@ -21,8 +21,7 @@ from positronic.utils.serialization import encode_jpeg
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
     """Test standard client connection and inference flow."""
-    host, port = inference_server
-    client = InferenceClient.from_url(f'{host}:{port}')
+    client = InferenceClient(*inference_server.ws())
 
     session = client.new_session()
     try:
@@ -41,8 +40,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
 
 def test_inference_client_new_session(inference_server, mock_policy):
     """Test that starting a new session calls new_session on the policy."""
-    host, port = inference_server
-    client = InferenceClient.from_url(f'{host}:{port}')
+    client = InferenceClient(*inference_server.ws())
 
     # First session
     session = client.new_session()
@@ -56,10 +54,9 @@ def test_inference_client_new_session(inference_server, mock_policy):
 
 
 def test_session_url_selects_the_model(multi_policy_server):
-    host, port, policies = multi_policy_server
-    endpoint = f'{host}:{port}'
+    served, policies = multi_policy_server
 
-    default_session = InferenceClient.from_url(endpoint).new_session()
+    default_session = InferenceClient(*served.ws()).new_session()
     try:
         assert default_session.metadata['model_name'] == 'alpha'
         action = default_session.infer({'obs': 'default'})
@@ -67,7 +64,7 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         default_session.close()
 
-    alpha_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/alpha').new_session()
+    alpha_session = InferenceClient(*served.ws(model='alpha')).new_session()
     try:
         assert alpha_session.metadata['model_name'] == 'alpha'
         action = alpha_session.infer({'obs': 'alpha'})
@@ -75,7 +72,7 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         alpha_session.close()
 
-    beta_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/beta').new_session()
+    beta_session = InferenceClient(*served.ws(model='beta')).new_session()
     try:
         assert beta_session.metadata['model_name'] == 'beta'
         action = beta_session.infer({'obs': 'beta'})

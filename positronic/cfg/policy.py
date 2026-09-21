@@ -24,7 +24,7 @@ def placeholder():
     )
 
 
-remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
+remote = cfn.Config(RemotePolicy, wire='websocket', host='localhost', port=8000)
 
 
 @cfn.config()
@@ -61,7 +61,8 @@ def file_headers(path: str) -> dict[str, str]:
     raise ValueError(f'{file}: {problem}') from None
 
 
-# The caller names the URL: a default would hand the credential to whatever host it points at.
+# The caller names the wire, the host and the port: a default would hand the credential to whatever host it
+# points at.
 authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
 nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
 file_authed_remote = cfn.Config(RemotePolicy, headers=file_headers)

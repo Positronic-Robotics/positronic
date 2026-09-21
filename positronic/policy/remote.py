@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 import pos3
+from positronic_wire import registry
+from positronic_wire.wire import SessionAddress, session_path
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
@@ -119,13 +121,10 @@ class RemoteSession(Session):
 
 
 class _Endpoint(Policy):
-    """The wire connection to one inference server: sessions forward observations under the border's settings.
+    """The wire connection to one inference server: sessions forward observations under the border's settings."""
 
-    ``InferenceClient`` reads the server, the model, and the session params off the URL.
-    """
-
-    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
-        self._client = InferenceClient.from_url(url, headers=headers, infer_timeout=infer_timeout)
+    def __init__(self, client: InferenceClient):
+        self._client = client
         # Filled on first contact, through a session opened for it alone.
         self._server_meta: dict[str, Any] | None = None
 
@@ -153,9 +152,9 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    One URL names the server, the model, and the session params — see ``InferenceClient`` for the forms
-    it takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
-    around should not.
+    ``wire`` names the transport (``positronic_wire.registry.CLIENT_WIRES``), ``host`` and ``port`` the
+    server, ``model`` the checkpoint it serves — empty for the one it pinned — and ``query`` the session
+    params as written. ``headers`` carry the credentials.
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
@@ -167,13 +166,19 @@ class RemotePolicy(Policy):
 
     def __init__(
         self,
-        url: str,
+        wire: str,
+        host: str,
+        port: int,
         *,
+        model: str = '',
+        query: str = '',
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout)
+        address = SessionAddress(host, port, session_path(model), query)
+        client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
+        self._endpoint = _Endpoint(client)
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
 

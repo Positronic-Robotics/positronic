@@ -4,6 +4,9 @@ from typing import NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
+from positronic_wire import wire
+from positronic_wire.grpc import GrpcClientWire
+from positronic_wire.websocket import WebsocketClientWire
 
 from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
@@ -20,6 +23,15 @@ class Served(NamedTuple):
     port: int
     server: PolicyServer
     grpc_port: int | None
+
+    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+        """The websocket wire, and this server's session on it: ``InferenceClient(*served.ws())``."""
+        return WebsocketClientWire(), wire.SessionAddress(self.host, self.port, wire.session_path(model), query)
+
+    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+        """The gRPC wire, and this server's session on it."""
+        assert self.grpc_port is not None, 'the server serves no gRPC wire'
+        return GrpcClientWire(), wire.SessionAddress(self.host, self.grpc_port, wire.session_path(model), query)
 
 
 StartServer = Callable[..., Served]
@@ -138,19 +150,13 @@ def mock_policy_registry() -> dict[str, MagicMock]:
 
 
 @pytest.fixture
-def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple[str, int]:
-    """A served single-policy pipeline.
-
-    Returns:
-        tuple[str, int]: (host, port)
-    """
-    host, port, *_ = start_server(ChunkedSchedule() | remote | PolicySource(mock_policy))
-    return host, port
+def inference_server(start_server: StartServer, mock_policy: MagicMock) -> Served:
+    """A served single-policy pipeline."""
+    return start_server(ChunkedSchedule() | remote | PolicySource(mock_policy))
 
 
 @pytest.fixture
 def multi_policy_server(
     start_server: StartServer, mock_policy_registry: dict[str, MagicMock]
-) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, *_ = start_server(ChunkedSchedule() | remote | DictSource(mock_policy_registry))
-    return host, port, mock_policy_registry
+) -> tuple[Served, dict[str, MagicMock]]:
+    return start_server(ChunkedSchedule() | remote | DictSource(mock_policy_registry)), mock_policy_registry

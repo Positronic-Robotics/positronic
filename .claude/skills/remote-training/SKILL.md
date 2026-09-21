@@ -233,7 +233,7 @@ as the bearer token and fails fast if the variable is unset:
 
 ```bash
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.authed_remote --policy.url=https://<managed-url> \
+  --policy=.authed_remote --policy.wire=websocket_tls --policy.host=<managed-host> --policy.port=443 \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
 
@@ -282,7 +282,7 @@ hostname:
 
 ```bash
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.url=desktop:8000 \
+  --policy=.remote --policy.host=desktop --policy.port=8000 \
   --output_dir=<...>
 ```
 

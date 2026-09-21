@@ -62,14 +62,14 @@ def test_a_status_that_refuses_the_call_reads_as_its_http_status_does(code, deta
     assert client_grpc._refusal(status) is refusal
 
 
-_ADDRESS = wire.SessionAddress('gpu-host', 9000, wire.SESSION_PATH, '', secure=False)
+_ADDRESS = wire.SessionAddress('gpu-host', 9000, wire.SESSION_PATH, '')
 
 
 def _dialled_target(host: str, monkeypatch) -> str:
     """The gRPC target ``dial`` builds for ``host``, without opening a channel."""
     targets = []
 
-    def refuse(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
+    def refuse(channel: grpc.Channel, target: str, open_timeout: float) -> grpc.Channel:
         targets.append(target)
         raise wire.ConnectRefused(wire.Refusal.FINAL, 'this test opens no channel')
 
@@ -89,25 +89,94 @@ def test_a_host_that_is_no_ipv6_literal_dials_unchanged(host, monkeypatch):
     assert _dialled_target(host, monkeypatch) == f'{host}:9000'
 
 
-def test_a_probe_answers_none_once_the_channel_is_ready(monkeypatch):
+def _status(code: grpc.StatusCode) -> grpc.RpcError:
+    status = MagicMock()
+    status.code.return_value = code
+    status.details.return_value = ''
+    return status
+
+
+def _probing(monkeypatch, answer: grpc.RpcError | None) -> list[tuple]:
+    """Answer every probe call with ``answer``, and record what each was sent."""
+    sent = []
+
+    def call(channel, metadata, timeout):
+        sent.append((channel, metadata, timeout))
+        return answer
+
+    monkeypatch.setattr(client_grpc, '_connect_refusal', call)
+    return sent
+
+
+def test_a_probe_the_server_answers_unimplemented_reads_as_the_server(monkeypatch):
+    _probing(monkeypatch, _status(grpc.StatusCode.UNIMPLEMENTED))
+    assert client_grpc.GrpcClientWire().probe(_ADDRESS, None, 1.0) is None
+
+
+@pytest.mark.parametrize(
+    ('code', 'refusal'),
+    [
+        (grpc.StatusCode.UNAVAILABLE, wire.Refusal.COLD),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, wire.Refusal.COLD),
+        (grpc.StatusCode.PERMISSION_DENIED, wire.Refusal.FORBIDDEN),
+        (grpc.StatusCode.INTERNAL, wire.Refusal.FINAL),
+    ],
+)
+def test_a_probe_reads_a_refusing_status_as_dial_does(code, refusal, monkeypatch):
+    _probing(monkeypatch, _status(code))
+    assert client_grpc.GrpcClientWire().probe(_ADDRESS, None, 1.0) is refusal
+
+
+def test_a_probe_carries_the_headers_as_metadata_and_closes_the_channel(monkeypatch):
     channel = MagicMock()
-    monkeypatch.setattr(client_grpc, '_ready_channel', lambda target, secure, open_timeout: channel)
-    assert client_grpc.GrpcClientWire().probe(_ADDRESS, 1.0) is None
+    monkeypatch.setattr(grpc, 'insecure_channel', lambda target, options: channel)
+    sent = _probing(monkeypatch, _status(grpc.StatusCode.UNIMPLEMENTED))
+    assert client_grpc.GrpcClientWire().probe(_ADDRESS, {'Modal-Key': 'k'}, 2.0) is None
+    assert sent == [(channel, (('modal-key', 'k'),), 2.0)]
     channel.close.assert_called_once()
 
 
-@pytest.mark.parametrize('refusal', list(wire.Refusal))
-def test_a_probe_answers_what_refused_the_channel(refusal, monkeypatch):
-    def refuse(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
-        raise wire.ConnectRefused(refusal, 'refused')
-
-    monkeypatch.setattr(client_grpc, '_ready_channel', refuse)
-    assert client_grpc.GrpcClientWire().probe(_ADDRESS, 1.0) is refusal
-
-
 def test_a_port_that_never_answers_is_cold():
-    """Nothing listens on port 1; the channel never becomes ready."""
-    assert client_grpc.GrpcClientWire().probe(_ADDRESS._replace(host='localhost', port=1), 0.2) is wire.Refusal.COLD
+    """Nothing listens on port 1; the call never reaches a server."""
+    assert (
+        client_grpc.GrpcClientWire().probe(_ADDRESS._replace(host='localhost', port=1), None, 0.2) is wire.Refusal.COLD
+    )
+
+
+def test_the_plain_member_opens_an_insecure_channel(monkeypatch):
+    opened = []
+    monkeypatch.setattr(grpc, 'insecure_channel', lambda target, options: opened.append(target) or MagicMock())
+    _probing(monkeypatch, None)
+    assert client_grpc.GrpcClientWire().probe(_ADDRESS, None, 1.0) is None
+    assert opened == ['gpu-host:9000']
+
+
+def test_the_tls_member_opens_a_secure_channel(monkeypatch):
+    opened = []
+    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: 'roots')
+    monkeypatch.setattr(
+        grpc, 'secure_channel', lambda target, credentials, options: opened.append((target, credentials)) or MagicMock()
+    )
+    _probing(monkeypatch, None)
+    assert client_grpc.GrpcTlsClientWire().probe(_ADDRESS, None, 1.0) is None
+    assert opened == [('gpu-host:9000', 'roots')]
+
+
+@pytest.mark.parametrize(
+    ('client_wire', 'address', 'spelled'),
+    [
+        (client_grpc.GrpcClientWire(), _ADDRESS, 'gpu-host:9000/api/v1/session'),
+        (
+            client_grpc.GrpcClientWire(),
+            _ADDRESS._replace(host='::1', query='fps=10'),
+            '[::1]:9000/api/v1/session?fps=10',
+        ),
+        (client_grpc.GrpcTlsClientWire(), _ADDRESS._replace(port=443), 'gpu-host:443/api/v1/session'),
+    ],
+)
+def test_a_grpc_session_is_named_by_its_target_and_no_scheme(client_wire, address, spelled):
+    assert client_wire.session_url(address) == spelled
+    assert client_wire.api_url(address) is None
 
 
 class _ManualChannel:

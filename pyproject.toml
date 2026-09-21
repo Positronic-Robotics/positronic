@@ -215,7 +215,7 @@ filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
 ]
 markers = [
-    "endpoint: what a served endpoint must do. Runs in-process, or against POSITRONIC_ENDPOINT_URL when it names one",
+    "endpoint: what a served endpoint must do. Runs in-process, or against the endpoint POSITRONIC_ENDPOINT_WIRE, _HOST and _PORT name",
 ]
 
 [tool.coverage.run]

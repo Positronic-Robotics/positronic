@@ -285,7 +285,7 @@ bash workflows/nebius/serve.sh gr00t groot-server droid \
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
 of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
-the `https://` URL for the WebSocket, or the port-9000 host dialled as `grpcs://<host>:443` for gRPC.
+the `https://` host on the `websocket_tls` wire, or the port-9000 host on the `grpc_tls` wire, port 443 either way.
 The banner prints the gRPC URL ready to paste. The container takes
 another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
 server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
@@ -302,7 +302,7 @@ Run inference from your laptop or robot host with `positronic eval run`
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.url=https://<endpoint-managed-url> \
+  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -331,7 +331,7 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
 wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
-of the printed `grpcs://` URL sends the same token, which `.authed_remote` carries as gRPC
+of the printed gRPC host, on the `grpc_tls` wire, sends the same token, which `.authed_remote` carries as gRPC
 metadata. `serve.sh` injects the token from the
 `positronic-serverless-inference-token` secret as the container's `AUTH_TOKEN`; export the same
 value locally and `.authed_remote` sends it (it raises immediately if the variable is unset).
@@ -345,7 +345,7 @@ export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
 
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.url=https://<endpoint-managed-url> \
+  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -374,7 +374,7 @@ stays under it.
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.nebius_remote \
-  --policy.url=https://<endpoint-managed-url> \
+  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -385,7 +385,7 @@ It needs a logged-in `nebius`, so it is an operator's convenience: a robot host 
 
 `pytest -m endpoint` states what a served endpoint must do: both routes refuse a missing, wrong, or
 `Bearer`-less token and serve with the right one, and a session survives an idle past the ~90 s close.
-Unset, the tests serve their own server and prove the code; pointed at `POSITRONIC_ENDPOINT_URL` they run
+Unset, the tests serve their own server and prove the code; pointed at the endpoint `POSITRONIC_ENDPOINT_WIRE`, `POSITRONIC_ENDPOINT_HOST` and `POSITRONIC_ENDPOINT_PORT` name, they run
 the same assertions through the managed ingress, where `--auth token` and the idle close are invisible from
 inside the container. `e2e.sh` runs them after its serve stage.
 
@@ -395,7 +395,7 @@ Against an endpoint of your own — the demo checkpoint needs no training and no
 bash workflows/nebius/serve.sh lerobot_0_3_3 auth-smoke demo
 # wait for `INFO Started server process` in: nebius ai endpoint logs <id> --follow
 # AUTH_TOKEN as exported above; the tests read it and fail on a KeyError without it
-POSITRONIC_ENDPOINT_URL=https://<endpoint-managed-url> \
+POSITRONIC_ENDPOINT_WIRE=websocket_tls POSITRONIC_ENDPOINT_HOST=<endpoint-managed-host> POSITRONIC_ENDPOINT_PORT=443 \
   uv run --locked pytest positronic/offboard/tests/test_server.py -m endpoint --no-cov
 bash workflows/nebius/stop.sh auth-smoke
 ```
@@ -460,7 +460,7 @@ bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
   --policy=@positronic.cfg.policy.authed_remote \
-  --policy.url=https://<endpoint-managed-url> \
+  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 

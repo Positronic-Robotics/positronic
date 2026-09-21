@@ -219,7 +219,8 @@ if [ "$CODE" = "200" ]; then
   note "models: $RESP"
   # That was an HTTP route. Sessions are WebSockets, and a managed ingress can carry the two differently,
   # so the endpoint answers the same assertions the suite otherwise makes against a server of its own.
-  if POSITRONIC_ENDPOINT_URL="$SERVE_URL" AUTH_TOKEN="$AUTH_TOKEN" \
+  if POSITRONIC_ENDPOINT_WIRE=websocket_tls POSITRONIC_ENDPOINT_HOST="${SERVE_URL#https://}" \
+     POSITRONIC_ENDPOINT_PORT=443 AUTH_TOKEN="$AUTH_TOKEN" \
       uv run --directory "$SCRIPT_DIR/../.." --locked \
       pytest positronic/offboard/tests/test_server.py -m endpoint --no-cov >> "$LOG" 2>&1; then
     note "endpoint contract: OK"

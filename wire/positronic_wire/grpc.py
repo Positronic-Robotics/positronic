@@ -187,14 +187,6 @@ def target(host: str, port: int) -> str:
     return f'{wire.bracket_ipv6(host)}:{port}'
 
 
-def _channel(target: str, secure: bool) -> grpc.Channel:
-    options = _client_options()
-    if secure:
-        # No roots named: the channel verifies the edge against the system's own roots.
-        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=options)
-    return grpc.insecure_channel(target, options=options)
-
-
 def _probe_share(open_timeout: float) -> float:
     """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
 
@@ -203,11 +195,18 @@ def _probe_share(open_timeout: float) -> float:
     return min(_REFUSAL_PROBE_SEC, open_timeout / 2)
 
 
-def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | None:
-    """What gRPC says stopped the channel. The readiness future says only that the channel is not ready."""
+def _metadata(headers: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
+    """``headers`` as gRPC metadata. The keys are lower case, as the server's authorization check reads them."""
+    return tuple((key.lower(), value) for key, value in (headers or {}).items())
+
+
+def _connect_refusal(
+    channel: grpc.Channel, metadata: tuple[tuple[str, str], ...], timeout: float
+) -> grpc.RpcError | None:
+    """What gRPC says stopped a call on ``PROBE_PATH``, which a server that is up answers ``UNIMPLEMENTED``."""
     probe = channel.stream_stream(PROBE_PATH, request_serializer=None, response_deserializer=None)
     try:
-        next(probe(iter(()), timeout=timeout))
+        next(probe(iter(()), metadata=metadata, timeout=timeout))
     except grpc.RpcError as e:
         return e
     except StopIteration:
@@ -215,14 +214,13 @@ def _connect_refusal(channel: grpc.Channel, timeout: float) -> grpc.RpcError | N
     return None
 
 
-def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Channel:
-    """A channel to ``target`` that is ready. Raises ``wire.ConnectRefused`` when it is not within ``open_timeout``."""
-    channel = _channel(target, secure)
+def _ready_channel(channel: grpc.Channel, target: str, open_timeout: float) -> grpc.Channel:
+    """``channel``, once it is ready. Raises ``wire.ConnectRefused`` when it is not within ``open_timeout``."""
     deadline = time.monotonic() + open_timeout
     try:
         grpc.channel_ready_future(channel).result(timeout=open_timeout - _probe_share(open_timeout))
     except grpc.FutureTimeoutError as not_ready:
-        refusal = _connect_refusal(channel, timeout=max(0.0, deadline - time.monotonic()))
+        refusal = _connect_refusal(channel, (), timeout=max(0.0, deadline - time.monotonic()))
         # An ``UNIMPLEMENTED`` from the probe path means the channel is up: the readiness wait was too short.
         if refusal is not None and refusal.code() is grpc.StatusCode.UNIMPLEMENTED:
             return channel
@@ -235,36 +233,52 @@ def _ready_channel(target: str, secure: bool, open_timeout: float) -> grpc.Chann
 
 
 class GrpcClientWire(wire.ClientWire):
-    """The client side of the gRPC wire, whose port carries sessions alone."""
+    """The client side of the gRPC wire, whose port carries sessions alone. The channel is plaintext."""
 
-    SCHEME = 'grpc'
-    SECURE_SCHEME = 'grpcs'
+    NAME = 'grpc'
+    DEFAULT_PORT = 80
+
+    def session_url(self, address: wire.SessionAddress) -> str:
+        """gRPC dials a target, not a URL: ``host:port`` and the session route, for the log."""
+        query = f'?{address.query}' if address.query else ''
+        return f'{target(address.host, address.port)}{address.path}{query}'
 
     def api_url(self, address: wire.SessionAddress) -> None:
         """None: the HTTP API answers on the server's own port."""
         return None
 
+    def channel(self, target: str) -> grpc.Channel:
+        return grpc.insecure_channel(target, options=_client_options())
+
     def dial(
         self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> GrpcClientConnection:
-        """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when the channel does not open.
-
-        A TLS address dials a TLS edge in front of the server's plaintext port.
-        """
+        """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         dialled = target(address.host, address.port)
-        channel = _ready_channel(dialled, address.secure, open_timeout)
-        # gRPC metadata keys are lower case, as the server's authorization check reads them.
-        metadata = tuple((key.lower(), value) for key, value in (headers or {}).items()) + (
-            (SESSION_PATH_HEADER, address.path),
-            (SESSION_QUERY_HEADER, address.query),
-        )
+        channel = _ready_channel(self.channel(dialled), dialled, open_timeout)
+        metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
 
-    def probe(self, address: wire.SessionAddress, open_timeout: float) -> wire.Refusal | None:
-        """A channel that reaches readiness, or answers ``PROBE_PATH``, names a server that is up."""
+    def probe(
+        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """One call on ``PROBE_PATH``, carrying ``headers``: a server that is up answers it ``UNIMPLEMENTED``."""
+        channel = self.channel(target(address.host, address.port))
         try:
-            channel = _ready_channel(target(address.host, address.port), address.secure, open_timeout)
-        except wire.ConnectRefused as refused:
-            return refused.refusal
-        channel.close()
-        return None
+            answered = _connect_refusal(channel, _metadata(headers), open_timeout)
+        finally:
+            channel.close()
+        if answered is None or answered.code() is grpc.StatusCode.UNIMPLEMENTED:
+            return None
+        return _refusal(answered)
+
+
+class GrpcTlsClientWire(GrpcClientWire):
+    """The gRPC wire through a TLS edge in front of the server's plaintext port."""
+
+    NAME = 'grpc_tls'
+    DEFAULT_PORT = 443
+
+    def channel(self, target: str) -> grpc.Channel:
+        # No roots named: the channel verifies the edge against the system's own roots.
+        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=_client_options())

@@ -68,13 +68,18 @@ def _refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.R
 class WebsocketClientWire(wire.ClientWire):
     """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
 
+    NAME = 'websocket'
+    DEFAULT_PORT = 80
+    # The URL schemes this wire writes: the session upgrades from HTTP, and the API answers on it.
     SCHEME = 'ws'
-    SECURE_SCHEME = 'wss'
-    # A bare host names this wire, and so does an http(s) URL: the session upgrades from HTTP.
-    ALIASES = (wire.Scheme('', secure=False), wire.Scheme('http', secure=False), wire.Scheme('https', secure=True))
+    API_SCHEME = 'http'
+
+    def session_url(self, address: wire.SessionAddress) -> str:
+        query = f'?{address.query}' if address.query else ''
+        return f'{self.SCHEME}://{self.netloc(address)}{address.path}{query}'
 
     def api_url(self, address: wire.SessionAddress) -> str:
-        return f'{"https" if address.secure else "http"}://{address.netloc}{wire.API_PATH}'
+        return f'{self.API_SCHEME}://{self.netloc(address)}{wire.API_PATH}'
 
     def dial(
         self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -95,15 +100,30 @@ class WebsocketClientWire(wire.ClientWire):
             raise wire.ConnectRefused(_refusal_of(e), f'{e} (connecting to {url})') from e
         return WebsocketClientConnection(websocket)
 
-    def probe(self, address: wire.SessionAddress, open_timeout: float) -> wire.Refusal | None:
-        """A handshake on the host's root, which no server upgrades: a status of any kind is an answer."""
-        root = address._replace(path='', query='')
+    def probe(
+        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """A handshake on the host's root, which no server upgrades.
+
+        The server refuses that upgrade with 403, and nothing else answers 403 there: an edge that refuses a
+        credential answers 401. So 403 is the server, and every other status reads as ``dial`` reads it.
+        """
+        root = f'{self.SCHEME}://{self.netloc(address)}'
         try:
-            connect(self.session_url(root), open_timeout=open_timeout).close()
+            connect(root, open_timeout=open_timeout, additional_headers=headers).close()
         except InvalidStatus as e:
-            # Only a gateway status names an edge with nothing behind it; every other one is the server.
-            refusal = _status_refusal(e.response.status_code)
-            return refusal if refusal is wire.Refusal.COLD else None
+            if e.response.status_code == HTTPStatus.FORBIDDEN:
+                return None
+            return _status_refusal(e.response.status_code)
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             return _refusal_of(e)
         return None
+
+
+class WebsocketTlsClientWire(WebsocketClientWire):
+    """The websocket wire over TLS: the same session behind an edge that terminates it."""
+
+    NAME = 'websocket_tls'
+    DEFAULT_PORT = 443
+    SCHEME = 'wss'
+    API_SCHEME = 'https'

@@ -24,6 +24,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 from positronic_wire import wire
+from positronic_wire.websocket import WebsocketClientWire
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
@@ -227,7 +228,8 @@ def main(
 
     server, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
     try:
-        session = InferenceClient.from_url(f'ws://127.0.0.1:{port}').new_session()
+        address = wire.SessionAddress('127.0.0.1', port, wire.SESSION_PATH, '')
+        session = InferenceClient(WebsocketClientWire(), address).new_session()
         try:
             replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed
             rows = replay(session, payloads, compress_images)

@@ -1,9 +1,12 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries the ``protocol`` frames as opaque bytes and reads none of them.
+A wire carries the ``protocol`` frames as opaque bytes and reads none of them. Nothing here reads a URL:
+a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
+spells whatever its library takes.
 """
 
 import abc
+import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
 from typing import ClassVar, NamedTuple
@@ -16,9 +19,13 @@ MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
 
 
-def default_port(secure: bool) -> int:
-    """The port a URL naming none opens on."""
-    return 443 if secure else 80
+def session_path(model: str = '') -> str:
+    """The route a session on ``model`` opens on; the model the server pinned when ``model`` is empty.
+
+    The id is percent-encoded as a path, so an id that is itself a path (a HuggingFace repo) keeps its
+    slashes as separators and the server decodes the rest.
+    """
+    return f'{SESSION_PATH}/{urllib.parse.quote(model, safe="/")}' if model else SESSION_PATH
 
 
 def bracket_ipv6(host: str) -> str:
@@ -27,24 +34,17 @@ def bracket_ipv6(host: str) -> str:
 
 
 class SessionAddress(NamedTuple):
-    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax."""
+    """Where one session opens. ``host`` is raw: each wire spells it for its own syntax.
+
+    ``path`` is ``session_path(model)``, and ``query`` carries the session params as written: the server
+    reads each value as a JSON literal, and only whoever wrote the query knows whether ``true`` means the
+    bool or the string.
+    """
 
     host: str
     port: int
     path: str
     query: str
-    secure: bool
-
-    @property
-    def netloc(self) -> str:
-        """``host:port``, less the port a URL at this TLS setting defaults to."""
-        host = bracket_ipv6(self.host)
-        return host if self.port == default_port(self.secure) else f'{host}:{self.port}'
-
-    def url(self, scheme: str) -> str:
-        """This session as a URL on ``scheme``."""
-        query = f'?{self.query}' if self.query else ''
-        return f'{scheme}://{self.netloc}{self.path}{query}'
 
 
 # The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
@@ -79,29 +79,25 @@ class Endpoint(NamedTuple):
     port: int
 
 
-class Scheme(NamedTuple):
-    """A URL scheme that selects a wire, and whether it names TLS."""
-
-    text: str
-    secure: bool
-
-
 class ClientWire(abc.ABC):
-    """The client side of one wire: the schemes that select it, how it spells a session, and how it dials one."""
+    """The client side of one wire: what it is called, how it spells a session, and how it dials one.
 
-    # The URL scheme that selects this wire, and the one that selects it over TLS.
-    SCHEME: ClassVar[str]
-    SECURE_SCHEME: ClassVar[str]
-    # Other schemes that select this wire. Each one names whether it carries TLS.
-    ALIASES: ClassVar[tuple[Scheme, ...]] = ()
+    A wire over TLS is a member of its own, not a flag on the plain one.
+    """
 
-    def schemes(self) -> tuple[Scheme, ...]:
-        """Every URL scheme that selects this wire."""
-        return (Scheme(self.SCHEME, secure=False), Scheme(self.SECURE_SCHEME, secure=True), *self.ALIASES)
+    # The name a caller selects this wire by.
+    NAME: ClassVar[str]
+    # The port a session opens on where the caller names none, and the one a URL leaves out.
+    DEFAULT_PORT: ClassVar[int]
 
+    def netloc(self, address: SessionAddress) -> str:
+        """``host:port``, less the port this wire defaults to."""
+        host = bracket_ipv6(address.host)
+        return host if address.port == self.DEFAULT_PORT else f'{host}:{address.port}'
+
+    @abc.abstractmethod
     def session_url(self, address: SessionAddress) -> str:
-        """``address`` as this wire spells it."""
-        return address.url(self.SECURE_SCHEME if address.secure else self.SCHEME)
+        """``address`` as this wire spells it, for the dial and for the log."""
 
     @abc.abstractmethod
     def api_url(self, address: SessionAddress) -> str | None:
@@ -114,11 +110,14 @@ class ClientWire(abc.ABC):
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
 
     @abc.abstractmethod
-    def probe(self, address: SessionAddress, open_timeout: float) -> Refusal | None:
+    def probe(self, address: SessionAddress, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:
         """Whether a server answers at ``address``, without opening a session.
 
-        ``None`` when one does. A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a
-        backend still starting or a port nothing answers on, ``FINAL`` for one no retry reaches.
+        ``headers`` are the ones ``dial`` sends: an edge that authenticates on them lets the probe through to
+        the server behind it, so the probe wakes what a session would reach. ``None`` when a server answers.
+        A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting or
+        a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for a refusal
+        no retry reaches.
         """
 
 
