@@ -88,9 +88,9 @@ REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 class RegistryCredential(BaseModel):
     """The username and password that open the registry one image endpoint names.
 
-    The password is a value here, because this is the model a request carries. A caller states the
-    FILE it is in and never the password itself: `credential_from_file` reads that file, and it is
-    the only thing in this package that opens one.
+    A request carries this model, so it holds the password as a value and no field of it names a
+    path. `password_from_file` opens the file a caller states, and nothing else in this package
+    opens one.
     """
 
     model_config = INPUT_MODEL_CONFIG

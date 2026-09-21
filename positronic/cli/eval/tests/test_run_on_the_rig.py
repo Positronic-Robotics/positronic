@@ -236,8 +236,7 @@ BROKEN_CREDENTIALS = {
 def a_plan_with_a_broken_credential(how: str) -> str:
     """A plan carrying a password a caller pasted into it, where the parser would quote it back.
 
-    A plan names a password file rather than a password, so this is a caller's mistake rather than
-    the documented shape. The refusal still prints none of it.
+    A plan names a password file, so this is a caller's mistake. The refusal still prints none of it.
     """
     broken = BROKEN_CREDENTIALS[how]
     return (
