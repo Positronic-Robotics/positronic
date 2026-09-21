@@ -193,15 +193,20 @@ def test_each_member_declares_the_address_it_dials():
 @pytest.mark.parametrize(
     ('raised', 'refusal'),
     [
+        # Reached a live socket: a server that is starting or restarting raises each of these.
         (TimeoutError('handshake timed out'), wire.Refusal.COLD),
         (ConnectionResetError(104, 'Connection reset by peer'), wire.Refusal.COLD),
+        (ConnectionAbortedError(103, 'Software caused connection abort'), wire.Refusal.COLD),
+        (BrokenPipeError(32, 'Broken pipe'), wire.Refusal.COLD),
         (FileNotFoundError(2, 'No such file or directory'), wire.Refusal.COLD),
+        # This process's own, and no retry reaches any of them.
         (PermissionError(13, 'Permission denied'), wire.Refusal.FINAL),
+        (OSError(24, 'Too many open files'), wire.Refusal.FINAL),
     ],
 )
 def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raised, refusal, tmp_path):
-    """A timeout and a reset reached the socket, so they read as they do on a port. An absent path is
-    cold because a misspelt one and a socket nobody has bound yet look the same from here."""
+    """A connection-level failure reached the socket, so it reads as it does on a port. An absent path
+    is cold because a misspelt one and a socket nobody has bound yet look the same from here."""
     address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.session_path(), '')
 
     with (
@@ -211,6 +216,21 @@ def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raise
         websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
     assert refused.value.refusal is refusal
     assert refused.value.__cause__ is raised
+
+
+def test_a_refusal_from_a_path_that_is_not_a_socket_is_final(tmp_path):
+    """A path holding a regular file is refused in the same words as a socket nobody listens on, so
+    the refusal reads the path: only one of the two can ever come good."""
+    not_a_socket = tmp_path / 'regular.file'
+    not_a_socket.write_text('not a socket')
+    address = wire.UnixSocketAddress(not_a_socket, wire.session_path(), '')
+
+    with (
+        patch('positronic_wire.websocket.unix_connect', side_effect=ConnectionRefusedError(111, 'Connection refused')),
+        pytest.raises(wire.ConnectRefused) as refused,
+    ):
+        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
+    assert refused.value.refusal is wire.Refusal.FINAL
 
 
 def test_a_socket_address_refuses_a_relative_path():

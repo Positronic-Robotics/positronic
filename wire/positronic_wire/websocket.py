@@ -193,37 +193,39 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
         return address.uds
 
     @staticmethod
-    def _socket_may_still_appear(uds: Path, raised: OSError) -> bool:
-        """Whether a failed dial is a co-located server that has not bound its socket yet.
+    def _a_retry_can_reach_it(uds: Path, raised: OSError) -> bool:
+        """Whether a failed dial can still come good, or is settled.
 
-        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting
-        for it spends the whole deadline on an answer that will not change. A refusal then reads the
-        path, which tells a restarting server from a path naming something that is not a socket.
+        A connection-level failure means the dial reached a live socket and the server behind it was
+        not ready: it accepted and closed, reset the connection, broke the pipe, or never finished the
+        handshake. A co-located server that is starting or restarting raises each of them in turn.
+
+        A refusal is the exception, and reads the path: a path holding something that is not a socket
+        is refused in the same words as a socket nobody listens on. An absent path can still become
+        one. Every other ``OSError`` is this process's own — a descriptor limit, a refused permission —
+        and no retry reaches it.
         """
-        if not isinstance(raised, FileNotFoundError | ConnectionRefusedError):
-            return False
-        try:
-            return stat.S_ISSOCK(os.stat(uds).st_mode)
-        except FileNotFoundError:
-            return True
-        except OSError:
-            return False
+        if isinstance(raised, ConnectionRefusedError | FileNotFoundError):
+            try:
+                return stat.S_ISSOCK(os.stat(uds).st_mode)
+            except FileNotFoundError:
+                return True
+            except OSError:
+                return False
+        return isinstance(raised, ConnectionError | TimeoutError)
 
     def _refusal(
         self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.UnixSocketAddress
     ) -> wire.Refusal:
-        """A path that may still become a socket is cold; a path that cannot is final.
+        """A dial a retry can still reach is cold; one it cannot is final.
 
-        The base wire reads any ``OSError`` as cold, which is right for a port a backend will answer on and
-        wrong for a path: a path holding something that is not a socket and a refused permission never
-        change, so retrying one spends the whole connect deadline on an answer that is already final. A
-        handshake that timed out or was reset reached the socket, so the server rather than the path was
-        not ready, and the base reads that one correctly.
+        The base wire reads any ``OSError`` as cold, which is right for a port a backend will answer on
+        and wrong for a path: a path holding something that is not a socket, a refused permission and a
+        spent descriptor limit never change, so retrying one spends the whole connect deadline on an
+        answer that is already final.
         """
-        if isinstance(raised, TimeoutError | ConnectionResetError):
-            return super()._refusal(raised, address)
         if isinstance(raised, OSError) and not isinstance(raised, InvalidHandshake | ConnectionClosed):
-            cold = self._socket_may_still_appear(address.uds, raised)
+            cold = self._a_retry_can_reach_it(address.uds, raised)
             return wire.Refusal.COLD if cold else wire.Refusal.FINAL
         return super()._refusal(raised, address)
 
