@@ -42,7 +42,9 @@ class FakeYam(yam._FakeYam):
 class Rig:
     def __init__(self):
         self.vendor = FakeYam()
-        self.driver = yam.Robot(connect=lambda channel, sim: self.vendor, park_after_idle_s=1.0)
+        # positronic#772 widened the factory with the station's gravity-compensation factors; this rig
+        # names none, so the vendor keeps i2rt's own.
+        self.driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: self.vendor, park_after_idle_s=1.0)
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
         self.states = RecordingEmitter()
