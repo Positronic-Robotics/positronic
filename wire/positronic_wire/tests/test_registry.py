@@ -4,6 +4,8 @@ import pytest
 from positronic_wire import grpc, registry, websocket, wire
 
 
+# rules-allow: hardcoded-keys — the names are spelled as a caller types them, so the test pins them; reading
+# each member's NAME would make the test and the registry agree whatever the names became.
 def test_every_member_is_registered_under_its_own_name():
     assert registry.CLIENT_WIRES == {
         'websocket': registry.CLIENT_WIRES['websocket'],
