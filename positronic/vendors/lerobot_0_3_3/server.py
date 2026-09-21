@@ -14,11 +14,11 @@ from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import Model, ModelSource, Pipeline
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, _detect_device, warm_observation
@@ -101,8 +101,8 @@ def pipeline(
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
     ee_frame: geom.Transform3D | None = None,
-) -> Pipeline:
-    return Pipeline(
+) -> PolicyDeployment:
+    return PolicyDeployment(
         source=source,
         local=Sequential(StopOnFault(), ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
         codec=codecs.compose_data(

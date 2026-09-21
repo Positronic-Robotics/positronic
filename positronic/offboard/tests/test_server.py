@@ -24,13 +24,13 @@ from positronic.offboard.client import InferenceClient, InferenceSession, _Conne
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
 from positronic.offboard.websocket_wire import WebsocketClientConnection
 from positronic.policy import Codec
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
-from positronic.policy.spec import Model, ModelSource, Pipeline
 
 
 class _StubSource(ModelSource):
@@ -98,14 +98,14 @@ class _UnbindableWire(wire.Wire):
 
 def test_a_server_with_no_wire_refuses_to_serve(make_mock_model):
     """A server that binds nothing answers nobody, so it raises instead of reporting itself ready."""
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     with pytest.raises(ValueError, match='at least one wire'):
         server.serve([], on_ready=lambda: pytest.fail('it reported ready with no wire bound'))
 
 
 def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_model):
     """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = _FailingWire(_A_MOMENT_IDLE)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -120,7 +120,7 @@ def _rebind_and_release(host: str, port: int) -> None:
 
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_model):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -130,7 +130,7 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_mo
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_model):
     """A wire that served and stopped starts again with a fresh socket, and a rollback before it serves frees it."""
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
     serving = threading.Thread(target=server.serve, args=([bound],))
     serving.start()
@@ -179,7 +179,7 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
 
 
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_model):
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
     asyncio.run(bound.start(MagicMock(), lambda _headers: True))
     try:
@@ -192,7 +192,7 @@ def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(mak
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_model, caplog):
     """No wire ends in silence: one failure raises out of ``serve``, and ``serve`` logs every other one."""
-    server = PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
         with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):
             server.serve([_FailingWire(0.05), _FailingWire(0.1)])
@@ -202,7 +202,8 @@ def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_mod
 def test_an_idle_server_stops_itself(make_mock_model):
     """The idle watchdog ends every wire, and ``serve`` returns with no ``shutdown`` call."""
     server = PolicyServer(
-        Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)), idle_timeout_min=_A_MOMENT_IDLE / 60
+        PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)),
+        idle_timeout_min=_A_MOMENT_IDLE / 60,
     )
     serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
     serving.start()
@@ -213,7 +214,7 @@ def test_an_idle_server_stops_itself(make_mock_model):
 @pytest.fixture
 def stub_server(start_server, make_mock_model) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, server, _ = start_server(Pipeline(_StubSource(policy), ChunkedSchedule(fps=10)))
+    host, port, server, _ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)))
     return host, port, server, policy
 
 
@@ -290,7 +291,7 @@ class _LatestSource(ModelSource):
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_model):
     source = _LatestSource(make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
-    host, port, *_ = start_server(Pipeline(source, ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(PolicyDeployment(source, ChunkedSchedule(fps=10)))
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
     client = InferenceClient.from_url(f'{host}:{port}')
@@ -319,7 +320,7 @@ class _ProgressSource(_StubSource):
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_model):
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, *_ = start_server(Pipeline(_ProgressSource(policy), ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(PolicyDeployment(_ProgressSource(policy), ChunkedSchedule(fps=10)))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
     ws = connect(f'ws://{host}:{port}/api/v1/session/other')
@@ -365,7 +366,9 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_model) -> tuple[str, int, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, *_ = start_server(Pipeline(_StubSource(policy), ChunkedSchedule(fps=10), codec=_IdentityCodec()))
+    host, port, *_ = start_server(
+        PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10), codec=_IdentityCodec())
+    )
     return host, port, policy
 
 
@@ -422,7 +425,7 @@ def test_warmup_failure_propagates_without_closing_the_model(make_mock_model):
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = Pipeline(_StubSource(stub), ChunkedSchedule(fps=10), codec=_IdentityCodec())
+    pipeline = PolicyDeployment(_StubSource(stub), ChunkedSchedule(fps=10), codec=_IdentityCodec())
     host, port, *_ = start_server(pipeline)
     client = InferenceClient.from_url(f'{host}:{port}')
     session = client.new_session()
@@ -440,7 +443,7 @@ class _ScriptedModel(Model):
 
 
 def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0), pad_start: bool = True):
-    return Pipeline(
+    return PolicyDeployment(
         source,
         Sequential(TemporalStack(keys=('x',), offsets_sec=offsets, pad_start=pad_start), ChunkedSchedule(fps=10)),
     )
@@ -480,7 +483,7 @@ def test_session_params_coerce_json_values(param_server):
 
 
 def _fps_pipe(source: ModelSource, fps: float = 10.0):
-    return Pipeline(source, ChunkedSchedule(fps=10), codec=ActionTimestamp(fps=fps))
+    return PolicyDeployment(source, ChunkedSchedule(fps=10), codec=ActionTimestamp(fps=fps))
 
 
 def test_session_param_retunes_the_served_remote_half(start_server):
@@ -576,7 +579,7 @@ def authed_endpoint(start_server, make_mock_model) -> tuple[str, str]:
     if _LIVE_ENDPOINT:
         return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, *_ = start_server(Pipeline(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    host, port, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     return f'{host}:{port}', _TOKEN
 
 
@@ -677,14 +680,14 @@ def test_server_without_a_token_serves_open(stub_server):
 )
 def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, token):
     with pytest.raises(ValueError, match='ASCII'):
-        PolicyServer(Pipeline(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)), auth_token=token)
+        PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)), auth_token=token)
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, *_ = start_server(Pipeline(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    host, port, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'
@@ -698,7 +701,7 @@ def test_shutdown_closes_the_loaded_model(start_server, make_mock_model):
     model = make_mock_model([], {})
     closed = threading.Event()
     model.close.side_effect = closed.set
-    served = start_server(Pipeline(_StubSource(model), ChunkedSchedule(fps=10)))
+    served = start_server(PolicyDeployment(_StubSource(model), ChunkedSchedule(fps=10)))
     session = InferenceClient.from_url(f'{served.host}:{served.port}').new_session()
     session.close()
     model.close.assert_not_called()

@@ -27,11 +27,11 @@ from positronic.offboard import grpc_wire, wire
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, bearer
+from positronic.offboard.spec import ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served, StartServer
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
-from positronic.policy.spec import ModelSource, Pipeline
 
 _TOKEN = 'test-secret-token'
 
@@ -44,7 +44,7 @@ def grpc_url(served: Served, path: str = '') -> str:
 def both_wires(start_server: StartServer, make_mock_model) -> tuple[Served, MagicMock]:
     """A server that offers both wires over one policy."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(Pipeline(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
     return served, policy
 
 
@@ -127,7 +127,7 @@ def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
 def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_server, make_mock_model):
     """A model the source refuses fails in the handshake, before the session serves anything."""
     policies = {'alpha': make_mock_model([{'action': [1]}], {'model_name': 'alpha'})}
-    served = start_server(Pipeline(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
     with pytest.raises(RuntimeError, match='Unknown model'):
         InferenceClient.from_url(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
 
@@ -137,7 +137,7 @@ def test_the_session_path_names_the_model(start_server, make_mock_model):
         'alpha': make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'}),
         'beta': make_mock_model([{'action': ['beta']}], {'model_name': 'beta'}),
     }
-    served = start_server(Pipeline(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
     session = InferenceClient.from_url(grpc_url(served, f'{wire.SESSION_PATH}/beta')).new_session()
     try:
         assert session.metadata['model_name'] == 'beta'
@@ -147,7 +147,9 @@ def test_the_session_path_names_the_model(start_server, make_mock_model):
 
 
 def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0)):
-    return Pipeline(source, Sequential(TemporalStack(keys=('x',), offsets_sec=offsets), ChunkedSchedule(fps=10)))
+    return PolicyDeployment(
+        source, Sequential(TemporalStack(keys=('x',), offsets_sec=offsets), ChunkedSchedule(fps=10))
+    )
 
 
 def test_the_query_carries_the_session_params(start_server, make_mock_model):
@@ -166,7 +168,7 @@ def test_the_query_carries_the_session_params(start_server, make_mock_model):
 def authed_server(start_server: StartServer, make_mock_model) -> Served:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(
-        Pipeline(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, auth_token=_TOKEN
+        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, auth_token=_TOKEN
     )
     return served
 
@@ -463,7 +465,9 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_mod
     assert grpc_wire._target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
     policy = make_mock_model([{'action': [4]}], {'model_name': 'stub'})
-    served = start_server(Pipeline(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, host='::1')
+    served = start_server(
+        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, host='::1'
+    )
     session = InferenceClient.from_url(f'grpc://[{served.host}]:{served.grpc_port}').new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
@@ -528,7 +532,7 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
     """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``, and the session is lost."""
     monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(grpc_wire._MESSAGE_SIZE_OPTIONS))
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(Pipeline(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
     with pytest.raises(wire.PeerDisconnected, match='Too many pings'):
         _silent_then_infer(served)
 

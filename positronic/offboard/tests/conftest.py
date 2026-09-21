@@ -7,8 +7,8 @@ import pytest
 
 from positronic.offboard import grpc_wire, websocket_wire, wire
 from positronic.offboard.server import PolicyServer
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.spec import Model, ModelSource, Pipeline
 
 
 class Served(NamedTuple):
@@ -105,7 +105,7 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, *_ = start_server(Pipeline(DictSource({'default': mock_model}), ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(PolicyDeployment(DictSource({'default': mock_model}), ChunkedSchedule(fps=10)))
     return host, port
 
 
@@ -113,5 +113,5 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
 def multi_model_server(
     start_server: StartServer, mock_model_registry: dict[str, MagicMock]
 ) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, *_ = start_server(Pipeline(DictSource(mock_model_registry), ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(PolicyDeployment(DictSource(mock_model_registry), ChunkedSchedule(fps=10)))
     return host, port, mock_model_registry

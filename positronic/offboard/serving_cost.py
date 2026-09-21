@@ -16,7 +16,7 @@ Usage
 import json
 import threading
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -34,13 +34,13 @@ from positronic.dataset.episode import Episode
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
-from positronic.policy.base import Policy
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy.base import Obs, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.remote import prepare_obs
 from positronic.policy.sequential import Sequential
-from positronic.policy.spec import Model, ModelSource, Pipeline
 
 
 class InstantChunk(Model):
@@ -96,7 +96,9 @@ def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> It
         yield {**obs, keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
 
 
-def capture(ticks: Iterable[dict[str, Any]], stack: Policy, model: Model, requests: int) -> list[dict[str, Any]]:
+def capture(
+    ticks: Iterable[dict[str, Any]], stack: Policy, model: Callable[[Obs], Any], requests: int
+) -> list[dict[str, Any]]:
     """Run the rig-side stack over ``ticks`` and collect the first ``requests`` payloads it sends."""
     sent: list[dict[str, Any]] = []
 
@@ -222,7 +224,7 @@ def main(
         raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
     print(f'captured {len(payloads)} payload(s) off episode {episode}')
 
-    server, thread, port = serve(Pipeline(InstantSource(chunk_rows), stack, compress_images=compress_images))
+    server, thread, port = serve(PolicyDeployment(InstantSource(chunk_rows), stack, compress_images=compress_images))
     try:
         address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')
         session = InferenceClient(WebsocketClientWire(), address).new_session()

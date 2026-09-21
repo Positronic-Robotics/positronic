@@ -12,6 +12,7 @@ from positronic.geom import Transform3D
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, websocket_wire, wire
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
@@ -19,7 +20,7 @@ from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
-from positronic.policy.spec import Model, Pipeline, from_spec
+from positronic.policy.spec import from_spec
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'args': {'fps': 10}}}
 
@@ -320,7 +321,7 @@ class FixedModel(Model):
 def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
-        pipeline = Pipeline(
+        pipeline = PolicyDeployment(
             DictSource({'050000': model}),
             local if local is not None else Sequential(StopOnFault(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
@@ -510,7 +511,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 def test_pipeline_rejects_frame_conversion_on_both_sides():
     local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        Pipeline(DictSource({'050000': FixedModel()}), local, codec=ChangeEEFrame(Transform3D.identity))
+        PolicyDeployment(DictSource({'050000': FixedModel()}), local, codec=ChangeEEFrame(Transform3D.identity))
 
 
 @pytest.fixture
@@ -579,7 +580,9 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(Pipeline(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(
+        PolicyDeployment(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc'
+    )
     url = (
         f'http://{server.host}:{server.port}'
         if transport == 'websocket'

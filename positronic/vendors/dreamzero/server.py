@@ -19,10 +19,11 @@ from websockets.exceptions import ConnectionClosed
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.offboard.spec import ModelSource
 from positronic.policy import Codec, Layer, Policy, Session
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION, RestrictImageSize
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.spec import remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs, roboarena

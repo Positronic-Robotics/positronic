@@ -17,11 +17,12 @@ from pimm.logging import init_logging
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
+from positronic.offboard.spec import ModelSource
 from positronic.policy import Policy, Session
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.spec import remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import codecs

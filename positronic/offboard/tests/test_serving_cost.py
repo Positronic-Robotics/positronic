@@ -7,7 +7,7 @@ from positronic import keys
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.serving_cost import InstantChunk, InstantSource, capture, replay, rig_stack
-from positronic.policy.spec import Pipeline
+from positronic.offboard.spec import PolicyDeployment
 
 CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 
@@ -32,7 +32,7 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
     payloads = capture(_ticks(12), stack, model, requests=2)
     assert payloads, 'the stack sent nothing'
 
-    host, port, *_ = start_server(Pipeline(InstantSource(2), stack, compress_images=True))
+    host, port, *_ = start_server(PolicyDeployment(InstantSource(2), stack, compress_images=True))
     session = InferenceClient.from_url(f'ws://{host}:{port}').new_session()
     try:
         rows = replay(session, payloads, compress_images=True)

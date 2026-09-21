@@ -15,12 +15,13 @@ from websockets.sync.client import connect
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready
+from positronic.offboard.spec import ModelSource
 from positronic.policy import Codec, Policy, Session
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Runtime
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.spec import remote
 from positronic.utils.serialization import serialize
 from positronic.vendors.galaxea import codecs, protocol
 

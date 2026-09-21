@@ -9,11 +9,12 @@ import pos3
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
+from positronic.offboard.spec import ModelSource, PolicyDeployment
 from positronic.policy import Codec, Policy
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, Pipeline, remote
+from positronic.policy.spec import remote
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, warm_observation
@@ -60,7 +61,7 @@ lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
 # No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
 # so none has a transform to declare.
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipeline(codec: Codec, source: ModelSource) -> Pipeline:
+def pipeline(codec: Codec, source: ModelSource) -> PolicyDeployment:
     return StopOnFault() | ChunkedSchedule() | RestrictImageSize(512, 512) | remote | codec | source
 
 

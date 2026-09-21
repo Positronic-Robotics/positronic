@@ -13,10 +13,11 @@ import configuronic as cfn
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
+from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import Policy, Session
 from positronic.policy.base import DelegatingSession, Layer, Runtime
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.spec import Pipeline, PolicySource, remote
+from positronic.policy.spec import PolicySource, remote
 
 # The smallest trajectory a served session can answer: one action, at the start of the chunk.
 CHUNK = [{keys.ACTION_TIMESTAMP: 0.0}]
@@ -67,7 +68,7 @@ POLICY = StubPolicy()
 
 
 @cfn.config(delay_sec=0.0)
-def pipeline(delay_sec: float) -> Pipeline:
+def pipeline(delay_sec: float) -> PolicyDeployment:
     return ChunkedSchedule() | remote | Delay(delay_sec) | PolicySource(POLICY)
 
 

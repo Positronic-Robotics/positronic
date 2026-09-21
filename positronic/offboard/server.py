@@ -1,4 +1,4 @@
-"""The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
+"""The inference server: serves a policy pipeline (see ``positronic.offboard.spec``) over the offboard protocol."""
 
 import asyncio
 import hmac
@@ -20,8 +20,8 @@ from starlette.datastructures import QueryParams
 
 from positronic import telemetry
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.base import Obs
-from positronic.policy.spec import Model, ModelSource, Pipeline
 
 from . import grpc_wire, protocol, server_wire, websocket_wire
 from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
@@ -201,17 +201,20 @@ class PolicyServer:
     """Serve a callable model with explicit server codecs and a declared client processor stack.
 
     A config-launched pipeline accepts session parameters as dotted configuration overrides.
-    An instantiated Pipeline refuses session parameters. The model source is fixed at launch;
+    An instantiated PolicyDeployment refuses session parameters. The model source is fixed at launch;
     the default checkpoint is resolved and pinned at startup.
     """
 
     def __init__(
-        self, pipeline: cfn.Config | Pipeline, idle_timeout_min: float | None = None, auth_token: str | None = None
+        self,
+        pipeline: cfn.Config | PolicyDeployment,
+        idle_timeout_min: float | None = None,
+        auth_token: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
-        assert isinstance(self._pipeline, Pipeline), (
-            f'PolicyServer requires a Pipeline, got {type(self._pipeline).__name__}'
+        assert isinstance(self._pipeline, PolicyDeployment), (
+            f'PolicyServer requires a PolicyDeployment, got {type(self._pipeline).__name__}'
         )
         self._pipeline.local.to_spec()
         self._source = self._pipeline.source
@@ -264,14 +267,14 @@ class PolicyServer:
     async def get_models(self) -> dict:
         return {wire.MODELS_KEY: self._source.get_models()}
 
-    def _session_pipeline(self, params: dict[str, Any]) -> Pipeline:
+    def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
         if not params:
             return self._pipeline
         if self._pipeline_cfg is None:
             raise ValueError(
                 'Session params require a config-launched pipeline; this server was launched from an '
-                'instantiated Pipeline'
+                'instantiated PolicyDeployment'
             )
         # ``override_data``: values came off the wire, so a string stays a string and never names a
         # Python object to import.

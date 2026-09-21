@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from positronic.policy.spec import Model
+from positronic.offboard.spec import Model
 
 logger = logging.getLogger(__name__)
 

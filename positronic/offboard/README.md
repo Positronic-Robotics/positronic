@@ -7,7 +7,7 @@ This package implements the protocol and utilities for offboard policy inference
 The protocol connects clients to callable models. ACT uses a server-declared processor stack on the
 client, with codecs configured separately on either side of the connection.
 
-TODO: Migrate the remaining vendor configurations to callable models and explicit `Pipeline` arguments.
+TODO: Migrate the remaining vendor configurations to callable models and explicit `PolicyDeployment` arguments.
 
 ### Wires
 
@@ -264,7 +264,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 ## Classes
 
 ### `server.PolicyServer`
-Serves a `Pipeline` with explicit `source`, `local`, and `codec` arguments.
+Serves a `PolicyDeployment` with explicit `source`, `local`, and `codec` arguments.
 `ModelSource.get_models()` backs the catalogue, `resolve()` selects a checkpoint, and `load()` returns
 a callable `Model` that owns the loaded resources.
 Server codecs wrap its call; the client receives one stack spec containing its processors and codecs.
@@ -275,10 +275,10 @@ from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.spec import Pipeline
+from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 
-pipeline = Pipeline(
+pipeline = PolicyDeployment(
     source=my_model_source,
     local=Sequential(
         StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
