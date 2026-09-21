@@ -15,7 +15,7 @@ loaded, so a session cut short still holds its results.
 | `link_probe sink` | when the first byte landed, when the last one did, and every read between |
 | `link_probe source` | how long this end's own write took to return |
 | `link_probe watch` | the receive queue over the transfer |
-| `serving_cost --server_url` | one round trip, divided by the phases the server reports |
+| `serving_cost --server_host` | one round trip, divided by the phases the server reports |
 
 `link_probe` carries no policy and no model. `serving_cost` needs a served handshake, so it runs last.
 
@@ -108,10 +108,10 @@ undrained receiver shows up in `send_ms` on one and in `recv_ms` on the other.
 $PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served.jsonl
 
 uv run --locked python -m positronic.offboard.serving_cost \
-    --dataset.path=$EPISODE --server_url=wss://$SERVER/api/v1/session \
+    --dataset.path=$EPISODE --server_host=$SERVER --server_wire=websocket_tls \
     --requests=20 --out=served-ws.json
 uv run --locked python -m positronic.offboard.serving_cost \
-    --dataset.path=$EPISODE --server_url=grpc://$SERVER:9000/api/v1/session \
+    --dataset.path=$EPISODE --server_host=$SERVER --server_wire=grpc --server_port=9000 \
     --requests=20 --out=served-grpc.json
 ```
 
