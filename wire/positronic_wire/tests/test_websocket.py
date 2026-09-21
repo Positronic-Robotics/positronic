@@ -178,3 +178,11 @@ def test_the_socket_wire_refuses_an_address_naming_no_socket():
 
     with pytest.raises(ValueError, match='names none'):
         websocket.WebsocketUnixClientWire().dial(address, None, 1.0)
+
+
+def test_the_socket_wire_refuses_a_relative_socket_path():
+    """`--policy.uds=policy.sock` reaches here as a relative path, and the server refuses to bind one."""
+    address = wire.SessionAddress('localhost', 8000, wire.session_path(), '', Path('policy.sock'))
+
+    with pytest.raises(ValueError, match='relative socket path'):
+        websocket.WebsocketUnixClientWire().dial(address, None, 1.0)

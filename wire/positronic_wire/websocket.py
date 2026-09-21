@@ -198,6 +198,10 @@ class WebsocketUnixClientWire(WebsocketClientWire):
     def _socket(cls, address: wire.SessionAddress) -> Path:
         if address.uds is None:
             raise ValueError(f'{cls.NAME} dials a Unix socket; SessionAddress.uds names none')
+        # A relative path is resolved against the directory this process was started from, so it names a
+        # different socket to each caller — and the server refuses to bind one for that reason.
+        if not address.uds.is_absolute():
+            raise ValueError(f'{address.uds!r} is a relative socket path; dial an absolute one')
         return address.uds
 
     def _connect(self, address: wire.SessionAddress, **settings) -> Connection:
