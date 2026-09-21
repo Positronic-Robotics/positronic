@@ -1,5 +1,6 @@
 """The client side of the websocket wire."""
 
+import socket
 import ssl
 from collections.abc import Mapping
 from http import HTTPStatus
@@ -46,18 +47,22 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
+# The resolver's authoritative answers that the host has no address. A resolver that timed out answers
+# ``EAI_AGAIN`` and stays cold: a name can start resolving, where a misspelt one never does.
+_NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
+
+
 def _refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
     """What a handshake that did not open says about the server."""
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)
     if isinstance(raised, ssl.SSLCertVerificationError):
         return wire.Refusal.FINAL
-    # A timed-out connect, a reset TLS handshake, a refused upgrade, a dropped handshake: a backend that is
-    # not ready.
-    if isinstance(raised, TimeoutError | ssl.SSLError | ConnectionClosed | InvalidHandshake):
-        return wire.Refusal.COLD
-    # A refused connect or a host with no address surfaces at once.
-    return wire.Refusal.FINAL
+    if isinstance(raised, socket.gaierror) and raised.errno in _NO_SUCH_HOST_ERRNOS:
+        return wire.Refusal.FINAL
+    # A refused connect, a timed-out one, a reset TLS handshake, a refused upgrade, a dropped handshake: a
+    # backend that is not ready.
+    return wire.Refusal.COLD
 
 
 class WebsocketClientWire(wire.ClientWire):

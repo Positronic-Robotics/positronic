@@ -221,8 +221,6 @@ class InferenceClient:
             # A status handshake the server did not finish: a backend that is not ready.
             except (TimeoutError, wire.PeerDisconnected) as e:
                 refusal, not_ready = wire.Refusal.COLD, e
-            except OSError as e:
-                raise type(e)(f'{e} (connecting to {self.session_url})') from e
             if retries.take(refusal) is _ConnectOutcome.SURFACE:
                 raise not_ready
             if time.monotonic() >= deadline:

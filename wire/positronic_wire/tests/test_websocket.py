@@ -47,9 +47,11 @@ def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal
         (ssl.SSLError('reset'), wire.Refusal.COLD),
         (ConnectionClosedError(None, None), wire.Refusal.COLD),
         (InvalidHandshake('dropped'), wire.Refusal.COLD),
+        (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.COLD),
+        (socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution'), wire.Refusal.COLD),
         (ssl.SSLCertVerificationError('unknown issuer'), wire.Refusal.FINAL),
-        (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.FINAL),
-        (socket.gaierror(-2, 'Name or service not known'), wire.Refusal.FINAL),
+        (socket.gaierror(socket.EAI_NONAME, 'Name or service not known'), wire.Refusal.FINAL),
+        (socket.gaierror(socket.EAI_NODATA, 'No address associated with hostname'), wire.Refusal.FINAL),
     ],
 )
 def test_a_handshake_that_does_not_open_is_a_refusal_naming_the_url(raised, refusal):
@@ -88,6 +90,5 @@ def test_a_probe_reads_a_handshake_that_opened_as_the_server():
     connect.return_value.close.assert_called_once()
 
 
-def test_a_probe_of_a_port_nothing_answers_on_is_final():
-    with patch('positronic_wire.websocket.connect', side_effect=ConnectionRefusedError(111, 'refused')):
-        assert websocket.WebsocketClientWire().probe(_ADDRESS, 1.0) is wire.Refusal.FINAL
+def test_a_probe_of_a_port_nothing_answers_on_is_cold():
+    assert websocket.WebsocketClientWire().probe(_ADDRESS._replace(port=1), 1.0) is wire.Refusal.COLD

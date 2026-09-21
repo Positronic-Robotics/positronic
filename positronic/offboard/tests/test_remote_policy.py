@@ -303,6 +303,13 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 2 * len(one_session)
 
 
+def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
+    """Nothing listens on port 1; the refused connect is a backend that is not ready, and the deadline ends it."""
+    client = InferenceClient.from_url('ws://localhost:1', open_timeout=0.2, connect_deadline=0.0)
+    with pytest.raises(TimeoutError, match='ws://localhost:1'):
+        client.new_session()
+
+
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
     client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
