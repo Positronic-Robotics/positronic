@@ -22,12 +22,9 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     trial_count=1,
 )
 def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_width, seed):
-    """An ABC eval on the bimanual i2rt YAM: the embodiment proxies a remote ABC env, the task carries the scene.
+    """An ABC eval on the bimanual i2rt YAM.
 
-    ``task`` selects from ABC's catalogue by canonical name, alias or prompt, and takes a list to sweep several;
-    unbound it sweeps every task ABC lists, whose assets are then all downloaded before the server starts. Each
-    arm carries the flat per-arm channels the real ``yam_bimanual`` embodiment shares. ABC's full physics state
-    is the privileged ground truth, recorded and never fed to the policy.
+    ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
     """
     selection = None if task is None else [task] if isinstance(task, str) else list(task)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(selection))
