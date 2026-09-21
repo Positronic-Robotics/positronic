@@ -5,13 +5,24 @@ The client side, and the facts both ends share, are ``positronic_wire``.
 
 import abc
 from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
 from positronic_wire.wire import Endpoint
 from starlette.datastructures import QueryParams
 
+from . import keys
+
 
 class ServerConnection(abc.ABC):
     """A server's end of one open session."""
+
+    @property
+    def endpoint_meta(self) -> dict[str, Any]:
+        """Where this wire serves, as a session's metadata names it.
+
+        A wire whose address is not a host and a port answers with its own keys instead.
+        """
+        return {keys.HOST: self.endpoint.host, keys.PORT: self.endpoint.port}
 
     @property
     @abc.abstractmethod

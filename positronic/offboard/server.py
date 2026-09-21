@@ -382,15 +382,8 @@ class PolicyServer:
                 self._infer_lock.release()
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
-            endpoint = conn.endpoint
-            # Where the server listens. A socket path is not a host, so it has its own key.
-            listens = (
-                {offboard_keys.HOST: endpoint.host, offboard_keys.PORT: endpoint.port}
-                if endpoint.uds is None
-                else {offboard_keys.UDS: str(endpoint.uds)}
-            )
             meta = {
-                **listens,
+                **conn.endpoint_meta,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,

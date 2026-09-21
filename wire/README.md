@@ -65,8 +65,8 @@ needs.
   which a server that is up answers `UNIMPLEMENTED`.
 
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries. A
-`SessionAddress` is `host`, `port`, `path` (`session_path(model)`) and `query`, as written; a
-caller that records an endpoint records those four and the wire's name, never a URL.
+`SessionAddress` is `host`, `port`, `path` (`session_path(model)`), `query` and `uds`, as written; a
+caller that records an endpoint records those five and the wire's name, never a URL.
 
 `uds` is the fifth field, and `websocket_unix` is the one member that reads it: an absolute path to a
 Unix socket a server on the same machine bound, dialled instead of the network. `host` still stands for
@@ -103,8 +103,9 @@ in another repository drifts the day either side edits it, and nothing reports t
 imported symbol cannot.
 
 A scheme table disappears with them. A record that names an endpoint carries the wire's name, the
-host, the port, the model and the query as five fields, so no reader of the record derives a
-transport, a TLS setting or a default port from the spelling of a URL.
+host, the port, the model and the query as five fields — and the socket path as a sixth, where the
+wire is `websocket_unix` — so no reader of the record derives a transport, a TLS setting or a
+default port from the spelling of a URL.
 
 The port a server serves a wire on, and the server flag that names it, stay literals where they are
 spelled: they are a deployment's configuration, not wire facts. A test in the consumer that installs

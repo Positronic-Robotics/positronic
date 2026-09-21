@@ -5,13 +5,14 @@ import os
 import socket
 import stat
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from . import server_wire
+from . import keys, server_wire
 
 
 class WebsocketServerConnection(server_wire.ServerConnection):
@@ -28,6 +29,13 @@ class WebsocketServerConnection(server_wire.ServerConnection):
     @property
     def endpoint(self) -> wire.Endpoint:
         return self._endpoint
+
+    @property
+    def endpoint_meta(self) -> dict[str, Any]:
+        # A socket path is not a host, so it names itself and neither of the other two keys.
+        if self._endpoint.uds is None:
+            return super().endpoint_meta
+        return {keys.UDS: str(self._endpoint.uds)}
 
     @property
     def query_params(self) -> QueryParams:
