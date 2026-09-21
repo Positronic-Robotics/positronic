@@ -1,6 +1,7 @@
 """`positronic eval run` with a policy image: the run goes to the platform, over a stub transport."""
 
 import sys
+from pathlib import Path
 
 import configuronic as cfn
 import pytest
@@ -224,4 +225,35 @@ def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platf
             registry_username='a-reader',
             registry_password_file=str(tmp_path / 'never-written'),
         )
+    assert platform.seen is None
+
+
+def test_a_password_file_that_changes_under_the_send_is_a_refusal(platform, run_command, tmp_path, monkeypatch):
+    # The plan reads the file, and the send reads it again. A file that stops being readable in
+    # between reaches the serializer, and the CLI answers it with a sentence.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+    password_file = a_password_file(tmp_path)
+    reads = iter([password_file.read_text()])
+    original = Path.read_text
+
+    def read_once_then_fail(self, *args, **kwargs):
+        if self != password_file:
+            return original(self, *args, **kwargs)
+        try:
+            return next(reads)
+        except StopIteration:
+            raise OSError(13, 'Permission denied') from None
+
+    monkeypatch.setattr(Path, 'read_text', read_once_then_fail)
+
+    with pytest.raises(SystemExit) as refusal:
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file=str(password_file),
+        )
+
+    assert 'Permission denied' in str(refusal.value)
     assert platform.seen is None

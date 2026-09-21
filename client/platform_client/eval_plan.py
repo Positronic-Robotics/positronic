@@ -101,20 +101,26 @@ class RegistryCredential(BaseModel):
 
     @field_validator('password_file')
     @classmethod
-    def _readable_now(cls, path: Path) -> Path:
-        # Checked when the plan is read, so a mistyped path is refused there rather than mid-send.
+    def _opens_and_holds_a_password(cls, path: Path) -> Path:
+        # Read when the plan is read, so a path that is mistyped, unreadable or blank is refused
+        # there rather than in the middle of a send. The content goes; the send path reads it again.
         path = path.expanduser()
         if not path.is_file():
             raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
-        if path.stat().st_size == 0:
-            raise ValueError(f'{path} is empty')
+        try:
+            held = path.read_text()
+        except OSError as exc:
+            raise ValueError(f'{path} cannot be read: {exc.strerror}') from exc
+        if not held.strip():
+            raise ValueError(f'{path} holds no password')
         return path
 
     def password(self) -> str:
         """The password, read at the moment it is sent.
 
         Surrounding whitespace goes, so a file written with `echo` carries no trailing newline into
-        the request.
+        the request. A file that changed since the plan was read raises, and the CLI reports a
+        `ValueError` from a send as a refusal.
         """
         password = self.password_file.read_text().strip()
         if not password:

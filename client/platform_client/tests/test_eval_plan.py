@@ -450,21 +450,19 @@ def test_a_credential_naming_a_directory_is_refused(tmp_path: Path):
 def test_an_empty_password_file_is_refused_when_the_plan_is_read(tmp_path: Path):
     empty = tmp_path / 'registry-password'
     empty.write_text('')
-    with pytest.raises(ValidationError, match='is empty'):
+    with pytest.raises(ValidationError, match='holds no password'):
         Endpoint.model_validate(
             an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(empty)})
         )
 
 
-def test_a_password_file_of_only_whitespace_is_refused_when_it_is_read(tmp_path: Path):
+def test_a_password_file_of_only_whitespace_is_refused_when_the_plan_is_read(tmp_path: Path):
     blank = tmp_path / 'registry-password'
     blank.write_text('  \n')
-    endpoint = Endpoint.model_validate(
-        an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(blank)})
-    )
-    assert endpoint.image_credential is not None
-    with pytest.raises(ValueError, match='holds no password'):
-        endpoint.image_credential.password()
+    with pytest.raises(ValidationError, match='holds no password'):
+        Endpoint.model_validate(
+            an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(blank)})
+        )
 
 
 def test_plan_of_image_carries_the_credential_onto_its_one_endpoint(password_file: Path):
@@ -547,3 +545,16 @@ def test_only_the_send_path_serialises_the_password_as_itself(credential: dict):
     }
     assert A_PASSWORD not in json.dumps(held)
     assert A_PASSWORD not in plan.model_dump_json()
+
+
+def test_a_password_file_nothing_may_read_is_refused(tmp_path: Path):
+    unreadable = tmp_path / 'registry-password'
+    unreadable.write_text('a-password\n')
+    unreadable.chmod(0o000)
+    try:
+        with pytest.raises(ValidationError, match='cannot be read'):
+            Endpoint.model_validate(
+                an_image_endpoint(image_credential={'username': 'a-reader', 'password_file': str(unreadable)})
+            )
+    finally:
+        unreadable.chmod(0o600)

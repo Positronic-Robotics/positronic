@@ -52,7 +52,8 @@ def submit(
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
             credential=_credential(registry_username, registry_password_file),
         )
-    with gateway(platform_url) as client:
+    # The send is inside the refusal too: it reads the password file, which may have changed.
+    with refusing_bad_input(), gateway(platform_url) as client:
         submission = client.create_submission(plan)
     print(f'submission {submission.submission_id} ({submission.status.name})')
     if submission.policy_image_digest is not None:
