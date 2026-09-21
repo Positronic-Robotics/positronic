@@ -68,7 +68,7 @@ def _check_ik_roundtrip(sim_env) -> None:
 def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
-    target = env.mapping.wire_command_to_arm_action(
+    target = env.arm_action.wire_command_to_arm_action(
         command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=(pos, rot)
     )
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
@@ -92,7 +92,7 @@ def _check_every_canonical_command_converts(sim_env) -> None:
 
     for kind in protocol.CANONICAL_COMMAND_TYPES:
         command = {protocol.COMMAND_TYPE: kind, **payloads[kind]}
-        target = env.mapping.wire_command_to_arm_action(
+        target = env.arm_action.wire_command_to_arm_action(
             command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose()
         )
         target = np.asarray(target, dtype=np.float64)

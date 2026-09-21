@@ -289,6 +289,10 @@ extraPaths = [".", "positronic/simulator/env_server"]
 root = "positronic/simulator/molmo_spaces"
 extraPaths = [".", "positronic/simulator/env_server"]
 
+[[tool.basedpyright.executionEnvironments]]
+root = "positronic/simulator/amazon_abc"
+extraPaths = [".", "positronic/simulator/env_server"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = [

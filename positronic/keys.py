@@ -52,5 +52,7 @@ DESCRIPTOR = 'descriptor'
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
+WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
+WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
