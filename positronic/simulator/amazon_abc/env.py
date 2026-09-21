@@ -1,9 +1,7 @@
-"""ABC behind the env-server protocol: a standalone server for its bimanual YAM tasks.
+"""The env server for ABC's bimanual YAM tasks.
 
-Runs in ABC's own interpreter, which the launcher builds, with ``server``, ``protocol``, ``arm_action`` and
-``mapping`` on ``PYTHONPATH``. It speaks ABC's 14-value joint action: a Cartesian goal reaches it as
-damped-least-squares IK on the arm's control site, from the posture the arm is in. The reset token carries
-the task, the camera size the scene is built for, and the per-trial seed that draws the world.
+Runs in ABC's own interpreter, which the launcher builds. A Cartesian command is solved to joints here, by
+damped-least-squares IK on the arm's control site.
 """
 
 import argparse
@@ -78,14 +76,12 @@ class AbcEnv(EnvProtocol):
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token)
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
-        # A task randomizer draws its world by recompiling the scene, which renumbers every joint and site, so
-        # the arms are indexed against the model the reset leaves behind rather than the one it started from.
+        # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
         return {
             protocol.FRAME_OBS: self._observe(obs),
-            # ABC rewrites the prompt each reset on the tasks whose directive the world draws.
             protocol.FRAME_META: {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]},
-            protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
+            protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
 
@@ -116,8 +112,7 @@ class AbcEnv(EnvProtocol):
         return np.concatenate(per_arm).astype(np.float32)
 
     def _sync_sites(self) -> None:
-        # A site is placed from the joints of the last forward pass, and both a reset's randomizer and a step's
-        # integration leave the scene one behind. Every pose read here is taken after this.
+        # A site pose lags ``qpos`` by one forward pass after a reset or a step.
         mujoco.mj_kinematics(self._env.model, self._env.data)
 
     def _measured_q(self, arm: _Arm) -> np.ndarray:

@@ -10,8 +10,7 @@ import numpy as np
 # The arms ABC drives, in the order its 14-value action concatenates them.
 ARMS = ('left', 'right')
 ARM_JOINTS = 6
-# The site each arm is measured and driven at. It sits where the YAM driver's ``DEFAULT_FRAME`` does, so a
-# pose means the same thing on this sim and on the rig.
+# The site each arm is measured and driven at; it coincides with the YAM driver's ``DEFAULT_FRAME``.
 CONTROL_SITE = '{arm}_grasp_site'
 JOINT = '{arm}_joint{index}'
 
@@ -25,7 +24,7 @@ TOKEN_SEED = 'seed'
 TOKEN_CAMERA_HEIGHT = 'camera_height'
 TOKEN_CAMERA_WIDTH = 'camera_width'
 
-# The scene meta a reset reports. ABC rewrites the prompt per episode on its directive tasks.
+# The scene meta a reset reports.
 META_TASK = 'task'
 
 # What ABC's own observation and step info carry.
