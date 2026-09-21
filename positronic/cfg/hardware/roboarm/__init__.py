@@ -73,8 +73,8 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', sim=False, base_pose=None)
-def yam(channel: str, sim: bool, base_pose):
+@cfn.config(channel='can0', sim=False, base_pose=None, park_after_idle_s=60.0)
+def yam(channel: str, sim: bool, base_pose, park_after_idle_s: float | None):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, base_pose=base_pose, sim=sim)
+    return Robot(channel, base_pose=base_pose, sim=sim, park_after_idle_s=park_after_idle_s)

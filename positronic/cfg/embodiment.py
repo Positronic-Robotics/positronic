@@ -79,6 +79,7 @@ def yam(robot_arm, cameras, video_encoder):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
@@ -89,7 +90,14 @@ def yam(robot_arm, cameras, video_encoder):
     },
     video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras, video_encoder):
+def yam_bimanual(
+    left_channel: str,
+    right_channel: str,
+    mounts: dict[str, list[float]],
+    cameras,
+    video_encoder,
+    park_after_idle_s: float | None,
+):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
@@ -102,7 +110,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     from positronic.drivers.roboarm import yam as yam_driver
 
     arms = {
-        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
+        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]), park_after_idle_s=park_after_idle_s)
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {
