@@ -220,7 +220,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
-The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params on the client's `--policy.url` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
+The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
 
 ### Checking Server Status
 

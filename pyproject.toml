@@ -24,8 +24,7 @@ dependencies = [
     "starlette>=1.0.0",
     "jinja2",
     "fire",
-    # The gRPC wire, one of the two transports `positronic.offboard` serves. The rig client and the
-    # server both import it, so it is not an extra.
+    # The server side of the gRPC wire, one of the two transports `positronic.offboard` serves.
     "grpcio",
     "httpx",
     "msgpack",
@@ -44,6 +43,10 @@ dependencies = [
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
     "positronic-platform-client==0.8.4",
+    # The client side of both wires and the facts both ends share. A workspace member in a clone;
+    # a released `positronic` resolves it from the index, so it is published first, and it is pinned
+    # exactly for the same reason the client is (wire/README.md).
+    "positronic-wire==0.1.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -143,9 +146,9 @@ dev = [
 ]
 
 [tool.uv.workspace]
-# `client/` builds the standalone `positronic-platform-client` distribution, which stays installable
-# on its own — it may depend on nothing in this repo.
-members = ["client"]
+# `client/` builds the standalone `positronic-platform-client` distribution and `wire/` the standalone
+# `positronic-wire` one. Each stays installable on its own — it may depend on nothing in this repo.
+members = ["client", "wire"]
 
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
@@ -187,6 +190,7 @@ positronic-franka = false
 
 [tool.uv.sources]
 positronic-platform-client = { workspace = true }
+positronic-wire = { workspace = true }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
@@ -198,7 +202,7 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
-testpaths = ["client", "pimm", "positronic", "utilities"]
+testpaths = ["client", "pimm", "positronic", "utilities", "wire"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
@@ -211,12 +215,12 @@ filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
 ]
 markers = [
-    "endpoint: what a served endpoint must do. Runs in-process, or against POSITRONIC_ENDPOINT_URL when it names one",
+    "endpoint: what a served endpoint must do. Runs in-process, or against the endpoint POSITRONIC_ENDPOINT_WIRE, _HOST and _PORT name",
 ]
 
 [tool.coverage.run]
 branch = true
-source = ["pimm", "platform_client", "positronic"]
+source = ["pimm", "platform_client", "positronic", "positronic_wire"]
 
 [tool.coverage.report]
 show_missing = true
@@ -263,7 +267,7 @@ skip-magic-trailing-comma = true
 # .basedpyright/baseline.json; only NEW errors fail. Modules are strictened incrementally.
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
-include = ["client", "pimm", "positronic"]
+include = ["client", "pimm", "positronic", "wire"]
 # mujoco ships no `.pyi` and re-exports from binary extension modules, so its whole API reads as
 # attribute errors without these. Regenerate with utilities/generate_mujoco_stubs.py.
 stubPath = "stubs"

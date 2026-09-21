@@ -4,7 +4,7 @@
 # The job pulls `positro/robolab` and boots the benchmark's env server inside the
 # job container (Isaac Sim for RoboLab — needs an RTX-class GPU, so the platform
 # is L40S, not H100). The policy is remote: serve it first (e.g. `serve.sh openpi
-# ...`) and point `--policy.url` at the endpoint's managed https:// URL. The
+# ...`) and name the endpoint's managed host with `--policy.wire=websocket_tls`. The
 # endpoint's bearer token is injected here as AUTH_TOKEN, which is where
 # `positronic.cfg.policy.authed_remote` reads it.
 #
@@ -46,13 +46,13 @@ if [ $# -lt 1 ]; then
 Usage: bash workflows/nebius/eval.sh [eval run args...]
 
 Forwards all arguments to `positronic eval run`. Serve the policy first
-(workflows/nebius/serve.sh) and pass the managed URL it printed. Example:
+(workflows/nebius/serve.sh) and pass the policy flags it printed. Example:
 
   bash workflows/nebius/eval.sh \
     --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
     --eval.trial_count=10 \
     --policy=@positronic.cfg.policy.authed_remote \
-    --policy.url=https://<endpoint-managed-url> \
+    --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
     --output_dir=s3://<your-bucket>/evals/robolab_banana/
 EOF
   exit 1

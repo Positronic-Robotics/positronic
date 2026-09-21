@@ -15,6 +15,7 @@ from typing import Any
 import configuronic as cfn
 import pos3
 from fastapi import APIRouter, Depends, Header, HTTPException
+from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
 from positronic.offboard import keys as offboard_keys
@@ -23,7 +24,7 @@ from positronic.policy.base import Layer, timings_to
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
-from . import grpc_wire, protocol, websocket_wire, wire
+from . import grpc_wire, protocol, server_wire, websocket_wire
 from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def bearer(token: str) -> str:
     return f'Bearer {token}'
 
 
-async def _acquire_with_keepalives(lock: asyncio.Lock, conn: wire.ServerConnection | None, message: str):
+async def _acquire_with_keepalives(lock: asyncio.Lock, conn: server_wire.ServerConnection | None, message: str):
     """Acquire ``lock``, emitting ``waiting`` keepalives while queued behind another holder.
 
     A peer may hold the lock for a slow load, first-call compile or inference; a silent wait here
@@ -68,7 +69,7 @@ class PolicyManager:
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
 
-    async def get_policy(self, checkpoint_id: str, conn: wire.ServerConnection | None = None) -> Policy:
+    async def get_policy(self, checkpoint_id: str, conn: server_wire.ServerConnection | None = None) -> Policy:
         await _acquire_with_keepalives(self._lock, conn, 'Waiting for the model slot')
         try:
             if self.current_checkpoint_id != checkpoint_id:
@@ -115,7 +116,7 @@ class PolicyManager:
             self._lock.release()
 
     @staticmethod
-    def _progress_callback(conn: wire.ServerConnection | None) -> Callable[[str], None] | None:
+    def _progress_callback(conn: server_wire.ServerConnection | None) -> Callable[[str], None] | None:
         """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
 
         Blocks the loader until each message is on the wire, so one emitted at the very end of a load
@@ -313,7 +314,7 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def _answer_observations(self, conn: wire.ServerConnection, session: Session) -> None:
+    async def _answer_observations(self, conn: server_wire.ServerConnection, session: Session) -> None:
         """Answer every observation the client sends, until it disconnects."""
         while True:
             message = await conn.receive()
@@ -345,7 +346,7 @@ class PolicyServer:
                 logger.error(f'Error processing message: {e}', exc_info=True)
                 await conn.send(serialise({protocol.ERROR: str(e)}))
 
-    async def _serve_session(self, conn: wire.ServerConnection, model_id: str | None):
+    async def _serve_session(self, conn: server_wire.ServerConnection, model_id: str | None):
         logger.info(f'Connected to {conn.peer} requesting {model_id or "default"}')
 
         self._active_sessions += 1
@@ -442,7 +443,7 @@ class PolicyServer:
                 return
 
     @staticmethod
-    def _raise_first_wire_failure(started: Sequence[wire.Wire], outcomes: Sequence[Any]):
+    def _raise_first_wire_failure(started: Sequence[server_wire.Wire], outcomes: Sequence[Any]):
         """Raise the first wire that ended on an error, and log every other one."""
         failed = [(w, e) for w, e in zip(started, outcomes, strict=True) if isinstance(e, Exception)]
         # Only one failure can raise; this logs the rest, and nothing else does.
@@ -452,7 +453,7 @@ class PolicyServer:
             # A wire that ended on an error raises; a silent return reads as a shutdown.
             raise failed[0][1]
 
-    def serve(self, wires: Sequence[wire.Wire], on_ready: Callable[[], None] | None = None):
+    def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
         Every wire shares this server's model slot and inference lock. ``on_ready`` runs on the server's
@@ -465,7 +466,7 @@ class PolicyServer:
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
             await self._startup()
             # A wire binds when it starts; the ``finally`` stops every started one, even when a later one cannot bind.
-            started: list[wire.Wire] = []
+            started: list[server_wire.Wire] = []
             serving: list[asyncio.Task] = []
             ending: list[asyncio.Task] = []
             try:
@@ -532,7 +533,7 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
+    wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
     if grpc_port is not None:
         wires.append(grpc_wire.GrpcWire(host, grpc_port))
     server.serve(wires)

@@ -71,6 +71,7 @@ positronic-franka = false
 members = [
     "positronic",
     "positronic-platform-client",
+    "positronic-wire",
 ]
 constraints = [
     { name = "cmake", specifier = "<4.3" },
@@ -4966,6 +4967,7 @@ dependencies = [
     { name = "plotly" },
     { name = "pos3" },
     { name = "positronic-platform-client" },
+    { name = "positronic-wire" },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -5089,6 +5091,7 @@ requires-dist = [
     { name = "pos3", specifier = ">=0.3.1" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "positronic-platform-client", editable = "client" },
+    { name = "positronic-wire", editable = "wire" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "psutil" },
     { name = "pyarrow" },
@@ -5164,6 +5167,21 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.7" },
+]
+
+[[package]]
+name = "positronic-wire"
+version = "0.1.0"
+source = { editable = "wire" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "grpcio" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [[package]]

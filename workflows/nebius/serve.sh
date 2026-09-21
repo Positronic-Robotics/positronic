@@ -184,14 +184,14 @@ if [ -n "$GRPC_PORT" ] && [ -z "$GRPC_HOST" ]; then
   exit 1
 fi
 
+# The front terminates TLS on 443 for both wires, so a rig names the TLS member of each.
 GRPC_BANNER=""
-POLICY_URL="$URL"
+POLICY_ARGS="--policy.wire=websocket_tls --policy.host=${URL#https://} --policy.port=443"
 POLICY_NOTE="Point a rig at the websocket wire:"
 if [ -n "$GRPC_PORT" ]; then
-  GRPC_URL="grpcs://${GRPC_HOST}:443"
-  GRPC_BANNER="  gRPC URL:      ${GRPC_URL}
+  GRPC_BANNER="  gRPC host:     ${GRPC_HOST} (TLS, port 443)
 "
-  POLICY_URL="$GRPC_URL"
+  POLICY_ARGS="--policy.wire=grpc_tls --policy.host=${GRPC_HOST} --policy.port=443"
   POLICY_NOTE="Point a rig at either wire; through this front an 846 KiB observation
 round-trips in about 6 ms over gRPC and about 60 ms over the websocket:"
 fi
@@ -217,7 +217,7 @@ for loading AUTH_TOKEN out of MysteryBox):
 
 $POLICY_NOTE
 
-  --policy=.authed_remote --policy.url='$POLICY_URL'
+  --policy=.authed_remote $POLICY_ARGS
 
 To release the endpoint:
 

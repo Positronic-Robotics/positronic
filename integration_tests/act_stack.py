@@ -5,7 +5,6 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urlsplit, urlunsplit
 from zipfile import ZIP_LZMA, ZipFile
 
 import configuronic as cfn
@@ -41,21 +40,17 @@ SEED_DIRECTORY = 'seed_{seed}'
 REFERENCE_FILENAME = SEED_DIRECTORY + '.npz'
 
 
-def checkpoint_url(url: str) -> str:
-    parsed = urlsplit(url if '://' in url else f'http://{url}')
-    if not parsed.netloc or parsed.path not in ('', '/') or parsed.query or parsed.fragment:
-        raise ValueError('--url must name the server origin only, e.g. http://localhost:8000')
-    return urlunsplit((parsed.scheme, parsed.netloc, f'/api/v1/session/{CHECKPOINT_ID}', '', ''))
-
-
-def run_episode(url: str, output: Path, seed: int, wall_timeout: float) -> None:
+def run_episode(wire: str, host: str, port: int, output: Path, seed: int, wall_timeout: float) -> None:
     command = [
         str(Path(sys.executable).with_name('positronic')),
         'eval',
         'run',
         '--eval=.sim.positronic.stack_cubes',
         '--policy=.remote',
-        f'--policy.url={checkpoint_url(url)}',
+        f'--policy.wire={wire}',
+        f'--policy.host={host}',
+        f'--policy.port={port}',
+        f'--policy.model={CHECKPOINT_ID}',
         f'--eval.seed={seed}',
         '--eval.trial_count=1',
         f'--eval.timeout={EPISODE_SECONDS}',
@@ -195,9 +190,18 @@ def check_seeds(seeds: Sequence[int]) -> None:
         raise ValueError(f'Choose distinct seeds from {SEEDS}, got {seeds}')
 
 
-@cfn.config(seeds=SEEDS, reference_dir=str(REFERENCE_DIR), success_only=False, wall_timeout=120.0)
-def run(url: str, output_dir: str, seeds: Sequence[int], reference_dir: str, success_only: bool, wall_timeout: float):
-    """Run the ACT stacking episodes, retaining their recordings and logs."""
+@cfn.config(wire='websocket', seeds=SEEDS, reference_dir=str(REFERENCE_DIR), success_only=False, wall_timeout=120.0)
+def run(
+    wire: str,
+    host: str,
+    port: int,
+    output_dir: str,
+    seeds: Sequence[int],
+    reference_dir: str,
+    success_only: bool,
+    wall_timeout: float,
+):
+    """Run the ACT stacking episodes against the server at ``host:port``, retaining their recordings and logs."""
     check_seeds(seeds)
     if not np.isfinite(wall_timeout) or wall_timeout <= 0:
         raise ValueError('wall_timeout must be finite and positive')
@@ -205,7 +209,7 @@ def run(url: str, output_dir: str, seeds: Sequence[int], reference_dir: str, suc
     output_root.mkdir(parents=True, exist_ok=False)
     for seed in seeds:
         output = output_root / SEED_DIRECTORY.format(seed=seed)
-        run_episode(url, output, seed, wall_timeout)
+        run_episode(wire, host, port, output, seed, wall_timeout)
         check_episode(output, seed, reference, success_only)
 
 
