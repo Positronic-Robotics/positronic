@@ -219,6 +219,14 @@ class LLMPolicy(Policy):
             self._revealed = set(self._pictures)
             self._failures = 0
 
+        def _select_cameras(self, requested: list[str]) -> list[str]:
+            assert self._obs is not None
+            cameras = requested if requested else list(self._obs.images)
+            selected = set(cameras)
+            if len(selected) != len(cameras) or selected - self._obs.images.keys() or selected & self._revealed:
+                raise ValueError('Choose available cameras not already revealed in this observation')
+            return cameras
+
         def _tool(self, call: ToolCallPart) -> MoveTo | Finish | None:
             tool = Tool(call.tool_name)
             data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
@@ -226,16 +234,9 @@ class LLMPolicy(Policy):
                 case MoveTo() | Finish():
                     return data
                 case TakePic():
-                    assert self._obs is not None
                     if self._policy.images is not Images.ON_DEMAND:
                         raise ValueError('take_pic is available only with images=on_demand')
-                    cameras = data.cameras if data.cameras else list(self._obs.images)
-                    if (
-                        len(set(cameras)) != len(cameras)
-                        or set(cameras) - self._obs.images.keys()
-                        or set(cameras) & self._revealed
-                    ):
-                        raise ValueError('Choose available cameras not already revealed in this observation')
+                    cameras = self._select_cameras(data.cameras)
                     self._revealed.update(cameras)
                     self._pictures = cameras
                     self._messages.append(
