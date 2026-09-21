@@ -89,9 +89,9 @@ Establishes an inference session with a **specific** model.
 
 **Example:**
 - `ws://localhost:8000/api/v1/session` → Default model
-- `grpc://localhost:9000/api/v1/session` → Default model, over gRPC
+- `localhost:9000/api/v1/session` → Default model, over gRPC
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
-- `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
+- `localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
 
 Each wire from the table above carries the same route, and each names the server its own way:
 `websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a target, and

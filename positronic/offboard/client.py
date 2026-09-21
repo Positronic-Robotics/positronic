@@ -182,7 +182,7 @@ class InferenceClient:
             raise
 
     def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the URL names.
+        """Creates a new inference session on the model the address names.
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
