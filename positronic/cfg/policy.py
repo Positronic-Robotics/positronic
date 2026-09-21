@@ -74,8 +74,8 @@ def file_headers(path: str) -> dict[str, str]:
     raise ValueError(f'{file}: {problem}') from None
 
 
-# The caller names the wire, the host and the port: a default would hand the credential to whatever host it
-# points at.
-authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
-nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
-file_authed_remote = cfn.Config(RemotePolicy, headers=file_headers)
+# The caller names the wire and the endpoint. `network_address` holds localhost, so a run that names no host
+# sends the credential to this machine and not to a stranger.
+authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
+nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
+file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
