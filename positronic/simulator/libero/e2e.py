@@ -73,11 +73,11 @@ def _replay_episode(
     # Exact-state reset: the token carries the task spec plus the demo's own recorded full state to restore.
     obs = conn.reset({**scene, 'state': init_state})['obs']
     for _ in range(_SETTLE_STEPS):
-        obs = conn.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))[protocol.FRAME_OBS]
+        obs = conn.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))[protocol.FRAME_OBS]
     success = False
     for action in actions:
         grip = (float(action[6]) + 1.0) / 2.0  # robosuite gripper [-1, 1] -> positronic [0, 1]
-        out = conn.step(protocol.sole_arm_action(_step_command(obs, action[:6], command_mode), grip))
+        out = conn.step(protocol.single_arm_action(_step_command(obs, action[:6], command_mode), grip))
         obs = out['obs']
         success = success or out['done']
     return success

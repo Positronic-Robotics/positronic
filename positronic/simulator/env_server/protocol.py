@@ -36,12 +36,13 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
-# An action carries one entry per arm the embodiment drives, each naming the arm it moves; an embodiment
-# with one arm leaves it unnamed and sends a list of one.
-ACTION_ARMS = 'arms'
-ARM_NAME = 'name'  # The arm's name, or ``None`` for the sole arm of a one-armed embodiment.
-ACTION_COMMAND = 'command'
-ACTION_GRIP = 'grip'  # Closure in [0, 1].
+# An action is a map from a command-channel name to that channel's payload, mirroring the embodiment's own
+# ``commands: dict[key, Command]``. A robot-command channel carries a tagged command dict (COMMAND_TYPE and
+# its fields); a gripper channel carries a closure float in [0, 1]. Adding an actuator adds a channel, never
+# a change to this format. The single-arm channel names below mirror positronic's ``keys.ROBOT_COMMAND`` /
+# ``keys.TARGET_GRIP``; the wire cannot import positronic, so a test pins the two equal.
+ROBOT_COMMAND = 'robot_command'
+TARGET_GRIP = 'target_grip'
 
 COMMAND_TYPE = 'type'
 COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
@@ -59,20 +60,20 @@ FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
 
 
-def sole_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
-    """An action for one unnamed arm — the shape a single-arm embodiment sends."""
-    return {ACTION_ARMS: [{ARM_NAME: None, ACTION_COMMAND: command, ACTION_GRIP: grip}]}
+def single_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
+    """The channel map a single-arm embodiment sends: its ROBOT_COMMAND and TARGET_GRIP channels."""
+    return {ROBOT_COMMAND: command, TARGET_GRIP: grip}
 
 
-def sole_arm(action: dict[str, Any]) -> dict[str, Any]:
-    """The one arm entry of ``action``, for an env whose model has a single arm.
+def single_arm(action: dict[str, Any]) -> dict[str, Any]:
+    """``action`` for an env whose model is one arm: its ROBOT_COMMAND and TARGET_GRIP channels.
 
-    Raises when the client drives a different number of arms than the env has.
+    Raises when the action carries a channel this env cannot drive, which no single-arm env can act on.
     """
-    arms = action[ACTION_ARMS]
-    if len(arms) != 1:
-        raise ValueError(f'this env drives one arm, the action carries {len(arms)}')
-    return arms[0]
+    extra = set(action) - {ROBOT_COMMAND, TARGET_GRIP}
+    if extra:
+        raise ValueError(f'a single-arm env cannot act on channels {sorted(extra)}')
+    return action
 
 
 def _pack(obj):

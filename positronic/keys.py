@@ -10,6 +10,7 @@ the robot model's in ``drivers.roboarm.keys``, and so on.
 # The suffixes a serializer adds under an arm's channel (``Serializers.robot_state``, ``expand_suffixed``).
 # A rig whose arms are ``robot_state.{side}`` composes them onto that channel, so they are named apart.
 JOINTS_SUFFIX = '.q'
+JOINT_VEL_SUFFIX = '.dq'
 EE_POSE_SUFFIX = '.ee_pose'
 POSE_SUFFIX = '.pose'
 STATUS_SUFFIX = '.status'
@@ -47,7 +48,7 @@ def arm_channel(channel: str, arm: str | None) -> str:
 # suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
 ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
-JOINT_VEL = f'{ROBOT_STATE}.dq'
+JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'

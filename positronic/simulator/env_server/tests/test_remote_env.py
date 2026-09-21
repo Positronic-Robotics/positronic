@@ -120,7 +120,7 @@ def test_transport_is_transparent(env_server):
     direct_reset = direct.reset(seed)
     base = np.asarray(direct_reset[protocol.FRAME_OBS]['q'])
     actions = [
-        protocol.sole_arm_action(
+        protocol.single_arm_action(
             {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: base + 0.03 * i}, 0.2 * (i % 2)
         )
         for i in range(1, 6)
@@ -265,7 +265,7 @@ def test_unanswered_heartbeat_closes_pending_requests(mute_server_without_heartb
         conn.close()
 
 
-_HOLD = protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
+_HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
@@ -276,8 +276,8 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
     return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
-class _ArmsAdapter(WireCommandAdapter):
-    """A ``WireCommandAdapter`` with nothing but the command side, to read its action payload directly."""
+class _CommandOnlyAdapter(WireCommandAdapter):
+    """A ``WireCommandAdapter`` with only the command side, to read its action map directly."""
 
     def _reset_token(self, params: dict) -> None:
         return None
@@ -295,82 +295,99 @@ class _ArmsAdapter(WireCommandAdapter):
         return None
 
 
-def _held(**channels) -> dict[str, pimm.Message]:
-    return {name: pimm.Message(value) for name, value in channels.items()}
+def _held(**channels) -> dict[str, pimm.Message | None]:
+    """Command messages keyed by channel; a ``None`` value stands for a channel with nothing new this step."""
+    return {name: (None if value is None else pimm.Message(value)) for name, value in channels.items()}
 
 
-class TestPerArmAction:
-    """An action carries one entry per arm the adapter drives, each naming the arm it moves."""
+class TestChannelMapAction:
+    """The action is a map from each command channel the adapter is handed to that channel's payload.
 
-    # rules-allow: hardcoded-keys — building the channel with ``keys.arm_channel`` would assert whatever
-    # that helper produced; spelling it pins the name the whole stack agrees on.
+    The channel names are spelled out rather than built with ``keys.arm_channel``: the map must key by the
+    name the whole stack agrees on, so a helper deriving both the map and the assertion from one call would
+    prove nothing.
+    """
 
-    def test_one_unnamed_arm_reads_the_bare_channels(self):
-        adapter = _ArmsAdapter()
+    # rules-allow: hardcoded-keys — spelling the channel keeps the assertion independent of the derivation
+    # under test; see the class docstring.
+
+    def test_one_arm_maps_its_command_and_grip_channels(self):
+        adapter = _CommandOnlyAdapter()
         action = adapter.action(_held(robot_command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.4))
-        (arm,) = action[protocol.ACTION_ARMS]
-        assert arm[protocol.ARM_NAME] is None
-        assert arm[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-        assert arm[protocol.ACTION_GRIP] == 0.4
+        assert set(action) == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        assert action[keys.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
+        assert action[keys.TARGET_GRIP] == 0.4
 
-    def test_each_named_arm_reads_its_own_channels_in_the_declared_order(self):
-        adapter = _ArmsAdapter(arms=('left', 'right'))
-        commands = {
-            'robot_command.left': pimm.Message(roboarm_command.JointPosition(np.zeros(6))),
-            'target_grip.left': pimm.Message(0.25),
-            'robot_command.right': pimm.Message(roboarm_command.CartesianPosition(geom.Transform3D.identity)),
-            'target_grip.right': pimm.Message(0.75),
-        }
-        left, right = adapter.action(commands)[protocol.ACTION_ARMS]
-        assert (left[protocol.ARM_NAME], right[protocol.ARM_NAME]) == ('left', 'right')
-        assert left[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-        assert left[protocol.ACTION_GRIP] == 0.25
-        assert right[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.CARTESIAN
-        assert right[protocol.ACTION_GRIP] == 0.75
+    def test_each_channel_keys_the_map_by_its_own_name(self):
+        adapter = _CommandOnlyAdapter()
+        commands = _held(**{
+            'robot_command.left': roboarm_command.JointPosition(np.zeros(6)),
+            'target_grip.left': 0.25,
+            'robot_command.right': roboarm_command.CartesianPosition(geom.Transform3D.identity),
+            'target_grip.right': 0.75,
+        })
+        action = adapter.action(commands)
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
+        assert action['target_grip.left'] == 0.25
+        assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        assert action['target_grip.right'] == 0.75
 
-    def test_an_arm_nobody_commanded_holds_open(self):
-        adapter = _ArmsAdapter(arms=('left', 'right'))
-        commands = {'robot_command.left': pimm.Message(roboarm_command.JointPosition(np.zeros(6)))}
-        left, right = adapter.action(commands)[protocol.ACTION_ARMS]
-        assert left[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-        assert right[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.HOLD
-        assert right[protocol.ACTION_GRIP] == 0.0
+    def test_a_channel_with_nothing_new_holds_open(self):
+        adapter = _CommandOnlyAdapter()
+        commands = _held(**{
+            'robot_command.left': roboarm_command.JointPosition(np.zeros(6)),
+            'robot_command.right': None,
+            'target_grip.right': None,
+        })
+        action = adapter.action(commands)
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
+        assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.HOLD
+        assert action['target_grip.right'] == 0.0
 
-    def test_a_delta_fires_once_on_its_own_arm_only(self):
-        adapter = _ArmsAdapter(arms=('left', 'right'))
-        delta = roboarm_command.JointDelta(np.ones(6))
-        commands = {
-            'robot_command.left': pimm.Message(delta),
-            'robot_command.right': pimm.Message(roboarm_command.JointPosition(np.zeros(6))),
-        }
-        left, right = adapter.action(commands)[protocol.ACTION_ARMS]
-        assert left[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_DELTA
-        assert right[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
+    def test_a_delta_fires_once_on_its_own_channel_only(self):
+        adapter = _CommandOnlyAdapter()
+        commands = _held(**{
+            'robot_command.left': roboarm_command.JointDelta(np.ones(6)),
+            'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
+        })
+        action = adapter.action(commands)
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_DELTA
+        assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
         # The next step delivers nothing new: the fired delta is gone, the absolute setpoint still holds.
-        left, right = adapter.action({})[protocol.ACTION_ARMS]
-        assert left[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.HOLD
-        assert right[protocol.ACTION_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS
+        action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
+        assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
 
 
-class TestSoleArm:
-    """``sole_arm`` is how a single-arm env reads an action it can act on."""
+class TestSingleArm:
+    """``single_arm`` is how a single-arm env reads the channel map it can act on."""
 
-    def test_it_returns_the_one_entry(self):
-        entry = protocol.sole_arm(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))
-        assert entry[protocol.ARM_NAME] is None
-        assert entry[protocol.ACTION_GRIP] == 0.5
+    def test_the_wire_names_mirror_the_positronic_keys(self):
+        # The adapter keys the map with positronic channel names; the isolated env reads it with these.
+        assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
+        assert protocol.TARGET_GRIP == keys.TARGET_GRIP
 
-    def test_it_refuses_an_action_a_single_arm_env_cannot_act_on(self):
-        two_armed = _ArmsAdapter(arms=('left', 'right')).action({})
-        with pytest.raises(ValueError, match='carries 2'):
-            protocol.sole_arm(two_armed)
+    def test_it_returns_the_two_channels(self):
+        action = protocol.single_arm(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))
+        assert action[protocol.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.HOLD
+        assert action[protocol.TARGET_GRIP] == 0.5
+
+    def test_it_refuses_a_channel_a_single_arm_env_cannot_drive(self):
+        two_armed = _CommandOnlyAdapter().action(
+            _held(**{
+                'robot_command.left': roboarm_command.JointPosition(np.zeros(6)),
+                'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
+            })
+        )
+        with pytest.raises(ValueError, match='cannot act on channels'):
+            protocol.single_arm(two_armed)
 
 
 class TestRemoteEmbodimentChannels:
     """The embodiment names one set of channels per arm, and reports their signals as its static meta."""
 
     def _embodiment(self, arms):
-        proxy = RemoteEnvControlSystem(_ArmsAdapter(arms=arms), nullcontext(('localhost', 0)))
+        proxy = RemoteEnvControlSystem(_CommandOnlyAdapter(), nullcontext(('localhost', 0)))
         return remote_embodiment(proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', arms=arms)
 
     def test_one_unnamed_arm_keeps_the_bare_names(self):
@@ -472,7 +489,7 @@ def test_cartesian_delta_matches_absolute_target():
     reset = abs_env.reset(seed)
     ee0 = np.asarray(reset[protocol.FRAME_OBS]['ee_pos'])
     target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset[protocol.FRAME_OBS]['ee_quat']))
-    absolute = protocol.sole_arm_action(
+    absolute = protocol.single_arm_action(
         {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: target.as_vector(rotmat)}, 0.0
     )
     ee_abs = _settle(abs_env, absolute, settle)
@@ -481,7 +498,7 @@ def test_cartesian_delta_matches_absolute_target():
     delta_env = make_mujoco_env(list(CAMERAS.values()))
     delta_env.reset(seed)
     delta = geom.Transform3D(lift, geom.Rotation.identity)
-    delta_action = protocol.sole_arm_action(
+    delta_action = protocol.single_arm_action(
         {protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA, protocol.COMMAND_DELTA: delta.as_vector(rotmat)}, 0.0
     )
     ee_delta = _settle(delta_env, delta_action, settle)
@@ -746,7 +763,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
         {protocol.CMD: 'bogus'},
         {
             protocol.CMD: protocol.Command.STEP.value,
-            protocol.ACTION: protocol.sole_arm_action({protocol.COMMAND_TYPE: 'bogus'}, 0.0),
+            protocol.ACTION: protocol.single_arm_action({protocol.COMMAND_TYPE: 'bogus'}, 0.0),
         },
     ],
 )
@@ -758,5 +775,5 @@ def test_server_failure_crosses_as_error_frame(env_server, message):
     with pytest.raises(RuntimeError, match='bogus'):
         conn._request(message)
     joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(7)}
-    assert protocol.FRAME_OBS in conn.step(protocol.sole_arm_action(joints, 0.0))
+    assert protocol.FRAME_OBS in conn.step(protocol.single_arm_action(joints, 0.0))
     conn.close()

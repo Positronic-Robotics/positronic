@@ -39,7 +39,7 @@ from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
 from robolab.robots.droid import EEF_OFFSET_ROT
 
 _TOKEN = {'task': 'BananaInBowlTask', 'instruction_type': 'default'}
-_HOLD = protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
+_HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 _HOLD_STEPS = 30
 _SETTLE_STEPS = 10
 _POS_DELTA = 0.05  # m — run_abs_ik_demo's per-case translation magnitude
@@ -121,10 +121,10 @@ def _check_grip(env: RobolabEnv) -> None:
     env.reset(_TOKEN)
     out = None
     for _ in range(_HOLD_STEPS):
-        out = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
+        out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
     assert out['obs']['grip'] > 0.9, f'closed grip {out["obs"]["grip"]}'
     for _ in range(_HOLD_STEPS):
-        out = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
+        out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
     assert out['obs']['grip'] < 0.1, f'open grip {out["obs"]["grip"]}'
     print('  grip: OK (closed > 0.9, open < 0.1)')
 
@@ -134,11 +134,11 @@ def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
     q0 = env._measured_q().cpu().numpy()
     target = q0 + np.array([0.1, -0.1, 0.1, -0.1, 0.1, -0.1, 0.1], dtype=np.float32)
     joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: target}
-    out = env.step(protocol.sole_arm_action(joints, 0.0))
+    out = env.step(protocol.single_arm_action(joints, 0.0))
     applied = env._env.action_manager.action[0, :7].cpu().numpy()
     assert np.array_equal(applied, target), f'joint_pos not passed through bit-identically: {applied} vs {target}'
     for _ in range(59):
-        out = env.step(protocol.sole_arm_action(joints, 0.0))
+        out = env.step(protocol.single_arm_action(joints, 0.0))
     err = float(np.max(np.abs(out['obs']['joint_pos'] - target)))
     assert err < 0.05, f'joint_pos convergence err {err} rad'
     print(f'  joint_pos: OK (bit-identical pass-through; converged to {err:.4f} rad)')
@@ -149,7 +149,7 @@ def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
     dq = np.full(7, 0.01, dtype=np.float32)
     expected = env._measured_q() + torch.as_tensor(dq, device=env._env.device)
     deltas = {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: dq}
-    env.step(protocol.sole_arm_action(deltas, 0.0))
+    env.step(protocol.single_arm_action(deltas, 0.0))
     applied = env._env.action_manager.action[0, :7]
     assert torch.equal(applied, expected), f'joint_vel target {applied} != q + dq {expected}'
     print('  joint_vel: OK (targets anchor on measured q + dq, exactly)')
@@ -221,7 +221,7 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
         command = {'type': 'cartesian', 'pose': _wire_pose(target_pos, target_quat)}
         terminated = False
         for _ in range(_HOLD_STEPS):
-            out = env.step(protocol.sole_arm_action(command, 0.0))
+            out = env.step(protocol.single_arm_action(command, 0.0))
             if out['done']:
                 terminated = True
                 break
@@ -262,9 +262,9 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
     q_abs = env._joint_targets(pose_cmd)
     assert torch.allclose(q_delta, q_abs, atol=1e-4), f'delta vs absolute joint targets differ: {q_delta - q_abs}'
     # End-to-end: one delta step, then hold the absolute target it defined.
-    out = env.step(protocol.sole_arm_action(delta_cmd, 0.0))
+    out = env.step(protocol.single_arm_action(delta_cmd, 0.0))
     for _ in range(_HOLD_STEPS - 1):
-        out = env.step(protocol.sole_arm_action(pose_cmd, 0.0))
+        out = env.step(protocol.single_arm_action(pose_cmd, 0.0))
     pos_err = float(np.linalg.norm(out['obs']['eef_pos'] - target_pos.numpy()))
     rot_err = _quat_angle(torch.as_tensor(out['obs']['eef_quat']), target_quat)
     assert pos_err <= _POS_TOL and rot_err <= _ROT_TOL, (

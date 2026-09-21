@@ -133,8 +133,8 @@ class MujocoEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        wire = protocol.sole_arm(action)
-        command = wire[protocol.ACTION_COMMAND]
+        wire = protocol.single_arm(action)
+        command = wire[protocol.ROBOT_COMMAND]
         match command[protocol.COMMAND_TYPE]:
             case protocol.HOLD:
                 cmd = None
@@ -150,7 +150,7 @@ class MujocoEnv(EnvProtocol):
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
         if cmd is not None:
             self._cmd_emit.emit(cmd)
-        self._grip_emit.emit(float(wire[protocol.ACTION_GRIP]))
+        self._grip_emit.emit(float(wire[protocol.TARGET_GRIP]))
         self._advance(self._timestep)
         return {
             protocol.FRAME_OBS: self._read_obs(),

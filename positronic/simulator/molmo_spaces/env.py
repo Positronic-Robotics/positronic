@@ -165,11 +165,11 @@ class MolmoSpacesEnv(EnvProtocol):
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        wire = protocol.sole_arm(action)
+        wire = protocol.single_arm(action)
         arm = mapping.wire_command_to_arm_action(
-            wire[protocol.ACTION_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
+            wire[protocol.ROBOT_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
         )
-        gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.ACTION_GRIP])], dtype=np.float32)
+        gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({
             mapping.MOLMO_ARM_GROUP: arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,

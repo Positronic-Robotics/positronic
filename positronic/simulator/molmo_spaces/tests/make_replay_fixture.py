@@ -74,7 +74,7 @@ def replay_commands(
             # These recordings use the benchmark's default seed.
             conn.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
             for command, grip in zip(commands, grips, strict=True):
-                action = protocol.sole_arm_action(
+                action = protocol.single_arm_action(
                     {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: command}, float(grip)
                 )
                 out = conn.step(action)

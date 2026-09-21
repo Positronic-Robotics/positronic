@@ -63,7 +63,7 @@ def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dic
     assert drift < _RESET_DRIFT_TOL, f'exact-state reset missed the demo start: {drift:.4f} rad'
     for action in [*actions, *([actions[-1]] * _HOLD_TAIL_STEPS)]:
         joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: action[:7]}
-        out = conn.step(protocol.sole_arm_action(joints, float(action[7])))
+        out = conn.step(protocol.single_arm_action(joints, float(action[7])))
         if out['done']:
             return bool(out['success'])
     print(f'  no terminal; final subtask [status, completed, total, score]: {out["obs"]["subtask"].tolist()}')

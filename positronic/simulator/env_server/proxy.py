@@ -128,8 +128,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
     def _step_env(self) -> dict[str, Any]:
         assert self._conn is not None, 'stepped before the first reset connected'
-        reads = ((name, receiver.read()) for name, receiver in self.commands.items())
-        commands = {name: msg for name, msg in reads if msg is not None}
+        # The full command-channel set, ``None`` where nothing new arrived, so the adapter builds a payload
+        # for every channel it drives. The channel set has one owner: the ports ``remote_embodiment`` created.
+        commands = {name: receiver.read() for name, receiver in self.commands.items()}
         result = self._conn.step(self._adapter.action(commands))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues

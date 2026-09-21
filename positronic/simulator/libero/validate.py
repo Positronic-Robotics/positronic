@@ -100,7 +100,7 @@ def _check_serve(env: LiberoEnv, token: dict) -> None:
     env.reset(token)
     out = None
     for _ in range(5):
-        out = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
+        out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
     assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'} <= out['obs'].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 
@@ -111,10 +111,10 @@ def _check_grip(env: LiberoEnv, token: dict) -> None:
     env.reset(token)
     out = None
     for _ in range(40):
-        out = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
+        out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
     assert out['obs']['grip'] < 0.05, f'open grip {out["obs"]["grip"]}'
     for _ in range(40):
-        out = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
+        out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
     assert out['obs']['grip'] > 0.95, f'closed grip {out["obs"]["grip"]}'
     print('  grip normalization: OK (open < 0.05, closed > 0.95)')
 
@@ -164,7 +164,7 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
     for _ in range(8):
         samples.append((wire, _robosuite_obs(env)))
         wire = env.step(
-            protocol.sole_arm_action(
+            protocol.single_arm_action(
                 {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _nudge_pose(env)}, 0.0
             )
         )[protocol.FRAME_OBS]
@@ -178,16 +178,16 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
     # the non-circular measurement; the sweep checks the linear model holds).
     env.reset(token)
     for _ in range(40):
-        wire = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))[protocol.FRAME_OBS]
+        wire = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))[protocol.FRAME_OBS]
     q_open = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
     for _ in range(40):
-        wire = env.step(protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))[protocol.FRAME_OBS]
+        wire = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))[protocol.FRAME_OBS]
     q_closed = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
     recon_err = 0.0
     env.reset(token)
     for g in np.linspace(0.0, 1.0, 6):
         for _ in range(20):
-            hold = protocol.sole_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, float(g))
+            hold = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, float(g))
             wire = env.step(hold)[protocol.FRAME_OBS]
         true_qpos = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
         recon = q_closed + (1.0 - wire['grip']) * (q_open - q_closed)
