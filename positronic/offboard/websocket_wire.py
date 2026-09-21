@@ -159,10 +159,9 @@ class WebsocketWire(server_wire.Wire):
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter, uds: str | Path | None = None):
+    def __init__(self, host: str, port: int, api: APIRouter, uds: Path | None = None):
         # A relative path is resolved against whatever directory the server was started from, so the path
         # an operator wrote and the path a client dials would part company on the next start.
-        uds = None if uds is None else Path(uds)
         if uds is not None and not uds.is_absolute():
             raise ValueError(f'{uds!r} is a relative socket path; bind an absolute one')
         self._host = host

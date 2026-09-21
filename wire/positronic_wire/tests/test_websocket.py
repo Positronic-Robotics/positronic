@@ -171,6 +171,15 @@ def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_port():
     assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session/10000?fps=10'
     assert unix.handshake_url(address) == 'ws://localhost/api/v1/session/10000?fps=10'
     assert unix.api_url(address) == 'http://localhost/api/v1'
+    assert unix.api_socket(address) == Path('/run/policy.sock')
+
+
+def test_a_member_that_dials_the_network_names_no_socket_whatever_the_address_carries():
+    """A session that opens over TCP reads the catalogue over TCP: one address cannot mean both."""
+    address = _ADDRESS._replace(uds=Path('/run/policy.sock'))
+
+    assert websocket.WebsocketClientWire().api_socket(address) is None
+    assert websocket.WebsocketTlsClientWire().api_socket(address) is None
 
 
 def test_the_socket_wire_refuses_an_address_naming_no_socket():
@@ -181,7 +190,7 @@ def test_the_socket_wire_refuses_an_address_naming_no_socket():
 
 
 def test_the_socket_wire_refuses_a_relative_socket_path():
-    """`--policy.uds=policy.sock` reaches here as a relative path, and the server refuses to bind one."""
+    """`--policy.uds=policy.sock` reaches here as a relative path, which names a socket per caller."""
     address = wire.SessionAddress('localhost', 8000, wire.session_path(), '', Path('policy.sock'))
 
     with pytest.raises(ValueError, match='relative socket path'):

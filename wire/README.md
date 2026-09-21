@@ -44,14 +44,18 @@ needs.
 
 ## The client interface
 
-`ClientWire` has two facts and four verbs. `NAME` is what a caller selects it by: `websocket`,
+`ClientWire` has two facts and five verbs. `NAME` is what a caller selects it by: `websocket`,
 `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
 
-- `session_url(address)` — the session as this wire spells it, for the dial and for the log. The
-  websocket members write `ws://` or `wss://`, because their library takes a URL; the gRPC members
-  write `host:port`, because theirs takes a target.
+- `session_url(address)` — the session as this wire names it, for a log and for an error. The
+  websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
+  members write `host:port`. What a wire dials is its own: `websocket` and `websocket_tls` dial this
+  spelling, and the others dial a socket or a target instead.
 - `api_url(address)` — the server's HTTP API beside this wire (`http://` or `https://`), or `None`
   where the wire's port carries sessions alone.
+- `api_socket(address)` — the Unix socket `api_url` answers on, or `None` where it answers over the
+  network. `websocket_unix` is the one member that names a socket, so a caller reaches the API
+  through the wire and never reads `uds` itself.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,

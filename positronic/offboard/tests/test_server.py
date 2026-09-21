@@ -572,6 +572,22 @@ def test_a_session_over_a_socket_carries_the_model_id(unix_stub_server):
         session.close()
 
 
+def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_server):
+    """A coordinator preflights an endpoint with ``probe`` alone, and a socket answers it like a port."""
+    served, _policy = unix_stub_server
+    client_wire, address = served.unix()
+
+    assert client_wire.probe(address, None, 5.0) is None
+
+
+def test_a_probe_of_a_socket_nothing_has_bound_is_cold(socket_path):
+    """A path no server has bound yet can still become one, so the probe says to wait rather than refuse."""
+    client_wire = registry.client_wire('websocket_unix')
+    address = wire.SessionAddress('localhost', 0, wire.session_path(), '', pathlib.Path(socket_path))
+
+    assert client_wire.probe(address, None, 1.0) is wire.Refusal.COLD
+
+
 def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(
     start_server, socket_path, make_mock_policy
 ):
@@ -735,7 +751,7 @@ def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mo
         live.listen()
 
         with pytest.raises(OSError) as refusal:
-            server.serve([websocket_wire.WebsocketWire('localhost', 0, server.api, uds=socket_path)])
+            server.serve([websocket_wire.WebsocketWire('localhost', 0, server.api, uds=pathlib.Path(socket_path))])
         assert refusal.value.errno == errno.EADDRINUSE
         assert socket_path in str(refusal.value)
 
@@ -748,7 +764,7 @@ def test_a_server_refuses_a_relative_socket_path():
     """A relative path is resolved against the directory the server was started from, so the path an
     operator wrote and the path a client dials would part company on the next start."""
     with pytest.raises(ValueError, match='relative socket path'):
-        websocket_wire.WebsocketWire('localhost', 0, APIRouter(), uds='policy.sock')
+        websocket_wire.WebsocketWire('localhost', 0, APIRouter(), uds=pathlib.Path('policy.sock'))
 
 
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):

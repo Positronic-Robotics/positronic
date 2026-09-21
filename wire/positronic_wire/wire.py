@@ -103,11 +103,19 @@ class ClientWire(abc.ABC):
 
     @abc.abstractmethod
     def session_url(self, address: SessionAddress) -> str:
-        """``address`` as this wire spells it, for the dial and for the log."""
+        """``address`` as this wire names one session, for a log and for an error.
+
+        What a wire dials is its own: a member whose library takes this spelling dials it, and one
+        that takes a target or a socket dials that instead.
+        """
 
     @abc.abstractmethod
     def api_url(self, address: SessionAddress) -> str | None:
         """The server's HTTP API beside this wire, or ``None`` where the wire's port carries sessions alone."""
+
+    def api_socket(self, address: SessionAddress) -> Path | None:
+        """The Unix socket ``api_url`` answers on, or ``None`` where it answers over the network."""
+        return None
 
     @abc.abstractmethod
     def dial(

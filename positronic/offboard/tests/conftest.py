@@ -61,7 +61,8 @@ def start_server() -> Generator[StartServer, None, None]:
     def start(pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, **server_kwargs)
-        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api, uds=uds)]
+        socket_path = None if uds is None else Path(uds)
+        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api, uds=socket_path)]
         if grpc:
             wires.append(grpc_wire.GrpcWire(host, 0))
         ready = threading.Event()

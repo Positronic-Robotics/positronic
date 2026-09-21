@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -534,7 +535,8 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api, uds=uds)]
+    socket_path = None if uds is None else Path(uds)
+    wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api, uds=socket_path)]
     if grpc_port is not None:
         wires.append(grpc_wire.GrpcWire(host, grpc_port))
     server.serve(wires)

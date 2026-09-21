@@ -146,23 +146,6 @@ class WebsocketTlsClientWire(WebsocketClientWire):
     API_SCHEME = 'https'
 
 
-def _socket_may_still_appear(uds: Path, raised: OSError) -> bool:
-    """Whether a failed dial is a co-located server that has not bound its socket yet.
-
-    Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting for
-    it spends the whole deadline on an answer that will not change. A refusal then reads the path, which
-    tells a restarting server from a path naming something that is not a socket.
-    """
-    if not isinstance(raised, FileNotFoundError | ConnectionRefusedError):
-        return False
-    try:
-        return stat.S_ISSOCK(os.stat(uds).st_mode)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-
-
 class WebsocketUnixClientWire(WebsocketClientWire):
     """The websocket wire over a Unix socket: the same session, reached on a path instead of a port.
 
@@ -177,9 +160,30 @@ class WebsocketUnixClientWire(WebsocketClientWire):
         return wire.bracket_ipv6(address.host)
 
     def session_url(self, address: wire.SessionAddress) -> str:
-        """The socket and the route on it, for the log. Nothing reads this back."""
+        """The socket and the route on it, as this wire names one session."""
         query = f'?{address.query}' if address.query else ''
         return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
+
+    def api_socket(self, address: wire.SessionAddress) -> Path:
+        """The session's own socket: the API answers on it beside the sessions."""
+        return self._socket(address)
+
+    @staticmethod
+    def _socket_may_still_appear(uds: Path, raised: OSError) -> bool:
+        """Whether a failed dial is a co-located server that has not bound its socket yet.
+
+        Only an absent path and a refusal can mean that; every other ``OSError`` is settled, and waiting
+        for it spends the whole deadline on an answer that will not change. A refusal then reads the
+        path, which tells a restarting server from a path naming something that is not a socket.
+        """
+        if not isinstance(raised, FileNotFoundError | ConnectionRefusedError):
+            return False
+        try:
+            return stat.S_ISSOCK(os.stat(uds).st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
 
     def _refusal(
         self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.SessionAddress
@@ -191,7 +195,8 @@ class WebsocketUnixClientWire(WebsocketClientWire):
         so retrying one spends the whole connect deadline on an answer that is already final.
         """
         if isinstance(raised, OSError) and not isinstance(raised, InvalidHandshake | ConnectionClosed):
-            return wire.Refusal.COLD if _socket_may_still_appear(self._socket(address), raised) else wire.Refusal.FINAL
+            cold = self._socket_may_still_appear(self._socket(address), raised)
+            return wire.Refusal.COLD if cold else wire.Refusal.FINAL
         return super()._refusal(raised, address)
 
     @classmethod
@@ -199,7 +204,7 @@ class WebsocketUnixClientWire(WebsocketClientWire):
         if address.uds is None:
             raise ValueError(f'{cls.NAME} dials a Unix socket; SessionAddress.uds names none')
         # A relative path is resolved against the directory this process was started from, so it names a
-        # different socket to each caller — and the server refuses to bind one for that reason.
+        # different socket to each caller.
         if not address.uds.is_absolute():
             raise ValueError(f'{address.uds!r} is a relative socket path; dial an absolute one')
         return address.uds
