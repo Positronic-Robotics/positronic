@@ -48,7 +48,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
-import protocol  # pyright: ignore[reportMissingImports]  # the launcher puts it on PYTHONPATH
+import protocol  # pyright: ignore[reportMissingImports]
 from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
 from server import EnvProtocol, EnvServer
 

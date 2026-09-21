@@ -51,7 +51,7 @@ run picks up a ``~/.libero`` written by some earlier, differently-located clone.
 import argparse
 
 import numpy as np
-import protocol  # pyright: ignore[reportMissingImports]  # the launcher puts it on PYTHONPATH
+import protocol  # pyright: ignore[reportMissingImports]
 from env import LiberoEnv
 from robosuite.utils.transform_utils import axisangle2quat, euler2mat, mat2quat, quat2axisangle, quat2mat
 

@@ -29,7 +29,7 @@ import sys
 
 import keys
 import numpy as np
-import protocol  # pyright: ignore[reportMissingImports]  # the launcher puts it on PYTHONPATH
+import protocol  # pyright: ignore[reportMissingImports]
 import torch
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.

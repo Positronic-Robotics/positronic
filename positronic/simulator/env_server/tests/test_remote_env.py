@@ -277,7 +277,7 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
 
 
 class _CommandOnlyAdapter(WireCommandAdapter):
-    """A ``WireCommandAdapter`` with only the command side, to read its action map directly."""
+    """A ``WireCommandAdapter`` with only the command side."""
 
     def _reset_token(self, params: dict) -> None:
         return None
@@ -296,20 +296,14 @@ class _CommandOnlyAdapter(WireCommandAdapter):
 
 
 def _held(**channels) -> dict[str, pimm.Message | None]:
-    """Command messages keyed by channel; a ``None`` value stands for a channel with nothing new this step."""
+    """Command messages keyed by channel; ``None`` is a channel with nothing new."""
     return {name: (None if value is None else pimm.Message(value)) for name, value in channels.items()}
 
 
 class TestChannelMapAction:
-    """The action is a map from each command channel the adapter is handed to that channel's payload.
+    """The action is a map from each command channel the adapter is handed to that channel's payload."""
 
-    The channel names are spelled out rather than built with ``keys.arm_channel``: the map must key by the
-    name the whole stack agrees on, so a helper deriving both the map and the assertion from one call would
-    prove nothing.
-    """
-
-    # rules-allow: hardcoded-keys — spelling the channel keeps the assertion independent of the derivation
-    # under test; see the class docstring.
+    # rules-allow: hardcoded-keys — an assertion built with ``keys.arm_channel`` would test the derivation with itself
 
     def test_one_arm_maps_its_command_and_grip_channels(self):
         adapter = _CommandOnlyAdapter()
@@ -353,7 +347,6 @@ class TestChannelMapAction:
         action = adapter.action(commands)
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_DELTA
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-        # The next step delivers nothing new: the fired delta is gone, the absolute setpoint still holds.
         action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
@@ -363,7 +356,6 @@ class TestSingleArm:
     """``single_arm`` is how a single-arm env reads the channel map it can act on."""
 
     def test_the_wire_names_mirror_the_positronic_keys(self):
-        # The adapter keys the map with positronic channel names; the isolated env reads it with these.
         assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
         assert protocol.TARGET_GRIP == keys.TARGET_GRIP
 

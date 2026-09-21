@@ -104,15 +104,13 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 
 
 class WireCommandAdapter(EnvAdapter):
-    """An adapter whose action is the shared channel map: one payload per command channel the env drives.
+    """An adapter whose action is one wire payload per command channel.
 
     The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
-    arrives and fires a relative delta once. Each channel becomes one map entry, keyed by the channel name
-    the embodiment declared. A robot-command channel carries a tagged command (a pose as ``[t(3), R(9)]``,
-    joint positions, or per-step joint deltas); a gripper channel carries its closure float.
-    All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
-    the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
-    around it) and keep the task, observation and terminal mappings to themselves.
+    arrives and fires a relative delta once. All action *encoding* — how the tagged command becomes the env's
+    native action — stays server-side with the env's own model. Subclasses implement ``_reset_token`` (the
+    base clears the per-trial command state around it) and keep the task, observation and terminal mappings
+    to themselves.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
@@ -137,14 +135,11 @@ class WireCommandAdapter(EnvAdapter):
         for name, msg in commands.items():
             if msg is not None and msg.updated:
                 self._held[name] = msg.data
-        # The map carries every channel the embodiment declared: the proxy hands the full set every step
-        # (a channel with nothing new reads ``None``), so the env never misses one.
         return {name: self._channel_payload(name) for name in commands}
 
     def _channel_payload(self, name: str) -> Any:
-        """One channel's wire payload, from whatever it holds: a tagged robot command, or a gripper closure."""
         if not keys.is_robot_command(name):
-            return float(self._held.get(name, 0.0))  # a gripper channel, held open until commanded
+            return float(self._held.get(name, 0.0))
         # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
         # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
         # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after

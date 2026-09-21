@@ -7,8 +7,6 @@ A key one package owns lives in that package's own ``keys`` module instead: a tr
 the robot model's in ``drivers.roboarm.keys``, and so on.
 """
 
-# The suffixes a serializer adds under an arm's channel (``Serializers.robot_state``, ``expand_suffixed``).
-# A rig whose arms are ``robot_state.{side}`` composes them onto that channel, so they are named apart.
 JOINTS_SUFFIX = '.q'
 JOINT_VEL_SUFFIX = '.dq'
 EE_POSE_SUFFIX = '.ee_pose'
@@ -35,12 +33,7 @@ def is_robot_command(name: str) -> bool:
 
 
 def arm_channel(channel: str, arm: str | None) -> str:
-    """``channel`` as one arm drives it: the bare channel for an unnamed arm, ``channel.{arm}`` otherwise.
-
-    An embodiment with one arm leaves it unnamed, so its channels are ``robot_command``/``robot_state``; one
-    with several names each, so they are ``robot_command.left`` and so on. A serializer's suffix follows the
-    result: ``robot_state.left`` records ``robot_state.left.q``.
-    """
+    """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
     return channel if arm is None else f'{channel}.{arm}'
 
 

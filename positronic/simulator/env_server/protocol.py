@@ -36,11 +36,7 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
-# An action is a map from a command-channel name to that channel's payload, mirroring the embodiment's own
-# ``commands: dict[key, Command]``. A robot-command channel carries a tagged command dict (COMMAND_TYPE and
-# its fields); a gripper channel carries a closure float in [0, 1]. The single-arm channel names below mirror
-# positronic's ``keys.ROBOT_COMMAND`` / ``keys.TARGET_GRIP``; the wire cannot import positronic, so a test
-# pins the two equal.
+# The command channels of a single-arm env. The wire cannot import positronic's ``keys``; a test pins them equal.
 ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
 
@@ -61,15 +57,12 @@ FRAME_SUCCESS = 'success'
 
 
 def single_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
-    """The channel map a single-arm embodiment sends: its ROBOT_COMMAND and TARGET_GRIP channels."""
+    """The action of a single-arm embodiment."""
     return {ROBOT_COMMAND: command, TARGET_GRIP: grip}
 
 
 def single_arm(action: dict[str, Any]) -> dict[str, Any]:
-    """``action`` for an env whose model is one arm: its ROBOT_COMMAND and TARGET_GRIP channels.
-
-    Raises when the action carries a channel this env cannot drive, which no single-arm env can act on.
-    """
+    """``action`` as a single-arm env reads it; raises on a channel such an env cannot drive."""
     extra = set(action) - {ROBOT_COMMAND, TARGET_GRIP}
     if extra:
         raise ValueError(f'a single-arm env cannot act on channels {sorted(extra)}')
