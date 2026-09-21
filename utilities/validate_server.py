@@ -8,6 +8,7 @@ import configuronic as cfn
 from positronic_wire import registry
 from positronic_wire import wire as wire_module
 
+from positronic.cfg import policy as policy_cfg
 from positronic.cfg.policy import bearer_headers
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import AUTH_TOKEN_ENV
@@ -23,6 +24,14 @@ def _shell_join(command: list[str]) -> str:
 def _infer_repo_root() -> Path:
     # utilities/validate_server.py -> repo root is parent of utilities/
     return Path(__file__).resolve().parents[1]
+
+
+def _policy_address_args(address: wire_module.SessionAddress) -> list[str]:
+    """The flags that rebuild ``address`` in the eval subprocess, spelled as its own wire's."""
+    if isinstance(address, wire_module.UnixSocketAddress):
+        return [f'--policy.address=@{_SOCKET_ADDRESS}', f'--policy.address.uds={address.uds}']
+    assert isinstance(address, wire_module.HostPortAddress), f'{type(address).__name__} spells no policy flags'
+    return [f'--policy.address.host={address.host}', f'--policy.address.port={address.port}']
 
 
 def _build_inference_command(
@@ -62,10 +71,7 @@ def _build_inference_command(
     dry_run=False,
     continue_on_error=False,
     wire='websocket',
-    host='localhost',
-    port=8000,
-    uds=None,
-    query='',
+    address=policy_cfg.network_address,
 )
 def main(
     eval: str,  # noqa: A002 — the CLI flag is `--eval`, mirroring `positronic eval run --eval=...`
@@ -74,10 +80,7 @@ def main(
     dry_run: bool,
     continue_on_error: bool,
     wire: str,
-    host: str,
-    port: int,
-    uds: str | None,
-    query: str,
+    address: wire_module.SessionAddress,
 ):
     """Validate an inference server by iterating all available models and running inference for each.
 
@@ -112,15 +115,8 @@ def main(
     token = os.environ.get(AUTH_TOKEN_ENV)
     policy_ref = '.authed_remote' if token else '.remote'
 
-    # Name the wire, then fill that wire's address. ``InferenceClient`` refuses the other wire's, and
-    # the eval subprocess is handed the same address, spelled as that wire's own flags.
+    # ``InferenceClient`` refuses an address the named wire does not dial.
     client_wire = registry.client_wire(wire)
-    if uds is not None:
-        address: wire_module.SessionAddress = wire_module.UnixSocketAddress(Path(uds), wire_module.SESSION_PATH, query)
-        address_args = [f'--policy.address=@{_SOCKET_ADDRESS}', f'--policy.address.uds={uds}']
-    else:
-        address = wire_module.HostPortAddress(host, port, wire_module.SESSION_PATH, query)
-        address_args = [f'--policy.address.host={host}', f'--policy.address.port={port}']
     client = InferenceClient(client_wire, address, headers=bearer_headers.instantiate() if token else None)
     print(f'Connecting to {client.session_url}...')
     try:
@@ -137,8 +133,8 @@ def main(
             uv_path=uv_path,
             eval_ref=eval,
             wire_name=wire,
-            address_args=address_args,
-            query=query,
+            address_args=_policy_address_args(address),
+            query=address.query,
             policy_ref=policy_ref,
             model_id=model_id,
             output_dir=output_dir.rstrip('/'),

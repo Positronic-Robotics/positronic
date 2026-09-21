@@ -60,7 +60,7 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
 
 
 def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
-    """Where a network wire opens a session, as ``RemotePolicy`` now takes it."""
+    """Where a network wire opens a session."""
     return wire.HostPortAddress(host, port, wire.session_path(model), query)
 
 

@@ -157,14 +157,10 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     # The URL scheme this wire writes for a session; ``_api_connection`` says how the API is reached.
     SCHEME = 'ws'
 
-    def netloc(self, address: wire.HostPortAddress) -> str:
-        """``host:port``, less the port this wire defaults to."""
-        return wire.netloc(address, self.DEFAULT_PORT)
-
     def handshake_url(self, address: wire.HostPortAddress) -> str:
         """The URL the upgrade asks for, which this wire also dials."""
         query = f'?{address.query}' if address.query else ''
-        return f'{self.SCHEME}://{self.netloc(address)}{address.path}{query}'
+        return f'{self.SCHEME}://{wire.netloc(address, self.DEFAULT_PORT)}{address.path}{query}'
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         return self.handshake_url(address)

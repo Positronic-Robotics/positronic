@@ -119,7 +119,7 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
 
 
 def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
-    """Where a network wire opens a session, as ``RemotePolicy`` now takes it."""
+    """Where a network wire opens a session."""
     return wire.HostPortAddress(host, port, wire.session_path(model), query)
 
 
