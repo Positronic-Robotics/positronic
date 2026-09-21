@@ -213,6 +213,49 @@ def test_a_file_that_reads_as_neither_yaml_nor_json_says_so(platform, run_comman
     assert platform.seen is None
 
 
+REGISTRY_PASSWORD = 'a-registry-password'
+
+
+# Each puts the password where PyYAML quotes what it read: on the error's mark, or, for the last
+# three, inside the message itself as the alias, anchor or tag it could not resolve.
+BROKEN_CREDENTIALS = {
+    'given twice': f'      password: {REGISTRY_PASSWORD}\n      password: {REGISTRY_PASSWORD}\n',
+    'a tab before the value': f'      password:\t{REGISTRY_PASSWORD}\n',
+    'an unclosed quote': f'      password: "{REGISTRY_PASSWORD}\n',
+    'a flow sequence left open': f'      password: [{REGISTRY_PASSWORD}\n',
+    'an undefined alias': f'      password: *{REGISTRY_PASSWORD}\n',
+    'a duplicate anchor': f'      password: &{REGISTRY_PASSWORD} x\n      other: &{REGISTRY_PASSWORD} y\n',
+    'an unknown tag': f'      password: !{REGISTRY_PASSWORD} x\n',
+}
+
+
+def a_plan_with_a_broken_credential(how: str) -> str:
+    """A plan whose registry password sits where the parser will quote it back."""
+    broken = BROKEN_CREDENTIALS[how]
+    return (
+        f'tasks:\n  - {SPOONS}\nendpoints:\n  - name: baseline\n'
+        '    image: registry.example/policy:v1\n    image_credential:\n      username: reader\n'
+        f'{broken}episodes_per_endpoint: 4\n'
+    )
+
+
+@pytest.mark.parametrize('how', sorted(BROKEN_CREDENTIALS))
+def test_a_malformed_plan_does_not_print_its_registry_password(platform, run_command, tmp_path: Path, how: str):
+    # Parsing runs before any model, so the masking on the model cannot reach these.
+    payload = a_plan_with_a_broken_credential(how)
+    with pytest.raises(SystemExit) as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert REGISTRY_PASSWORD not in str(refusal.value)
+    assert platform.seen is None
+
+
+def test_a_malformed_plan_still_says_where_the_fault_is(platform, run_command, tmp_path: Path):
+    # The position is what the redaction keeps: a refusal naming no line sends the author hunting.
+    payload = a_plan_with_a_broken_credential('given twice')
+    with pytest.raises(SystemExit, match=r'line \d+, column \d+'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+
+
 def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='absent.yaml'):
         run_command(run, from_file=str(tmp_path / 'absent.yaml'))

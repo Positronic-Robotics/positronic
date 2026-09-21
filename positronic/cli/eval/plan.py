@@ -1,5 +1,6 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -17,6 +18,10 @@ TRANSACTION_KEY_FIELD = 'transaction_key'
 ALIAS_FIELD = 'alias'
 
 
+class _KeyGivenTwice(yaml.constructor.ConstructorError):
+    """A plan repeated a mapping key. The key this names is a plan field, never a stated value."""
+
+
 class _OneValuePerKey(yaml.SafeLoader):
     """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
     two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
@@ -26,10 +31,31 @@ class _OneValuePerKey(yaml.SafeLoader):
         for key_node, _ in node.value:
             key = self.construct_object(key_node, deep=deep)
             if isinstance(key, str) and key in seen:
-                raise yaml.constructor.ConstructorError(None, None, f'{key!r} is given twice', key_node.start_mark)
+                raise _KeyGivenTwice(None, None, f'{key!r} is given twice', key_node.start_mark)
             if isinstance(key, str):
                 seen.add(key)
         return super().construct_mapping(node, deep=deep)
+
+
+# PyYAML quotes what it read back at the reader, in both quote styles.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def _diagnostic_without_document_text(exc: yaml.YAMLError) -> str:
+    """What the parser refused, and where, but no text it read from the file.
+
+    PyYAML renders the offending source line onto the mark, and names an alias, an anchor or a tag
+    in the message itself. Each of those sits in value position, where a plan states a registry
+    password, so every quoted run is dropped. The key `_KeyGivenTwice` names is a plan field.
+    """
+    if not isinstance(exc, yaml.MarkedYAMLError):
+        return 'the file does not parse'
+    mark = exc.problem_mark or exc.context_mark
+    where = f'line {mark.line + 1}, column {mark.column + 1}' if mark is not None else ''
+    said = [part for part in (exc.context, exc.problem) if part]
+    if not isinstance(exc, _KeyGivenTwice):
+        said = [_QUOTED.sub("'...'", part) for part in said]
+    return ', '.join([*said, where] if where else said)
 
 
 def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
@@ -43,7 +69,7 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
     except OSError as exc:
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
-        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
+        raise SystemExit(f'{path} reads as neither YAML nor JSON: {_diagnostic_without_document_text(exc)}') from exc
     for field, stated in ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias)):
         if stated is None or not isinstance(payload, dict):
             continue
