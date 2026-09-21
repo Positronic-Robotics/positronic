@@ -614,7 +614,7 @@ def test_a_plan_file_states_the_file_and_never_the_password(credential: dict):
     with pytest.raises(ValidationError, match='stays in the file'):
         EvalPlan.model_validate(payload, context={FROM_A_PLAN_FILE: True})
 
-    EvalPlan.model_validate(payload)  # the same payload IS what a request carries
+    EvalPlan.model_validate(payload)  # a request carries this same payload
 
 
 def test_a_credential_states_one_route_to_its_password(credential: dict):
