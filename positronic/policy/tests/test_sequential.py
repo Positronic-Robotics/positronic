@@ -9,7 +9,7 @@ from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 
 
@@ -50,11 +50,11 @@ def test_sequential_combines_component_metadata():
         def meta(self):
             return {'config': {'fps': 10}}
 
-    class NamedStop(StopOnFault):
+    class NamedPause(PauseOnUnavailable):
         def meta(self):
             return {'config': {'fault_handling': True, 'fps': 20}}
 
-    assert Sequential(NamedStop(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
+    assert Sequential(NamedPause(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
 
 
 @pytest.mark.parametrize('with_codec', [False, True])

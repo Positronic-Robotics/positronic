@@ -25,7 +25,7 @@ from positronic.policy.compatibility import (
     TemporalStackV1,
     _LayerV1,
 )
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
@@ -36,7 +36,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
     for component in (
         ChunkedSchedule,
-        StopOnFault,
+        PauseOnUnavailable,
         TemporalStack,
         BinarizeGripTraining,
         BinarizeGripInference,

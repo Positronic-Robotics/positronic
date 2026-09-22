@@ -22,7 +22,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import codecs
@@ -355,7 +355,7 @@ def pipeline(codec: Codec, source: cfn.Config, fps: float = 15.0, horizon_sec: f
     model_source = source(modality=codec.training_encoder.meta[GR00T_MODALITY])
     return PolicyDeployment(
         model_source,
-        Sequential(StopOnFault(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(*gr00t.IMAGE_SIZE)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(*gr00t.IMAGE_SIZE)),
         codec,
     )
 

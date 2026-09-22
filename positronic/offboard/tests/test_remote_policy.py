@@ -28,7 +28,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -278,7 +278,7 @@ def served(start_server):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
             DictSource({'050000': model}),
-            local if local is not None else Sequential(StopOnFault(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
+            local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
         server = start_server(pipeline, grpc=transport == 'grpc')
@@ -293,7 +293,11 @@ def served(start_server):
 def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first):
     resize = RestrictImageSize(8, 8)
     schedule = ChunkedSchedule(fps=10, horizon_sec=0.2)
-    local = Sequential(resize, StopOnFault(), schedule) if resize_first else Sequential(StopOnFault(), schedule, resize)
+    local = (
+        Sequential(resize, PauseOnUnavailable(), schedule)
+        if resize_first
+        else Sequential(PauseOnUnavailable(), schedule, resize)
+    )
     address, model, pipeline = served(local=local, transport=transport)
     policy = RemotePolicy(transport, address)
     assert policy.meta()['server.model_name'] == 'fixed'
@@ -546,8 +550,8 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
     inputs = []
     for placement in (
         {'codec': codec},
-        {'local': Sequential(StopOnFault(), ChunkedSchedule(fps=10), codec)},
-        {'local': Sequential(StopOnFault(), codec, ChunkedSchedule(fps=10))},
+        {'local': Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), codec)},
+        {'local': Sequential(PauseOnUnavailable(), codec, ChunkedSchedule(fps=10))},
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
         runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)

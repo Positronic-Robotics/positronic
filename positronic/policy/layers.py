@@ -8,7 +8,7 @@ Describe a local stack without creating episode state::
     from positronic.policy.sequential import Sequential
 
     definition = Sequential(
-        StopOnFault(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)
+        PauseOnUnavailable(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)
     )
     episode = runtime.start(definition, infer)
     step = episode.send(obs)
@@ -58,14 +58,16 @@ def _arms_available(obs) -> bool:
 MILLISECOND_NS = 10**6
 
 
-class StopOnFault(Policy):
+class PauseOnUnavailable(Policy):
     """Withhold commands and child calls while any arm is unavailable.
 
     An unavailable arm causes an empty command set and a status check one millisecond later. Once every
-    arm is available, calls resume on the same child policy.
+    arm is available, calls resume on the same child policy, retaining queued commands and pending answers.
+
+    TODO(#789): Define plan invalidation and recovery after robot unavailability.
     """
 
-    WIRE_NAME = 'stop_on_fault'
+    WIRE_NAME = 'stop_on_fault'  # Stable protocol identifier, independent of the Python class name.
     WIRE_VERSION = 2
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:

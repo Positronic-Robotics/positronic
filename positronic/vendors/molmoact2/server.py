@@ -9,7 +9,7 @@ from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
 
@@ -57,7 +57,7 @@ molmoact2_source = cfn.Config(MolmoAct2Source)
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
 def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = None):
     return PolicyDeployment(
-        source, Sequential(StopOnFault(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
+        source, Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
     )
 
 

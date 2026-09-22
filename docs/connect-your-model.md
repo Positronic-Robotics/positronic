@@ -111,7 +111,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`; the standard stack puts `StopOnFault` ahead of the model, which answers such a step itself rather than plan against an arm that will not take its commands. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`; the standard stack puts `PauseOnUnavailable` ahead of the model, which answers such a step itself rather than plan against an arm that will not take its commands. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -174,7 +174,7 @@ from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 
 
 class MyModel(Model):
@@ -202,7 +202,7 @@ class MySource(ModelSource):
 
 deployment = PolicyDeployment(
     source=MySource(),
-    local=Sequential(StopOnFault(), ChunkedSchedule(fps=15)),
+    local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)),
 )
 server = PolicyServer(deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])

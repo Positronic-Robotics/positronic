@@ -20,7 +20,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.serialization import serialize
 from positronic.vendors.galaxea import codecs, protocol
 
@@ -185,7 +185,7 @@ class GalaxeaSource(ModelSource):
 def pipeline(codec: codecs.DroidCodec, source: ModelSource, execution_steps: int = 16):
     return PolicyDeployment(
         source,
-        Sequential(StopOnFault(), ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
         codecs.droid(action=codec),
     )
 

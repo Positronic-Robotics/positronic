@@ -33,7 +33,7 @@ from positronic.policy import executor as executor_module
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import Harness, Rollout
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
 
@@ -573,7 +573,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
                 time.sleep(delay)
                 return [{MOTOR: i} for i in range(1, 51)]
 
-            return Sequential(StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0)).run(runtime, infer)
+            return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15, horizon_sec=1.0)).run(runtime, infer)
 
     definition = CompletePolicy()
     with pimm.World(virtual_time=True) as world:

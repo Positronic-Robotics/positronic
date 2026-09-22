@@ -29,7 +29,7 @@ from positronic.policy.codec import (
     SetControlMode,
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.sequential import Sequential
 
@@ -46,10 +46,10 @@ class Echo(Policy):
 
 @pytest.mark.parametrize('status', [RobotStatus.ERROR, RobotStatus.BUSY])
 @pytest.mark.parametrize('channel', [keys.ROBOT_STATUS, 'robot_state.left.status', 'robot_state.right.status'])
-def test_fault_withholds_commands_and_resumes_on_recovery(execution, status, channel):
+def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, status, channel):
     runtime, _ = execution
     inner = Mock(send=Mock(side_effect=lambda obs: Step(obs, 100_000_000)))
-    run = runtime.start(StopOnFault(), inner)
+    run = runtime.start(PauseOnUnavailable(), inner)
     try:
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE, channel: status}
         assert run.send(obs) == Step({}, 1_000_000)
@@ -357,7 +357,7 @@ class TestRestrictImageSize:
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
-        Sequential(StopOnFault(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
         ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],
@@ -389,7 +389,7 @@ def test_non_deliverable_codec_is_rejected():
 def test_wire_names_match_the_registered_components():
     instances = {
         'chunked_schedule': ChunkedSchedule(fps=10),
-        'stop_on_fault': StopOnFault(),
+        'stop_on_fault': PauseOnUnavailable(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),

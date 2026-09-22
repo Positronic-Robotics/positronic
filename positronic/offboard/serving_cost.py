@@ -40,7 +40,7 @@ from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.base import Obs, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import prepare_obs
 from positronic.policy.sequential import Sequential
 
@@ -75,7 +75,7 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
     offsets = tuple(-(frames - 1 - step) / rate_hz for step in range(frames))
     stacked = (*cameras, keys.EE_POSE, keys.GRIP)
     return Sequential(
-        StopOnFault(),
+        PauseOnUnavailable(),
         TemporalStack(stacked, offsets),
         ChunkedSchedule(fps=rate_hz),
         RestrictImageSize(width=width, height=height),

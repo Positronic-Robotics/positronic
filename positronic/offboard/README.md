@@ -336,12 +336,12 @@ from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 
 pipeline = PolicyDeployment(
     source=my_model_source,
     local=Sequential(
-        StopOnFault(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
+        PauseOnUnavailable(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
     ),
     codec=my_model_codec,
 )

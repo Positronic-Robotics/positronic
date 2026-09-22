@@ -19,7 +19,7 @@ from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -262,7 +262,7 @@ def pipeline(
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
     (``models.DROID_EE_FRAME``); ``None`` for a checkpoint trained in ``default``, or one speaking joints.
     """
-    local = Sequential(StopOnFault(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
+    local = Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = Sequential(ChangeEEFrame(ee_frame), local)

@@ -435,9 +435,9 @@ class Codec:
     ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]: ...
 ```
 
-For example, `runtime.start(Sequential(StopOnFault(), ChunkedSchedule(fps=20)), infer)`
+For example, `runtime.start(Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=20)), infer)`
 passes the inference callable into the scheduler, and the scheduler's live run
-into `StopOnFault`. The caller sends observations to the returned run.
+into `PauseOnUnavailable`. The caller sends observations to the returned run.
 
 Codecs compose with `|` for sequential conversion and `&` for parallel conversion.
 `Sequential.meta()` flattens and combines component metadata, with later
@@ -448,6 +448,7 @@ their caller. `Codec.wrap` does not take ownership of the child it wraps.
 
 ## Deferred, not to decide now
 
+- Plan invalidation and recovery after robot unavailability; [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
 - TODO: Record dropped and late waypoints in the scheduling processor.
 - The shape of the robot description, and a server's ability to refuse one.
