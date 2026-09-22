@@ -319,8 +319,8 @@ def test_parking_does_not_release_at_target_with_moving_or_invalid_velocity(rig,
     assert not rig.vendor.closed
 
 
-@pytest.mark.parametrize('disturbance', ['position', 'velocity'])
-def test_parking_requires_continuously_still_arrival_before_release(rig, disturbance):
+@pytest.mark.parametrize(('position_offset', 'velocity'), [(0.01, 0.0), (0.0, 0.03)])
+def test_parking_requires_continuously_still_arrival_before_release(rig, position_offset, velocity):
     rig.tick(3)
     rig.vendor._pos[:6] = PARK
     rig.vendor.stuck = True
@@ -332,10 +332,8 @@ def test_parking_requires_continuously_still_arrival_before_release(rig, disturb
     rig.vendor._vel[:] = 0.0
     rig.tick(0.1)
     assert not rig.vendor.released_at
-    if disturbance == 'position':
-        rig.vendor._pos[0] = 0.01
-    else:
-        rig.vendor._vel[0] = 0.03
+    rig.vendor._pos[0] = position_offset
+    rig.vendor._vel[0] = velocity
     rig.tick(0.1)
     rig.vendor._pos[:6] = PARK
     rig.vendor._vel[:] = 0.0
@@ -395,35 +393,42 @@ def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
     assert not rig.vendor.released_at
 
 
-@pytest.mark.parametrize('kind', ['arm', 'gripper', 'sync'])
-def test_new_command_interrupts_idle_parking(world, rig, kind):
+@pytest.fixture
+def parking_rig(rig):
     rig.raise_arm()
     rig.tick(0.8)
     assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
-    position = rig.vendor._pos[:6].copy()
-    assert 0.1 < position[1] < RAISED[1]
-    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
-    wire_call(world, caller, rig.driver.sync_move)
+    assert 0.1 < rig.vendor._pos[1] < RAISED[1]
+    return rig
+
+
+def test_arm_command_interrupts_idle_parking(parking_rig):
     target = np.array([0.0, 0.8, 0.8, 0.0, 0.0, 0.0])
-    answer = None
-    if kind == 'arm':
-        rig.commands.push(command.JointPosition(target))
-    elif kind == 'gripper':
-        rig.grip.push(0.7)
-    else:
-        answer = caller(command.JointPosition(target))
-    rig.tick(0.02)
-    if kind == 'arm':
-        np.testing.assert_array_equal(rig.vendor.targets[-1][:6], target)
-    elif kind == 'gripper':
-        np.testing.assert_allclose(rig.vendor.targets[-1][:6], position)
-        assert rig.vendor.targets[-1][6] == pytest.approx(0.3)
-    else:
-        rig.tick(2.5)
-        assert answer is not None and answer.done()
-        answer.result()
-        np.testing.assert_array_equal(rig.vendor.targets[-1][:6], target)
-    assert not rig.vendor.released_at
+    parking_rig.commands.push(command.JointPosition(target))
+    parking_rig.tick(0.02)
+    np.testing.assert_array_equal(parking_rig.vendor.targets[-1][:6], target)
+    assert not parking_rig.vendor.released_at
+
+
+def test_gripper_command_interrupts_idle_parking_and_holds_arm(parking_rig):
+    position = parking_rig.vendor._pos[:6].copy()
+    parking_rig.grip.push(0.7)
+    parking_rig.tick(0.02)
+    np.testing.assert_allclose(parking_rig.vendor.targets[-1][:6], position)
+    assert parking_rig.vendor.targets[-1][6] == pytest.approx(0.3)
+    assert not parking_rig.vendor.released_at
+
+
+def test_sync_command_interrupts_idle_parking(world, parking_rig):
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](parking_rig.driver)
+    wire_call(world, caller, parking_rig.driver.sync_move)
+    target = np.array([0.0, 0.8, 0.8, 0.0, 0.0, 0.0])
+    answer = caller(command.JointPosition(target))
+    parking_rig.tick(2.5)
+    assert answer.done()
+    answer.result()
+    np.testing.assert_array_equal(parking_rig.vendor.targets[-1][:6], target)
+    assert not parking_rig.vendor.released_at
 
 
 def test_commands_do_not_interrupt_shutdown_parking(world, rig):
@@ -438,3 +443,16 @@ def test_commands_do_not_interrupt_shutdown_parking(world, rig):
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
+
+
+def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
+    connections = []
+
+    def connect(channel, sim):
+        vendor = FakeYam()
+        connections.append(vendor)
+        return vendor
+
+    with pimm.World(virtual_time=True) as world:
+        world.start(yam.Robot(connect=connect))
+    assert not connections

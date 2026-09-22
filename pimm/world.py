@@ -521,7 +521,7 @@ class World:
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
         self._shutdown_policies = {}
-        self._foreground_shutdown: list[Iterator[Command]] = []
+        self._protected_foreground_loops: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
         self._connections = []
@@ -546,7 +546,7 @@ class World:
             except BaseException as exc:
                 errors.append(exc)
 
-        self._drive(self._interleave([finish(loop) for loop in self._foreground_shutdown]))
+        self._drive(self._interleave([finish(loop) for loop in self._protected_foreground_loops]))
         if len(errors) == 1:
             raise errors[0]
         if errors:
@@ -800,6 +800,13 @@ class World:
             case _:
                 raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
+    def _run_foreground(self, cs: ControlSystem) -> Iterator[Command]:
+        loop = _CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock)
+        if cs.shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
+            self._protected_foreground_loops.append(loop)
+        for command in loop:  # noqa: UP028 — yield from would close the protected device with this wrapper
+            yield command
+
     def start(  # noqa: C901
         self,
         main_process: ControlSystem | list[ControlSystem | None],
@@ -885,14 +892,7 @@ class World:
 
         for cs in spawned:
             self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_policy=cs.shutdown_policy)
-        loops = []
-        for cs in in_process:
-            loop = _CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock)
-            loops.append(loop)
-            if cs.shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
-                # Keep the device iterator alive even if a sibling closes the scheduler by raising.
-                self._foreground_shutdown.append(loop)
-        return self._interleave(loops)
+        return self._interleave([self._run_foreground(cs) for cs in in_process])
 
     def run(
         self,

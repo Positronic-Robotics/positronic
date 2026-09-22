@@ -342,6 +342,7 @@ class _Arm(DriverRun[command.CommandType]):
             hold_target = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
             if not self.moves.errored:
                 return
+        # rules-allow: swallowed-error — any failure before verified parking must block torque release
         except Exception:
             self.moves.errored = True
             logger.exception('Could not verify parking; keeping the arm powered')
@@ -354,8 +355,8 @@ class _Arm(DriverRun[command.CommandType]):
                 q, grip = hold_target
                 self.command_target(q, grip)
                 self.publish(self.observations())
+            # rules-allow: swallowed-error — a failed hold must keep the connection open and shutdown blocked
             except Exception:
-                # A failed hold cannot authorize torque release; keep trying with the connection open.
                 logger.exception('Could not hold the arm; shutdown remains blocked')
             yield self.limiter.wait()
 
