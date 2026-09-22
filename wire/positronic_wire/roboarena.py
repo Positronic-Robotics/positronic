@@ -11,17 +11,9 @@ from collections.abc import Mapping
 from typing import Self
 
 from positronic_wire import wire
-from positronic_wire.websocket import refusal_of
+from positronic_wire.websocket import WebsocketClientConnection, refusal_of
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.sync.client import connect
-from websockets.sync.connection import Connection
-
-# How often the client pings an idle connection, and how long it waits for the pong. A server holds one
-# connection open across a whole run and sends nothing between inferences, so a shorter pong deadline drops
-# a connection that is merely quiet. FOOTGUN: this bounds a missing pong. A server that answers pings while
-# its policy wedges holds the caller until the caller's own `recv` deadline passes.
-PING_INTERVAL_S = 60.0
-PING_TIMEOUT_S = 600.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,33 +34,18 @@ class RoboarenaAddress(wire.SessionAddress):
         return self
 
 
-class RoboarenaClientConnection(wire.ClientConnection):
-    """A client's end of one roboarena connection."""
-
-    def __init__(self, connection: Connection):
-        self._connection = connection
-
-    def send(self, message: bytes) -> None:
-        try:
-            self._connection.send(message)
-        except ConnectionClosed as e:
-            raise wire.PeerDisconnected(str(e)) from e
+class RoboarenaClientConnection(WebsocketClientConnection):
+    """A client's end of one roboarena connection: a websocket session whose peer may answer in text."""
 
     def recv(self, timeout: float | None = None) -> bytes:
         try:
-            message = self._connection.recv(timeout=timeout)
+            message = self._websocket.recv(timeout=timeout)
         except ConnectionClosed as e:
             raise wire.PeerDisconnected(str(e)) from e
         if isinstance(message, str):
             # The server reports a failure as a text frame, and serves nothing more on that connection.
             raise wire.PeerDisconnected(f'the server answered this error text: {message}')
         return message
-
-    def close(self) -> str:
-        state_before_close = self._connection.state.name
-        self._connection.close()
-        # A close that times out still reaches CLOSED locally; only the close code says the server answered.
-        return f'state {state_before_close} -> {self._connection.state.name}, close code {self._connection.close_code}'
 
 
 class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
@@ -80,6 +57,12 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
+    # How often the client pings an idle connection, and how long it waits for the pong. A server holds one
+    # connection open across a whole run and sends nothing between inferences, so a shorter pong deadline
+    # drops a connection that is merely quiet. FOOTGUN: this bounds a missing pong. A server that answers
+    # pings while its policy wedges holds the caller until the caller's own `recv` deadline passes.
+    PING_INTERVAL_S = 60.0
+    PING_TIMEOUT_S = 600.0
 
     def session_url(self, address: RoboarenaAddress) -> str:
         """The root this wire dials. A roboarena session names no route, so the server is the whole of it."""
@@ -105,8 +88,8 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
                 open_timeout=open_timeout,
                 additional_headers=headers,
                 compression=None,
-                ping_interval=PING_INTERVAL_S,
-                ping_timeout=PING_TIMEOUT_S,
+                ping_interval=self.PING_INTERVAL_S,
+                ping_timeout=self.PING_TIMEOUT_S,
                 max_size=wire.MAX_MESSAGE_BYTES,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:

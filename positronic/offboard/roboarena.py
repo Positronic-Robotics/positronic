@@ -21,6 +21,9 @@ ENDPOINT = 'endpoint'
 INFER = 'infer'
 RESET = 'reset'
 
+# The session a frame belongs to, on a server that keeps per-session history.
+SESSION_ID = 'session_id'
+
 # How long a read waits, in seconds. The handshake covers a backbone that loads on connect; the inference
 # covers one forward pass; the reset covers an acknowledgement the server sends at once.
 HANDSHAKE_TIMEOUT_S = 60.0
@@ -63,7 +66,7 @@ class RoboarenaClient:
             raise RuntimeError('Not connected: the server announces its config on connect')
         return self._server_config
 
-    def ping(self) -> bool:
+    def is_ready(self) -> bool:
         """Whether the server announces itself, which is the readiness the protocol carries."""
         return self._wire.probe(self._address, None, HANDSHAKE_TIMEOUT_S) is None
 
@@ -81,7 +84,7 @@ class RoboarenaClient:
             return
         frame: dict[str, Any] = {ENDPOINT: RESET}
         if session_id is not None:
-            frame['session_id'] = session_id
+            frame[SESSION_ID] = session_id
         self._connection.send(serialize(frame))
         self._connection.recv(timeout=RESET_TIMEOUT_S)
 

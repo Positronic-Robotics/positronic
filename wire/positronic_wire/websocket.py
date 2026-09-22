@@ -62,8 +62,7 @@ _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
     """What a handshake that did not open says about the server.
 
-    Public because every wire the `websockets` library dials reads its errors the same way, and the
-    roboarena wire is the second of them.
+    Every wire the `websockets` library dials reads its errors this way.
     """
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)

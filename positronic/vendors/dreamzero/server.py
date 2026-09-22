@@ -151,7 +151,7 @@ class DreamZeroSubprocess:
         self._launch()
         client = RoboarenaClient(port=self.roboarena_port)
         wait_for_subprocess_ready(
-            check_ready=client.ping,
+            check_ready=client.is_ready,
             check_crashed=self._check_crashed,
             description='DreamZero subprocess',
             on_progress=on_progress,

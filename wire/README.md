@@ -8,7 +8,7 @@ ends of a wire share. It is one distribution, installable on its own, with `grpc
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.3.0"
+uv add "positronic-wire==0.4.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
