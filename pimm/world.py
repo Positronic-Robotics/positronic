@@ -560,11 +560,21 @@ class World:
             raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
     def _join_background_processes(self) -> None:
+        errors: list[BaseException] = []
+        has_protected_children = ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             policy = self._shutdown_policies[process]
             timeout_s = None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0
-            process.join(timeout=timeout_s)
+            while True:
+                try:
+                    process.join(timeout=timeout_s)
+                except (KeyboardInterrupt, SystemExit) as exc:
+                    if not has_protected_children:
+                        raise
+                    errors.append(exc)
+                else:
+                    break
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
@@ -574,6 +584,10 @@ class World:
                     process.kill()
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup('Background shutdown interrupted', errors)
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
