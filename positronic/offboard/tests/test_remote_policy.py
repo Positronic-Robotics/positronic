@@ -343,9 +343,9 @@ class DeclaredPromptModel(FixedModel):
         return {'model_name': 'fixed', 'prompt': 'A prompt this deployment declares.'}
 
 
-def test_a_prompt_the_server_declares_is_recorded_as_sent_and_the_task_still_goes_out(served):
-    """A ``prompt`` in the handshake is the deployment's declaration. It is recorded whole under the server
-    block, it is not the episode's task, and the task the episode sends reaches the model unchanged."""
+def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unchanged(served):
+    """A ``prompt`` in the handshake appears unchanged in the policy's meta, under the server block. The task an
+    episode sends reaches the model unchanged, with no prompt beside it."""
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
     assert policy.meta()['server.prompt'] == 'A prompt this deployment declares.'
