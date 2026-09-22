@@ -538,19 +538,19 @@ class World:
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
     def _finish_foreground_shutdown(self) -> None:
-        errors: list[Exception] = []
+        errors: list[BaseException] = []
 
         def finish(loop: Iterator[Command]) -> Iterator[Command]:
             try:
                 yield from loop
-            except Exception as exc:
+            except BaseException as exc:
                 errors.append(exc)
 
         self._drive(self._interleave([finish(loop) for loop in self._foreground_shutdown]))
         if len(errors) == 1:
             raise errors[0]
         if errors:
-            raise ExceptionGroup('Foreground shutdown failed', errors)
+            raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
     def _join_background_processes(self) -> None:
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
