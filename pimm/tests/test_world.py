@@ -1488,20 +1488,21 @@ def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure)
     assert closed.is_set()
 
 
-def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(monkeypatch):
+@pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(monkeypatch, error_type):
     class FailingShutdown(ControlSystem):
         shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
 
         def run(self, should_stop, clock):
             while not should_stop.value:
                 yield Sleep(0.01)
-            raise RuntimeError('shutdown failed')
+            raise error_type('shutdown failed')
 
     ready, holding, release, closed = (threading.Event() for _ in range(4))
     release.set()
     waiter = ShutdownWaiter(ready, holding, release, closed)
     join, close, emitter_close, receiver_close = (Mock() for _ in range(4))
-    with pytest.raises(RuntimeError, match='shutdown failed'):
+    with pytest.raises(error_type, match='shutdown failed'):
         with World(virtual_time=True) as world:
             loop = world.start([FailingShutdown(), waiter], Finisher(1))
             next(loop)
@@ -1522,3 +1523,29 @@ def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(
     close.assert_called_once()
     emitter_close.assert_called_once()
     receiver_close.assert_called_once()
+
+
+def test_foreground_shutdown_reports_multiple_base_exceptions_after_draining():
+    class FailingShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def __init__(self, error):
+            self.error = error
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            raise self.error
+
+    errors = [KeyboardInterrupt(), SystemExit(1)]
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with World(virtual_time=True) as world:
+            loop = world.start([
+                *(FailingShutdown(error) for error in errors),
+                ShutdownWaiter(ready, holding, release, closed),
+            ])
+            next(loop)
+    assert list(raised.value.exceptions) == errors
+    assert holding.is_set() and closed.is_set()
