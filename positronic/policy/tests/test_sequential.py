@@ -57,6 +57,33 @@ def test_sequential_combines_component_metadata():
     assert Sequential(NamedStop(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
 
 
+@pytest.mark.parametrize('with_codec', [False, True])
+@pytest.mark.parametrize('timed', [False, True])
+def test_sequence_preserves_normal_processor_completion(with_codec, timed):
+    closed = []
+
+    class Finite(Policy):
+        def run(self, runtime):
+            try:
+                yield
+                yield Step({'value': 1}, 123)
+            finally:
+                closed.append(True)
+
+    stack = Sequential(RestrictImageSize(), Finite()) if with_codec else Sequential(Finite())
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
+        run = runtime.start(stack)
+        try:
+            assert run.send({}) == Step({'value': 1}, 123)
+            with pytest.raises(StopIteration):
+                run.send({})
+            assert closed == [True]
+        finally:
+            runtime.close()
+            run.close()
+
+
 @pytest.mark.parametrize('translation', [0.1, 0.2])
 def test_sequential_rejects_two_frame_conversions(translation):
     outer = ChangeEEFrame([0.1, 0, 0, 1, 0, 0, 0])

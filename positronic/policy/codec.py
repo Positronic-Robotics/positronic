@@ -130,7 +130,11 @@ class Codec:
         call = self.wrap(inner.send)
         obs = yield
         while True:
-            obs = yield call(obs)
+            try:
+                result = call(obs)
+            except StopIteration:
+                return
+            obs = yield result
 
     def to_spec(self) -> dict[str, Any]:
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')

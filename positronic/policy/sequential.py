@@ -43,7 +43,11 @@ class Sequential(Processor[InputT, OutputT]):
                 call = call.send
             value = yield
             while True:
-                value = yield call(value)
+                try:
+                    result = call(value)
+                except StopIteration:
+                    return
+                value = yield result
         finally:
             for child in reversed(children):
                 child.close()
