@@ -85,8 +85,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--task', default='put_plastic_bottles_in_bin')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--camera-height', type=int, default=168)
-    parser.add_argument('--camera-width', type=int, default=224)
+    parser.add_argument('--camera-height', type=int, default=260)
+    parser.add_argument('--camera-width', type=int, default=416)
     args = parser.parse_args()
 
     adapter = AbcAdapter(CAMERAS)

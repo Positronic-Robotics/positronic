@@ -12,8 +12,8 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
 
 @cfn.config(
     camera_dict=CAMERAS,
-    camera_height=168,
-    camera_width=224,
+    camera_height=260,
+    camera_width=416,
     # ABC's own sim-eval budget is 3540 actions of ~34 ms.
     timeout=120.0,
     seed=None,
