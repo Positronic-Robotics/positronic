@@ -60,9 +60,9 @@ The split introduces a delay: the model takes time to think, and the network add
 
 Two consequences shape the API:
 
-**The server usually returns a whole trajectory, not one target.** A server *can* return a single destination for the robot, but in practice a model returns a short stretch of upcoming motion at once. The client executes that trajectory while it requests the next prediction, so the robot keeps moving instead of stalling between requests. When new actions arrive, they replace the part of the trajectory not yet executed.
+**The server usually returns an ordered action chunk.** A model predicts a short stretch of upcoming motion at once. The client policy decides when to request the next chunk and how to combine predictions with commands already being executed.
 
-**Each action says when to run.** The actions come tagged with a time offset in seconds, measured from the start of the returned trajectory. The client lays them on its own timeline the moment the prediction arrives and runs each one at its offset. Because the client times everything from when the answer came back, the model never has to know about network or compute delay.
+**The client scheduler decides when each action runs.** `ChunkedSchedule` uses its configured FPS to space commands, starting when it reads the completed prediction. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
 
 ```mermaid
 sequenceDiagram
@@ -71,7 +71,7 @@ sequenceDiagram
     C->>S: observation
     Note over S: model thinks (latency)
     S-->>C: ordered action chunk
-    Note over C: run them from "now"…<br/>and request the next set before they end
+    Note over C: execute the chunk at the configured cadence
     C->>S: next observation
     S-->>C: next action chunk
 ```
@@ -115,12 +115,12 @@ Your server receives every key each step. An arm that is faulted or busy still r
 
 ### Actions (server → client)
 
-The normal response is a list of action dicts — a short trajectory. (A single action dict is also valid; what matters is that the client-side layers and the server, taken together, produce actions carrying the fields below.)
+`ChunkedSchedule` expects a list of action dicts, including a one-item list for a single action. Other client processors may accept different response shapes.
 
 ```python
 {"result": [
     {"robot_command": CartesianPosition(pose=...), "target_grip": 1.0},
-    {"robot_command": CartesianPosition(pose=...), "target_grip": 1.066},
+    {"robot_command": CartesianPosition(pose=...), "target_grip": 1.0},
     ...
 ]}
 ```

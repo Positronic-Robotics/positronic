@@ -182,6 +182,17 @@ def test_component_versions_are_independent_and_exact():
         })
 
 
+@pytest.mark.parametrize(
+    'timing',
+    [{'name': 'action_timestamp', 'args': {'fps': 10}}, {'name': 'action_horizon', 'args': {'horizon_sec': 0.1}}],
+)
+@pytest.mark.parametrize('group', [None, 'seq', 'par'])
+def test_v2_processors_reject_legacy_timing_codecs(timing, group):
+    codec = {group: [timing, {'name': 'flip_grip'}]} if group else timing
+    with pytest.raises(ValueError, match='V1 timing codecs cannot be mixed with Step processors'):
+        spec.from_spec({'seq': [{'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}, codec]})
+
+
 def test_deprecated_component_warns_once_per_stack_and_removed_one_fails(monkeypatch):
     current = spec.COMPONENTS['flip_grip'][1].implementation
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Serve flip_grip v2 instead.')

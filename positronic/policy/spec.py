@@ -81,4 +81,10 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
             versions[version] = factory
         return versions[version](**node.get(ARGS, {}))
 
-    return build(node)
+    stack = build(node)
+    legacy_timing = any(
+        codec.WIRE_VERSION in selected.get(codec.WIRE_NAME, {}) for codec in (ActionTimestampV1, ActionHorizonV1)
+    )
+    if legacy_timing and isinstance(stack, Processor) and not isinstance(stack, (_LayerV1, StackV1)):
+        raise ValueError('V1 timing codecs cannot be mixed with Step processors; configure ChunkedSchedule timing')
+    return stack
