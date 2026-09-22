@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 ENDPOINT = 'endpoint'
 INFER = 'infer'
 RESET = 'reset'
+# The text the backend answers a reset with; the wire reports every text frame as the server's error.
+RESET_ACKNOWLEDGEMENT = 'reset successful'
 
 # The session a frame belongs to, on a server that keeps per-session history.
 SESSION_ID = 'session_id'
@@ -88,8 +90,10 @@ class RoboarenaClient:
         try:
             self._connection.recv(timeout=RESET_TIMEOUT_S)
         except wire.PeerDisconnected as e:
-            # The bundled backend acknowledges a reset in a text frame, which the wire reports as the
-            # peer's own word. A session ends after its reset either way, so both readings end it here.
+            # The backend acknowledges a reset in text, and the wire reports every text frame as the
+            # server's error, carrying that text last. Any other reading reaches the caller.
+            if not str(e).endswith(RESET_ACKNOWLEDGEMENT):
+                raise
             logger.debug(f'roboarena reset answered: {e}')
 
     def close(self) -> None:

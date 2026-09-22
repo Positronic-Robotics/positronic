@@ -3,7 +3,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
+from websockets.exceptions import ConnectionClosedError
 
 from positronic.offboard import roboarena
 from positronic.utils.serialization import deserialize, serialize
@@ -16,13 +18,31 @@ def _client(connection) -> roboarena.RoboarenaClient:
 
 
 def test_a_reset_acknowledged_in_text_ends_the_session():
-    """The bundled backend answers `reset successful` as a text frame, which the wire reports as the peer."""
-    connection = MagicMock(**{'recv.side_effect': wire.PeerDisconnected('the server answered this error text: ok')})
+    """The backend answers the acknowledgement as a text frame, which the wire reports as the peer."""
+    websocket = MagicMock(**{'recv.return_value': roboarena.RESET_ACKNOWLEDGEMENT})
 
-    _client(connection).reset(session_id='an-episode')
+    _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset(session_id='an-episode')
 
-    sent = deserialize(connection.send.call_args.args[0])
+    sent = deserialize(websocket.send.call_args.args[0])
     assert sent == {roboarena.ENDPOINT: roboarena.RESET, roboarena.SESSION_ID: 'an-episode'}
+
+
+def test_a_reset_answered_with_error_text_reaches_the_caller():
+    """A caller logs this at ERROR: the backend still holds the session's frame history."""
+    websocket = MagicMock(**{'recv.return_value': 'CUDA out of memory'})
+
+    with pytest.raises(wire.PeerDisconnected, match='CUDA out of memory'):
+        _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset(session_id='an-episode')
+
+
+def test_a_reset_the_peer_never_answered_reaches_the_caller():
+    closed = ConnectionClosedError(None, None)
+    websocket = MagicMock(**{'recv.side_effect': closed})
+
+    with pytest.raises(wire.PeerDisconnected) as ended:
+        _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset()
+
+    assert ended.value.__cause__ is closed
 
 
 def test_a_reset_acknowledged_in_a_frame_ends_the_session():
