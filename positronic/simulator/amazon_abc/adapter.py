@@ -57,7 +57,7 @@ class AbcAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {mapping.OBS_SIM_STATE: raw_obs[mapping.OBS_SIM_STATE]}
+        return {name: raw_obs[name] for name in (mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL)}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         return {eval_keys.SUCCESS: bool(result[protocol.FRAME_SUCCESS])} if result[protocol.FRAME_DONE] else None
