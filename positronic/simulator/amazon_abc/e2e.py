@@ -20,7 +20,7 @@ from positronic.simulator.amazon_abc.launcher import serve_abc
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 
-_RISE = np.array([0.0, 0.0, 0.02])  # metres, straight up: clear of the table and well inside both arms' reach
+_RISE = np.array([0.0, 0.0, 0.02])  # metres, straight up: clear of the table and inside both arms' reach
 _SETTLE_STEPS = 24  # the joints are position-servoed, so a target is approached rather than jumped to
 _ARRIVED_TOL = 0.008  # metres
 _HELD_TOL = 0.008  # metres the arm nobody commanded may drift while its partner moves
@@ -39,17 +39,15 @@ def _eef(obs: dict, arm: str) -> geom.Transform3D:
 
 
 def _drive(conn: EnvConnection, adapter: AbcAdapter, commands: dict) -> dict:
-    """Send ``commands`` once, then hold them for the settle window, and return the last observation."""
     action = adapter.action(commands)
     result: dict = {}
     for _ in range(_SETTLE_STEPS):
         result = conn.step(action)
-        action = adapter.action(dict.fromkeys(commands))
+        action = adapter.action(dict.fromkeys(commands))  # no new message: the adapter re-sends what it holds
     return _observe(adapter, result)
 
 
 def _raise_one_arm(conn: EnvConnection, adapter: AbcAdapter, start: dict, arm: str) -> dict:
-    """Send ``arm`` straight up from where ``start`` reads it, and check both arms once it settles."""
     partner = next(other for other in mapping.ARMS if other != arm)
     target = geom.Transform3D(_eef(start, arm).translation + _RISE, _eef(start, arm).rotation)
     obs = _drive(

@@ -1,14 +1,13 @@
 """The env server for ABC's bimanual YAM tasks.
 
-Runs in ABC's own interpreter, which the launcher builds. A Cartesian command is solved to joints here, by
-damped-least-squares IK on the arm's control site.
+Runs in ABC's own interpreter, which the launcher builds.
 """
 
 import argparse
 import functools
 from typing import Any
 
-import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv, which the launcher builds
+import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv
 import arm_action
 import mapping
 import mujoco
@@ -18,7 +17,7 @@ from server import EnvProtocol, EnvServer
 
 
 class _Arm:
-    """One YAM chain of the ABC scene: the joints it moves and the site it is measured and driven at."""
+    """One YAM chain of the ABC scene."""
 
     def __init__(self, model: Any, name: str):
         self.name = name
@@ -34,18 +33,13 @@ class _Arm:
 
 
 class AbcEnv(EnvProtocol):
-    """An ABC task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
-
-    ``reset`` rebuilds the env when the token's task or camera size changes.
-    """
-
     def __init__(self):
         self._key: tuple[Any, ...] | None = None
         self._env: Any = None
         self._arms: list[_Arm] = []
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        """ABC's own catalogue, or the tasks ``spec`` names in it; a name, an alias or a prompt resolves."""
+        """ABC's own catalogue, or the tasks ``spec`` names in it."""
         selection = spec.get(mapping.SELECT_TASKS)
         if selection is None:
             specs = abc_sim.list_task_specs()
@@ -121,7 +115,7 @@ class AbcEnv(EnvProtocol):
 
     def _ik(self, arm: _Arm, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         """Damped-least-squares differential IK on the arm's site Jacobian, iterated on a scratch ``MjData``
-        seeded from the live scene so the objects standing in it are never perturbed."""
+        seeded from the live scene: a solve must not move the objects standing in it."""
         iterations, damping, tolerance = 100, 0.05, 1e-4
         model = self._env.model
         data = mujoco.MjData(model)
@@ -174,7 +168,6 @@ class AbcEnv(EnvProtocol):
         return payload
 
     def _physics_state(self) -> np.ndarray:
-        """MuJoCo's ``mjSTATE_INTEGRATION`` vector for this scene."""
         model, data = self._env.model, self._env.data
         spec = mujoco.mjtState.mjSTATE_INTEGRATION
         state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)

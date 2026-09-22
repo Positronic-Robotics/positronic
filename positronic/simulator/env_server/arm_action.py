@@ -23,7 +23,6 @@ def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Apply a world-frame translation and rotation delta to a measured pose."""
     return (
         np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
         np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),

@@ -1,4 +1,4 @@
-"""``AbcAdapter``: the canonical embodiment contract <-> ABC's raw per-arm payloads, client-side."""
+"""``AbcAdapter``: the client side, between the canonical embodiment contract and ABC's raw per-arm payloads."""
 
 from typing import Any
 
@@ -15,7 +15,6 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 
 _LEFT, _RIGHT = mapping.ARMS
-# ABC names the overhead camera `top` and gives each arm's wrist camera the arm's own name.
 CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: _LEFT, keys.WRIST_RIGHT_IMAGE: _RIGHT}
 
 
