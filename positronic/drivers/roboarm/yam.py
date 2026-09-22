@@ -27,15 +27,9 @@ from positronic.drivers import vendor_import
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 from positronic.utils import package_assets_path
 
-from . import RobotStatus, command
+from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
 from .models import DEFAULT_FRAME, YAM_JOINT_NAMES, bundled_yam_model
-from .yam_state import YamState
-
-# i2rt lives in the `yam` extra, which the type-check environment does not install.
-with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
-    from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +54,49 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
 
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
+    # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
+    with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
+        from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from i2rt.robots.utils import GripperType  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
+
+
+class YamState(State, pimm.shared_memory.NumpySMAdapter):
+    Q_OFFSET = 0
+    DQ_OFFSET = Q_OFFSET + 6
+    EE_POSE_OFFSET = DQ_OFFSET + 6
+    STATUS_OFFSET = EE_POSE_OFFSET + 7
+    TOTAL = STATUS_OFFSET + 1
+
+    def __init__(self):
+        super().__init__(shape=(YamState.TOTAL,), dtype=np.dtype(np.float32))
+
+    def instantiation_params(self) -> tuple[Any, ...]:
+        return ()
+
+    @property
+    def q(self) -> np.ndarray:
+        return self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6].copy()
+
+    @property
+    def dq(self) -> np.ndarray:
+        return self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6].copy()
+
+    @property
+    def ee_pose(self) -> geom.Transform3D:
+        pose = self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 7].copy()
+        return geom.Transform3D(pose[:3], geom.Rotation.from_quat(pose[3:7]))
+
+    @property
+    def status(self) -> RobotStatus:
+        return RobotStatus(int(self.array[YamState.STATUS_OFFSET]))
+
+    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus):
+        self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6] = q
+        self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6] = dq
+        self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 3] = ee_pose.translation
+        self.array[YamState.EE_POSE_OFFSET + 3 : YamState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
+        self.array[YamState.STATUS_OFFSET] = status.value
 
 
 class _Kinematics:
