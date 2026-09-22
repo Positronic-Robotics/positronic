@@ -1,4 +1,4 @@
-"""Drive both arms of the ABC env server over the socket and check each reaches its Cartesian target.
+"""Drive both arms of the ABC env server over the socket: each reaches its Cartesian target, and a reset returns both.
 
 Needs a working GL context::
 
@@ -24,6 +24,7 @@ _RISE = np.array([0.0, 0.0, 0.02])  # metres, straight up: clear of the table an
 _SETTLE_STEPS = 24  # the joints are position-servoed, so a target is approached rather than jumped to
 _ARRIVED_TOL = 0.008  # metres
 _HELD_TOL = 0.008  # metres the arm nobody commanded may drift while its partner moves
+_START_POSE_TOL = 0.001  # metres; a reset places the joints, it does not servo them
 
 
 def _message(payload):
@@ -72,6 +73,14 @@ def _raise_one_arm(conn: EnvConnection, adapter: AbcAdapter, start: dict, arm: s
     return obs
 
 
+def _reset_to_start_pose(conn: EnvConnection, adapter: AbcAdapter, token: dict, first_start: dict) -> None:
+    obs = _observe(adapter, conn.reset(token))
+    for arm in mapping.ARMS:
+        offset = np.linalg.norm(_eef(obs, arm).translation - _eef(first_start, arm).translation)
+        print(f'{arm}: {offset * 1000:.1f} mm from its first start pose after a second reset')
+        assert offset < _START_POSE_TOL, f'{arm} starts the next episode {offset * 1000:.1f} mm from its start pose'
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--task', default='put_plastic_bottles_in_bin')
@@ -87,20 +96,19 @@ def main() -> None:
         params = adapter.task_params(records)
         assert [p[eval_keys.TASK] for p in params] == [args.task], params
 
-        frame = conn.reset(
-            adapter.reset_token({
-                **params[0],
-                eval_keys.SEED: args.seed,
-                abc_keys.CAMERA_HEIGHT: args.camera_height,
-                abc_keys.CAMERA_WIDTH: args.camera_width,
-            })
-        )
+        token = adapter.reset_token({
+            **params[0],
+            eval_keys.SEED: args.seed,
+            abc_keys.CAMERA_HEIGHT: args.camera_height,
+            abc_keys.CAMERA_WIDTH: args.camera_width,
+        })
+        frame = conn.reset(token)
         assert frame[protocol.FRAME_META][mapping.META_TASK], 'the env reported no instruction'
         assert frame[protocol.FRAME_CONTROL_DT] > 0.0
         mounts = frame[protocol.FRAME_ROBOT_META][eval_keys.MOUNTS]
         assert set(mounts) == {keys.arm_channel(keys.ROBOT_STATE, arm) + keys.JOINTS_SUFFIX for arm in mapping.ARMS}
         assert all(len(mount) == 3 for mount in mounts.values()), mounts
-        start = _observe(adapter, frame)
+        first_start = start = _observe(adapter, frame)
         for logical in CAMERAS:
             assert start[logical].array.shape == (args.camera_height, args.camera_width, 3), logical
         assert adapter.privileged(frame[protocol.FRAME_OBS])[mapping.OBS_SIM_STATE].size > 0
@@ -109,6 +117,7 @@ def main() -> None:
 
         for arm in mapping.ARMS:
             start = _raise_one_arm(conn, adapter, start, arm)
+        _reset_to_start_pose(conn, adapter, token, first_start)
 
         conn.close()
     print('ABC env server e2e passed')

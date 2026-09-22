@@ -74,6 +74,7 @@ class AbcEnv(EnvProtocol):
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token)
+        self._env.forget_arm_state()  # ABC otherwise starts each episode where the last one left the arms
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
