@@ -71,7 +71,7 @@ leaves out on the members that carry one.
   a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
-  frame the server announces itself with, which is the only readiness the protocol carries.
+  frame the server announces itself with. The protocol carries no other readiness.
 
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
 

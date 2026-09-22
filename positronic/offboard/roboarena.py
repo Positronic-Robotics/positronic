@@ -61,7 +61,7 @@ class RoboarenaClient:
         return self._server_config
 
     def is_ready(self) -> bool:
-        """Whether the server announces itself, which is the readiness the protocol carries."""
+        """Whether the server announces itself."""
         return self._wire.probe(self._address, None, HANDSHAKE_TIMEOUT_S) is None
 
     def infer(self, observation: Mapping[str, Any]) -> Any:

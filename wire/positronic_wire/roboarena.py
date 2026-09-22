@@ -96,7 +96,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """Whether a server announces itself at ``address``, which is the readiness this protocol has."""
+        """Whether a server announces itself at ``address``."""
         try:
             connection = self._open(address, headers, open_timeout)
         except wire.ConnectRefused as e:
