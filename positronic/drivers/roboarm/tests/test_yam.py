@@ -95,6 +95,28 @@ def test_idle_parks_once_and_a_new_command_moves_the_arm(rig, caplog):
     rig.raise_arm()
 
 
+@pytest.mark.parametrize('object_width', [0.2, 0.6])
+def test_idle_parking_preserves_an_obstructed_gripper(rig, monkeypatch, object_width):
+    rig.raise_arm()
+    send = rig.vendor.command_joint_pos
+
+    def hold_object(joint_pos):
+        send(joint_pos)
+        rig.vendor._pos[6] = max(rig.vendor._pos[6], object_width)
+        rig.vendor._vel[6] = 0.0
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', hold_object)
+    rig.grip.push(1.0)
+    rig.tick(0.5)
+    assert rig.vendor._pos[6] == pytest.approx(object_width)
+    rig.tick(5)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(rig.vendor.targets[-1], np.append(PARK, object_width), atol=0.005)
+    assert not rig.vendor.released_at
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0], np.append(PARK, object_width), atol=0.005)
+
+
 def test_repeated_identical_grip_commands_delay_parking_until_they_stop(rig):
     rig.raise_arm()
     for _ in range(600):

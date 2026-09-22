@@ -483,7 +483,7 @@ class Robot(pimm.ControlSystem):
                         q_target = arm.to_joints(asked, q)
                     idle_since = clock.now()
                 elif self._should_park(idle_since, clock.now()):
-                    parking = arm.park(grip_target)
+                    parking = arm.park(arm._grip(arm.observations()))
                     idle_since = None
 
                 if parking is not None:
