@@ -56,13 +56,13 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     PING_TIMEOUT_S = 600.0
 
     def session_url(self, address: RoboarenaAddress) -> str:
-        """The root this wire dials. A roboarena session names no route, so the server is the whole of it."""
+        """The root this wire dials; a roboarena session names no route under it."""
         return f'ws://{wire.bracket_ipv6(address.host)}:{address.port}'
 
     def list_models(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> list[str]:
-        """Raises: a roboarena server serves one model and no catalogue route to read it on."""
+        """Raises: this wire has no catalogue route to read."""
         raise ValueError(
             f'{self.NAME} serves one model and no catalogue; the model a partner serves is the endpoint '
             f'itself, and the server announces its configuration on connect'

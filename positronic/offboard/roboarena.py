@@ -23,8 +23,7 @@ RESET = 'reset'
 # The session a frame belongs to, on a server that keeps per-session history.
 SESSION_ID = 'session_id'
 
-# How long a read waits, in seconds. The handshake covers a backbone that loads on connect; the inference
-# covers one forward pass; the reset covers an acknowledgement the server sends at once.
+# How long each read waits, in seconds: a backbone loading, one forward pass, one acknowledgement.
 HANDSHAKE_TIMEOUT_S = 60.0
 INFER_TIMEOUT_S = 120.0
 RESET_TIMEOUT_S = 10.0
