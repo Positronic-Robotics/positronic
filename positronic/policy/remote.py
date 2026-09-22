@@ -1,6 +1,6 @@
 import collections.abc as cabc
 from contextlib import closing
-from functools import partial
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -89,6 +89,7 @@ class RemotePolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
+        connection_lock = Lock()
         try:
             meta = session.metadata
             self._server_meta = dict(meta)
@@ -100,7 +101,12 @@ class RemotePolicy(Policy):
                 stack = StackV1(stack)
             if not isinstance(stack, Processor):
                 raise ValueError('The declared client stack must be a processor')
-            infer = partial(round_trip, session, compress_images=bool(meta.get(offboard_keys.COMPRESS_IMAGES)))
+            compress_images = bool(meta.get(offboard_keys.COMPRESS_IMAGES))
+
+            def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+                with connection_lock:
+                    return round_trip(session, obs, compress_images)
+
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield
                 while True:
@@ -110,4 +116,6 @@ class RemotePolicy(Policy):
                         return
                     obs = yield step
         finally:
-            session.close()
+            # Generator failure can reach cleanup while inference still owns the connection.
+            with connection_lock:
+                session.close()

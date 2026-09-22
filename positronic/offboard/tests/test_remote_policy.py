@@ -1,5 +1,6 @@
 import dataclasses
 import pathlib
+import threading
 import time
 from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
@@ -27,7 +28,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -589,6 +590,36 @@ def test_invalid_declaration_fails_before_inference_and_closes_connection(runtim
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
+    started, release = threading.Event(), threading.Event()
+    order = []
+    stack = Sequential(TemporalStack(('image',), (0.0,)), ChunkedSchedule(fps=10))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+
+    def infer(obs):
+        started.set()
+        assert release.wait(5), 'inference was not released'
+        order.append('inference finished')
+        return [{}]
+
+    session.infer.side_effect = infer
+    session.close.side_effect = lambda: order.append('session closed')
+    run = runtime.start(policy)
+    releaser = threading.Timer(0.05, release.set)
+    try:
+        run.send({'image': _make_image(8, 8)})
+        assert started.wait(5)
+        releaser.start()
+        with pytest.raises(KeyError, match='image'):
+            run.send({})
+    finally:
+        release.set()
+        releaser.cancel()
+        runtime.close()
+        run.close()
+    assert order == ['inference finished', 'session closed']
 
 
 @pytest.mark.parametrize('compressed', [False, True])
