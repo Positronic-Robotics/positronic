@@ -171,7 +171,11 @@ class _Kinematics:
 class _Chain(DriverRun[command.CommandType]):
     """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
-    _MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
+    _MOVE_TIME_S = 2.0  # seconds the shortest move is ramped over; a longer one is paced by the speed below
+    # A fixed ramp asks the same seconds of a move of any length, so a far target is commanded faster than
+    # the joints hold and the move times out short of it. Budget by distance instead: this is the pace the
+    # ramp travels at, and it only ever LENGTHENS a move, so no move that arrives today is given less time.
+    _MAX_JOINT_SPEED = 0.35  # radians per second
     _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
     _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
@@ -272,16 +276,21 @@ class _Chain(DriverRun[command.CommandType]):
         """
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+            farthest_joint = float(np.max(np.abs(np.asarray(target, dtype=np.float64) - start)))
+            ramp_s = max(self._MOVE_TIME_S, farthest_joint / self._MAX_JOINT_SPEED)
             started = self.clock.now()
             while not self._arrived(obs := self.observations(), target, grip):
                 if self.should_stop.value and not at_teardown:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
-                if elapsed > self._MOVE_TIME_S + self._SETTLE_S:
-                    raise TimeoutError(f'the chain stopped short of {target} at grip {grip}')
+                if elapsed > ramp_s + self._SETTLE_S:
+                    raise TimeoutError(
+                        f'the chain stopped short of {target} at grip {grip} after {ramp_s + self._SETTLE_S:.1f}s; '
+                        f'it reads {obs[_JOINT_POS]} at grip {self._grip(obs)}'
+                    )
                 # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
                 # and held at the target afterwards while it settles the last of the way in.
-                alpha = min(elapsed / self._MOVE_TIME_S, 1.0)
+                alpha = min(elapsed / ramp_s, 1.0)
                 self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
                 self.encode(obs, RobotStatus.BUSY)  # the driver owns the chain until it arrives
                 self.out.emit(self.state)
