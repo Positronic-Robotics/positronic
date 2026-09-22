@@ -30,6 +30,7 @@ class _Arm:
         ranges = np.array([model.jnt_range[j] for j in joints])
         self.lower, self.upper = ranges[:, 0], ranges[:, 1]
         self.site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, mapping.CONTROL_SITE.format(arm=name))
+        self.base_body_id = model.body_parentid[model.jnt_bodyid[joints[0]]]
 
 
 class AbcEnv(EnvProtocol):
@@ -72,7 +73,7 @@ class AbcEnv(EnvProtocol):
         return {
             protocol.FRAME_OBS: self._observe(obs),
             protocol.FRAME_META: {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]},
-            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
 
@@ -101,6 +102,15 @@ class AbcEnv(EnvProtocol):
             grip = mapping.invert_grip(action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)])
             per_arm.append(np.append(joints, grip))
         return np.concatenate(per_arm).astype(np.float32)
+
+    def _mounts(self) -> dict[str, list[float]]:
+        """Where each arm's base stands in the scene, keyed by the joint signal the recording names it by."""
+        self._sync_sites()
+        mounts = {}
+        for arm in self._arms:
+            signal = protocol.arm_channel(protocol.ROBOT_STATE, arm.name) + protocol.JOINTS_SUFFIX
+            mounts[signal] = self._env.data.xpos[arm.base_body_id].tolist()
+        return mounts
 
     def _sync_sites(self) -> None:
         # A site pose lags ``qpos`` by one forward pass after a reset or a step.

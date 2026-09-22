@@ -39,6 +39,10 @@ CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, H
 # The command channels of one arm. The wire cannot import positronic's ``keys``; a test pins them equal.
 ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
+# The joint signal an arm's mount is keyed by in the recorded static meta.
+ROBOT_STATE = 'robot_state'
+JOINTS_SUFFIX = '.q'
+MOUNTS = 'mounts'
 
 
 def arm_channel(channel: str, arm: str) -> str:

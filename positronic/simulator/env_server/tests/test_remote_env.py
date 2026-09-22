@@ -363,6 +363,9 @@ class TestSingleArm:
         assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
         assert protocol.TARGET_GRIP == keys.TARGET_GRIP
         assert protocol.arm_channel(protocol.ROBOT_COMMAND, 'left') == keys.arm_channel(keys.ROBOT_COMMAND, 'left')
+        assert protocol.ROBOT_STATE == keys.ROBOT_STATE
+        assert protocol.JOINTS_SUFFIX == keys.JOINTS_SUFFIX
+        assert protocol.MOUNTS == eval_keys.MOUNTS
 
     def test_it_returns_the_two_channels(self):
         action = protocol.single_arm(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))
