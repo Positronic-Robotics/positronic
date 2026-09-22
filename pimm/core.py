@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Generic, TypeAlias, TypeVar, final
 
 T = TypeVar('T')
@@ -120,6 +121,13 @@ Run: TypeAlias = Generator[Command, None, T]
 ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Command]]
 
 
+class ShutdownPolicy(Enum):
+    """How the runtime stops a control system."""
+
+    TERMINATE_AFTER_TIMEOUT = auto()  # Background processes get 90 seconds to exit.
+    WAIT_FOR_COMPLETION = auto()  # Drain foreground loops; ignore background SIGINT and wait without killing.
+
+
 class ControlSystem(ABC):
     """Composable unit of runtime that cooperates with the world scheduler.
 
@@ -134,9 +142,7 @@ class ControlSystem(ABC):
     ``Yield``, allowing the ``World`` interleaver to sequence multiple systems.
     """
 
-    # None waits for cooperative shutdown without a deadline. These background systems ignore SIGINT;
-    # the parent World requests their shutdown through the stop signal.
-    shutdown_timeout_s: float | None = 90.0
+    shutdown_policy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
 
     @abstractmethod
     def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
