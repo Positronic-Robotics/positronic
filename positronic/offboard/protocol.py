@@ -33,6 +33,11 @@ MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
 ERROR = 'error'
+# The ready handshake issues an ID. Requests carry it beside the observation, and an end request
+# is acknowledged with the same ID after the model releases the session's state.
+SESSION_ID = 'session_id'
+OBSERVATION = 'observation'
+END_SESSION = 'end_session'
 # What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
 # milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
 TIMING = 'timing'

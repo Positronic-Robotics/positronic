@@ -17,8 +17,10 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import configuronic as cfn
 import numpy as np
@@ -51,7 +53,7 @@ class InstantChunk(Model):
             {keys.TARGET_JOINTS: np.zeros(7, dtype=np.float32), keys.TARGET_GRIP: np.float32(0.0)} for _ in range(rows)
         ]
 
-    def __call__(self, obs):
+    def __call__(self, obs, *, session_id: str):
         return self.chunk
 
 
@@ -219,7 +221,7 @@ def main(
 
     chosen = dataset[episode]
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
-    payloads = capture(observations(chosen, cameras, rate_hz), stack, model, requests)
+    payloads = capture(observations(chosen, cameras, rate_hz), stack, partial(model, session_id=uuid4().hex), requests)
     if not payloads:
         raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
     print(f'captured {len(payloads)} payload(s) off episode {episode}')

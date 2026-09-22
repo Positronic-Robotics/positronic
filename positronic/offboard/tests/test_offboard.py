@@ -33,7 +33,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_model):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_model.assert_called_with(obs)
+        mock_model.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -79,9 +79,9 @@ def test_session_url_selects_the_model(multi_model_server):
     finally:
         beta_session.close()
 
-    policies['alpha'].assert_any_call({'obs': 'alpha'})
-    policies['beta'].assert_any_call({'obs': 'beta'})
-    policies['alpha'].assert_any_call({'obs': 'default'})
+    policies['alpha'].assert_any_call({'obs': 'alpha'}, session_id=alpha_session.session_id)
+    policies['beta'].assert_any_call({'obs': 'beta'}, session_id=beta_session.session_id)
+    policies['alpha'].assert_any_call({'obs': 'default'}, session_id=default_session.session_id)
 
 
 def test_wire_serialisation_accepts_mappingproxy():

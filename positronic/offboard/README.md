@@ -136,6 +136,7 @@ Upon connection, the server sends a ready packet with metadata:
 ```json
 {
   "status": "ready",
+  "session_id": "<server-issued ID>",
   "meta": {
     "type": "lerobot",
     "host": "localhost",
@@ -157,6 +158,9 @@ Upon connection, the server sends a ready packet with metadata:
 ```
 
 The client ignores all messages until it sees `status == "ready"` (status updates like `loading`/`waiting` may arrive first).
+
+The session ID belongs to this connection and is separate from model metadata. `RemotePolicy.run()`
+owns the session and includes its ID in each inference request.
 
 This metadata tells the client:
 - Which checkpoint is loaded
@@ -198,12 +202,15 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
 
 ```json
 {
-  "robot_state.ee_pose": [0.5, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
-  "robot_state.q": [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8],
-  "grip": 0.04,
-  "image.wrist": "<uint8 (H, W, 3)>",
-  "image.exterior": "<uint8 (H, W, 3)>",
-  "task": "pick up the red cube"
+  "session_id": "<server-issued ID>",
+  "observation": {
+    "robot_state.ee_pose": [0.5, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
+    "robot_state.q": [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8],
+    "grip": 0.04,
+    "image.wrist": "<uint8 (H, W, 3)>",
+    "image.exterior": "<uint8 (H, W, 3)>",
+    "task": "pick up the red cube"
+  }
 }
 ```
 
@@ -234,7 +241,22 @@ Every command may carry a `mode`, itself a tagged mapping naming the control law
 }
 ```
 
-The loop continues until the client closes the connection or the episode ends.
+The server passes the encoded observation to `model(obs, session_id=...)`; codecs receive only the
+observation. An ID from another connection returns an error and closes the requesting session
+before invoking the model. The other session stays open; no replacement session is created automatically.
+
+#### 4. End the session
+
+After inference finishes, closing the policy run sends:
+
+```json
+{"session_id": "<server-issued ID>", "end_session": true}
+```
+
+The server calls `model.end_session(id)` and acknowledges with the same message. The client then
+closes the connection. The loaded model stays available for other sessions. ACT retains no episode
+state, so its `end_session` does nothing. A disconnected client also triggers session cleanup after
+any running inference finishes. Reconnecting creates a new session ID.
 
 ### Key Benefits
 

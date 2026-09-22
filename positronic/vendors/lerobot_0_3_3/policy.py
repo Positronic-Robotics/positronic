@@ -84,7 +84,7 @@ class LerobotModel(Model):
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
-    def __call__(self, obs: Obs) -> list[dict[str, Any]]:
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         return _infer(self._policy, self._device, obs)
 
     def meta(self) -> dict[str, Any]:

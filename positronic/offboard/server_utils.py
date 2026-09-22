@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
 from positronic.offboard.spec import Model
 
@@ -41,7 +42,11 @@ def warmup(policy: Model, obs: dict[str, Any], on_progress: Callable[[str], None
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    run_with_progress(lambda: policy(obs), 'Running warmup inference', on_progress)
+    session_id = uuid4().hex
+    try:
+        run_with_progress(lambda: policy(obs, session_id=session_id), 'Running warmup inference', on_progress)
+    finally:
+        policy.end_session(session_id)
 
 
 def wait_for_subprocess_ready(

@@ -58,9 +58,10 @@ def round_trip(
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
-    ``wire`` names the transport and ``address`` is the address it dials. Each episode owns its connection.
-    Submitted calls finish before the harness closes the generator and its connection.
-    The declared stack determines when client codecs run.
+    ``wire`` names the transport and ``address`` is the address it dials.
+    Each run owns a server session and its connection. Submitted calls finish before the harness
+    closes the generator; closing the session waits for the server to release its state, then closes
+    the connection. The declared stack determines when client codecs run.
     """
 
     def __init__(

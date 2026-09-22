@@ -17,7 +17,11 @@ class Model(ABC):
     """A loaded inference callable and the resources it owns."""
 
     @abstractmethod
-    def __call__(self, obs: Obs) -> Any: ...
+    def __call__(self, obs: Obs, *, session_id: str) -> Any: ...
+
+    def end_session(self, session_id: str) -> None:
+        """Release one session's state after its calls finish; keep the loaded model available."""
+        return None
 
     def meta(self) -> dict[str, Any]:
         return {}

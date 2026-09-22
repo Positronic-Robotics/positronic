@@ -227,7 +227,7 @@ def test_full_inference_cycle(stub_server):
         obs = {'image': 'test'}
         result = session.infer(obs)
         assert result == [{'action': [1, 2, 3]}]
-        policy.assert_called_with(obs)
+        policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -333,17 +333,32 @@ def test_load_progress_frames_reach_the_client(start_server, make_mock_model):
 def test_a_client_that_leaves_mid_inference_is_a_lost_peer_not_an_error(stub_server, caplog):
     """The answer meets a closed socket; the wire reports a lost peer, and the server logs no error."""
     host, port, _server, policy = stub_server
-    policy.side_effect = lambda *_: time.sleep(0.3) or [{'action': [1, 2, 3]}]
+    finished = threading.Event()
+    ended = threading.Event()
+
+    def infer(obs, *, session_id):
+        time.sleep(0.3)
+        finished.set()
+        return [{'action': [1, 2, 3]}]
+
+    def end_session(session_id):
+        assert finished.is_set()
+        ended.set()
+
+    policy.side_effect = infer
+    policy.end_session.side_effect = end_session
     ws = connect(f'ws://{host}:{port}/api/v1/session')
-    while deserialise(ws.recv(timeout=10)).get('status') != 'ready':
+    while (ready := deserialise(ws.recv(timeout=10))).get(protocol.STATUS) != protocol.ServerStatus.READY:
         pass
     with caplog.at_level(logging.INFO, logger='positronic.offboard.server'):
-        ws.send(serialise({'image': 'test'}))
+        ws.send(serialise({protocol.SESSION_ID: ready[protocol.SESSION_ID], protocol.OBSERVATION: {'image': 'test'}}))
         ws.close()
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not any('Client disconnected' in r.getMessage() for r in caplog.records):
             time.sleep(0.05)
     assert any('Client disconnected' in r.getMessage() for r in caplog.records)
+    assert ended.wait(timeout=5)
+    policy.end_session.assert_called_once_with(ready[protocol.SESSION_ID])
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
 
 
@@ -405,7 +420,9 @@ def test_warmup_calls_the_model_without_closing_it(make_mock_model):
 
     warmup(policy, obs)
 
-    policy.assert_called_once_with(obs)
+    session_id = policy.call_args.kwargs['session_id']
+    policy.assert_called_once_with(obs, session_id=session_id)
+    policy.end_session.assert_called_once_with(session_id)
     policy.close.assert_not_called()
 
 
@@ -416,6 +433,7 @@ def test_warmup_failure_propagates_without_closing_the_model(make_mock_model):
     with pytest.raises(RuntimeError, match='shape mismatch'):
         warmup(policy, {})
 
+    policy.end_session.assert_called_once_with(policy.call_args.kwargs['session_id'])
     policy.close.assert_not_called()
 
 
@@ -434,7 +452,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
 class _ScriptedModel(Model):
     """A model returning the same untimestamped chunk on every call."""
 
-    def __call__(self, obs):
+    def __call__(self, obs, *, session_id: str):
         return [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
 
 

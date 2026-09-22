@@ -55,7 +55,7 @@ def test_a_grpc_session_handshakes_and_infers(both_wires):
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
         assert session.infer(obs) == [{'action': [1, 2, 3]}]
-        policy.assert_called_with(obs)
+        policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -303,7 +303,7 @@ def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
         assert session.infer(obs) == [{'action': [1, 2, 3]}]
-        policy.assert_called_with(obs)
+        policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -571,13 +571,29 @@ def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monke
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     """The timeout closes the connection, and the server may answer inside the close's own wait."""
     served, policy = both_wires
-    policy.side_effect = lambda *_: time.sleep(1.0) or [{'action': [1, 2, 3]}]
+    finished = threading.Event()
+    ended = threading.Event()
+
+    def infer(obs, *, session_id):
+        time.sleep(1.0)
+        finished.set()
+        return [{'action': [1, 2, 3]}]
+
+    def end_session(session_id):
+        assert finished.is_set()
+        ended.set()
+
+    policy.side_effect = infer
+    policy.end_session.side_effect = end_session
     session = InferenceClient.from_url(grpc_url(served), infer_timeout=0.2).new_session()
     with pytest.raises(TimeoutError):
         session.infer({'image': 'test'})
     # The late answer is the first observation's actions.
     with pytest.raises(wire.PeerDisconnected):
         session.infer({'image': 'test'})
+    session.close()
+    assert ended.wait(timeout=5)
+    policy.end_session.assert_called_once_with(session.session_id)
 
 
 def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):

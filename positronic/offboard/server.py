@@ -9,9 +9,11 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from functools import partial
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import configuronic as cfn
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -283,27 +285,35 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline
 
-    async def _answer_observations(self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any]) -> None:
-        """Answer every observation the client sends, until it disconnects."""
+    async def _answer_observations(
+        self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
+    ) -> None:
+        """Answer observations until the client ends this session or disconnects."""
         while True:
             message = await conn.receive()
             self._last_activity = time.monotonic()
+            timing = _ServedTiming()
+            with timing.phase(protocol.TIMING_DECODE):
+                request = deserialise(message)
+                if request[protocol.SESSION_ID] != session_id:
+                    raise ValueError('The session ID does not belong to this connection')
+                if request.get(protocol.END_SESSION) is True:
+                    return
+                raw_obs = request[protocol.OBSERVATION]
             try:
-                timing = _ServedTiming()
-                with timing.phase(protocol.TIMING_DECODE):
-                    raw_obs = deserialise(message)
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                 with timing.phase(protocol.TIMING_QUEUED):
                     await self._infer_lock.acquire()
                 try:
                     with timing.phase(protocol.TIMING_INFER):
-                        actions = await asyncio.to_thread(timing.infer, infer, raw_obs)
-                except asyncio.CancelledError:
-                    # A cancelled await does not stop the worker, and the session close runs beside a live
-                    # inference. The log gives a later wrong answer a cause.
-                    logger.error('Cancelled mid-inference: the worker is still in the backend')
-                    raise
+                        work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, raw_obs))
+                        try:
+                            actions = await asyncio.shield(work)
+                        except asyncio.CancelledError:
+                            # Session cleanup must wait for the worker that still uses its state.
+                            await work
+                            raise
                 finally:
                     self._infer_lock.release()
                 answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
@@ -325,6 +335,7 @@ class PolicyServer:
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             model = await self._manager.get_model(rid, conn)
+            session_id = uuid4().hex
             meta = {
                 **conn.served_address.meta,
                 **model.meta(),
@@ -335,15 +346,26 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            infer = telemetry.traced(protocol.MODEL_CALL)(model.__call__)
+            infer = partial(model, session_id=session_id)
+            infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
-            await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
             try:
-                await self._answer_observations(conn, infer)
-            except wire.PeerDisconnected:
-                logger.info('Client disconnected')
+                await conn.send(
+                    serialise({
+                        protocol.STATUS: protocol.ServerStatus.READY,
+                        protocol.META: meta,
+                        protocol.SESSION_ID: session_id,
+                    })
+                )
+                await self._answer_observations(conn, infer, session_id)
+            finally:
+                async with self._infer_lock:
+                    await asyncio.to_thread(model.end_session, session_id)
+            await conn.send(serialise({protocol.SESSION_ID: session_id, protocol.END_SESSION: True}))
 
+        except wire.PeerDisconnected:
+            logger.info('Client disconnected')
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:

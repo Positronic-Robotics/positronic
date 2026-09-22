@@ -1,3 +1,4 @@
+from functools import partial
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -29,7 +30,7 @@ def _ticks(count: int, period_ns: int = 66_666_666):
 def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_server):
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
     model = InstantChunk(rows=2)
-    payloads = capture(_ticks(12), stack, model, requests=2)
+    payloads = capture(_ticks(12), stack, partial(model, session_id='capture'), requests=2)
     assert payloads, 'the stack sent nothing'
 
     host, port, *_ = start_server(PolicyDeployment(InstantSource(2), stack, compress_images=True))
@@ -48,7 +49,7 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
 
 def test_a_captured_payload_carries_one_stack_per_stacked_key():
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
-    payloads = capture(_ticks(12), stack, InstantChunk(rows=2), requests=1)
+    payloads = capture(_ticks(12), stack, partial(InstantChunk(rows=2), session_id='capture'), requests=1)
 
     sent = payloads[0]
     for camera in CAMERAS:

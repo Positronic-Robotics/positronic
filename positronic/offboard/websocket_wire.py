@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
+from starlette.websockets import WebSocketState
 
 from . import keys, server_wire
 
@@ -222,10 +223,20 @@ class WebsocketWire(server_wire.Wire):
             """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
             await websocket.accept()
             await session(WebsocketServerConnection(websocket, self.served_address), None)
+            if (
+                websocket.application_state is WebSocketState.CONNECTED
+                and websocket.client_state is WebSocketState.CONNECTED
+            ):
+                await websocket.close()
 
         async def serve_named_model(websocket: WebSocket, model_id: str) -> None:
             await websocket.accept()
             await session(WebsocketServerConnection(websocket, self.served_address), model_id)
+            if (
+                websocket.application_state is WebSocketState.CONNECTED
+                and websocket.client_state is WebSocketState.CONNECTED
+            ):
+                await websocket.close()
 
         auth = [Depends(require_auth)]
         app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)

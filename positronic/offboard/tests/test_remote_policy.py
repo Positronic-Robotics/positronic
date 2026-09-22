@@ -11,7 +11,13 @@ from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, websocket_wire, wire
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
+from positronic.offboard.client import (
+    DEFAULT_INFER_TIMEOUT,
+    DEFAULT_OPEN_TIMEOUT,
+    InferenceClient,
+    InferenceSession,
+    _ConnectRetries,
+)
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
 from positronic.policy.base import Obs, Step
@@ -306,15 +312,21 @@ def test_remote_policy_hands_the_url_and_headers_to_the_client():
 class FixedModel(Model):
     def __init__(self):
         self.observations = []
+        self.session_ids = []
+        self.ended_sessions = []
 
-    def __call__(self, obs: Obs):
+    def __call__(self, obs: Obs, *, session_id: str):
         self.observations.append(obs)
+        self.session_ids.append(session_id)
         if obs.get('fail'):
             raise ValueError('model failed')
         return [{'value': index} for index in range(4)]
 
     def meta(self):
         return {'model_name': 'fixed'}
+
+    def end_session(self, session_id: str) -> None:
+        self.ended_sessions.append(session_id)
 
 
 @pytest.fixture
@@ -345,6 +357,7 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     assert policy.meta()['server.model_name'] == 'fixed'
     assert policy.meta()['server.action_fps'] == 10
     assert policy.meta()['server.action_horizon_sec'] == 0.2
+    assert len(model.ended_sessions) == 1  # The metadata probe also ends its session.
     obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
     for episode in range(2):
         now = [0]
@@ -373,7 +386,71 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         finally:
             runtime.close()
             run.close()
+        assert len(model.ended_sessions) == episode + 2
+        assert model.session_ids[-2:] == [model.ended_sessions[-1]] * 2
+    assert len(set(model.ended_sessions)) == 3
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+@pytest.mark.parametrize('payload', [{protocol.OBSERVATION: {}}, {protocol.END_SESSION: True}], ids=['infer', 'end'])
+def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload):
+    url, model, _ = served(transport=transport)
+    client = InferenceClient.from_url(url)
+    first, second = client.new_session(), client.new_session()
+    try:
+        assert first.session_id != second.session_id
+        assert protocol.SESSION_ID not in first.metadata
+        first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
+        response = protocol.deserialise(first._conn.recv(timeout=5))
+        assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
+        assert 'session ID' in response[protocol.ERROR]
+        with pytest.raises(wire.PeerDisconnected):
+            first._conn.recv(timeout=5)
+        assert model.observations == []
+        assert model.ended_sessions == [first.session_id]
+        with pytest.raises(wire.PeerDisconnected):
+            first.infer({})
+        assert second.infer({})[0] == {'value': 0}
+        assert model.session_ids == [second.session_id]
+        first.close()
+        first.close()
+        assert model.ended_sessions == [first.session_id]
+        with pytest.raises(wire.PeerDisconnected, match='closed'):
+            first.infer({})
+    finally:
+        first.close()
+        second.close()
+    assert model.ended_sessions == [first.session_id, second.session_id]
+
+
+def test_fatal_server_error_closes_client_without_masking_the_error():
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        protocol.serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: 'session ID mismatch'}),
+    ]
+    session = InferenceSession(conn)
+    with pytest.raises(RuntimeError, match='session ID mismatch'):
+        session.infer({})
+    session.close()
+    assert conn.send.call_count == 1
+    conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize('failure', [TimeoutError(), wire.PeerDisconnected('connection lost')])
+def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(failure):
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        failure,
+    ]
+    session = InferenceSession(conn)
+    with pytest.raises(type(failure)):
+        session.infer({})
+    session.close()
+    assert conn.send.call_count == 1
+    conn.close.assert_called_once()
 
 
 class OffsetCodec(Codec):
@@ -406,10 +483,10 @@ def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, mo
     monkeypatch.setattr('positronic.offboard.server.time.time_ns', lambda: now_ns)
 
     class TimedModel(FixedModel):
-        def __call__(self, obs: Obs):
+        def __call__(self, obs: Obs, *, session_id: str):
             nonlocal now_ns
             now_ns += obs['duration_ns']
-            return super().__call__(obs)
+            return super().__call__(obs, session_id=session_id)
 
     class TimedCodec(Codec):
         def encode(self, data):
@@ -469,7 +546,7 @@ def test_act_codec_matches_data_conversions_without_timing():
 
 def test_act_codec_can_run_on_either_side_of_the_connection(served):
     class EchoStateModel(FixedModel):
-        def __call__(self, obs: Obs):
+        def __call__(self, obs: Obs, *, session_id: str):
             self.observations.append(obs)
             return [{'action': obs['observation.state']}]
 

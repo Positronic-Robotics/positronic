@@ -25,7 +25,7 @@ DEFAULT_CONNECT_DEADLINE = 900.0
 
 
 class InferenceSession:
-    """One session over one open connection, whichever wire carries it."""
+    """One server-issued session over an open connection. Finish inference before closing it."""
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
@@ -35,9 +35,10 @@ class InferenceSession:
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
         self._infer_timeout = infer_timeout
-        self._metadata = self._handshake()
+        self._session_id, self._metadata = self._handshake()
+        self._closed = False
 
-    def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
+    def _handshake(self, timeout_per_message: float = 30.0) -> tuple[str, dict[str, Any]]:
         """Receive status updates until server is ready.
 
         The server must send an update at least every ``timeout_per_message`` seconds.
@@ -53,7 +54,7 @@ class InferenceSession:
                     raise RuntimeError(f'Unexpected server response: {response}') from None
 
                 if status is protocol.ServerStatus.READY:
-                    return response[protocol.META]
+                    return response[protocol.SESSION_ID], response[protocol.META]
                 if status is protocol.ServerStatus.ERROR:
                     raise RuntimeError('Server error: Unknown error')
 
@@ -67,6 +68,10 @@ class InferenceSession:
             ) from None
 
     @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
@@ -77,36 +82,59 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
+        if self._closed:
+            raise wire.PeerDisconnected('The inference session is closed')
         self.served_timing = {}
-        serialised = serialise(obs)
+        serialised = serialise({protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs})
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
-        with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
-            self._conn.send(serialised)
         try:
+            with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
+                self._conn.send(serialised)
             with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
                 received = self._conn.recv(timeout=self._infer_timeout)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
             # reused — a subsequent ``infer`` fails loudly on the closed socket instead.
+            self._closed = True
             self._conn.close()
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
+        except wire.PeerDisconnected:
+            self._closed = True
+            self._conn.close()
+            raise
         response = deserialise(received)
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:
+            if response.get(protocol.STATUS) == protocol.ServerStatus.ERROR:
+                self._closed = True
+                self._conn.close()
             raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
         return typed_commands(response[protocol.RESULT])
 
-    def close(self):
-        logger.info('InferenceSession.close: %s', self._conn.close())
+    def close(self) -> None:
+        """End the server session and wait for its cleanup before closing the connection."""
+        if self._closed:
+            return
+        self._closed = True
+        message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
+        try:
+            self._conn.send(serialise(message))
+            response = deserialise(self._conn.recv(timeout=self._infer_timeout))
+            if protocol.ERROR in response:
+                raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+            if response != message:
+                raise RuntimeError(f'Unexpected end-session response: {response}')
+        finally:
+            logger.info('InferenceSession.close: %s', self._conn.close())
 
 
 class _ConnectOutcome(Enum):
