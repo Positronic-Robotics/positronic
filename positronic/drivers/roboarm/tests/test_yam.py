@@ -494,3 +494,48 @@ def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
     with pimm.World(virtual_time=True) as world:
         world.start(yam.Robot(connect=connect))
     assert not connections
+
+
+@pytest.mark.parametrize('failed_read', [1, 2])
+def test_sync_call_is_answered_when_idle_parking_setup_read_fails(world, parking_rig, monkeypatch, failed_read):
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](parking_rig.driver)
+    wire_call(world, caller, parking_rig.driver.sync_move)
+    answer = caller(command.JointPosition(RAISED))
+    read = parking_rig.vendor.get_observations
+    reads = 0
+    error = OSError('CAN read failed')
+
+    def fail_during_setup():
+        nonlocal reads
+        reads += 1
+        if reads == failed_read:
+            raise error
+        return read()
+
+    monkeypatch.setattr(parking_rig.vendor, 'get_observations', fail_during_setup)
+    with pytest.raises(OSError, match='CAN read failed'):
+        parking_rig.tick()
+    assert answer.done()
+    with pytest.raises(OSError, match='CAN read failed') as raised:
+        answer.result()
+    assert raised.value is error
+    assert not parking_rig.vendor.released_at
+
+
+def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world, parking_rig, monkeypatch):
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](parking_rig.driver)
+    wire_call(world, caller, parking_rig.driver.sync_move)
+    answer = caller(command.JointPosition(RAISED))
+    error = OSError('CAN write failed')
+
+    def fail_hold(joint_pos):
+        raise error
+
+    monkeypatch.setattr(parking_rig.vendor, 'command_joint_pos', fail_hold)
+    with pytest.raises(OSError, match='CAN write failed'):
+        parking_rig.tick()
+    assert answer.done()
+    with pytest.raises(OSError, match='CAN write failed') as raised:
+        answer.result()
+    assert raised.value is error
+    assert not parking_rig.vendor.released_at

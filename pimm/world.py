@@ -889,7 +889,58 @@ class World:
                 return
             yield command
 
-    def start(  # noqa: C901
+    def _bind_multiprocess_connections(self, connections) -> None:
+        grouped_mp_connections = defaultdict(list)
+        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, clock in connections:
+            grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
+
+        for emitter_logical, receivers_logical in grouped_mp_connections.items():
+            num_receivers = len(receivers_logical)
+            emitter_wrp, _, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
+
+            for wrapper, _, _, _, _ in receivers_logical[1:]:
+                if wrapper != emitter_wrp:
+                    raise ValueError(
+                        f'Conflicting emitter wrappers detected for emitter owned by '
+                        f"'{type(emitter_logical.owner).__name__}'. "
+                        'When broadcasting to multiple processes, all connections must use the same emitter wrapper. '
+                        "Use 'receiver_wrapper' instead to transform data for specific receivers."
+                    )
+
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
+            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
+
+            emitter_logical._bind(emitter_wrp(emitter_physical))
+
+            if not isinstance(receivers_physical, list):
+                receivers_physical = [receivers_physical]
+
+            for (_, receiver_wrp, logical, _, _), physical in zip(receivers_logical, receivers_physical, strict=True):
+                logical._bind(receiver_wrp(physical))
+
+    def _bind_connections(self, local_cs: set[ControlSystem], all_cs: set[ControlSystem]) -> None:
+        system_clock = SystemClock()
+        local_connections, mp_connections = [], []
+        for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
+            if emitter.owner in local_cs and receiver.owner in local_cs:
+                local_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, None))
+            elif emitter.owner not in all_cs:
+                raise ValueError(f'Emitter {emitter.owner} is not in any control system')
+            elif receiver.owner not in all_cs:
+                raise ValueError(f'Receiver {receiver.owner} is not in any control system')
+            else:
+                clock = None if emitter.owner in local_cs else system_clock
+                mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
+
+        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
+            em, re = self.local_pipe(**kwargs)
+            emitter._bind(emitter_wrp(em))
+            receiver._bind(receiver_wrp(re))
+
+        self._bind_multiprocess_connections(mp_connections)
+
+    def start(
         self,
         main_process: ControlSystem | list[ControlSystem | None],
         background: ControlSystem | list[ControlSystem | None] | None = None,
@@ -920,57 +971,7 @@ class World:
         local_cs = set(in_process)
         all_cs = local_cs | set(spawned)
 
-        system_clock = SystemClock()
-        local_connections, mp_connections = [], []
-        for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
-            if emitter.owner in local_cs and receiver.owner in local_cs:
-                local_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, None))
-            elif emitter.owner not in all_cs:
-                raise ValueError(f'Emitter {emitter.owner} is not in any control system')
-            elif receiver.owner not in all_cs:
-                raise ValueError(f'Receiver {receiver.owner} is not in any control system')
-            else:
-                clock = None if emitter.owner in local_cs else system_clock
-                mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
-
-        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
-            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
-            em, re = self.local_pipe(**kwargs)
-            emitter._bind(emitter_wrp(em))
-            # Wrap the underlying transport receiver before binding it into the logical receiver.
-            receiver._bind(receiver_wrp(re))
-
-        # Interprocess connection handling
-        grouped_mp_connections = defaultdict(list)
-        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, clock in mp_connections:
-            grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
-
-        for emitter_logical, receivers_logical in grouped_mp_connections.items():
-            # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
-            # have to serialise our local clock to the other process, which is not what we want.
-            num_receivers = len(receivers_logical)
-            emitter_wrp, _, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
-
-            for wrapper, _, _, _, _ in receivers_logical[1:]:
-                if wrapper != emitter_wrp:
-                    raise ValueError(
-                        f'Conflicting emitter wrappers detected for emitter owned by '
-                        f"'{type(emitter_logical.owner).__name__}'. "
-                        'When broadcasting to multiple processes, all connections must use the same emitter wrapper. '
-                        "Use 'receiver_wrapper' instead to transform data for specific receivers."
-                    )
-
-            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
-            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
-
-            emitter_logical._bind(emitter_wrp(emitter_physical))
-
-            if not isinstance(receivers_physical, list):
-                receivers_physical = [receivers_physical]
-
-            for (_, receiver_wrp, logical, _, _), physical in zip(receivers_logical, receivers_physical, strict=True):
-                # Wrap the underlying transport receiver before binding it into the logical receiver.
-                logical._bind(receiver_wrp(physical))
+        self._bind_connections(local_cs, all_cs)
 
         for cs in spawned:
             self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_policy=cs.shutdown_policy)
