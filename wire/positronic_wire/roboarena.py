@@ -1,9 +1,6 @@
-"""The client side of the roboarena wire.
+"""The client side of the roboarena wire, which a partner serves and `wire/README.md` states.
 
-Roboarena is a cross-vendor protocol a partner serves: msgpack frames on a websocket at the bare root of a
-port the partner names. The server announces its configuration as the first frame of every connection, it
-serves one model, and it carries no HTTP API beside the frames. This wire carries the frames as bytes, and
-the caller's codec reads them.
+This wire carries the frames as bytes; the caller's codec reads them.
 """
 
 import dataclasses
@@ -49,11 +46,7 @@ class RoboarenaClientConnection(WebsocketClientConnection):
 
 
 class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
-    """The client side of the roboarena wire, whose root carries frames alone.
-
-    The protocol names no URL scheme and a partner publishes a plain port, so no TLS member sits beside
-    this one.
-    """
+    """The client side of the roboarena wire, whose root carries frames alone."""
 
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
@@ -106,11 +99,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """Whether a server announces itself at ``address``.
-
-        The protocol serves no route a probe can ask for, so the announcement is the whole of what says a
-        server is up. A port that accepts a connection and announces nothing is a backend still starting.
-        """
+        """Whether a server announces itself at ``address``, which is the readiness this protocol has."""
         try:
             connection = self._open(address, headers, open_timeout)
         except wire.ConnectRefused as e:

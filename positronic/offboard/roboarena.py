@@ -31,11 +31,7 @@ RESET_TIMEOUT_S = 10.0
 
 
 class RoboarenaClient:
-    """One connection to a roboarena server, and the msgpack frames it carries.
-
-    The server announces its ``PolicyServerConfig`` as the first frame, which states the observation keys it
-    wants, the geometry it wants them at, and whether it tracks sessions.
-    """
+    """One connection to a roboarena server, and the msgpack frames it carries."""
 
     def __init__(self, host: str = '127.0.0.1', port: int = 9000):
         self._address = roboarena_wire.RoboarenaAddress(host, port)
