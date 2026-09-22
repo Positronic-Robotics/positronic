@@ -447,6 +447,16 @@ class Robot(pimm.ControlSystem):
             and now - idle_since >= self._park_after_idle_s
         )
 
+    @staticmethod
+    @contextlib.contextmanager
+    def _answer_failed_setup(asked: pimm.calls.Call | command.CommandType | None) -> Iterator[None]:
+        try:
+            yield
+        except BaseException as exc:
+            if isinstance(asked, pimm.calls.Call):
+                asked.set_exception(exc)
+            raise
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         with _opened(self._connect, self._channel, self._sim) as vendor:
             arm = _Arm(
@@ -466,15 +476,16 @@ class Robot(pimm.ControlSystem):
             while not should_stop.value:
                 grip = pimm.value_updated(self.target_grip)
                 asked = arm.moves.next_request()
-                if parking is not None and (grip is not None or asked is not None):
-                    parking.close()
-                    parking = None
-                    q_target, grip_target = arm.hold_where_it_stopped()
-                if grip is not None:
-                    grip_target = float(grip)
-                    idle_since = clock.now()
+                with self._answer_failed_setup(asked):
+                    if parking is not None and (grip is not None or asked is not None):
+                        parking.close()
+                        parking = None
+                        q_target, grip_target = arm.hold_where_it_stopped()
+                    if grip is not None:
+                        grip_target = float(grip)
+                        idle_since = clock.now()
 
-                q = arm.observations()[_JOINT_POS]
+                    q = arm.observations()[_JOINT_POS]
                 if isinstance(asked, pimm.calls.Call):
                     q_target, grip_target = yield from arm.sync_move(asked, q, grip_target)
                     idle_since = clock.now()
