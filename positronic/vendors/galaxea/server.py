@@ -183,9 +183,6 @@ class GalaxeaSource(ModelSource):
 
 @cfn.config(codec=cfn.Config(codecs.DroidCodec), source=cfn.Config(GalaxeaSource))
 def pipeline(codec: codecs.DroidCodec, source: ModelSource, execution_steps: int = 16):
-    # TODO: Add an opt-in local layer for RoboArena's missing-gripper behavior. Capture the measured
-    # grip per inference request, with state isolated per session, and fill omitted targets in its chunk.
-    # Keep preserving the previous target as the default; this state belongs in the layer, not the codec.
     return PolicyDeployment(
         source,
         Sequential(StopOnFault(), ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
