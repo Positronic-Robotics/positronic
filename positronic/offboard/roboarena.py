@@ -7,6 +7,7 @@ from typing import Any
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
+from positronic.offboard.client import ConnectOutcome, ConnectRetries
 from positronic.utils.serialization import deserialize, serialize
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class RoboarenaClient:
         self._wire = registry.client_wire(roboarena_wire.RoboarenaClientWire.NAME)
         self._connection: wire.ClientConnection | None = None
         self._server_config: dict[str, Any] | None = None
+        self._probe_retries = ConnectRetries()
 
     def connect(self) -> dict[str, Any]:
         """Open the connection and answer the config the server announces on it."""
@@ -63,12 +65,15 @@ class RoboarenaClient:
     def is_ready(self) -> bool:
         """Whether the server announces itself.
 
-        Raises ``TextAnswer`` when it answers in text, and ``wire.ConnectRefused`` on a ``FINAL`` refusal.
+        Raises ``TextAnswer`` when it answers in text, and ``wire.ConnectRefused`` on a refusal the connect retry
+        policy surfaces.
         """
         refusal = self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S)
-        if refusal is wire.Refusal.FINAL:
+        if refusal is None:
+            return True
+        if self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
             raise wire.ConnectRefused(refusal, f'{self._wire.session_url(self._address)} refused the connection')
-        return refusal is None
+        return False
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""

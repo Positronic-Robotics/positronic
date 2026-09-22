@@ -156,13 +156,13 @@ class InferenceSession:
             logger.info('InferenceSession.close: %s', self._conn.close())
 
 
-class _ConnectOutcome(Enum):
+class ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
 
 
-class _ConnectRetries:
-    """The retry policy over one ``new_session``'s connect attempts.
+class ConnectRetries:
+    """The retry policy over one run of refused connect attempts: a new session's, or a readiness poll's.
 
     A ``FORBIDDEN`` refusal means a cold backend or a refused credential, and gets ``MAX_FORBIDDEN_ATTEMPTS``
     attempts.
@@ -173,14 +173,14 @@ class _ConnectRetries:
     def __init__(self) -> None:
         self._forbidden_attempts = 0
 
-    def take(self, refusal: wire.Refusal) -> _ConnectOutcome:
+    def take(self, refusal: wire.Refusal) -> ConnectOutcome:
         """Spend a refused connect against the budget."""
         if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         else:
             again = refusal is wire.Refusal.COLD
-        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
+        return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
 
 
 class InferenceClient:
@@ -235,7 +235,7 @@ class InferenceClient:
         """
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
-        retries = _ConnectRetries()
+        retries = ConnectRetries()
         while True:
             try:
                 return self._open_session()
@@ -244,7 +244,7 @@ class InferenceClient:
             # A status handshake the server did not finish: a backend that is not ready.
             except (TimeoutError, wire.PeerDisconnected) as e:
                 refusal, not_ready = wire.Refusal.COLD, e
-            if retries.take(refusal) is _ConnectOutcome.SURFACE:
+            if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready

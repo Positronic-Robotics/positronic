@@ -8,6 +8,7 @@ from positronic_wire import wire
 from websockets.exceptions import ConnectionClosedError
 
 from positronic.offboard import roboarena
+from positronic.offboard.client import ConnectRetries
 from positronic.utils.serialization import deserialize, serialize
 
 
@@ -191,10 +192,22 @@ def test_readiness_raises_a_final_refusal():
     assert refused.value.refusal is wire.Refusal.FINAL
 
 
-@pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.FORBIDDEN])
-def test_readiness_of_a_refusal_a_retry_may_clear_is_false(refusal):
+def test_readiness_raises_a_forbidden_refusal_once_its_attempts_are_spent():
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
     with patch.object(client, '_wire') as client_wire:
-        client_wire.probe.return_value = refusal
-        assert not client.is_ready()
+        client_wire.probe.return_value = wire.Refusal.FORBIDDEN
+        for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1):
+            assert not client.is_ready()
+        with pytest.raises(wire.ConnectRefused) as refused:
+            client.is_ready()
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
+
+
+def test_readiness_of_a_cold_backend_stays_false_past_the_forbidden_attempts():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.probe.return_value = wire.Refusal.COLD
+        for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 1):
+            assert not client.is_ready()
