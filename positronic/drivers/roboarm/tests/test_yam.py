@@ -165,7 +165,11 @@ def test_failed_parking_is_bounded_and_reported_then_closes(rig, caplog):
     rig.vendor.stuck = True
     started = rig.clock.now()
     rig.finish()
-    assert rig.clock.now() - started < 25
+    # Derived, not a constant: each pass spends its own ramp plus the move's settle, then settles again
+    # before it measures. The ramp is paced by distance, so the bound follows how far the arm was raised.
+    ramp_s = max(yam._Chain._MOVE_TIME_S, float(np.max(np.abs(RAISED - PARK))) / yam._Chain._MAX_JOINT_SPEED)
+    bound_s = yam._Chain._PARK_ATTEMPTS * (ramp_s + 2 * yam._Chain._SETTLE_S) + 5
+    assert rig.clock.now() - started < bound_s
     assert 'did not reach the park pose' in caplog.text
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
     assert rig.vendor.closed
