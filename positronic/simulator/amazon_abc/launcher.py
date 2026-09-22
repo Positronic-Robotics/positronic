@@ -1,7 +1,6 @@
 """Launches the ABC env server as a subprocess and owns its lifetime.
 
-The server runs in an interpreter of its own, built once beside the pinned ABC checkout: ABC needs MuJoCo 3.8
-and positronic locks 3.5.
+The server runs in an interpreter of its own: ABC needs MuJoCo 3.8 and positronic locks 3.5.
 """
 
 import fcntl
@@ -29,7 +28,6 @@ _ABC_PYTHON = '3.12'
 # Installing the ABC project itself would pull its CUDA torch and mujoco-warp.
 _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
 
-# Assets are untracked, so forcing the checkout onto the pin leaves them.
 _PREPARE_SCRIPT = 'prepare.py'
 _PREPARE_ONE_TASK = '--sim-task'
 _PREPARE_EVERY_TASK = '--sim'
@@ -45,10 +43,7 @@ def _checkout_lock() -> Iterator[None]:
 
 
 def ensure_abc(tasks: Sequence[str] | None) -> Path:
-    """Return the Python executable of the prepared ABC environment, with ``tasks``' assets installed.
-
-    ``tasks`` of ``None`` installs every asset package, which is what a sweep over the whole catalogue needs.
-    """
+    """The Python executable of the prepared ABC environment; ``None`` tasks installs every asset package."""
     venv = _ABC_SRC / '.venv'
     with _checkout_lock():
         src = ensure_pinned_checkout(_ABC_REPO, _ABC_COMMIT, _ABC_SRC)
@@ -68,7 +63,6 @@ PYTHONPATH_ENV = 'PYTHONPATH'
 
 
 def abc_subprocess_env() -> dict[str, str]:
-    """Subprocess environment with the server's Python paths and GL backend."""
     return {
         **os.environ,
         PYTHONPATH_ENV: os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR), str(_ABC_SRC)]),
@@ -83,8 +77,5 @@ def _spawn(host: str, port: int, tasks: Sequence[str] | None) -> subprocess.Pope
 
 
 def serve_abc(tasks: Sequence[str] | None, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """The ABC env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
-
-    ``tasks`` names the tasks whose assets the server needs; the scene each one builds is drawn from them.
-    """
+    """Run an ABC server for the context's lifetime and yield its address, with ``tasks``' assets prepared."""
     return serve_subprocess(partial(_spawn, tasks=tasks), host)

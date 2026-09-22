@@ -1,8 +1,4 @@
-"""What the launcher hands its env-server subprocess, and which assets it asks for.
-
-Nothing here clones ABC or spawns it: the checkout, the installs and ``Popen`` are stubbed, so what is under
-test is the choice ``_spawn`` makes rather than the simulation it leads to.
-"""
+"""What the launcher hands its env-server subprocess, and which assets it asks for."""
 
 import subprocess
 import sys
@@ -33,14 +29,12 @@ def spawned(monkeypatch):
 # rules-allow: hardcoded-keys — these assertions spell the names the subprocess reads, so a test built from
 # the launcher's own constants would check the derivation against itself.
 def test_headless_linux_gets_a_renderer_without_being_told(spawned, monkeypatch):
-    """A GPU host has no display, and nobody running an eval should have to know that."""
     monkeypatch.delenv('MUJOCO_GL', raising=False)
     env, _ = spawned('linux')
     assert env['MUJOCO_GL'] == 'egl'
 
 
 def test_an_operators_renderer_is_never_overridden(spawned, monkeypatch):
-    """A software-rendering box exports its own backend; the default must not win over it."""
     monkeypatch.setenv('MUJOCO_GL', 'osmesa')
     env, _ = spawned('linux')
     assert env['MUJOCO_GL'] == 'osmesa'
@@ -61,6 +55,5 @@ def test_only_the_named_tasks_assets_are_downloaded(spawned):
 
 
 def test_a_sweep_over_the_catalogue_downloads_every_package(spawned):
-    """An unbound task list runs whatever ABC offers, so every scene's meshes have to be there."""
     _, runs = spawned('linux', tasks=None)
     assert runs[-1][-1] == '--sim'

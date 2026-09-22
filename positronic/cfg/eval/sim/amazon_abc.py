@@ -43,6 +43,4 @@ def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 
 
-# The task the integration is built against: two to six plastic bottles into a bin, scored by ABC's own
-# evaluator against the bin's measured interior.
 put_bottles = _abc_eval.override(task='put_plastic_bottles_in_bin')
