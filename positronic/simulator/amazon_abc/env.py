@@ -8,7 +8,7 @@ import argparse
 import functools
 from typing import Any
 
-import abc_sim  # pyright: ignore[reportMissingImports]
+import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv, which the launcher builds
 import arm_action
 import mapping
 import mujoco
