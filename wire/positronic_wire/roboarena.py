@@ -25,6 +25,11 @@ class RoboarenaAddress(wire.SessionAddress):
         return self
 
 
+def text_frame_report(text: str) -> str:
+    """How this wire reports a text frame. The server serves nothing more on that connection."""
+    return f'the server answered this error text: {text}'
+
+
 class RoboarenaClientConnection(WebsocketClientConnection):
     """A client's end of one roboarena connection: a websocket session whose peer may answer in text."""
 
@@ -34,8 +39,7 @@ class RoboarenaClientConnection(WebsocketClientConnection):
         except ConnectionClosed as e:
             raise wire.PeerDisconnected(str(e)) from e
         if isinstance(message, str):
-            # The server reports a failure as a text frame, and serves nothing more on that connection.
-            raise wire.PeerDisconnected(f'the server answered this error text: {message}')
+            raise wire.PeerDisconnected(text_frame_report(message))
         return message
 
 

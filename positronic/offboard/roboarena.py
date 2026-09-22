@@ -90,9 +90,8 @@ class RoboarenaClient:
         try:
             self._connection.recv(timeout=RESET_TIMEOUT_S)
         except wire.PeerDisconnected as e:
-            # The backend acknowledges a reset in text, and the wire reports every text frame as the
-            # server's error, carrying that text last. Any other reading reaches the caller.
-            if not str(e).endswith(RESET_ACKNOWLEDGEMENT):
+            # The backend acknowledges a reset in text, which the wire reports as the server's error.
+            if str(e) != roboarena_wire.text_frame_report(RESET_ACKNOWLEDGEMENT):
                 raise
             logger.debug(f'roboarena reset answered: {e}')
 

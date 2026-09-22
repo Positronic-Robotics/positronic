@@ -1,8 +1,8 @@
 # positronic-wire
 
-The client side of the two transports a Positronic inference session runs over, and the facts both
-ends of a wire share. It is one distribution, installable on its own, with `grpcio` and
-`websockets` as its only dependencies.
+The client side of the transports a Positronic inference session runs over: websockets, gRPC, and a
+partner's own protocol. It carries the facts both ends of a wire share. It is one distribution,
+installable on its own, with `grpcio` and `websockets` as its only dependencies.
 
 > **Alpha, under rapid development.** Names and behaviour change without notice, and nothing here is
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
@@ -35,6 +35,7 @@ one interface and reads one answer. A wire over TLS is a member of its own, so n
 | `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, `netloc`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, and the call both ends agree on: `SERVICE`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and the report both ends agree on: `text_frame_report(text)` |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,

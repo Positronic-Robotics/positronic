@@ -28,11 +28,20 @@ def test_a_reset_acknowledged_in_text_ends_the_session():
 
 
 def test_a_reset_answered_with_error_text_reaches_the_caller():
-    """A caller logs this at ERROR: the backend still holds the session's frame history."""
+    """Error text propagates; it does not count as the reset acknowledgement."""
     websocket = MagicMock(**{'recv.return_value': 'CUDA out of memory'})
 
     with pytest.raises(wire.PeerDisconnected, match='CUDA out of memory'):
         _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset(session_id='an-episode')
+
+
+def test_an_error_text_that_ends_with_the_acknowledgement_reaches_the_caller():
+    """Only the exact acknowledgement ends the reset. Text that ends with it is still a failure."""
+    near_miss = f'expected {roboarena.RESET_ACKNOWLEDGEMENT}'
+    websocket = MagicMock(**{'recv.return_value': near_miss})
+
+    with pytest.raises(wire.PeerDisconnected, match=near_miss):
+        _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset()
 
 
 def test_a_reset_the_peer_never_answered_reaches_the_caller():
