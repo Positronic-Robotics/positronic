@@ -1549,3 +1549,13 @@ def test_foreground_shutdown_reports_multiple_base_exceptions_after_draining():
             next(loop)
     assert list(raised.value.exceptions) == errors
     assert holding.is_set() and closed.is_set()
+
+
+def test_unstarted_protected_foreground_loop_is_not_run_on_exit():
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with World(virtual_time=True) as world:
+        world.start(ShutdownWaiter(ready, holding, release, closed))
+    assert not ready.is_set()
+    assert not holding.is_set()
+    assert not closed.is_set()
