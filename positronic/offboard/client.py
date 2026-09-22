@@ -1,6 +1,7 @@
 import logging
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from enum import Enum
 from types import MappingProxyType
 from typing import Any
@@ -127,7 +128,9 @@ class InferenceSession:
         self._closed = True
         message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
         try:
-            self._conn.send(serialise(message))
+            # The server can acknowledge and close before the transport confirms the final write.
+            with suppress(wire.PeerDisconnected):
+                self._conn.send(serialise(message))
             response = deserialise(self._conn.recv(timeout=self._infer_timeout))
             if protocol.ERROR in response:
                 raise RuntimeError(f'Server error: {response[protocol.ERROR]}')

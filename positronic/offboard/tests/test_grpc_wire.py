@@ -24,7 +24,7 @@ from cryptography.x509.oid import NameOID
 from positronic_wire import grpc as client_grpc
 from positronic_wire import wire
 
-from positronic.offboard import grpc_wire
+from positronic.offboard import grpc_wire, protocol
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import InferenceClient, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, bearer
@@ -107,6 +107,32 @@ def test_closing_a_session_ends_it_on_the_server(both_wires):
     session = InferenceClient(*served.grpc()).new_session()
     assert served.server._active_sessions == 1
     session.close()
+    assert served.server._active_sessions == 0
+
+
+def test_close_accepts_ack_before_the_final_write_receipt(both_wires, monkeypatch):
+    stream_ended = threading.Event()
+    requests = client_grpc.GrpcClientConnection._requests
+    read = client_grpc.GrpcClientConnection._read
+
+    def delayed_receipt(connection):
+        for message in requests(connection):
+            yield message
+            if protocol.deserialise(message).get(protocol.END_SESSION):
+                assert stream_ended.wait(5)
+
+    def read_until_end(connection):
+        try:
+            read(connection)
+        finally:
+            stream_ended.set()
+
+    monkeypatch.setattr(client_grpc.GrpcClientConnection, '_requests', delayed_receipt)
+    monkeypatch.setattr(client_grpc.GrpcClientConnection, '_read', read_until_end)
+    served, model = both_wires
+    session = InferenceClient(*served.grpc()).new_session()
+    session.close()
+    model.end_session.assert_called_once_with(session.session_id)
     assert served.server._active_sessions == 0
 
 

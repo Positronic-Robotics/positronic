@@ -394,6 +394,28 @@ def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(f
     conn.close.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    'response, error',
+    [
+        (wire.PeerDisconnected('no acknowledgement'), wire.PeerDisconnected),
+        (protocol.serialise({protocol.SESSION_ID: 'wrong', protocol.END_SESSION: True}), RuntimeError),
+        (protocol.serialise({protocol.ERROR: 'cleanup failed'}), RuntimeError),
+    ],
+    ids=['no-ack', 'wrong-session', 'cleanup-error'],
+)
+def test_close_still_requires_a_valid_ack_when_the_final_write_reports_disconnect(response, error):
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        response,
+    ]
+    conn.send.side_effect = wire.PeerDisconnected('stream ended')
+    session = InferenceSession(conn)
+    with pytest.raises(error):
+        session.close()
+    conn.close.assert_called_once()
+
+
 class OffsetCodec(Codec):
     def encode(self, data):
         return {**data, 'encoded': 42}
