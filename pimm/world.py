@@ -10,7 +10,8 @@ import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import ExitStack
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -589,6 +590,8 @@ class World:
         observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
         control system finishing sets the same event (``_bg_wrapper``), so any control system —
         background or foreground — ending by returning, raising or being interrupted stops the world.
+        When the iterator ends, it closes each loop that is still suspended, so the teardown of that
+        loop runs before an error gets to the caller.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
         A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
@@ -597,6 +600,13 @@ class World:
         a stall (a hang in virtual time, a busy-spin on a wall clock) that ``interleave`` warns about.
         """
         iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
+        with ExitStack() as teardown:
+            for loop_iter in iters:
+                if isinstance(loop_iter, Generator):
+                    teardown.callback(loop_iter.close)
+            yield from self._schedule(iters)
+
+    def _schedule(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)

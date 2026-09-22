@@ -11,6 +11,7 @@ import pos3
 import pytest
 
 import pimm
+from pimm.tests.test_world import TeardownRecorder
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
@@ -54,6 +55,37 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         simulated=True,
     )
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
+
+
+class _FailingPolicy(Policy):
+    """Answers one observation, then fails on the next one."""
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        yield Step({}, runtime.time_ns + 100_000_000)
+        raise ConnectionError('the policy server closed the connection')
+
+
+@pytest.mark.timeout(30.0)
+def test_a_failed_episode_closes_the_env_before_main_raises():
+    events = []
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        control_systems=(TeardownRecorder(events),),  # stands in for the env proxy
+        simulated=True,
+    )
+    task = Task(instruction_source='stack', timeout_sec=1.0)
+    try:
+        main(policy=_FailingPolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, [task]))])
+    except ConnectionError:
+        events.append('raised')
+
+    assert events == ['closed', 'raised']
 
 
 class _EpisodeStub(pimm.ControlSystem):

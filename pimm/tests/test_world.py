@@ -80,6 +80,20 @@ class StopWatcher(ControlSystem):
             yield Sleep(0.01)
 
 
+class TeardownRecorder(ControlSystem):
+    """A control system that runs until stopped and appends 'closed' to `events` when its loop ends."""
+
+    def __init__(self, events: list[str]):
+        self._events = events
+
+    def run(self, should_stop, clock):
+        try:
+            while not should_stop.value:
+                yield Sleep(0.01)
+        finally:
+            self._events.append('closed')
+
+
 class DummySMValue(SMCompliant):
     """Simple SMCompliant payload used to test adaptive transports."""
 
@@ -811,6 +825,21 @@ class TestWorldInterleave:
                 list(world.interleave(failing_loop))
 
             assert 'before_exception' in execution_order
+
+    def test_a_failing_loop_closes_the_loops_still_running(self):
+        events = []
+
+        def failing_loop(stop_reader, clock):
+            yield Sleep(0.01)
+            raise ValueError('Test exception')
+
+        with World(virtual_time=True) as world:
+            try:
+                list(world.interleave(TeardownRecorder(events).run, failing_loop))
+            except ValueError:
+                events.append('raised')
+
+        assert events == ['closed', 'raised']
 
     def test_interleave_stop_behavior(self):
         """Test stop event behavior: early stopping and completion detection."""
