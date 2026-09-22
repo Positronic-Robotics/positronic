@@ -60,10 +60,7 @@ _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 
 
 def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
-    """What a handshake that did not open says about the server.
-
-    Every wire the `websockets` library dials reads its errors this way.
-    """
+    """What a handshake that did not open says about the server."""
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)
     if isinstance(raised, ssl.SSLCertVerificationError):

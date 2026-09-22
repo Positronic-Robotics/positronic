@@ -55,3 +55,15 @@ def test_a_handshake_that_does_not_answer_closes_the_connection_it_opened():
             client.connect()
 
     connection.close.assert_called_once()
+
+
+def test_an_inference_that_does_not_answer_drops_the_connection():
+    """A reply arriving after this read gave up would be read by the NEXT inference as its own."""
+    connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
+    client = _client(connection)
+
+    with pytest.raises(TimeoutError):
+        client.infer({'observation/joint_position': 0})
+
+    connection.close.assert_called_once()
+    assert client._connection is None

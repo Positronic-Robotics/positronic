@@ -1,7 +1,4 @@
-"""The client side of the roboarena wire, which a partner serves and `wire/README.md` states.
-
-This wire carries the frames as bytes; the caller's codec reads them.
-"""
+"""The client side of the roboarena wire: each frame carried as bytes, on a websocket at the root."""
 
 import dataclasses
 from collections.abc import Mapping
@@ -48,7 +45,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
     # A server holds one connection open across a run and sends nothing between inferences, so a shorter
-    # pong deadline drops a quiet connection. FOOTGUN: a missing FRAME is bounded by the caller's `recv`.
+    # pong deadline drops a quiet connection.
     PING_INTERVAL_S = 60.0
     PING_TIMEOUT_S = 600.0
 

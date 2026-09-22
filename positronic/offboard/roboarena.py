@@ -1,8 +1,4 @@
-"""A client for a roboarena server: the msgpack frames, over the `roboarena` wire that carries them.
-
-Two servers here speak the protocol: the DreamZero subprocess this repository launches, and a partner's
-own server a rig dials.
-"""
+"""A client for a roboarena server: the msgpack frames, over the `roboarena` wire that carries them."""
 
 import logging
 from collections.abc import Mapping
@@ -71,8 +67,15 @@ class RoboarenaClient:
         if self._connection is None:
             self.connect()
         assert self._connection is not None
-        self._connection.send(serialize({**observation, ENDPOINT: INFER}))
-        return deserialize(self._connection.recv(timeout=INFER_TIMEOUT_S))
+        try:
+            self._connection.send(serialize({**observation, ENDPOINT: INFER}))
+            answer = self._connection.recv(timeout=INFER_TIMEOUT_S)
+        except BaseException:
+            # A reply that arrives after this read gave up stays queued, and the next inference reads it
+            # as its own: the arm would run a chunk computed for an observation it has moved on from.
+            self.close()
+            raise
+        return deserialize(answer)
 
     def reset(self, session_id: str | None = None) -> None:
         """End the server's history for ``session_id``, and read the acknowledgement off the connection."""
