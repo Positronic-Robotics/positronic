@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+import contextlib
 import functools
 import heapq
 import logging
@@ -8,6 +9,7 @@ import multiprocessing.shared_memory
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
 from collections import Counter, defaultdict, deque
@@ -15,6 +17,7 @@ from collections.abc import Callable, Iterator, Mapping
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
+from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
@@ -559,29 +562,31 @@ class World:
         if errors:
             raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
+    def _join_process(self, process: BaseProcess, timeout_s: float | None, errors: list[BaseException]) -> None:
+        while True:
+            try:
+                process.join(timeout=timeout_s)
+                return
+            except (KeyboardInterrupt, SystemExit) as exc:
+                if ShutdownPolicy.WAIT_FOR_COMPLETION not in self._shutdown_policies.values():
+                    raise
+                errors.append(exc)
+
     def _join_background_processes(self) -> None:
         errors: list[BaseException] = []
-        has_protected_children = ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             policy = self._shutdown_policies[process]
             timeout_s = None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0
-            while True:
-                try:
-                    process.join(timeout=timeout_s)
-                except (KeyboardInterrupt, SystemExit) as exc:
-                    if not has_protected_children:
-                        raise
-                    errors.append(exc)
-                else:
-                    break
+            self._join_process(process, timeout_s, errors)
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
-                process.join(timeout=2)
+                self._join_process(process, 2.0, errors)
                 if process.is_alive():
                     logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
+                    self._join_process(process, None, errors)
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
         if len(errors) == 1:
@@ -589,20 +594,55 @@ class World:
         if errors:
             raise BaseExceptionGroup('Background shutdown interrupted', errors)
 
+    @contextlib.contextmanager
+    def _defer_sigint(self, errors: list[BaseException]) -> Iterator[None]:
+        has_protected_systems = (
+            bool(self._protected_foreground_loops)
+            or ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
+        )
+        if not has_protected_systems or threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        previous = signal.getsignal(signal.SIGINT)
+        if previous is None or previous == signal.SIG_IGN:
+            yield
+            return
+        pending = []
+
+        def defer(signum, frame):
+            pending.append((signum, frame))
+
+        signal.signal(signal.SIGINT, defer)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGINT, previous)
+            for signum, frame in pending:
+                try:
+                    if callable(previous):
+                        previous(signum, frame)
+                    else:
+                        signal.default_int_handler(signum, frame)
+                except BaseException as exc:
+                    errors.append(exc)
+
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
-        logger.info('Stopping background processes...')
-        self.request_stop()
-        cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
-        for emitter, receivers in self._cleanup_emitters_readers:
-            cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
-            cleanup.append(emitter.close)
         errors: list[BaseException] = []
-        for finish in cleanup:
-            try:
-                finish()
-            except BaseException as exc:
-                errors.append(exc)
+        with self._defer_sigint(errors):
+            logger.info('Stopping background processes...')
+            self.request_stop()
+            cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
+            for emitter, receivers in self._cleanup_emitters_readers:
+                cleanup.extend(
+                    receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers])
+                )
+                cleanup.append(emitter.close)
+            for finish in cleanup:
+                try:
+                    finish()
+                except BaseException as exc:
+                    errors.append(exc)
         if errors and exc_value is not None:
             errors.insert(0, exc_value)
         if len(errors) == 1:

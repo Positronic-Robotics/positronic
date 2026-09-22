@@ -1647,3 +1647,82 @@ def test_world_reports_errors_from_every_cleanup_phase(monkeypatch, body_error):
     assert list(raised.value.exceptions) == expected
     receiver_close.assert_called_once()
     emitter_close.assert_called_once()
+
+
+def test_sigint_inside_protected_shutdown_does_not_close_the_device_iterator():
+    closed = []
+
+    class InterruptedShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            signal.raise_signal(signal.SIGINT)
+            yield Sleep(0.01)
+            closed.append(self)
+
+    device = InterruptedShutdown()
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with World(virtual_time=True) as world:
+                next(world.start(device))
+        assert closed == [device]
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_custom_sigint_handler_runs_after_protected_shutdown_and_is_restored():
+    closed = []
+    handled = []
+
+    class InterruptedShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            signal.raise_signal(signal.SIGINT)
+            assert not handled
+            closed.append(self)
+
+    def handler(signum, frame):
+        assert closed
+        handled.append(signum)
+
+    previous = signal.signal(signal.SIGINT, handler)
+    try:
+        with World(virtual_time=True) as world:
+            next(world.start(InterruptedShutdown()))
+        assert handled == [signal.SIGINT]
+        assert signal.getsignal(signal.SIGINT) is handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_interrupted_post_terminate_join_still_waits_for_protected_sibling(monkeypatch):
+    ctx = mp.get_context('spawn')
+    ordinary, protected = [ShutdownWaiter(*(ctx.Event() for _ in range(4))) for _ in range(2)]
+    ordinary.shutdown_policy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
+    timeouts = []
+    with pytest.raises(KeyboardInterrupt):
+        with World() as world:
+            world.start([], [ordinary, protected])
+            assert ordinary.ready.wait(5) and protected.ready.wait(5)
+            process = world.background_processes[0]
+            join = process.join
+
+            def interrupted_join(timeout):
+                timeouts.append(timeout)
+                if len(timeouts) == 1:
+                    return
+                if len(timeouts) == 2:
+                    raise KeyboardInterrupt()
+                protected.release.set()
+                join(timeout=5)
+
+            monkeypatch.setattr(process, 'join', interrupted_join)
+    assert timeouts == [90.0, 2.0, 2.0]
+    assert protected.closed.is_set()
