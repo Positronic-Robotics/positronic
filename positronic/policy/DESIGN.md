@@ -1,6 +1,7 @@
-# Positronic Policy API
+# Positronic Policy API [WIP]
 
-This document walks through the Positronic's policy API design, and its execution and ownership contracts.
+This document walks through the Positronic's policy API design, including the
+reasoning that shaped it and the API itself.
 
 ## Introduction
 
@@ -100,164 +101,308 @@ This design starts from the moving world instead. A policy acts, watches
 and paces itself in it, so the list of expressible schemes has no end: the
 next idea fits without a new interface.
 
-## Processors and runs
+## Design
 
-A `Processor[InputT, OutputT]` is a reusable definition. Its constructor holds
-configuration; `run(runtime, *dependencies)` returns one generator with its
-own state. `Policy` is an alias for `Processor[Obs, Step]`.
+### The life of an episode
 
-The runtime starts and primes each generator. Its first yield must be `None`;
-after that, `send(input)` returns an output. The aliases `ProcessorRun[InputT,
-OutputT]` and `PolicyRun` describe these generators. State belongs in generator
-locals, so starting the same definition again creates a fresh episode.
+The code on the rig is given one URL, and that is all it knows about the
+policy. It connects and receives a description of the policy's pieces —
+which run near the robot and which stay remote. It assembles the local
+half: a chain of parts that transform observations on the way to the
+model and commands on the way back.
+
+An episode begins, and the assembled half becomes a session — the
+running instance of the policy that controls this robot for this
+episode. The framework calls the session repeatedly, sending the sensor
+data and the current world time. Every call returns commands and the
+time of the next call. The framework sends the commands to the robot
+immediately.
+
+The session holds everything the episode remembers between calls. This
+state lives on the rig: a reaction that crosses a wire arrives late,
+and when the network fails it does not arrive at all.
+
+The model is heavy: it needs a GPU and a machine of its own, and the rig
+rarely has them. Heavy pieces stay remote. The model is also too slow for
+this loop, so the session never waits for it. The session starts the
+model call and continues to control the robot. The session acts on the
+answer when it arrives. After the setup, the server only answers these
+calls. It is stateless: every call is a pure function of its arguments.
+
+The framework records everything that crosses a boundary, as it
+happens: what the session saw, what it decided, and what it asked of
+the model, on every machine involved. The episode ends when the
+framework closes the session. The record remains.
+
+![The life of an episode](docs/episode.svg)
+
+The sections below describe each piece.
+
+### Policies and sessions
+
+One algorithm may drive several robots at once.
+
+- A `Policy` is the algorithm that controls a robot from observed data.
+- Control happens in a `Session`; a `Policy` makes one for each episode.
+- Sessions are independent, and several may exist at the same moment.
+- Each session is told at its creation which robot it controls, so it comes
+  ready for it.
+- The framework may cancel a session at any moment; a session never ends
+  itself.
+
+### Control
+
+The robot moves continuously, but code acts in moments. The framework
+connects the two with signals, a concept from
+[pimm](../../pimm/README.md), Positronic's runtime. A signal is a single
+value that its owner updates at its own rate. A reader takes the latest
+value whenever it looks. Nothing queues and nothing waits.
+
+The session is a reader of observations and a writer of commands.
+Everything around the session is asynchronous, but the framework calls it
+synchronously — a plain function call, repeated:
+
+- One call: `(observations, time) -> (commands, resume_at)` — the current
+  observations and time in, the commands to execute now (possibly none) out.
+- Observations contain the latest available sensor values, task, and rig descriptor.
+  Each signal's `updated` flag controls whether its serialized fields need refreshing.
+  Arrays are copied on update so later device writes cannot change an earlier observation.
+  Current time comes from `runtime.time_ns`, not from observation fields.
+- Returned commands are emitted towards the robot driver immediately.
+- Observations and commands are named channels. A channel value can be
+  of any type, structured or unstructured (a robot command, an image).
+- The episode clock never goes backwards. A completion can cause another
+  call at the same time, with the same `runtime.tick` but any newly received sensor values.
+- `resume_at` is how the session paces itself: the instant at which it wants
+  to be called next, absolute on the episode clock.
+- The framework calls best-effort at `resume_at`: it may be earlier or later,
+  and the session reads the actual moment from `time`.
+
+Every newly available inference answer also schedules a call through the whole
+policy stack. A completion is delivered once, independently of whether its
+result has been read. In charged simulation, availability includes the elapsed
+inference time. In uncharged simulation, completions are handled before the
+clock advances, without a limit on chains of calls at the same instant.
+
+The harness drives policy generators and handles control-system signals. The
+executor receives a clock function, reports completions, and provides bounded
+waits; it has no dependency on the control-system framework.
+
+TODO: Let a policy select which answers may wake it early with `wake_on`.
+
+### Async inference
+
+The policy defines its heavy work (the model inference) as stateless
+functions, `infer(obs) -> actions`, and gives them to the framework. The
+session starts a call and does not wait — control continues while the
+framework runs the function, in process or on a GPU server. The framework
+runs every call and records the arguments when the call starts, and the
+result when it arrives. It measures the call's duration, so in simulation
+the call keeps its real latency.
+
+![An inference call goes through the framework](docs/inference.svg)
+
+- The session cannot tell where a function runs.
+- Between calls the framework promises nothing: not the same process, not
+  surviving state, not order, not exactly-once delivery. A function answers
+  from its arguments alone. A cache may make it faster, but the function
+  must answer the same without it.
+- Invoking a function starts the work and returns a handle at once, never
+  waiting. The session reads the handle when it next has control.
+- A failure the framework can see — a lost connection, a dead worker, a
+  value that does not serialize — ends the handle with an error. Only a
+  function that does not return leaves a handle open.
+- The re-raise is best effort. A failure that crossed the wire loses its
+  class and can arrive as a different type. A session must not select its
+  behavior by the class of a function error.
+- A session may cancel a call it will not read. The framework stops the
+  work where it can: it stops retries and drops the queued call. A call
+  that already runs may run to its end. Functions are pure, so a dropped
+  call loses nothing.
+- A function's inputs and outputs are types the framework can serialize:
+  plain types and numpy, selected domain classes. An unsupported type fails
+  at the call.
+- A session computes only inside its own call or inside an inference
+  function.
+
+### Composability
+
+A neural policy is never just the model. Data transforms surround it —
+normalize, change frames, encode actions — the pre- and post-processing
+every ML pipeline has. Physical AI adds a second kind of part, one that
+works in time: decide when to call the model, execute the actions it
+returned, blend a late plan into the motion underway. The API gives each
+kind its own shape. A `Codec` transforms data and does not see time. A
+`Layer` wraps a session and runs on the session's clock.
+
+![The chain across time](docs/chain.svg)
+
+- A `Layer` is a recipe fixed at configuration time. When a policy session
+  is created, each layer makes its session, wrapping the one inside it.
+- A chain of layers is a layer, and its order fully determines behavior.
+- Each session in the chain communicates only through the observations and
+  commands flowing through it. It knows nothing of its neighbours or its
+  position.
+- What an inner session sees is its outer's choice — except `time`. The
+  framework sets `time` once per outermost call, and every session in the
+  chain sees that same value.
+- A layer calls its inner session at most once per outer call. A second
+  call would repeat the same `time`. Sessions depend on strict growth: a
+  session that divides by its time step must not get a zero step.
+- A `Codec` is a pair of transforms — encode and decode, as in a video
+  codec. Around an inference function, encode converts the arguments and decode
+  converts the answer. As a trivial layer, encode converts the observations
+  going down and decode converts the commands coming up, with `resume_at`
+  untouched.
+
+Layers and codecs are offered, not imposed: a policy may always implement
+its session directly against the call itself.
+
+### Remote policies
+
+Execution splits between the rig and the server. The definition does not:
+the layers and codecs on the rig belong to the same design as the functions
+behind the wire, and halves defined apart drift apart. The server owns the
+whole definition and sends it to the rig as a description.
+
+- One URL is enough to use a policy: the description carries everything the
+  rig needs to assemble its half.
+- Descriptions are backward compatible: the framework evolves without
+  changing what an already-served policy does (as much as possible).
+- A description the rig cannot honor is refused at the handshake.
+
+### Recording and logging
+
+A system split between a rig and a server is hard to debug. Data flows
+in two dimensions — through time and through the layers — and the
+recording reconstructs both flows after the episode.
+
+Each session produces one recording on the rig: a set of named series, where
+a series holds values of one type — arrays, images, numbers. A recording is
+built for a visualizer like [rerun.io](https://rerun.io). Every value is
+placed on three timelines: the call number, control time, and wall time.
+
+- If requested, the framework records the flow at every boundary it carries:
+  what enters and leaves each session in a chain it assembled and each
+  inference function, and when.
+- A session may append values to named series of its own. The framework
+  places each value on the timelines.
+- A session names its series locally. The framework keeps the full names
+  distinct across sessions and stable across runs.
+- Inference functions record too: into the recording itself, or into storage of
+  their own, joined later.
+- Timing is part of logging: the framework records wall-clock spans for processor
+  calls, codecs, and background jobs, preserving parent-child links.
+- The framework makes the best effort not to consume control time, and recording adds no failure path.
+
+## API
+
+The design above, as Python protocols.
+
+### The session call
 
 ```python
-from positronic.policy.base import Policy, PolicyRun, Runtime, Step
+# Observations and commands are named channels.
+Obs = Mapping[str, Any]
+Commands = Mapping[str, Any]
 
 
-class Hold(Policy):
-    def run(self, runtime: Runtime) -> PolicyRun:
-        obs = yield
-        while True:
-            obs = yield Step({}, runtime.time_ns + 100_000_000)
+class Session(Protocol):
+    def __init__(self, context: dict[str, Any]) -> None: ...
+
+    # `time_ns` and the returned `resume_at` are nanoseconds on the same clock.
+    def __call__(self, runtime: InferenceRuntime, obs: Obs) -> tuple[Commands, int]: ...
+
+    # Called by the framework, at any moment.
+    def close(self) -> None: ...
 ```
 
-The harness receives a complete policy definition. It creates one runtime and
-starts one run per episode. Dependencies are resolved by the definition;
-`Runtime.start` also accepts dependencies for constructing child runs.
-Whoever starts a run closes it. Submitted work must finish before runs close
-resources that work may still use.
-The harness closes its executor, draining workers, then closes the policy run.
-Generator closure happens between resumptions, never concurrently with a send.
+### Async inference
 
-## Control and time
+```python
+class Answer(Protocol):
+    def done(self) -> bool: ...
 
-A policy receives the latest available sensor values, task, and rig descriptor.
-The harness refreshes each signal's serialized fields when its `updated` flag
-is set, copying arrays so later device writes cannot change an earlier input.
-Observation mappings are read-only. Time comes from `runtime.time_ns`; the
-observation contains neither `obs_time_ns` nor `wall_time_ns`.
+    # The result once done. A failed call raises here. Reading it earlier is an error.
+    def result(self) -> Any: ...
 
-A `Step` contains commands to emit immediately and an absolute `resume_at_ns`
-on the runtime's clock. The harness clamps the interval from the policy call's
-start to 5 ms–1 s. When no observation is available, a real rig polls every
-100 ms. Simulation yields to the other control systems and checks the policy's
-deadline on simulator ticks.
+    # The session will not read this answer. The framework stops the work
+    # where it can.
+    def cancel(self) -> None: ...
 
-Every newly available submitted answer can resume the entire policy stack
-before its requested time. Multiple resumptions can have the same time and
-`runtime.tick`; code must not assume a positive elapsed time between calls.
-The harness re-reads signals even then, so newly arrived values are visible.
 
-`ChunkedSchedule(fps, horizon_sec=None)` submits a function returning an ordered
-sequence of command mappings. It anchors the first command when it reads the
-answer, emits due commands, and requests another chunk after the execution
-window. `horizon_sec` caps that window. An overdue call combines due commands,
-keeping the latest value per channel. The harness contains no trajectory player.
+# Calling one starts the work and returns the `Answer` at once.
+Fn = Callable[..., Answer]
+```
 
-`StopOnFault` withholds commands and child calls while an arm is unavailable.
-Calls resume on the same child run once the arms are available. `TemporalStack`
-records selected channels and samples their history; place it outside the
-scheduler to collect history during chunk execution.
+### The runtime
 
-## Submitted work
+```python
+# The framework's standing offer to one session. Every session gets its own.
+class InferenceRuntime(Protocol):
+    # The inference functions, each wrapped into an `Fn`: a worker pool in
+    # process, a stub over the wire.
+    def async_infer(self, Obs obs) -> Answer: ...
 
-`runtime.submit(function, *args, **kwargs)` returns `Answer[T]` immediately.
-The function is an ordinary callable, including a remote inference call.
-Submitted functions must not mutate the processor run's episode state.
-Submission passes arguments by reference: neither the run nor the worker may
-mutate those inputs until the call finishes. Copy a reusable buffer before
-submitting it. Handles are checked without waiting for the worker or network.
+    @property
+    def time_ns(self) -> int: ...
 
-- `done()` checks whether the result is available on the episode clock.
-- `result()` returns the function's result, re-raises its exception, or raises
-  `NotAnswered` if it is too early. A remote error may have a different type.
-- `cancel()` cancels queued work when possible. Running calls may finish.
+    # Append `value` to this session's series `name`. The framework places
+    # it on the timelines.
+    def record(self, name: str, value: Any) -> None: ...
+```
 
-The executor uses worker threads and receives a clock function. It has no
-control-system signal dependencies. Real execution exposes finished answers
-immediately; the harness polls pending work at intervals of at most 5 ms.
-Charged simulation exposes answers only after simulated time includes their
-queueing and execution duration. Uncharged simulation handles completion before
-advancing time. Chains of uncharged calls at the same instant are unrestricted
-and can prevent the simulator from advancing.
+### Policies
 
-Shutdown is checked between episode iterations. Waiting for uncharged work can
-delay shutdown; the wait deliberately does not poll the stop signal. Cleanup
-stops at the first error, without guaranteeing closure of remaining resources.
+```python
+class Policy(Protocol):
+    # The policy's heavy work: plain callables, given by name, offered
+    # back as `rt.fns`.
+    def infer(Obs obs) -> Commands: ...
 
-## Composition and codecs
+    # `context` carries the robot the session will control, and whatever
+    # else the framework knows about the episode.
+    def new_session(self, context: dict[str, Any]) -> Session: ...
+```
 
-`Sequential(outer, middle, inner)` nests its components in that order. A processor
-receives the live child run or callable as a dependency and controls whether and
-how often to invoke it. A codec encodes inputs and decodes outputs; around a
-`Step`, it transforms commands and preserves `resume_at_ns`.
-Other processors may replace the child's requested time. An empty command
-mapping emits nothing. `Codec.wrap` copies the input mapping to a dict before
-encoding; it accepts one observation value, not a positional-argument envelope.
-Context-dependent decoding belongs around the inference callable so it uses
-that call's input; a codec around a scheduler sees the current control input.
+### Layers and codecs
 
-Codecs and processors can mix anywhere in a sequence. Codecs also support `|`
-for sequential data conversion and `&` for parallel conversion with merged
-outputs. They have no clock and do not attach action timestamps. `Metadata`
-adds declarations, such as training cadence, without transforming data.
+```python
+# The framework's handle to the next session in. No `time_ns` parameter: the
+# framework stamps the inner call with the outermost call's time, so the
+# whole chain sees one time.
+Inner = Callable[[Obs], tuple[Commands, int]]
 
-`processor.meta()` reports definition metadata. `Sequential.meta()` flattens
-and combines component metadata, with later components winning on shared keys.
-`to_spec()` returns a registered name, component version, and plain-data constructor arguments;
-compositions contain nested specs. A component without a supported wire spec
-can still run locally, but cannot be delivered to a rig.
 
-## Remote deployments
+class Layer(Protocol):
+    def make_session(self, inner: Inner, rt: Runtime) -> Session: ...
 
-`RemotePolicy` takes a wire name and a session address. Each run opens a server
-session, receives its ID and declared client stack, and runs that stack around
-an ordinary remote inference function. The run ends the session when closed.
-The transport connection also bounds its lifetime: disconnects release the
-session after outstanding calls finish. A wrong session ID produces an error
-and closes the requesting connection.
-Credentials are supplied separately through headers, outside the address.
 
-The handshake declares the protocol version, and each stack component declares its own version.
-Missing versions mean v1. Exact registry lookup preserves old-server behavior or rejects an
-unsupported declaration before inference. V1 connections send raw observations and close without
-an end-session message; their trajectory stack is adapted to policy steps. Deprecated versions
-warn with calendar dates and migration instructions. Removal requires a later client release;
-installed clients never expire by date. See [wire compatibility](../offboard/README.md#compatibility-and-deprecation).
+# A codec is a layer: its session encodes the observations going down and
+# decodes the commands coming up.
+class Codec(Layer):
+    def encode(self, data: dict) -> dict: ...
 
-Server configuration lives in `positronic.offboard.spec`:
+    # `data` may be a list of commands; the codec decodes each one.
+    def decode(self, data: Any) -> Any: ...
+```
 
-- `ModelSource` discovers checkpoint IDs and loads a `Model`.
-- `Model(obs, session_id=...)` returns model outputs. Stateless models can ignore
-  the ID. A stateful backend must isolate sessions or reject concurrent owners.
-- `Model.end_session(id)` releases episode state. `Model.close()` releases
-  loaded resources when the server switches models or shuts down.
-- `PolicyDeployment(source, local, codec=None, compress_images=False)` assembles
-  the model source, client processor stack, optional server codec, and transport
-  compression setting.
+`layer_a | layer_b` is a layer. `chain.wrap(policy)` is a policy: its
+sessions are the chained sessions, with a handle between each pair. The
+framework makes every session in the chain and gives each one its own
+`Runtime`. The framework closes every session it made, and a session
+closes what it made itself. `close` never travels through the chain.
 
-The server returns full action chunks; client scheduling selects their execution
-window. It serializes calls to a loaded model. Session parameters may change the
-client stack or server codec, but cannot replace the model source. A metadata
-probe creates and ends a session without claiming a stateful model's episode.
+## Deferred, not to decide now
 
-## Recording and logging
-
-The harness records sensor and executed-command signals as an episode dataset.
-Timing is part of logging: framework spans cover processor resumptions, codecs,
-and submitted jobs, with parent-child links. Suspended generators keep no span
-open; background jobs remain children of the call that submitted them. These
-are wall-clock timings, independent of simulation charging. Parent durations
-include synchronous children and should not be added to them.
-
-The server reports per-request component durations even without telemetry files.
-Inference input/output recording and per-run metadata are not implemented.
-
-## Deferred
-
-- TODO: Record dropped and late waypoints in the scheduling processor.
-- TODO: Allow selecting which answers wake a policy early with `wake_on`.
-- TODO: Define per-run metadata and inference input/output recording.
-- TODO: Decide whether observations include each sensor's source timestamp.
-- TODO: Align wall-clock logs across machines; #528 tracks the clock problem.
+- TODO: Record dropped and late waypoints in the scheduling processor; the harness emits commands directly.
+- The shape of the robot description, and a server's ability to refuse one.
+- The exact wire protocol a server must support — the handshake that
+  delivers the description, the inference calls, and the versioning that
+  keeps an old server compatible.
+- Source times for observations — whether the framework passes the
+  timestamp of each sensor value to the session. The pimm signals
+  already carry these timestamps.
+- The wall-time timeline across machines — the rig clock and the server
+  clock differ, and the records from both must align. #528 tracks the
+  clock problem in pimm.
