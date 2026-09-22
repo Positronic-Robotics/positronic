@@ -10,12 +10,13 @@ def test_every_member_is_registered_under_its_own_name():
     assert registry.CLIENT_WIRES == {
         'websocket': registry.CLIENT_WIRES['websocket'],
         'websocket_tls': registry.CLIENT_WIRES['websocket_tls'],
+        'websocket_unix': registry.CLIENT_WIRES['websocket_unix'],
         'grpc': registry.CLIENT_WIRES['grpc'],
         'grpc_tls': registry.CLIENT_WIRES['grpc_tls'],
     }
     for name, client_wire in registry.CLIENT_WIRES.items():
         assert client_wire.NAME == name
-        assert isinstance(client_wire.DEFAULT_PORT, int)
+        assert issubclass(client_wire.ADDRESS, wire.SessionAddress)
 
 
 @pytest.mark.parametrize(
@@ -23,6 +24,7 @@ def test_every_member_is_registered_under_its_own_name():
     [
         ('websocket', websocket.WebsocketClientWire),
         ('websocket_tls', websocket.WebsocketTlsClientWire),
+        ('websocket_unix', websocket.WebsocketUnixClientWire),
         ('grpc', grpc.GrpcClientWire),
         ('grpc_tls', grpc.GrpcTlsClientWire),
     ],
@@ -32,7 +34,7 @@ def test_a_name_selects_its_member(name, kind):
 
 
 def test_a_name_no_wire_carries_is_refused_naming_every_wire():
-    with pytest.raises(ValueError, match='websocket, websocket_tls, grpc, grpc_tls'):
+    with pytest.raises(ValueError, match='websocket, websocket_tls, websocket_unix, grpc, grpc_tls'):
         registry.client_wire('ws')
 
 

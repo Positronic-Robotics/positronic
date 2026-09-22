@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import configuronic as cfn
+from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
 
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
@@ -24,7 +25,19 @@ def placeholder():
     )
 
 
-remote = cfn.Config(RemotePolicy, wire='websocket', host='localhost', port=8000)
+@cfn.config(host='localhost', port=8000, model='', query='')
+def network_address(host: str, port: int, model: str, query: str) -> HostPortAddress:
+    """A session on a server reached over the network, as the network wires dial one."""
+    return HostPortAddress(host, port, session_path(model), query)
+
+
+@cfn.config(model='', query='')
+def socket_address(uds: str, model: str, query: str) -> UnixSocketAddress:
+    """A session on a server on this machine, as `websocket_unix` dials one."""
+    return UnixSocketAddress(Path(uds), session_path(model), query)
+
+
+remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
 
 @cfn.config()
@@ -61,8 +74,8 @@ def file_headers(path: str) -> dict[str, str]:
     raise ValueError(f'{file}: {problem}') from None
 
 
-# The caller names the wire, the host and the port: a default would hand the credential to whatever host it
-# points at.
-authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
-nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
-file_authed_remote = cfn.Config(RemotePolicy, headers=file_headers)
+# The caller names the wire and the endpoint. `network_address` holds localhost, so a run that names no host
+# sends the credential to this machine and not to a stranger.
+authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
+nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
+file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)

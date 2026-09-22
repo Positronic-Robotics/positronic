@@ -104,7 +104,7 @@ inside `checkpoints/g05-droid/`. Start the server on the GPU host:
 
 ```bash
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml \
-  run --rm --service-ports --use-aliases galaxea-server --port=8000
+  run --rm --service-ports --use-aliases galaxea-server --websocket.served_address.port=8000
 ```
 
 The published API binds to `127.0.0.1:8000` on the Docker host. Use Docker Engine
@@ -130,7 +130,7 @@ the server in the Positronic environment with an explicit localhost bind:
 
 ```bash
 uv run --locked python -m positronic.vendors.galaxea.server \
-  --host=127.0.0.1 --port=8000 \
+  --websocket.served_address.host=127.0.0.1 --websocket.served_address.port=8000 \
   --pipeline.source.galaxea_root=/path/to/GalaxeaVLA \
   --pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
 ```
@@ -148,7 +148,7 @@ localhost URL works for clients running directly on the GPU host:
 
 ```bash
 uv run --locked positronic eval run --eval=.real.droid.pick_place \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --output_dir=/path/to/evaluation-recordings
 ```
 
@@ -162,7 +162,7 @@ Use a unique output directory for each run:
 ```bash
 IMAGE_TAG=latest docker compose -f docker/docker-compose.yml run --rm robolab-eval \
   --eval=.sim.robolab.banana_in_bowl --eval.trial_count=1 \
-  --policy=.remote --policy.host=galaxea-server --policy.port=8000 \
+  --policy=.remote --policy.address.host=galaxea-server --policy.address.port=8000 \
   --output_dir=s3://inference/tmp/galaxea-robolab/<run-id>/
 ```
 

@@ -28,9 +28,9 @@ cd docker && docker compose run --rm --service-ports openpi-server libero
 Score a suite, and browse every trial — video, robot state, per-trial success:
 
 ```bash
-# --policy.host and --policy.port say where the server is — a remote host and 8000 if it runs on another machine
+# --policy.address.host and --policy.address.port say where the server is — a remote host and 8000 off-machine
 uv run positronic eval run --eval=.sim.libero.object \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
 uv run positronic-server --dataset.path=~/evals/libero \

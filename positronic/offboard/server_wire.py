@@ -4,10 +4,39 @@ The client side, and the facts both ends share, are ``positronic_wire``.
 """
 
 import abc
+import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
-from positronic_wire.wire import Endpoint
+from fastapi import APIRouter
 from starlette.datastructures import QueryParams
+
+from . import keys
+
+
+class ServedAddress(abc.ABC):
+    """Where a wire serves, and how a session served there names that in its own metadata.
+
+    A wire that binds a host and a port and one that binds a socket answer with different keys, so each
+    writes its own; nothing reads one kind of address and decides.
+    """
+
+    @property
+    @abc.abstractmethod
+    def meta(self) -> dict[str, Any]:
+        """The metadata keys this address writes into every session served on it."""
+
+
+@dataclasses.dataclass(frozen=True)
+class ServedHostPort(ServedAddress):
+    """A wire serving on a host and a port. The port is known once the wire has bound."""
+
+    host: str
+    port: int
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {keys.HOST: self.host, keys.PORT: self.port}
 
 
 class ServerConnection(abc.ABC):
@@ -20,7 +49,7 @@ class ServerConnection(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def endpoint(self) -> Endpoint:
+    def served_address(self) -> ServedAddress:
         """Where the wire that accepted this session serves."""
 
     @property
@@ -58,12 +87,20 @@ class Wire(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def endpoint(self) -> Endpoint:
-        """Where this wire serves. The port is known once ``start`` returns."""
+    def served_address(self) -> ServedAddress:
+        """Where this wire serves, known once ``start`` returns: a bound port, or the socket path."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized) -> None:
-        """Bind, and give every accepted session to ``session``. Raises when the port is not free."""
+    async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
+        """Bind, and give every accepted session to ``session``.
+
+        ``api`` is the server's own HTTP routes, the model catalogue among them. A wire whose
+        transport carries HTTP serves them beside its sessions; one that does not ignores them, and
+        says so.
+
+        Raises when the address is taken: a port another process holds, or a socket path a live
+        server is already serving on.
+        """
 
     @abc.abstractmethod
     async def serve(self) -> None:

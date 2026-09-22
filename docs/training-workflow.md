@@ -182,7 +182,7 @@ Start an inference server that exposes a unified API over a WebSocket or a gRPC 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --port=8000
+  --websocket.served_address.port=8000
 ```
 
 **LeRobot Server (ACT — lerobot 0.3.3):**
@@ -190,7 +190,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --port=8000
+  --websocket.served_address.port=8000
 ```
 
 **GR00T Server (naming the pipeline as the subcommand):**
@@ -217,10 +217,11 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | `--pipeline.source.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
 | `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
 | `--pipeline.ee_frame` | OpenPI only: the EE frame the checkpoint speaks, relative to the rig's `default` | `None` |
-| `--port` | Server port | `8000` (default) |
-| `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
+| `--websocket.served_address.port` | WebSocket wire port | `8000` (default) |
+| `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` (default, binds to all interfaces) |
+| `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket, which takes `.uds` and names no host and no port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 
-The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
+The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.address.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
 
 ### Checking Server Status
 

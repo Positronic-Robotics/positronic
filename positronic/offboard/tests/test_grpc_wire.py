@@ -278,7 +278,7 @@ def _trust_only(monkeypatch, root: bytes) -> None:
 
 def _through_edge(port: int) -> tuple[wire.ClientWire, wire.SessionAddress]:
     """The TLS member of the gRPC wire, and the session behind the edge on ``port``."""
-    return client_grpc.GrpcTlsClientWire(), wire.SessionAddress(EDGE_HOST, port, wire.SESSION_PATH, '')
+    return client_grpc.GrpcTlsClientWire(), wire.HostPortAddress(EDGE_HOST, port, wire.SESSION_PATH, '')
 
 
 @pytest.fixture
@@ -348,7 +348,7 @@ def test_a_path_outside_the_session_route_is_refused():
 
 def test_a_port_that_never_answers_is_named_at_the_deadline():
     """Nothing listens on port 1; the channel never becomes ready."""
-    address = wire.SessionAddress('localhost', 1, wire.SESSION_PATH, '')
+    address = wire.HostPortAddress('localhost', 1, wire.SESSION_PATH, '')
     client = InferenceClient(client_grpc.GrpcClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='localhost:1'):
         client.new_session()
@@ -385,17 +385,17 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
     opened = []
     client_wire = client._wire
 
-    class _Recording(wire.ClientWire):
+    class _Recording(wire.ClientWire[wire.HostPortAddress]):
         """The client's wire, recording every connection it dials."""
 
         NAME = client_wire.NAME
-        DEFAULT_PORT = client_wire.DEFAULT_PORT
+        ADDRESS = wire.HostPortAddress
 
         def session_url(self, address):
             return client_wire.session_url(address)
 
-        def api_url(self, address):
-            return client_wire.api_url(address)
+        def list_models(self, address, headers, open_timeout):
+            return client_wire.list_models(address, headers, open_timeout)
 
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))

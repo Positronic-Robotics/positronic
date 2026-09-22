@@ -232,26 +232,32 @@ def _ready_channel(channel: grpc.Channel, target: str, open_timeout: float) -> g
     return channel
 
 
-class GrpcClientWire(wire.ClientWire):
+class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
     """The client side of the gRPC wire, whose port carries sessions alone. The channel is plaintext."""
 
     NAME = 'grpc'
+    ADDRESS = wire.HostPortAddress
     DEFAULT_PORT = 80
 
-    def session_url(self, address: wire.SessionAddress) -> str:
+    def session_url(self, address: wire.HostPortAddress) -> str:
         """gRPC dials a target, not a URL: ``host:port`` and the session route, for the log."""
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def api_url(self, address: wire.SessionAddress) -> None:
-        """None: the HTTP API answers on the server's own port."""
-        return None
+    def list_models(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> list[str]:
+        """Raises: this wire's port carries sessions alone, and the catalogue is an HTTP route."""
+        raise ValueError(
+            f'{self.NAME} carries sessions alone and no catalogue; read it on an HTTP-capable wire, '
+            f'where the server serves one'
+        )
 
     def channel(self, target: str) -> grpc.Channel:
         return grpc.insecure_channel(target, options=_client_options())
 
     def dial(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> GrpcClientConnection:
         """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         dialled = target(address.host, address.port)
@@ -260,7 +266,7 @@ class GrpcClientWire(wire.ClientWire):
         return GrpcClientConnection(channel, dialled, metadata)
 
     def probe(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         """One call on ``PROBE_PATH``, carrying ``headers``: a server that is up answers it ``UNIMPLEMENTED``."""
         channel = self.channel(target(address.host, address.port))

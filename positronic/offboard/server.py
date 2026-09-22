@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -296,7 +297,7 @@ class PolicyServer:
             raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
-        return {'models': self._source.get_models()}
+        return {wire.MODELS_KEY: self._source.get_models()}
 
     def _session_pipeline(self, params: dict[str, Any]) -> Pipeline:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -382,10 +383,8 @@ class PolicyServer:
                 self._infer_lock.release()
             assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
-            endpoint = conn.endpoint
             meta = {
-                offboard_keys.HOST: endpoint.host,
-                offboard_keys.PORT: endpoint.port,
+                **conn.served_address.meta,
                 **self._source.meta(rid),
                 offboard_keys.CHECKPOINT_ID: rid,
                 **session.meta,
@@ -471,7 +470,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized)
+                    await w.start(self._serve_session, self._authorized, self.api)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
@@ -507,22 +506,38 @@ class PolicyServer:
             loop.call_soon_threadsafe(stop.set)
 
 
-@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None, grpc_port=None)
+# Named rather than positional: configuronic addresses an override by parameter name.
+websocket = cfn.Config(
+    websocket_wire.WebsocketWire, served_address=cfn.Config(server_wire.ServedHostPort, host='0.0.0.0', port=8000)
+)
+grpc = cfn.Config(grpc_wire.GrpcWire, served_address=cfn.Config(server_wire.ServedHostPort, host='0.0.0.0', port=8001))
+
+
+@cfn.config()
+def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
+    """The Unix socket a wire binds, named on the command line."""
+    return websocket_wire.ServedUnixSocket(Path(uds))
+
+
+@cfn.config(websocket=websocket, grpc=None, recording_dir=None, idle_timeout_min=None)
 def serve(
     pipeline: cfn.Config,
-    host: str,
-    port: int,
+    websocket: server_wire.Wire | None,
+    grpc: server_wire.Wire | None,
     recording_dir: str | None,
     idle_timeout_min: float | None,
-    grpc_port: int | None,
 ):
     """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
 
-    Only the sockets and the recording taps are flags of their own; everything the served model is —
-    codec, source, checkpoint — is reached through the pipeline itself. GR00T selects checkpoints with
-    ``--pipeline.source.model_source=...``; LeRobot and OpenPI use ``--pipeline.source.checkpoints_dir=...``.
+    Everything the served model is — codec, source, checkpoint — is reached through the pipeline
+    itself. GR00T selects checkpoints with ``--pipeline.source.model_source=...``; LeRobot and OpenPI
+    use ``--pipeline.source.checkpoints_dir=...``.
 
-    ``grpc_port`` adds the gRPC wire beside the websocket one (see the offboard README).
+    Each wire carries the address it binds, and this binds what it is given::
+
+        --websocket.served_address.port=9000
+        --websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/p.sock
+        --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
@@ -533,7 +548,4 @@ def serve(
         idle_timeout_min=idle_timeout_min,
         auth_token=os.environ.get(AUTH_TOKEN_ENV),
     )
-    wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, port, server.api)]
-    if grpc_port is not None:
-        wires.append(grpc_wire.GrpcWire(host, grpc_port))
-    server.serve(wires)
+    server.serve([w for w in (websocket, grpc) if w is not None])

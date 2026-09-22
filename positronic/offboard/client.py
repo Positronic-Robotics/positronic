@@ -5,7 +5,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-import httpx
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
-# One TCP/TLS handshake, and the retries until a cold backend answers.
+# One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
@@ -140,14 +139,15 @@ class _ConnectRetries:
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
-    ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one TCP/TLS
-    handshake, ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one
-    inference round trip.
+    ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
+    handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
+    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
+    round trip.
     """
 
     def __init__(
         self,
-        client_wire: ClientWire,
+        client_wire: ClientWire[Any],
         address: wire.SessionAddress,
         *,
         headers: dict[str, str] | None = None,
@@ -155,10 +155,14 @@ class InferenceClient:
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
+        if not isinstance(address, client_wire.ADDRESS):
+            raise ValueError(
+                f'{client_wire.NAME} dials a {client_wire.ADDRESS.__name__}, and this is a '
+                f'{type(address).__name__}; build the address the wire names'
+            )
         self._wire = client_wire
         self._address = address
         self.session_url = client_wire.session_url(address)
-        self.api_url = client_wire.api_url(address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -202,9 +206,5 @@ class InferenceClient:
             backoff = min(backoff * 2, 30.0)
 
     def list_models(self) -> list[str]:
-        """List available models from the server."""
-        if self.api_url is None:
-            raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
-        response.raise_for_status()
-        return response.json()['models']
+        """The models this server serves, read by the wire on the transport it carries sessions on."""
+        return self._wire.list_models(self._address, self.headers, self.open_timeout)

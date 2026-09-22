@@ -40,7 +40,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 # 4. Run inference
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=localhost --policy.port=8000
+  --policy.address.host=localhost --policy.address.port=8000
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
@@ -91,8 +91,8 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --port=8000 \
-  --host=0.0.0.0
+  --websocket.served_address.port=8000 \
+  --websocket.served_address.host=0.0.0.0
 ```
 
 **Server parameters:**
@@ -104,14 +104,16 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 | `--pipeline.source.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--pipeline.source.policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
 | `--pipeline.source.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
-| `--port` | Server port | `8000` | `8001` |
-| `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
+| `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
+| `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
+| `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
 **Available pipelines:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
 
-**Session params:** clients can tune pipeline arguments per session via `--policy.query` — e.g. `--policy.query='codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
+**Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
 **Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 

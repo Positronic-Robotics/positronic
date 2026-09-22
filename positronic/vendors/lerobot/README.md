@@ -45,7 +45,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 # 4. Run inference
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=localhost --policy.port=8000
+  --policy.address.host=localhost --policy.address.port=8000
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
@@ -98,7 +98,7 @@ Two training modes are available:
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --port=8000
+  --websocket.served_address.port=8000
 ```
 
 | Parameter | Description | Default | Example |
@@ -107,8 +107,10 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 | `--pipeline.source.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--pipeline.source.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--pipeline.source.device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
-| `--port` | Server port | `8000` | `8001` |
-| `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
+| `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
+| `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
+| `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 

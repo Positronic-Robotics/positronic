@@ -1,17 +1,20 @@
 import asyncio
+import errno
 import logging
 import os
+import pathlib
 import socket
+import stat
 import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
 from typing import Any
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
-import httpx
 import pytest
+from fastapi import APIRouter
 from positronic_wire import registry, wire
 from positronic_wire.websocket import WebsocketClientConnection
 from websockets.sync.client import connect
@@ -64,10 +67,12 @@ class _FailingWire(server_wire.Wire):
         self.stopped = False
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return wire.Endpoint('localhost', 0)
+    def served_address(self) -> server_wire.ServedHostPort:
+        return server_wire.ServedHostPort('localhost', 0)
 
-    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
+    async def start(
+        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+    ) -> None:
         pass
 
     async def serve(self) -> None:
@@ -82,10 +87,12 @@ class _UnbindableWire(server_wire.Wire):
     """A wire whose port is taken."""
 
     @property
-    def endpoint(self) -> wire.Endpoint:
+    def served_address(self) -> server_wire.ServedHostPort:
         raise AssertionError('it never bound')
 
-    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
+    async def start(
+        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+    ) -> None:
         raise OSError('that port is taken')
 
     async def serve(self) -> None:
@@ -111,6 +118,18 @@ def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_policy):
     assert bound.stopped, 'the wire that had bound was left holding its port'
 
 
+def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+    """Where a network wire opens a session."""
+    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+
+
+def _bound_port(bound: websocket_wire.WebsocketWire) -> int:
+    """The port a wire bound. A wire serving a socket bound none, and no test here asks one for a port."""
+    served = bound.served_address
+    assert isinstance(served, server_wire.ServedHostPort), 'the wire bound a socket, not a port'
+    return served.port
+
+
 def _rebind_and_release(host: str, port: int) -> None:
     """Bind ``host`` on ``port`` and let it go again. It raises while anything else holds the port."""
     for sock in websocket_wire._listening_sockets(host, port):
@@ -120,17 +139,17 @@ def _rebind_and_release(host: str, port: int) -> None:
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_policy):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
+    bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
     # A leaked listener holds the port, and a fresh bind to it raises.
-    _rebind_and_release('localhost', bound.endpoint.port)
+    _rebind_and_release('localhost', _bound_port(bound))
 
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_policy):
     """A wire that served and stopped starts again with a fresh socket, and a rollback before it serves frees it."""
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = websocket_wire.WebsocketWire('localhost', 0, server.api)
+    bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     serving = threading.Thread(target=server.serve, args=([bound],))
     serving.start()
     time.sleep(_A_MOMENT_IDLE)
@@ -139,7 +158,7 @@ def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollbac
     assert not serving.is_alive(), 'the first serve did not end'
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
-    _rebind_and_release('localhost', bound.endpoint.port)
+    _rebind_and_release('localhost', _bound_port(bound))
 
 
 def test_a_host_with_two_addresses_binds_each_of_them_on_one_port(monkeypatch):
@@ -179,14 +198,14 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
 
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_policy):
     server = PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})))
-    bound = websocket_wire.WebsocketWire('127.0.0.1', 0, server.api)
-    asyncio.run(bound.start(MagicMock(), lambda _headers: True))
+    bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
+    asyncio.run(bound.start(MagicMock(), lambda _headers: True, server.api))
     try:
         assert len(bound._sockets) == 1
-        assert bound.endpoint.port == bound._sockets[0].getsockname()[1] != 0
+        assert _bound_port(bound) == bound._sockets[0].getsockname()[1] != 0
     finally:
         asyncio.run(bound.stop())
-    _rebind_and_release('127.0.0.1', bound.endpoint.port)
+    _rebind_and_release('127.0.0.1', _bound_port(bound))
 
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_policy, caplog):
@@ -203,7 +222,9 @@ def test_an_idle_server_stops_itself(make_mock_policy):
     server = PolicyServer(
         ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), idle_timeout_min=_A_MOMENT_IDLE / 60
     )
-    serving = threading.Thread(target=server.serve, args=([websocket_wire.WebsocketWire('localhost', 0, server.api)],))
+    serving = threading.Thread(
+        target=server.serve, args=([websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))],)
+    )
     serving.start()
     serving.join(timeout=_A_MOMENT_IDLE * 20)
     assert not serving.is_alive(), 'the idle watchdog left the server running'
@@ -530,6 +551,239 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         session.close()
 
 
+@pytest.fixture
+def unix_stub_server(start_server, socket_path, make_mock_policy) -> tuple[Served, MagicMock]:
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(ChunkedSchedule() | remote | _StubSource(policy), uds=socket_path)
+    return served, policy
+
+
+def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
+    served, policy = unix_stub_server
+    client = InferenceClient(*served.unix())
+
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {'name': 'chunked_schedule'}
+        assert session.metadata[offboard_keys.UDS] == socket_path
+        assert offboard_keys.HOST not in session.metadata
+        assert offboard_keys.PORT not in session.metadata
+
+        obs = {'image': 'test'}
+        assert session.infer(obs) == [{'action': [1, 2, 3]}]
+        policy._mock_session.assert_called_with(obs, ANY)
+    finally:
+        session.close()
+
+
+def test_a_session_over_a_socket_carries_the_model_id(unix_stub_server):
+    """The route is the address's, not a URL's, so a socket carries a model id like any other wire."""
+    served, _policy = unix_stub_server
+
+    session = InferenceClient(*served.unix(model='10000')).new_session()
+    try:
+        assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
+    finally:
+        session.close()
+
+
+def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_server):
+    """A coordinator preflights an endpoint with ``probe`` alone, and a socket answers it like a port."""
+    served, _policy = unix_stub_server
+    client_wire, address = served.unix()
+
+    assert client_wire.probe(address, None, 5.0) is None
+
+
+def test_a_probe_of_a_socket_nothing_has_bound_is_cold(socket_path):
+    """A path no server has bound yet can still become one, so the probe says to wait rather than refuse."""
+    client_wire = registry.client_wire('websocket_unix')
+    address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.session_path(), '')
+
+    assert client_wire.probe(address, None, 1.0) is wire.Refusal.COLD
+
+
+def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(
+    start_server, socket_path, make_mock_policy
+):
+    """The socket is a path the wire hands to the kernel, so the spellings a URL would have to escape
+    — a space, a percent, the route marker itself — reach it unchanged."""
+    odd = pathlib.Path(socket_path).parent / 'a b%c' / 'api' / 'v1'
+    odd.mkdir(parents=True)
+    uds = str(odd / 's.sock')
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(ChunkedSchedule() | remote | _StubSource(policy), uds=uds)
+
+    client = InferenceClient(*served.unix())
+
+    assert str(served.uds) == uds
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def _dial_socket(uds: str, **settings) -> InferenceClient:
+    """A client for a socket no server need have bound yet, as a co-located one is built."""
+    client_wire = registry.client_wire('websocket_unix')
+    address = wire.UnixSocketAddress(pathlib.Path(uds), wire.session_path(), '')
+    return InferenceClient(client_wire, address, **settings)
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_server, socket_path, make_mock_policy):
+    """``serve`` binds only once the model has loaded, so a co-located client starting beside its
+    server finds no socket at all for that interval."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_server(pipeline, uds=socket_path))
+    late.start()
+
+    try:
+        session = _dial_socket(socket_path, connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_waits_for_a_server_restarting_over_the_socket_it_left(start_server, socket_path, make_mock_policy):
+    """A bound path whose server has gone refuses the dial, and the successor binds over it. The wait
+    covers that restart as it covers a first start."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gone:
+        gone.bind(socket_path)
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    pipeline = ChunkedSchedule() | remote | _StubSource(policy)
+    late = threading.Timer(1.5, lambda: start_server(pipeline, uds=socket_path))
+    late.start()
+
+    try:
+        session = _dial_socket(socket_path, connect_deadline=30.0).new_session()
+    finally:
+        late.join()
+    try:
+        assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def test_a_dial_this_process_broke_fails_at_once_over_a_live_socket(unix_stub_server, socket_path):
+    """A descriptor limit is this process's own, so no server appearing clears it. The socket is live
+    and the path says so, which is exactly when reading the path alone would wait out the deadline."""
+    started = time.monotonic()
+
+    with patch('positronic_wire.websocket.unix_connect') as dial:
+        dial.side_effect = OSError(errno.EMFILE, 'Too many open files')
+        with pytest.raises(wire.ConnectRefused) as refusal:
+            _dial_socket(socket_path, connect_deadline=30.0).new_session()
+
+    assert refusal.value.refusal is wire.Refusal.FINAL
+    assert 'Too many open files' in str(refusal.value)
+    assert time.monotonic() - started < 5.0
+
+
+def test_a_dial_at_a_path_holding_something_that_is_not_a_socket_fails_at_once(socket_path):
+    """No waiting clears a wrong path. Which errno says so differs by platform, so this asserts the
+    connect deadline goes unspent."""
+    pathlib.Path(socket_path).write_text('not a socket')
+    started = time.monotonic()
+
+    with pytest.raises(wire.ConnectRefused) as refusal:
+        _dial_socket(socket_path, connect_deadline=30.0).new_session()
+
+    assert refusal.value.refusal is wire.Refusal.FINAL
+    assert time.monotonic() - started < 5.0
+
+
+def test_a_server_binds_over_the_socket_an_earlier_run_left(start_server, socket_path, make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(socket_path)
+
+    served = start_server(ChunkedSchedule() | remote | _StubSource(policy), uds=socket_path)
+
+    assert InferenceClient(*served.unix()).list_models() == ['stub']
+
+
+def test_a_path_that_is_not_a_socket_is_refused_and_left_alone(socket_path):
+    """A wrong ``uds`` is refused, and the file it names stays as it was."""
+    path = pathlib.Path(socket_path)
+    path.write_text('not a socket')
+
+    with pytest.raises(OSError) as refusal:
+        websocket_wire.claim_socket_path(path)
+
+    assert refusal.value.errno == errno.EADDRINUSE
+    assert path.read_text() == 'not a socket'
+
+
+@pytest.mark.timeout(30.0)
+def test_a_second_claim_on_one_path_is_refused_and_the_first_goes_on_serving(socket_path):
+    """The bind is the claim, so two servers starting on one absent path cannot both pass it."""
+    held = websocket_wire.claim_socket_path(pathlib.Path(socket_path))
+    try:
+        with pytest.raises(OSError) as refusal:
+            websocket_wire.claim_socket_path(pathlib.Path(socket_path))
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert held.accept()[0].close() is None
+    finally:
+        held.close()
+
+
+def test_a_claimed_socket_keeps_the_mode_the_umask_gives(socket_path):
+    """A restrictive umask is the deployment's choice, and widening it would open the socket to every
+    local account that can reach the directory."""
+    previous = os.umask(0o077)
+    try:
+        sock = websocket_wire.claim_socket_path(pathlib.Path(socket_path))
+    finally:
+        os.umask(previous)
+    try:
+        assert stat.S_IMODE(os.stat(socket_path).st_mode) & 0o077 == 0
+    finally:
+        sock.close()
+
+
+@pytest.mark.timeout(30.0)
+def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mock_policy):
+    """``asyncio.create_unix_server`` unlinks the file it finds, so only a refusal here keeps the
+    address with the server that owns it."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    server = PolicyServer(ChunkedSchedule() | remote | _StubSource(policy))
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
+        live.bind(socket_path)
+        live.listen()
+
+        with pytest.raises(OSError) as refusal:
+            server.serve([websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(pathlib.Path(socket_path)))])
+        assert refusal.value.errno == errno.EADDRINUSE
+        assert socket_path in str(refusal.value)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+        assert live.accept()[0].close() is None
+
+
+def test_a_server_refuses_a_relative_socket_path():
+    """A relative path is resolved against the directory the server was started from, so the path an
+    operator wrote and the path a client dials would part company on the next start."""
+    with pytest.raises(ValueError, match='relative socket path'):
+        websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(pathlib.Path('policy.sock')))
+
+
 def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
     """Nothing left of the marker leaves the rig nothing to run, so the server refuses to serve it."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
@@ -574,7 +828,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
     served = start_server(pipeline())
-    remote_session, rt = open_session(RemotePolicy('websocket', served.host, served.port))
+    remote_session, rt = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
 
     local_session, local_rt = open_session(inline(pipeline()))
 
@@ -730,7 +984,7 @@ _LIVE_HOST = os.environ.get(ENDPOINT_HOST_ENV)
 def authed_endpoint(start_server, make_mock_policy) -> tuple[tuple[wire.ClientWire, wire.SessionAddress], str]:
     """An authenticated server's wire and session address, and the token gating it."""
     if _LIVE_HOST:
-        address = wire.SessionAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
+        address = wire.HostPortAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
         return (registry.client_wire(os.environ[ENDPOINT_WIRE_ENV]), address), os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     served = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
@@ -756,8 +1010,10 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     with pytest.raises(wire.ConnectRefused) as refused:
         client.new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
-    with pytest.raises(httpx.HTTPStatusError):
+    # The catalogue refuses in the same vocabulary: the wire reads it, so it raises what a dial raises.
+    with pytest.raises(wire.ConnectRefused) as catalogue:
         client.list_models()
+    assert catalogue.value.refusal is wire.Refusal.FINAL
 
 
 @pytest.mark.endpoint

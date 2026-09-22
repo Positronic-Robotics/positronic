@@ -44,7 +44,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
+  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 \
   --eval.trial_count=2
 ```
 
@@ -148,7 +148,7 @@ Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"mode
 
 ```bash
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
+  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 \
   --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
 
@@ -196,7 +196,7 @@ launch). With `positronic eval run`, pass them through the remote policy:
 # At episode start, send only the observed history (a growing frame stack) instead of
 # padding the window with the current frame repeated.
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 --policy.query='local.pad_start=false' \
+  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 --policy.address.query='local.pad_start=false' \
   --eval.trial_count=2
 ```
 
@@ -244,7 +244,7 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
 bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
   --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --pipeline.source.backbone=wan2.2
-# ... infer with --policy=.authed_remote --policy.wire=websocket_tls --policy.host=<managed-host> --policy.port=443 (export AUTH_TOKEN first,
+# ... infer with --policy=.authed_remote --policy.wire=websocket_tls --policy.address.host=<managed-host> --policy.address.port=443 (export AUTH_TOKEN first,
 # see workflows/nebius/README.md), then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>
 ```

@@ -1,19 +1,23 @@
 """Every wire a client can open a session on, by the name a caller selects it with."""
 
+from typing import Any
+
 from positronic_wire import grpc, websocket, wire
 
-CLIENT_WIRES: dict[str, wire.ClientWire] = {
+# One stateless wire per name. A wire holds no address: the caller builds the wire's own and hands it in.
+CLIENT_WIRES: dict[str, wire.ClientWire[Any]] = {
     client_wire.NAME: client_wire
     for client_wire in (
         websocket.WebsocketClientWire(),
         websocket.WebsocketTlsClientWire(),
+        websocket.WebsocketUnixClientWire(),
         grpc.GrpcClientWire(),
         grpc.GrpcTlsClientWire(),
     )
 }
 
 
-def client_wire(name: str) -> wire.ClientWire:
+def client_wire(name: str) -> wire.ClientWire[Any]:
     """The wire ``name`` selects. Raises ``ValueError`` naming every wire where none is called that."""
     try:
         return CLIENT_WIRES[name]

@@ -1,12 +1,15 @@
+import os
+import tempfile
 import threading
 from collections.abc import Callable, Generator, Mapping
-from typing import NamedTuple
+from pathlib import Path
+from typing import Any, NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
 from positronic_wire import wire
 from positronic_wire.grpc import GrpcClientWire
-from positronic_wire.websocket import WebsocketClientWire
+from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWire
 
 from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
@@ -17,21 +20,27 @@ from positronic.policy.spec import ModelSource, PolicySource, remote
 
 
 class Served(NamedTuple):
-    """A running server, and the ports its wires took."""
+    """A running server, and the addresses its wires took."""
 
     host: str
     port: int
     server: PolicyServer
     grpc_port: int | None
+    uds: Path | None = None
 
-    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The websocket wire, and this server's session on it: ``InferenceClient(*served.ws())``."""
-        return WebsocketClientWire(), wire.SessionAddress(self.host, self.port, wire.session_path(model), query)
+        return WebsocketClientWire(), wire.HostPortAddress(self.host, self.port, wire.session_path(model), query)
 
-    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire, wire.SessionAddress]:
+    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The gRPC wire, and this server's session on it."""
         assert self.grpc_port is not None, 'the server serves no gRPC wire'
-        return GrpcClientWire(), wire.SessionAddress(self.host, self.grpc_port, wire.session_path(model), query)
+        return GrpcClientWire(), wire.HostPortAddress(self.host, self.grpc_port, wire.session_path(model), query)
+
+    def unix(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.UnixSocketAddress]:
+        """The socket wire, and this server's session on the socket it bound."""
+        assert self.uds is not None, 'the server bound no socket'
+        return WebsocketUnixClientWire(), wire.UnixSocketAddress(self.uds, wire.session_path(model), query)
 
 
 StartServer = Callable[..., Served]
@@ -42,29 +51,49 @@ def start_server() -> Generator[StartServer, None, None]:
     """Factory serving pipelines on daemon threads; teardown stops and joins every started server.
 
     Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
-    serves the gRPC wire beside the websocket one.
+    serves the gRPC wire beside the websocket one. ``uds`` binds the websocket wire to that socket path
+    instead, as a socket-bound websocket wire does; the port it reports is then 0.
     """
     running: list[tuple[PolicyServer, threading.Thread]] = []
 
-    def start(pipeline, *, grpc: bool = False, **server_kwargs) -> Served:
+    def start(pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
         server = PolicyServer(pipeline, **server_kwargs)
-        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(host, 0, server.api)]
+        binds: server_wire.ServedAddress = (
+            server_wire.ServedHostPort(host, 0) if uds is None else websocket_wire.ServedUnixSocket(Path(uds))
+        )
+        wires: list[server_wire.Wire] = [websocket_wire.WebsocketWire(binds)]
         if grpc:
-            wires.append(grpc_wire.GrpcWire(host, 0))
+            wires.append(grpc_wire.GrpcWire(server_wire.ServedHostPort(host, 0)))
         ready = threading.Event()
         thread = threading.Thread(target=server.serve, args=(wires, ready.set), daemon=True)
         thread.start()
         running.append((server, thread))
         if not ready.wait(timeout=10.0):
             raise RuntimeError('Server failed to start')
-        return Served(host, wires[0].endpoint.port, server, wires[1].endpoint.port if grpc else None)
+        served = wires[0].served_address
+        bound = served.port if isinstance(served, server_wire.ServedHostPort) else 0
+        grpc_served = wires[1].served_address if grpc else None
+        return Served(
+            host,
+            bound,
+            server,
+            grpc_served.port if isinstance(grpc_served, server_wire.ServedHostPort) else None,
+            served.uds if isinstance(served, websocket_wire.ServedUnixSocket) else None,
+        )
 
     yield start
     for server, thread in running:
         server.shutdown()
         thread.join(timeout=10.0)
         assert not thread.is_alive(), 'the server did not stop when asked'
+
+
+@pytest.fixture
+def socket_path() -> Generator[str, None, None]:
+    """A path for a Unix socket, short enough for the 104-byte limit that ``tmp_path`` can pass."""
+    with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+        yield os.path.join(directory, 's.sock')
 
 
 @pytest.fixture

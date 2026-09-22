@@ -1,29 +1,46 @@
 """The server side of the websocket wire."""
 
+import dataclasses
+import errno
+import os
 import socket
+import stat
+from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from . import server_wire
+from . import keys, server_wire
+
+
+@dataclasses.dataclass(frozen=True)
+class ServedUnixSocket(server_wire.ServedAddress):
+    """A wire serving on a Unix socket. It names no host and no port, because a socket has neither."""
+
+    uds: Path
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {keys.UDS: str(self.uds)}
 
 
 class WebsocketServerConnection(server_wire.ServerConnection):
     """A server's end of one websocket session, over an accepted ``WebSocket``."""
 
-    def __init__(self, websocket: WebSocket, endpoint: wire.Endpoint):
+    def __init__(self, websocket: WebSocket, served_address: server_wire.ServedAddress):
         self._websocket = websocket
-        self._endpoint = endpoint
+        self._served_address = served_address
 
     @property
     def peer(self) -> str:
         return str(self._websocket.client)
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedAddress:
+        return self._served_address
 
     @property
     def query_params(self) -> QueryParams:
@@ -74,43 +91,118 @@ def _listening_sockets(host: str, port: int) -> list[socket.socket]:
     return sockets
 
 
+# The probe bounds its wait, and reads a wait that runs out as a live server: a server whose backlog is
+# full holds a connect open, and an unbounded one would stall startup.
+LIVE_SOCKET_PROBE_SEC = 1.0
+
+
+def _is_stale_socket(path: Path) -> bool:
+    """Whether ``path`` is a socket no server answers on, so replacing it takes nothing from anybody.
+
+    A live socket, a probe that runs out of time against a full backlog, and a path that holds something
+    other than a socket are none of them stale.
+    """
+    try:
+        if not stat.S_ISSOCK(os.stat(path).st_mode):
+            return False
+    except FileNotFoundError:
+        return False
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(LIVE_SOCKET_PROBE_SEC)
+        try:
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def claim_socket_path(path: Path) -> socket.socket:
+    """Bind and listen on ``path``, and return the socket, or refuse a path a live server holds.
+
+    A live path is refused: the bind precedes any probe, so the loser fails on ``EADDRINUSE`` and the
+    probe reads the holder as live. An absent or a stale path holds no such claim. A socket is bound
+    before it listens, and a probe in that window reads the binder as stale. Two starters on one path
+    can then both unlink and rebind, and the first serves a socket nothing links to. Give each path
+    one starter. Serve the returned socket by its descriptor: a server handed the path instead binds
+    again, and unlinks this claim.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        try:
+            sock.bind(str(path))
+        except OSError as taken:
+            if taken.errno != errno.EADDRINUSE:
+                raise
+            if not _is_stale_socket(path):
+                raise OSError(errno.EADDRINUSE, f'{path!r} is already in use') from None
+            os.unlink(path)
+            sock.bind(str(path))
+        # The mode is the deployment's, through its umask: widening it here would open the socket to
+        # every local account that can reach the directory.
+        sock.listen()
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 # uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
 # (measured by positronic/offboard/serving_cost.py).
 WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(server_wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and ``api`` answers on the same port."""
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the API answers beside it.
+
+    ``served_address`` is what this binds: a host and a port, or a Unix socket path. A socket file
+    stays after ``stop``, where an unlink could take a path a successor has claimed.
+    """
 
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
 
-    def __init__(self, host: str, port: int, api: APIRouter):
-        self._host = host
-        self._port = port
-        self._api = api
+    def __init__(self, served_address: server_wire.ServedAddress):
+        if isinstance(served_address, ServedUnixSocket) and not served_address.uds.is_absolute():
+            # A relative path is resolved against whatever directory the server was started from, so the
+            # path an operator wrote and the path a client dials would part company on the next start.
+            raise ValueError(f'{served_address.uds!r} is a relative socket path; bind an absolute one')
+        self._binds = served_address
         self._sockets: list[socket.socket] = []
         self._server: uvicorn.Server | None = None
-        self._endpoint: wire.Endpoint | None = None
+        self._served_address: server_wire.ServedAddress | None = None
         self._served = False
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        assert self._endpoint is not None, 'The websocket wire has not started'
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedAddress:
+        assert self._served_address is not None, 'The websocket wire has not started'
+        return self._served_address
 
-    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
+    async def start(
+        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+    ) -> None:
         self._served = False
-        self._sockets = _listening_sockets(self._host, self._port)
-        self._endpoint = wire.Endpoint(self._host, self._sockets[0].getsockname()[1])
+        binds = self._binds
+        if isinstance(binds, ServedUnixSocket):
+            self._sockets = [claim_socket_path(binds.uds)]
+            self._served_address = binds
+            bound_port, host = 0, ''
+        else:
+            assert isinstance(binds, server_wire.ServedHostPort), f'{type(binds).__name__} names no address to bind'
+            host = binds.host
+            self._sockets = _listening_sockets(host, binds.port)
+            # A wire asked for port 0 binds any free one, so what it serves on is known only now.
+            bound_port = self._sockets[0].getsockname()[1]
+            self._served_address = server_wire.ServedHostPort(host, bound_port)
         app = FastAPI()
-        app.include_router(self._api)
+        app.include_router(api)
         self._route_sessions(app, session, authorized)
         config = uvicorn.Config(
             app,
-            host=self._host,
-            port=self._endpoint.port,
+            host=host,
+            port=bound_port,
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
@@ -129,11 +221,11 @@ class WebsocketWire(server_wire.Wire):
         async def serve_pinned_model(websocket: WebSocket) -> None:
             """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
             await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.endpoint), None)
+            await session(WebsocketServerConnection(websocket, self.served_address), None)
 
         async def serve_named_model(websocket: WebSocket, model_id: str) -> None:
             await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.endpoint), model_id)
+            await session(WebsocketServerConnection(websocket, self.served_address), model_id)
 
         auth = [Depends(require_auth)]
         app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)

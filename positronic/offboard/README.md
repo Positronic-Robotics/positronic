@@ -13,14 +13,26 @@ the same order. The client side of each wire, and the facts both ends share, shi
 `positronic-wire` distribution ([wire/README.md](../../wire/README.md)); this package holds the
 server side.
 
-| Wire | `--policy.wire` | Port |
+| Wire | `--policy.wire` | Where it answers |
 |---|---|---|
-| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the server's `port`, beside the HTTP routes |
-| gRPC | `grpc` | the server's `grpc_port`, sessions alone |
-| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same `grpc_port` |
+| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the HTTP routes |
+| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same HTTP routes |
+| gRPC | `grpc` | the gRPC wire's own port, sessions alone |
+| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same port |
 
-- A client names its wire; nothing reads one off a URL. The WebSocket wire is the default. A server serves
-  gRPC only when `grpc_port` names a port.
+- A client names its wire; nothing reads one off a URL. The WebSocket wire is the default, and a server
+  serves gRPC only where `--grpc` names that wire.
+- Each server wire carries the address it binds, and `serve` binds what it is given:
+  `--websocket.served_address.port=9000` moves the WebSocket wire, and
+  `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it
+  to a Unix socket instead. `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=9001` serves the gRPC wire beside it,
+  on an address of its own.
+- `websocket_unix` reaches a server on the same machine, over no network, and
+  `--policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=…` dials it.
+  A caller names the wire and then fills that wire's address, so a socket address carries no host and no
+  port at all — on either end. Both paths are absolute: a relative one is resolved against whatever
+  directory each side was started from, and the address refuses it. A socket is same-machine by
+  construction, so there is no TLS member beside it.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
@@ -37,8 +49,8 @@ server side.
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route and stays on the server's `port`. `InferenceClient.list_models`
-refuses a gRPC wire.
+`/api/v1/models` is an HTTP route. It answers on the address the WebSocket wire binds: a port, or a
+Unix socket. `InferenceClient.list_models` refuses a gRPC wire.
 
 ### Authentication
 
@@ -81,7 +93,9 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `grpc://localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
 
-Each wire from the table above takes the same path; only the scheme and the port change.
+Each wire from the table above carries the same route, and each names the server its own way:
+`websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a target, and
+`websocket_unix` a socket path and no authority at all.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
@@ -107,8 +121,8 @@ Rules:
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
-The client names each part: `--policy=.remote --policy.wire=websocket --policy.host=gpu-host --policy.port=8000
---policy.model=<model_id> --policy.query='codec.fps=10'`, and forwards the query string verbatim. Credentials stay a
+The client names each part: `--policy=.remote --policy.wire=websocket --policy.address.host=gpu-host --policy.address.port=8000
+--policy.address.model=<model_id> --policy.address.query='codec.fps=10'`, and forwards the query string verbatim. Credentials stay a
 separate `headers` argument.
 
 ### Session Flow
@@ -232,7 +246,7 @@ cd docker && docker compose run --rm --service-ports groot-server droid \
 # Client connects the same way
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=localhost --policy.port=8000
+  --policy.address.host=localhost --policy.address.port=8000
 ```
 
 **Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.
@@ -250,43 +264,63 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 
 ```python
 from positronic.offboard.server import PolicyServer
+from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy.spec import PolicySource, remote
 from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 server = PolicyServer(pipeline)
-server.serve([WebsocketWire('0.0.0.0', 8000, server.api)])
+server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
-`serve` takes the wires that sessions arrive on. Each wire binds its own port, reads its own route for
-the model a session asks for, and checks its own session headers. Add `grpc_wire.GrpcWire(host, port)`
-to the list to serve gRPC beside the WebSocket. An HTTP wire takes `server.api`, the model catalogue,
-and answers it on the port it carries sessions on. A wire asked for port 0 binds any free one and
-names it in its `endpoint` property, so `ws.endpoint.port` is the port the wire took.
+`serve` takes the wires that sessions arrive on. Each wire carries the address it binds, reads its own
+route for the model a session asks for, and checks its own session headers:
+
+```python
+from positronic.offboard import grpc_wire, server_wire, websocket_wire
+
+wires = [
+    websocket_wire.WebsocketWire(server_wire.ServedHostPort('0.0.0.0', 8000)),
+    # or on this machine only: websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(Path('/run/p.sock')))
+    grpc_wire.GrpcWire(server_wire.ServedHostPort('0.0.0.0', 8001)),
+]
+server.serve(wires)
+```
+
+`serve` hands every wire the model catalogue it owns; a wire whose transport carries HTTP answers it
+beside its sessions, and the gRPC wire, whose port carries sessions alone, does not. A wire names
+where it bound in its `served_address` property: `ServedHostPort` for a host and a port — a wire
+asked for port 0 binds any free one, and `ws.served_address.port` is the port it took — or
+`ServedUnixSocket` for a socket path, which has no port at all.
 
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` ends the server after that many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--grpc_port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--websocket`, `--grpc`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
 
 ### `client.InferenceClient`
-A Python client for connecting to an inference server. It takes the wire and the session address as values
-(`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the model and the
-session params, so serving another model means another client.
+A Python client for connecting to an inference server. It takes the wire and the address that wire
+dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the model
+and the session params, so serving another model means another client. Each wire names its own
+address type, and the client refuses one built for another wire.
 
 ```python
+from pathlib import Path
+
 from positronic.offboard.client import InferenceClient
 from positronic_wire import registry
-from positronic_wire.wire import SessionAddress, session_path
+from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
 
 # The server's pinned checkpoint, with no session params
-client = InferenceClient(registry.client_wire('websocket'), SessionAddress('localhost', 8000, session_path(), ''))
+client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path(), ''))
 # A named model, tuned for every session this client opens
-# client = InferenceClient(registry.client_wire('websocket'), SessionAddress('localhost', 8000, session_path('model_a'), 'codec.fps=10'))
+# client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path('model_a'), 'codec.fps=10'))
 # The same session on the gRPC wire, on a LAN and behind a TLS edge
-# client = InferenceClient(registry.client_wire('grpc'), SessionAddress('localhost', 9000, session_path('model_a'), ''))
-# client = InferenceClient(registry.client_wire('grpc_tls'), SessionAddress('gpu-host', 443, session_path('model_a'), ''))
+# client = InferenceClient(registry.client_wire('grpc'), HostPortAddress('localhost', 9000, session_path('model_a'), ''))
+# client = InferenceClient(registry.client_wire('grpc_tls'), HostPortAddress('gpu-host', 443, session_path('model_a'), ''))
+# A server on this machine: the socket wire's address names the socket, and no host and no port
+# client = InferenceClient(registry.client_wire('websocket_unix'), UnixSocketAddress(Path('/run/policy.sock'), session_path(), ''))
 
 session = client.new_session()
 meta = session.metadata

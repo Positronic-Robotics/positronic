@@ -13,7 +13,7 @@
 # memory after the URL appears.
 #
 # The endpoint serves the websocket wire on 8000, and the gRPC wire on the port
-# `--grpc_port` names. The create declares the gRPC port as an ordinary HTTP port;
+# `--grpc.served_address.port` names. The create declares the gRPC port as an ordinary HTTP port;
 # a `/tcp` port gets a front gRPC refuses. The offboard README says what each
 # front does to a session.
 #
@@ -104,14 +104,28 @@ esac
 WS_PORT=8000
 
 # gRPC is the server's opt-in wire, so the endpoint declares its port only where one is served. A
-# caller's own --grpc_port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket wire alone.
+# caller's own --grpc.served_address.port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket
+# wire alone.
 ARGS=" $* "
 case "$ARGS" in
-  *" --grpc_port="*) GRPC_PORT=${ARGS#*--grpc_port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
-  *" --grpc_port "*) GRPC_PORT=${ARGS#*--grpc_port }; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *" --grpc.served_address.port="*|*" --grpc.served_address.port "*)
+    # configuronic takes a value after `=` or after a space, so every flag read here reads both.
+    GRPC_PORT=${ARGS#*--grpc.served_address.port}; GRPC_PORT=${GRPC_PORT#[= ]}; GRPC_PORT=${GRPC_PORT%% *}
+    # A port names the address of a wire, and the server serves no gRPC until `--grpc` names the
+    # wire itself. A port on its own would declare a container port nothing answers on.
+    case "$ARGS" in
+      *" --grpc="*|*" --grpc "*) ;;
+      *) set -- "$@" "--grpc=@positronic.offboard.server.grpc" ;;
+    esac
+    ;;
+  *" --grpc="*|*" --grpc "*)
+    # The caller named the gRPC wire and left its port at the wire's own default.
+    GRPC_PORT=8001 ;;
   *)
     GRPC_PORT=${NEBIUS_GRPC_PORT-9000}
-    if [ -n "$GRPC_PORT" ]; then set -- "$@" "--grpc_port=${GRPC_PORT}"; fi
+    if [ -n "$GRPC_PORT" ]; then
+      set -- "$@" "--grpc=@positronic.offboard.server.grpc" "--grpc.served_address.port=${GRPC_PORT}"
+    fi
     ;;
 esac
 
@@ -186,12 +200,12 @@ fi
 
 # The front terminates TLS on 443 for both wires, so a rig names the TLS member of each.
 GRPC_BANNER=""
-POLICY_ARGS="--policy.wire=websocket_tls --policy.host=${URL#https://} --policy.port=443"
+POLICY_ARGS="--policy.wire=websocket_tls --policy.address.host=${URL#https://} --policy.address.port=443"
 POLICY_NOTE="Point a rig at the websocket wire:"
 if [ -n "$GRPC_PORT" ]; then
   GRPC_BANNER="  gRPC host:     ${GRPC_HOST} (TLS, port 443)
 "
-  POLICY_ARGS="--policy.wire=grpc_tls --policy.host=${GRPC_HOST} --policy.port=443"
+  POLICY_ARGS="--policy.wire=grpc_tls --policy.address.host=${GRPC_HOST} --policy.address.port=443"
   POLICY_NOTE="Point a rig at either wire; through this front an 846 KiB observation
 round-trips in about 6 ms over gRPC and about 60 ms over the websocket:"
 fi

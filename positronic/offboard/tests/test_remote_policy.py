@@ -1,3 +1,5 @@
+import dataclasses
+import pathlib
 import threading
 import time
 from collections.abc import Mapping
@@ -24,29 +26,32 @@ from positronic.policy.spec import PolicySource, remote
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
-class _FakeWire(wire.ClientWire):
+class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     """A client wire that answers each dial from ``outcomes``: a connection to return, or a refusal to raise."""
 
     NAME = 'fake'
-    DEFAULT_PORT = 80
+    ADDRESS = wire.HostPortAddress
 
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
-        self.dials: list[tuple[wire.SessionAddress, Mapping[str, str] | None, float]] = []
+        self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
+        self.catalogue_reads: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
+        self.models: list[str] = []
 
-    def session_url(self, address: wire.SessionAddress) -> str:
+    def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
-        return f'fake://{self.netloc(address)}{address.path}{query}'
+        return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
 
-    def api_url(self, address: wire.SessionAddress) -> str:
-        return f'http://{self.netloc(address)}{wire.API_PATH}'
+    def list_models(self, address: wire.HostPortAddress, headers, open_timeout: float) -> list[str]:
+        self.catalogue_reads.append((address, headers, open_timeout))
+        return self.models
 
     def probe(
-        self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         return None
 
-    def dial(self, address: wire.SessionAddress, headers: Mapping[str, str] | None, open_timeout: float):
+    def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         self.dials.append((address, headers, open_timeout))
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, wire.ConnectRefused):
@@ -54,7 +59,12 @@ class _FakeWire(wire.ClientWire):
         return outcome
 
 
-_ADDRESS = wire.SessionAddress('localhost', 8000, wire.SESSION_PATH, '')
+def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+    """Where a network wire opens a session."""
+    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+
+
+_ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
 
 def _mock_session(metadata=None):
@@ -69,7 +79,7 @@ def _mock_remote_policy(metadata=None, infer_return=None):
     mock_session = _mock_session(metadata)
     if infer_return is not None:
         mock_session.infer.return_value = infer_return
-    policy = RemotePolicy('websocket', 'localhost', 0)
+    policy = RemotePolicy('websocket', _address('localhost', 0))
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_session
     return policy, mock_session
@@ -140,28 +150,20 @@ class TestInferenceClientHeaders:
 
         assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
-    def test_list_models_passes_headers(self):
+    def test_the_catalogue_read_hands_the_wire_the_headers_and_the_open_timeout(self):
+        """The client asks the wire for the catalogue, with the headers and the timeout it dials with."""
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
-            mock_get.return_value.json.return_value = {'models': ['m1']}
-            client = InferenceClient(websocket.WebsocketClientWire(), _ADDRESS, headers=headers)
+        fake = _FakeWire()
+        fake.models = ['m1']
 
-            models = client.list_models()
+        client = InferenceClient(fake, _ADDRESS, headers=headers, open_timeout=3.0)
 
-            assert models == ['m1']
-            assert mock_get.call_args.kwargs['headers'] == headers
-
-    def test_list_models_without_headers_passes_none(self):
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
-            mock_get.return_value.json.return_value = {'models': []}
-            client = InferenceClient(websocket.WebsocketClientWire(), _ADDRESS)
-            client.list_models()
-
-            assert mock_get.call_args.kwargs['headers'] is None
+        assert client.list_models() == ['m1']
+        assert fake.catalogue_reads == [(_ADDRESS, headers, 3.0)]
 
 
 def test_every_session_dials_the_same_address():
-    address = wire.SessionAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
+    address = wire.HostPortAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
     fake = _FakeWire(MagicMock(), MagicMock())
     with patch('positronic.offboard.client.InferenceSession'):
         client = InferenceClient(fake, address)
@@ -236,9 +238,20 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 2 * len(one_session)
 
 
+def test_a_client_refuses_a_wire_handed_the_other_wire_address():
+    """The registry answers by name, so the type cannot catch this one; the client does, before it dials."""
+    socket_address = wire.UnixSocketAddress(pathlib.Path('/run/policy.sock'), wire.SESSION_PATH, '')
+
+    with pytest.raises(ValueError, match='websocket dials a HostPortAddress'):
+        InferenceClient(websocket.WebsocketClientWire(), socket_address)
+
+    with pytest.raises(ValueError, match='websocket_unix dials a UnixSocketAddress'):
+        InferenceClient(websocket.WebsocketUnixClientWire(), _ADDRESS)
+
+
 def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
     """Nothing listens on port 1; the refused connect is a backend that is not ready, and the deadline ends it."""
-    address = _ADDRESS._replace(port=1)
+    address = dataclasses.replace(_ADDRESS, port=1)
     client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='ws://localhost:1'):
         client.new_session()
@@ -246,16 +259,17 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
 
 def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy('websocket_tls', 'example.com', 443, model='10000', query='fps=2.5', headers=headers)
+    policy = RemotePolicy(
+        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
+    )
     client = policy._endpoint._client
     assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
-    assert client.api_url == 'https://example.com/api/v1'
     assert client.headers == headers
 
 
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
-        RemotePolicy('ws', 'localhost', 8000)
+        RemotePolicy('ws', _address('localhost', 8000))
 
 
 class TestActionHorizonWrapping:
@@ -510,7 +524,7 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     policy = make_mock_policy(wire_action, {'model_name': 'm'})
     served = start_server(ChunkedSchedule() | remote | PolicySource(policy))
 
-    session, rt = open_session(RemotePolicy('websocket', served.host, served.port))
+    session, rt = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
     actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
 
     assert actions is not None, 'the chunk was swallowed before any command reached a driver'
@@ -523,7 +537,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     served = inference_server
 
-    policy = RemotePolicy('websocket', served.host, served.port)
+    policy = RemotePolicy('websocket', _address(served.host, served.port))
     session, rt = open_session(policy)
 
     meta = session.meta
@@ -545,7 +559,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
 def test_remote_session_meta(inference_server, open_session):
     """Session meta must include server metadata."""
     served = inference_server
-    session, _ = open_session(RemotePolicy('websocket', served.host, served.port))
+    session, _ = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
 
     meta = session.meta
     assert meta['type'] == 'remote'
