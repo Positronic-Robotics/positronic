@@ -175,7 +175,10 @@ class _Chain(DriverRun[command.CommandType]):
     _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
     _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
-    _PARK_TOL = 0.005  # radians; how close the measured pose must sit to the park target for the park to end
+    # The park ends where the driver already calls the chain arrived. Measured on the yambox station, the
+    # worst joint settles about 10 mrad short under the gravity compensation that station declares, so a
+    # tighter gate never closes and every teardown reports a failed park.
+    _PARK_TOL = _ARRIVED_TOL
     _PARK_ATTEMPTS = 6  # how many settle-and-correct passes a park makes before it gives up
     _PARK_MAX_CORRECTION = 0.05  # radians of total reference bias around the park pose
 
