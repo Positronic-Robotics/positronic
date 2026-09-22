@@ -46,7 +46,8 @@ def task_eval_signals(task_eval: dict[str, Any]) -> dict[str, Any]:
     for name, value in task_eval.items():
         array = np.asarray(value)
         if array.size and array.dtype.kind in 'biuf':
-            signals[f'.{name}'] = array if array.ndim else array[()]
+            # A recorded signal holds a scalar or a 1-D vector per sample.
+            signals[f'.{name}'] = array.ravel() if array.ndim else array[()]
     return signals
 
 
