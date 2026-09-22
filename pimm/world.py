@@ -593,16 +593,22 @@ class World:
         self.entered = False
         logger.info('Stopping background processes...')
         self.request_stop()
-        try:
+        cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
+        for emitter, receivers in self._cleanup_emitters_readers:
+            cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
+            cleanup.append(emitter.close)
+        errors: list[BaseException] = []
+        for finish in cleanup:
             try:
-                self._finish_foreground_shutdown()
-            finally:
-                self._join_background_processes()
-        finally:
-            for emitter, receivers in self._cleanup_emitters_readers:
-                for receiver in receivers if isinstance(receivers, list) else [receivers]:
-                    receiver.close()
-                emitter.close()
+                finish()
+            except BaseException as exc:
+                errors.append(exc)
+        if errors and exc_value is not None:
+            errors.insert(0, exc_value)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup('World shutdown failed', errors)
 
     def request_stop(self):
         self._stop_event.set()
