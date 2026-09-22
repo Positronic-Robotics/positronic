@@ -97,11 +97,15 @@ def main() -> None:
         )
         assert frame[protocol.FRAME_META][mapping.META_TASK], 'the env reported no instruction'
         assert frame[protocol.FRAME_CONTROL_DT] > 0.0
+        mounts = frame[protocol.FRAME_ROBOT_META][eval_keys.MOUNTS]
+        assert set(mounts) == {keys.arm_channel(keys.ROBOT_STATE, arm) + keys.JOINTS_SUFFIX for arm in mapping.ARMS}
+        assert all(len(mount) == 3 for mount in mounts.values()), mounts
         start = _observe(adapter, frame)
         for logical in CAMERAS:
             assert start[logical].array.shape == (args.camera_height, args.camera_width, 3), logical
         assert adapter.privileged(frame[protocol.FRAME_OBS])[mapping.OBS_SIM_STATE].size > 0
         print(f'reset: {frame[protocol.FRAME_META][mapping.META_TASK]!r} at {frame[protocol.FRAME_CONTROL_DT]}s')
+        print(f'mounts: {mounts}')
 
         for arm in mapping.ARMS:
             start = _raise_one_arm(conn, adapter, start, arm)
