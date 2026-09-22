@@ -1,6 +1,8 @@
 """The brakeless YAM arm is laid onto its joint stops before it loses torque — on a normal stop, and on a
 crash inside the run loop. Without that, a chain going limp from the ready pose drops ~0.4 m."""
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -8,7 +10,7 @@ import pimm
 from pimm.tests.testing import MockClock
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.tests.fakes import StopFlag
-from positronic.drivers.roboarm.yam import YAM_STOW_JOINTS, Robot, _Chain, _FakeYam
+from positronic.drivers.roboarm.yam import _PARK_JOINTS, YAM_STOW_JOINTS, ParkTuning, Robot, _Chain, _FakeYam
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 _DT = 0.01  # seconds per pump; matches the driver's 100 Hz tick so the ramp behaves as it does on the rig
@@ -108,7 +110,7 @@ def _assert_stowed_then_limp(fake: _RecordingYam) -> None:
     """The arm read the stow pose when torque was cut, no command went out afterwards, and the handle was
     then given back."""
     assert fake.pos_at_zero_torque is not None, 'the chain was never cut limp'
-    np.testing.assert_allclose(fake.pos_at_zero_torque, YAM_STOW_JOINTS, atol=_Chain._PARK_TOL)
+    np.testing.assert_allclose(fake.pos_at_zero_torque, YAM_STOW_JOINTS, atol=ParkTuning().tol)
     cut = fake.events.index(_ZERO_TORQUE)
     assert _CMD not in fake.events[cut + 1 :], 'a joint command went out after the chain was cut limp'
     assert fake.events[-1] == _CLOSE, 'the handle was not given back last'
@@ -139,3 +141,61 @@ def test_a_crash_in_the_run_loop_still_stows_the_arm_before_it_goes_limp():
         _pump_to_end(loop, clock)
 
     _assert_stowed_then_limp(fake)
+
+
+class _SaggingYam(_RecordingYam):
+    """A chain whose position servo holds a fixed residual below its reference, as the real one does. The
+    park closes that gap by biasing the reference; a residual wider than the bias it is allowed cannot close.
+    """
+
+    def __init__(self, sag: float):
+        super().__init__()
+        self._sag = sag
+
+    def command_joint_pos(self, joint_pos: np.ndarray) -> None:
+        held = np.asarray(joint_pos, dtype=np.float64).copy()
+        held[:6] -= self._sag  # the servo settles this far short of what it was asked for
+        super().command_joint_pos(held)
+
+
+def _stow_error(fake: _RecordingYam) -> float:
+    assert fake.pos_at_zero_torque is not None, 'the chain was never cut limp'
+    return float(np.max(np.abs(fake.pos_at_zero_torque - YAM_STOW_JOINTS)))
+
+
+def _run_to_stop(fake: _RecordingYam, tuning: ParkTuning) -> None:
+    stop, clock = StopFlag(), MockClock()
+    driver = Robot(connect=lambda channel, sim: fake, park_tuning=tuning)
+    driver.state._bind(_StatusSpy())
+    driver.grip._bind(_Sink())
+    driver.robot_meta._bind(_Sink())
+    driver.target_grip._bind(ManualCommandReceiver())
+    driver.commands._bind(ManualCommandReceiver())
+    loop = driver.run(stop, clock)
+    for _ in range(600):
+        next(loop)
+        clock.advance(_DT)
+    stop.stopped = True
+    _pump_to_end(loop, clock, max_steps=8000)
+
+
+def test_a_bench_whose_servo_sags_further_than_the_default_bias_is_tuned_not_edited():
+    """The residual is a property of one bench, so the driver takes it as configuration. A chain sagging
+    0.12 rad cannot be stowed by the default 0.05 rad of bias; widening the bias stows it, with no edit to
+    the driver."""
+    sag = 0.12
+
+    with_default = _SaggingYam(sag)
+    _run_to_stop(with_default, ParkTuning())
+    assert _stow_error(with_default) > ParkTuning().tol, 'the default bias should not have closed a 0.12 rad sag'
+
+    with_tuning = _SaggingYam(sag)
+    tuned = ParkTuning(max_correction=0.2)
+    _run_to_stop(with_tuning, tuned)
+    assert _stow_error(with_tuning) < tuned.tol, 'a bias wide enough for this bench should reach the stow pose'
+
+
+def test_park_takes_only_a_grip_and_means_the_ready_pose():
+    """``park(grip)`` means the ready pose: ``target`` defaults to it, so only a teardown names its own."""
+    target = inspect.signature(_Chain.park).parameters['target']
+    np.testing.assert_array_equal(target.default, _PARK_JOINTS)
