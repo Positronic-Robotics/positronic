@@ -1,8 +1,4 @@
-"""Observation keys of the roboarena wire protocol.
-
-The codec writes them when it encodes an observation and the source rebuilds them when it warms a freshly
-loaded checkpoint, so they are named once here rather than spelled out at each end.
-"""
+"""Observation keys of the roboarena wire protocol, named once so both ends spell them the same."""
 
 from positronic.offboard.roboarena import SESSION_ID as SESSION_ID
 

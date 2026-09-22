@@ -60,8 +60,8 @@ def test_an_edge_in_front_of_the_server_refuses_as_it_does_on_the_websocket_wire
     assert refused.value.refusal is refusal
 
 
-def test_a_dial_opens_the_bare_root_and_leaves_the_first_frame_for_the_caller():
-    """The server announces its configuration on connect, and the codec above this wire reads it."""
+def test_a_dial_opens_the_bare_root_and_leaves_the_first_frame_unread():
+    """The server announces its configuration on connect, and ``dial`` leaves it for ``recv``."""
     with patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = _ANNOUNCEMENT
         connection = roboarena.RoboarenaClientWire().dial(_ADDRESS, {'Modal-Key': 'k'}, 3.0)
@@ -127,7 +127,7 @@ def test_a_send_on_a_closed_connection_says_the_peer_ended_the_session():
 
 
 def test_the_wire_serves_one_model_and_refuses_a_catalogue_read():
-    """A partner's endpoint IS the model, so there is no route a catalogue could be read on."""
+    """A partner's endpoint is the model, so there is no route a catalogue could be read on."""
     with pytest.raises(ValueError, match='roboarena serves one model and no catalogue'):
         roboarena.RoboarenaClientWire().list_models(_ADDRESS, None, 1.0)
 

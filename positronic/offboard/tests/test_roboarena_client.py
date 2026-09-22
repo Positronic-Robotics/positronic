@@ -18,13 +18,16 @@ def _client(connection) -> roboarena.RoboarenaClient:
 
 
 def test_a_reset_acknowledged_in_text_ends_the_session():
-    """The backend answers the acknowledgement as a text frame, which the wire reports as the peer."""
+    """The backend answers in text, which the wire reports as the peer ending the session."""
     websocket = MagicMock(**{'recv.return_value': roboarena.RESET_ACKNOWLEDGEMENT})
 
-    _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset(session_id='an-episode')
+    client = _client(roboarena_wire.RoboarenaClientConnection(websocket))
+
+    client.reset(session_id='an-episode')
 
     sent = deserialize(websocket.send.call_args.args[0])
     assert sent == {roboarena.ENDPOINT: roboarena.RESET, roboarena.SESSION_ID: 'an-episode'}
+    assert client._connection is None
 
 
 def test_a_reset_answered_with_error_text_reaches_the_caller():
@@ -63,7 +66,7 @@ def test_a_reset_acknowledged_in_a_frame_ends_the_session():
 
 
 def test_a_readiness_poll_waits_far_less_than_a_handshake():
-    """`wait_for_subprocess_ready` polls this between heartbeats, so a silent backend must not hold it."""
+    """Readiness reads on the short probe timeout, not the handshake's."""
     assert roboarena.READY_PROBE_TIMEOUT_S < roboarena.HANDSHAKE_TIMEOUT_S
 
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
@@ -87,7 +90,7 @@ def test_a_handshake_that_does_not_answer_closes_the_connection_it_opened():
 
 
 def test_an_inference_that_does_not_answer_drops_the_connection():
-    """A reply arriving after this read gave up would be read by the NEXT inference as its own."""
+    """A reply arriving after this read gave up would be read by the next inference as its own."""
     connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
     client = _client(connection)
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 ENDPOINT = 'endpoint'
 INFER = 'infer'
 RESET = 'reset'
-# The text the backend answers a reset with; the wire reports every text frame as the server's error.
+# The text the backend answers a reset with.
 RESET_ACKNOWLEDGEMENT = 'reset successful'
 
 # The session a frame belongs to, on a server that keeps per-session history.
@@ -25,7 +25,7 @@ SESSION_ID = 'session_id'
 HANDSHAKE_TIMEOUT_S = 60.0
 INFER_TIMEOUT_S = 120.0
 RESET_TIMEOUT_S = 10.0
-# A readiness poll answers between heartbeats, so it waits far less than a handshake a caller committed to.
+# A silent peer must not hold a readiness probe for a handshake's wait.
 READY_PROBE_TIMEOUT_S = 5.0
 
 
@@ -93,6 +93,8 @@ class RoboarenaClient:
             if str(e) != roboarena_wire.text_frame_report(RESET_ACKNOWLEDGEMENT):
                 raise
             logger.debug(f'roboarena reset answered: {e}')
+            # The peer ended the exchange to answer, so this connection carries nothing more.
+            self.close()
 
     def close(self) -> None:
         if self._connection is not None:

@@ -90,7 +90,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     ) -> RoboarenaClientConnection:
         """A client's end of one session on ``address``.
 
-        The server announces its configuration as the first frame, so the caller's first ``recv`` reads it.
+        The server announces its configuration as the first frame, and ``dial`` leaves it unread.
         """
         return self._open(address, headers, open_timeout)
 
