@@ -1,8 +1,7 @@
 import configuronic as cfn
 
 from positronic.cfg.eval import build_tasks, spec
-from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import bundled_yam_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -29,11 +28,7 @@ def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     selection = None if task is None else [task] if isinstance(task, str) else list(task)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(selection))
     embodiment = remote_embodiment(
-        proxy,
-        camera_dict,
-        descriptor='remote.abc.yam_bimanual',
-        arms=mapping.ARMS,
-        static_meta={roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME},
+        proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
     task_spec = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
