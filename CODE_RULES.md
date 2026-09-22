@@ -392,3 +392,32 @@ attempt = spec.model_copy(update={'artifact_location': moved})
 attempt = spec.model_copy()
 attempt.artifact_location = moved
 ```
+
+### installation-constant
+
+Don't bake a value that differs between two installations of the same hardware into the code that uses
+it. Take it as configuration the instantiator supplies, defaulting to today's value, so a second
+installation runs the same code unmodified.
+
+What varies is the line. A property of the model's DESIGN is shared by every unit of it — how many
+joints a chain has, that joint zero rests two of them on their lower stops, the field names a vendor's
+wire uses — and a constant is its right home. A property of one INSTALLATION differs between two benches
+holding that same model: a serial number, a device path, a mount pose, a calibration offset, a tolerance
+tuned to the residual one servo holds. Those are configuration.
+
+The test: someone with the same hardware and a different calibration must be able to use this code
+without editing it. Getting it wrong is quiet — the code does not refuse on the second bench; it runs
+and does the wrong thing somewhere far from the constant.
+
+Existing violations are grandfathered: this binds a value you add or touch. An existing one is not
+permission to add another.
+
+```python
+# Bad — how far this servo sags is a property of one bench
+_PARK_MAX_CORRECTION = 0.05
+
+# Good — the default is the bench we measured; another instantiator passes its own
+@dataclass(frozen=True)
+class ParkTuning:
+    max_correction: float = 0.05
+```
