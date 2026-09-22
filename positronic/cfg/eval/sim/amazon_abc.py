@@ -30,7 +30,9 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )
-    privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
+    privileged = {
+        name: Observation(proxy.privileged[name], None) for name in (mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL)
+    }
     task_spec = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
 
     def tasks() -> list[Task]:

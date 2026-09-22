@@ -111,9 +111,13 @@ def main() -> None:
         first_start = start = _observe(adapter, frame)
         for logical in CAMERAS:
             assert start[logical].array.shape == (args.camera_height, args.camera_width, 3), logical
-        assert adapter.privileged(frame[protocol.FRAME_OBS])[mapping.OBS_SIM_STATE].size > 0
+        privileged = adapter.privileged(frame[protocol.FRAME_OBS])
+        assert privileged[mapping.OBS_SIM_STATE].size > 0
+        task_eval = privileged[mapping.OBS_TASK_EVAL]
+        assert {'.reward', '.success'} <= set(task_eval), f'the task evaluator reported only {sorted(task_eval)}'
         print(f'reset: {frame[protocol.FRAME_META][mapping.META_TASK]!r} at {frame[protocol.FRAME_CONTROL_DT]}s')
         print(f'mounts: {mounts}')
+        print(f'task metrics: {sorted(task_eval)}')
 
         for arm in mapping.ARMS:
             start = _raise_one_arm(conn, adapter, start, arm)
