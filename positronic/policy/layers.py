@@ -27,6 +27,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     ARGS,
     NAME,
+    VERSION,
     Answer,
     Commands,
     Obs,
@@ -65,6 +66,7 @@ class StopOnFault(Policy):
     """
 
     WIRE_NAME = 'stop_on_fault'
+    WIRE_VERSION = 2
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
@@ -75,7 +77,7 @@ class StopOnFault(Policy):
                 obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
 
     def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
 class ChunkedSchedule(Policy):
@@ -89,6 +91,7 @@ class ChunkedSchedule(Policy):
     """
 
     WIRE_NAME = 'chunked_schedule'
+    WIRE_VERSION = 2
 
     def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
         if not isfinite(fps) or fps <= 0:
@@ -141,7 +144,7 @@ class ChunkedSchedule(Policy):
         args = {'fps': self._fps}
         if self._horizon_sec is not None:
             args['horizon_sec'] = self._horizon_sec
-        return {NAME: self.WIRE_NAME, ARGS: args}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
 class _StackBuffer:
@@ -202,6 +205,7 @@ class TemporalStack(Processor[Obs, OutputT]):
     """
 
     WIRE_NAME = 'temporal_stack'
+    WIRE_VERSION = 2
 
     def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
         self._keys = tuple(keys)
@@ -223,5 +227,6 @@ class TemporalStack(Processor[Obs, OutputT]):
     def to_spec(self) -> dict[str, Any]:
         return {
             NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
             ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }

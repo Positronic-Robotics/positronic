@@ -354,6 +354,7 @@ class PolicyServer:
                 await conn.send(
                     serialise({
                         protocol.STATUS: protocol.ServerStatus.READY,
+                        protocol.PROTOCOL_VERSION: protocol.CURRENT_VERSION,
                         protocol.META: meta,
                         protocol.SESSION_ID: session_id,
                     })

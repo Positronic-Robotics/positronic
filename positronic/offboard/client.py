@@ -10,6 +10,7 @@ from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
+from positronic.utils.versions import resolve_version
 
 from . import protocol
 from .protocol import deserialise, serialise, typed_commands
@@ -26,7 +27,7 @@ DEFAULT_CONNECT_DEADLINE = 900.0
 
 
 class InferenceSession:
-    """One server-issued session over an open connection. Finish inference before closing it."""
+    """One connection using the protocol declared by its server. Finish inference before closing it."""
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
@@ -36,10 +37,13 @@ class InferenceSession:
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
         self._infer_timeout = infer_timeout
-        self._session_id, self._metadata = self._handshake()
+        ready = self._handshake()
+        self._protocol = resolve_version(protocol.VERSIONS, ready.get(protocol.PROTOCOL_VERSION, 1), 'policy protocol')
+        self._metadata = ready[protocol.META]
+        self._session_id = ready[protocol.SESSION_ID] if self._protocol is protocol.ProtocolVersion.V2 else None
         self._closed = False
 
-    def _handshake(self, timeout_per_message: float = 30.0) -> tuple[str, dict[str, Any]]:
+    def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
         The server must send an update at least every ``timeout_per_message`` seconds.
@@ -55,7 +59,7 @@ class InferenceSession:
                     raise RuntimeError(f'Unexpected server response: {response}') from None
 
                 if status is protocol.ServerStatus.READY:
-                    return response[protocol.SESSION_ID], response[protocol.META]
+                    return response
                 if status is protocol.ServerStatus.ERROR:
                     raise RuntimeError('Server error: Unknown error')
 
@@ -69,7 +73,11 @@ class InferenceSession:
             ) from None
 
     @property
-    def session_id(self) -> str:
+    def protocol_version(self) -> protocol.ProtocolVersion:
+        return self._protocol
+
+    @property
+    def session_id(self) -> str | None:
         return self._session_id
 
     @property
@@ -86,7 +94,12 @@ class InferenceSession:
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
         self.served_timing = {}
-        serialised = serialise({protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs})
+        request = (
+            obs
+            if self._protocol is protocol.ProtocolVersion.V1
+            else {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
+        )
+        serialised = serialise(request)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
@@ -126,6 +139,9 @@ class InferenceSession:
         if self._closed:
             return
         self._closed = True
+        if self._protocol is protocol.ProtocolVersion.V1:
+            logger.info('InferenceSession.close: %s', self._conn.close())
+            return
         message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
         try:
             # The server can acknowledge and close before the transport confirms the final write.

@@ -10,11 +10,14 @@ from positronic_wire.wire import SessionAddress
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
+from positronic.offboard.protocol import ProtocolVersion
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyRun, Processor, Runtime
+from .codec import Codec
+from .compatibility import StackV1
 from .spec import from_spec
 
 
@@ -93,6 +96,8 @@ class RemotePolicy(Policy):
             if declared is None:
                 raise ValueError('Server declares no client processor stack')
             stack = from_spec(declared)
+            if session.protocol_version is ProtocolVersion.V1 and isinstance(stack, Codec):
+                stack = StackV1(stack)
             if not isinstance(stack, Processor):
                 raise ValueError('The declared client stack must be a processor')
             infer = partial(round_trip, session, compress_images=bool(meta.get(offboard_keys.COMPRESS_IMAGES)))

@@ -402,8 +402,9 @@ def test_wire_names_match_the_registered_components():
         'joint_delta_action': JointDeltaAction(),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
     }
-    registered = spec.WIRE_PROCESSORS | spec.WIRE_CODECS
-    assert set(instances) == set(registered)
+    registered = spec.COMPONENTS
+    assert set(instances) | {'action_timestamp', 'action_horizon'} == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
-        assert type(instance) is registered[name]
+        assert type(instance) is registered[name][instance.WIRE_VERSION].implementation
+        assert instance.to_spec()['version'] == instance.WIRE_VERSION

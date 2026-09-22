@@ -32,7 +32,7 @@ from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 
-CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'args': {'fps': 10}}}
+CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
 
 class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
@@ -368,7 +368,12 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
 def test_fatal_server_error_closes_client_without_masking_the_error():
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
         protocol.serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: 'session ID mismatch'}),
     ]
     session = InferenceSession(conn)
@@ -383,7 +388,12 @@ def test_fatal_server_error_closes_client_without_masking_the_error():
 def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(failure):
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
         failure,
     ]
     session = InferenceSession(conn)
@@ -406,7 +416,12 @@ def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(f
 def test_close_still_requires_a_valid_ack_when_the_final_write_reports_disconnect(response, error):
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: {}, protocol.SESSION_ID: 's'}),
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
         response,
     ]
     conn.send.side_effect = wire.PeerDisconnected('stream ended')

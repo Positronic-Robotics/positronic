@@ -28,7 +28,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import ARGS, NAME, PAR, SEQ, Obs, ProcessorRun, Step
+from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -72,6 +72,7 @@ class Codec:
 
     IMAGE_SIZES = 'image_sizes'
     WIRE_NAME: ClassVar[str]
+    WIRE_VERSION: ClassVar[int] = 1
 
     def encode(self, data: dict) -> dict:
         return {}
@@ -261,7 +262,7 @@ class Metadata(Codec):
         return Identity(meta=self.meta)
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, ARGS: {'values': self.meta}}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'values': self.meta}}
 
 
 class BinarizeGripTraining(Codec):
@@ -302,7 +303,11 @@ class BinarizeGripTraining(Codec):
         return Group(Derive(**transforms), Identity())
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, ARGS: {'keys': list(self._keys), 'threshold': self._threshold}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'keys': list(self._keys), 'threshold': self._threshold},
+        }
 
 
 class BinarizeGripInference(Codec):
@@ -332,7 +337,11 @@ class BinarizeGripInference(Codec):
         return data
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, ARGS: {'threshold': self._threshold, 'key': self._key}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'threshold': self._threshold, 'key': self._key},
+        }
 
 
 class FlipGrip(Codec):
@@ -365,7 +374,7 @@ class FlipGrip(Codec):
         return data
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
 def _usable_cpus() -> int:
@@ -451,7 +460,7 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, ARGS: {'width': self._width, 'height': self._height}}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'width': self._width, 'height': self._height}}
 
 
 class ChangeEEFrame(Codec):
@@ -544,6 +553,7 @@ class ChangeEEFrame(Codec):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.
         return {
             NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
             ARGS: {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
         }
 

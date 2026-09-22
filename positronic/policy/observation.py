@@ -9,7 +9,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.policy.base import ARGS, NAME
+from positronic.policy.base import ARGS, NAME, VERSION
 from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
@@ -100,4 +100,8 @@ class ObservationCodec(Codec):
     def to_spec(self):
         # Normalized to lists so the spec is identical before and after a wire round-trip.
         images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
-        return {NAME: self.WIRE_NAME, ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field},
+        }

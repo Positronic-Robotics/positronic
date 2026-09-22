@@ -17,6 +17,7 @@ SEQ = 'seq'
 PAR = 'par'
 NAME = 'name'
 ARGS = 'args'
+VERSION = 'version'
 
 
 class NotAnswered(RuntimeError):
@@ -142,6 +143,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
 
     # A receiver resolves this name through its registry of installed processor classes.
     WIRE_NAME: ClassVar[str]
+    WIRE_VERSION: ClassVar[int] = 1
 
     @abstractmethod
     def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
@@ -151,7 +153,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
         return {}
 
     def to_spec(self) -> dict[str, Any]:
-        """A registered name and plain-data constructor arguments, for deliverable processors."""
+        """A versioned component declaration with plain-data arguments."""
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
 

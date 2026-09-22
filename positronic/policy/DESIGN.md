@@ -205,7 +205,7 @@ adds declarations, such as training cadence, without transforming data.
 
 `processor.meta()` reports definition metadata. `Sequential.meta()` flattens
 and combines component metadata, with later components winning on shared keys.
-`to_spec()` returns a registered name and plain-data constructor arguments;
+`to_spec()` returns a registered name, component version, and plain-data constructor arguments;
 compositions contain nested specs. A component without a supported wire spec
 can still run locally, but cannot be delivered to a rig.
 
@@ -218,6 +218,13 @@ The transport connection also bounds its lifetime: disconnects release the
 session after outstanding calls finish. A wrong session ID produces an error
 and closes the requesting connection.
 Credentials are supplied separately through headers, outside the address.
+
+The handshake declares the protocol version, and each stack component declares its own version.
+Missing versions mean v1. Exact registry lookup preserves old-server behavior or rejects an
+unsupported declaration before inference. V1 connections send raw observations and close without
+an end-session message; their trajectory stack is adapted to policy steps. Deprecated versions
+warn with calendar dates and migration instructions. Removal requires a later client release;
+installed clients never expire by date. See [wire compatibility](../offboard/README.md#compatibility-and-deprecation).
 
 Server configuration lives in `positronic.offboard.spec`:
 

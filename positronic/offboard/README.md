@@ -134,6 +134,7 @@ Upon connection, the server sends a ready packet with metadata:
 ```json
 {
   "status": "ready",
+  "protocol_version": 2,
   "session_id": "<server-issued ID>",
   "meta": {
     "type": "lerobot",
@@ -145,9 +146,9 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "stop_on_fault"},
-      {"name": "chunked_schedule", "args": {"fps": 15.0, "horizon_sec": 1.0}},
-      {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
+      {"name": "stop_on_fault", "version": 2},
+      {"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "horizon_sec": 1.0}},
+      {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": false,
     "positronic_version": "0.2.1"
@@ -171,11 +172,50 @@ This metadata tells the client:
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
   preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
   and decodes whole chunks. Codec specs also support `"par"` composition.
-  Processor and codec names are resolved only through `WIRE_PROCESSORS` and `WIRE_CODECS` in
-  `positronic.policy.spec`; an unknown name fails before the policy emits commands.
+  Processor and codec names and versions resolve only through `COMPONENTS` in
+  `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
+
+#### Compatibility and deprecation
+
+Protocol and component versions are independent positive integers. Missing versions mean **v1**.
+The client reads the handshake before sending requests; it never probes an old server with new
+messages. Protocol v1 sends observations directly and ends a session by disconnecting. Protocol v2
+uses the session-ID envelope and explicit end-session acknowledgement described below. The URL's
+`/api/v1` prefix identifies the route; it does not select the inference-message protocol.
+
+Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
+The client selects the exact registered implementation; it never substitutes a newer version or
+guesses from constructor arguments. Unsupported versions fail with supported-version information.
+`positronic_version` identifies the server build for diagnostics, not compatibility selection.
+
+V1 stack support includes timestamped chunks, timing codecs, and cancellation of pending results
+on robot faults. Its adapter emits ordinary policy steps, subject to the harness's polling bounds
+and immediate command delivery. V1 trajectory processors and v2 Step processors have different
+output contracts and cannot share a sequence; unchanged v1 codecs compose with v2 processors.
+
+Published versions have three states in the protocol and component registries:
+
+- **Supported:** an implementation is available without a warning.
+- **Deprecated:** the implementation remains available, with an announcement date, earliest removal
+  date, and migration instructions. Selection emits a visible warning, once per component version
+  in a stack. The notice period is measured in calendar time.
+- **Removed:** a later client release explicitly removes the implementation and retains the notice
+  and removal date so the error explains how to migrate. Removal cannot precede the announced date.
+
+Dates never disable an installed client. Reaching the earliest removal date leaves a deprecated
+version working until an upgrade installs a release that explicitly removes it. No v1 version is
+currently deprecated.
+
+To evolve a component, add a `Version(factory)` under a new integer in `COMPONENTS` and set the
+emitting class's `WIRE_VERSION`. Keep the old factory and its input/output behavior. Breaking changes
+to message shapes or composition grammar instead need a new protocol version. Mark a version
+deprecated by attaching `Deprecation(announced_on, remove_after, replacement)` to its registry entry;
+removal replaces the factory with `None` and records `removed_on`. Both registries use the same
+validation in `positronic.utils.versions`. Compatibility tests cover wire messages and behavior,
+including chunk timing and fault cancellation.
 
 #### 2. Status Updates (Long Model Loading)
 
