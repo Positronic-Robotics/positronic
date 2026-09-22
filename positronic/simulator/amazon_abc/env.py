@@ -116,7 +116,8 @@ class AbcEnv(EnvProtocol):
     def _ik(self, arm: _Arm, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         """Damped-least-squares differential IK on the arm's site Jacobian, iterated on a scratch ``MjData``
         seeded from the live scene: a solve must not move the objects standing in it."""
-        iterations, damping, tolerance = 100, 0.05, 1e-4
+        iterations, damping = 100, 0.05
+        position_tolerance, rotation_tolerance = 1e-3, 1e-2  # the YAM driver's acceptance, in m and rad
         model = self._env.model
         data = mujoco.MjData(model)
         data.qpos[:] = self._env.data.qpos
@@ -134,7 +135,7 @@ class AbcEnv(EnvProtocol):
 
         for _ in range(iterations):
             error = error_at(q)
-            if np.linalg.norm(error) < tolerance:
+            if np.linalg.norm(error[:3]) < position_tolerance and np.linalg.norm(error[3:]) < rotation_tolerance:
                 return q
             jacp = np.zeros((3, model.nv))
             jacr = np.zeros((3, model.nv))
@@ -142,9 +143,11 @@ class AbcEnv(EnvProtocol):
             jac = np.vstack([jacp, jacr])[:, arm.dof_ids]
             dq = jac.T @ np.linalg.solve(jac @ jac.T + damping**2 * np.eye(6), error)
             q = np.clip(q + dq, arm.lower, arm.upper)
+        residual = error_at(q)
         raise RuntimeError(
             f'IK for the {arm.name} arm did not converge in {iterations} iterations: '
-            f'residual {np.linalg.norm(error_at(q)):.2e} for target {target_pos.tolist()}'
+            f'{np.linalg.norm(residual[:3]):.2e} m and {np.linalg.norm(residual[3:]):.2e} rad short of '
+            f'{target_pos.tolist()}'
         )
 
     def _observe(self, obs: dict[str, Any]) -> dict[str, Any]:
