@@ -13,7 +13,7 @@ from contextlib import AbstractContextManager, contextmanager
 from functools import partial
 from pathlib import Path
 
-from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.env_server.launcher import SERVER_DEPS, ensure_pinned_checkout, serve_subprocess
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -28,8 +28,6 @@ _ABC_SRC = _ABC_CACHE / 'src'
 _ABC_PYTHON = '3.12'
 # Installing the ABC project itself would pull its CUDA torch and mujoco-warp.
 _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
-# The isolated env server requires these independently of ABC's dependencies.
-_WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
 
 # Assets are untracked, so forcing the checkout onto the pin leaves them.
 _PREPARE_SCRIPT = 'prepare.py'
@@ -58,7 +56,7 @@ def ensure_abc(tasks: Sequence[str] | None) -> Path:
             subprocess.run(['uv', 'venv', '--python', _ABC_PYTHON, str(venv)], check=True)
         python = venv / 'bin' / 'python'
         subprocess.run(
-            ['uv', 'pip', 'install', *_ABC_DEPS, *_WIRE_DEPS], env={**os.environ, 'VIRTUAL_ENV': str(venv)}, check=True
+            ['uv', 'pip', 'install', *_ABC_DEPS, *SERVER_DEPS], env={**os.environ, 'VIRTUAL_ENV': str(venv)}, check=True
         )
         assets = [_PREPARE_EVERY_TASK] if tasks is None else [_PREPARE_ONE_TASK, *tasks]
         subprocess.run([str(python), _PREPARE_SCRIPT, *assets], cwd=str(src), check=True)
