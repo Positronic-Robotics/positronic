@@ -60,7 +60,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     assert len(trials) == 4  # two tasks the stub answers with, two trials each
     scene = trials[0].prepare_args[eval_keys.SCENE]
     assert scene[eval_keys.TASK] == 'put_plastic_bottles_in_bin'
-    assert (scene[abc_keys.CAMERA_HEIGHT], scene[abc_keys.CAMERA_WIDTH]) == (168, 224)
+    assert (scene[abc_keys.CAMERA_HEIGHT], scene[abc_keys.CAMERA_WIDTH]) == (260, 416)
     assert [t.meta[eval_keys.SEED] for t in trials] == [3, 4, 3, 4]
 
 
