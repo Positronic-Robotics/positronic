@@ -92,8 +92,7 @@ class RoboarenaClient:
     def reset(self, session_id: str | None = None) -> None:
         """End the server's history for ``session_id``, and read the acknowledgement off the connection.
 
-        Dials a new connection when this client holds none, so a reset after a failed inference still reaches
-        the server.
+        Dials a new connection when this client holds none.
         """
         if self._connection is None:
             self.connect()

@@ -162,7 +162,7 @@ class ConnectOutcome(Enum):
 
 
 class ConnectRetries:
-    """The retry policy over one run of refused connect attempts: a new session's, or a readiness poll's.
+    """The retry policy over one run of refused connect attempts.
 
     A ``FORBIDDEN`` refusal means a cold backend or a refused credential, and gets ``MAX_FORBIDDEN_ATTEMPTS``
     attempts.
