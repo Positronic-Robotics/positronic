@@ -57,10 +57,8 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
-    # How often the client pings an idle connection, and how long it waits for the pong. A server holds one
-    # connection open across a whole run and sends nothing between inferences, so a shorter pong deadline
-    # drops a connection that is merely quiet. FOOTGUN: this bounds a missing pong. A server that answers
-    # pings while its policy wedges holds the caller until the caller's own `recv` deadline passes.
+    # A server holds one connection open across a run and sends nothing between inferences, so a shorter
+    # pong deadline drops a quiet connection. FOOTGUN: a missing FRAME is bounded by the caller's `recv`.
     PING_INTERVAL_S = 60.0
     PING_TIMEOUT_S = 600.0
 

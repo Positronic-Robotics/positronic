@@ -1,8 +1,7 @@
-"""A client for a roboarena server, over the wire that carries its frames.
+"""A client for a roboarena server: the msgpack frames, over the `roboarena` wire that carries them.
 
-Roboarena is a cross-vendor protocol. Two servers here speak it: the DreamZero subprocess this repository
-launches, and a partner's own server a rig dials. The frames are msgpack, which the wire package does not
-depend on, so the framing lives here and the wire carries bytes.
+Two servers here speak the protocol: the DreamZero subprocess this repository launches, and a partner's
+own server a rig dials.
 """
 
 import logging
@@ -50,8 +49,8 @@ class RoboarenaClient:
         try:
             announced: dict[str, Any] = deserialize(connection.recv(timeout=HANDSHAKE_TIMEOUT_S))
         except BaseException:
-            # A connection left behind here is the one the next episode infers over, which turns one
-            # transient handshake failure into a second.
+            # A connection left behind here carries the next episode's inference, so one transient
+            # handshake failure becomes two.
             connection.close()
             raise
         self._server_config = announced
