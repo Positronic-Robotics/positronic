@@ -25,7 +25,7 @@ from pimm.core import (
 )
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
-from pimm.tests.testing import MockClock
+from pimm.tests.testing import MockClock, TeardownRecorder
 from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
 
 
@@ -78,20 +78,6 @@ class StopWatcher(ControlSystem):
                 self._seen.value = 1
                 return
             yield Sleep(0.01)
-
-
-class TeardownRecorder(ControlSystem):
-    """A control system that runs until stopped and appends 'closed' to `events` when its loop ends."""
-
-    def __init__(self, events: list[str]):
-        self._events = events
-
-    def run(self, should_stop, clock):
-        try:
-            while not should_stop.value:
-                yield Sleep(0.01)
-        finally:
-            self._events.append('closed')
 
 
 class DummySMValue(SMCompliant):

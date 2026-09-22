@@ -11,7 +11,7 @@ import pos3
 import pytest
 
 import pimm
-from pimm.tests.test_world import TeardownRecorder
+from pimm.tests.testing import TeardownRecorder
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
