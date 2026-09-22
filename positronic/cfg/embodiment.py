@@ -68,6 +68,7 @@ def yam(robot_arm, cameras):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
@@ -84,6 +85,7 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     gravity_comp_factor: list[float] | None,
     cameras,
+    park_after_idle_s: float | None,
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -98,7 +100,10 @@ def yam_bimanual(
 
     arms = {
         side: yam_driver.Robot(
-            channel, base_pose=geom.Transform3D(mounts[side]), gravity_comp_factor=gravity_comp_factor
+            channel,
+            base_pose=geom.Transform3D(mounts[side]),
+            gravity_comp_factor=gravity_comp_factor,
+            park_after_idle_s=park_after_idle_s,
         )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
@@ -129,6 +134,25 @@ def yam_bimanual(
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
     )
+
+
+# The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
+# there are the onboard controllers and reach no arm.
+# TODO: `mounts` still holds the sim-scene values the default carries. Survey where this station's arm bases
+# sit and put the measured pose here, or `ee_pose` reaches the world frame wrong.
+yam_bimanual_yambox = yam_bimanual.override(
+    left_channel='can_follower_l',
+    right_channel='can_follower_r',
+    # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
+    # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
+    # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    gravity_comp_factor=[1.0, 1.1, 1.4, 1.4, 1.0, 1.0],
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
+        'image.wrist_left': positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
+        'image.wrist_right': positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(resolution='svga', fps=30),
+    },
+)
 
 
 def mujoco_franka(sim, camera_dict):
