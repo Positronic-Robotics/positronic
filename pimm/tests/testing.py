@@ -47,8 +47,11 @@ class Passive(ControlSystem):
             yield Sleep(0.001)
 
 
-class TeardownRecorder(ControlSystem):
-    """A control system that runs until stopped and appends 'closed' to `events` when its loop ends."""
+class ExitRecorder(ControlSystem):
+    """A control system that runs until stopped and records in `events` how its loop ends.
+
+    It appends 'stopped' when it sees `should_stop`, and 'closed' when its loop ends by any path.
+    """
 
     def __init__(self, events: list[str]):
         self._events = events
@@ -57,6 +60,7 @@ class TeardownRecorder(ControlSystem):
         try:
             while not should_stop.value:
                 yield Sleep(0.001)
+            self._events.append('stopped')
         finally:
             self._events.append('closed')
 
