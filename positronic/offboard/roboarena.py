@@ -61,8 +61,14 @@ class RoboarenaClient:
         return self._server_config
 
     def is_ready(self) -> bool:
-        """Whether the server announces itself. Raises ``TextAnswer`` when it answers in text instead."""
-        return self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S) is None
+        """Whether the server announces itself.
+
+        Raises ``TextAnswer`` when it answers in text, and ``wire.ConnectRefused`` on a ``FINAL`` refusal.
+        """
+        refusal = self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S)
+        if refusal is wire.Refusal.FINAL:
+            raise wire.ConnectRefused(refusal, f'{self._wire.session_url(self._address)} refused the connection')
+        return refusal is None
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""

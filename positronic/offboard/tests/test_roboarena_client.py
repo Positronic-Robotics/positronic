@@ -112,6 +112,26 @@ def test_readiness_of_a_peer_that_closes_before_announcing_is_false():
         assert not client.is_ready()
 
 
+def test_readiness_raises_a_final_refusal():
+    """A retry does not change a permanent refusal, so a readiness poll does not wait out its deadline."""
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.probe.return_value = wire.Refusal.FINAL
+        with pytest.raises(wire.ConnectRefused) as refused:
+            client.is_ready()
+    assert refused.value.refusal is wire.Refusal.FINAL
+
+
+@pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.FORBIDDEN])
+def test_readiness_of_a_refusal_a_retry_may_clear_is_false(refusal):
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.probe.return_value = refusal
+        assert not client.is_ready()
+
+
 def test_a_handshake_that_does_not_answer_closes_the_connection_it_opened():
     """Nothing else holds it: `_connection` is assigned after the read, so an unclosed one leaks."""
     connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
