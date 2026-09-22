@@ -29,18 +29,19 @@ _FAILURES = {
 
 
 @pytest.mark.parametrize('failure', _FAILURES.values(), ids=_FAILURES.keys())
-@pytest.mark.parametrize('verb', ['infer', 'reset'])
-def test_a_failed_exchange_drops_the_connection_and_raises(verb, failure):
+@pytest.mark.parametrize(
+    'exchange',
+    [lambda client: client.infer({}), lambda client: client.reset(session_id='an-episode')],
+    ids=['infer', 'reset'],
+)
+def test_a_failed_exchange_drops_the_connection_and_raises(exchange, failure):
     """A reply after the failure stays queued, so no later exchange may read it as its own."""
     effects, raised = failure
     connection = MagicMock(**effects)
     client = _client(connection)
 
     with pytest.raises(raised):
-        if verb == 'infer':
-            client.infer({})
-        else:
-            client.reset(session_id='an-episode')
+        exchange(client)
 
     connection.close.assert_called_once()
     assert client._connection is None
