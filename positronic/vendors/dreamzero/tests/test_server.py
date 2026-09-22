@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 from positronic_wire import roboarena as roboarena_wire
+from positronic_wire import wire
 
 pytest.importorskip('huggingface_hub')
 
@@ -200,10 +201,14 @@ def test_session_owns_video_cache_and_probe_cannot_reset_it(monkeypatch):
     backend.stop.assert_called_once()
 
 
-def test_a_reset_the_backend_answers_with_error_text_is_logged_and_the_client_closed(monkeypatch, caplog):
+@pytest.mark.parametrize(
+    'failure',
+    [roboarena_wire.TextAnswer('CUDA out of memory'), wire.ConnectRefused(wire.Refusal.FINAL, 'CUDA out of memory')],
+)
+def test_a_reset_that_fails_is_logged_and_the_client_closed(monkeypatch, caplog, failure):
     client = Mock()
     client.infer.return_value = np.zeros((24, 8))
-    client.reset.side_effect = roboarena_wire.TextAnswer('CUDA out of memory')
+    client.reset.side_effect = failure
     monkeypatch.setattr(server, 'RoboarenaClient', Mock(return_value=client))
     model = server.DreamZeroModel(Mock(roboarena_port=1234), {})
     model({}, session_id='first')

@@ -17,6 +17,85 @@ def _client(connection) -> roboarena.RoboarenaClient:
     return client
 
 
+_ANNOUNCEMENT = serialize({'resolution': [180, 320]})
+
+# Each way an exchange on an open connection fails, as the connection raises it.
+_FAILURES = {
+    'send-disconnect': ({'send.side_effect': wire.PeerDisconnected('gone')}, wire.PeerDisconnected),
+    'read-timeout': ({'recv.side_effect': TimeoutError('timed out')}, TimeoutError),
+    'read-disconnect': ({'recv.side_effect': wire.PeerDisconnected('gone')}, wire.PeerDisconnected),
+    'read-text': ({'recv.side_effect': roboarena_wire.TextAnswer('CUDA out of memory')}, roboarena_wire.TextAnswer),
+}
+
+
+@pytest.mark.parametrize('failure', _FAILURES.values(), ids=_FAILURES.keys())
+@pytest.mark.parametrize('verb', ['infer', 'reset'])
+def test_a_failed_exchange_drops_the_connection_and_raises(verb, failure):
+    """A reply after the failure stays queued, so no later exchange may read it as its own."""
+    effects, raised = failure
+    connection = MagicMock(**effects)
+    client = _client(connection)
+
+    with pytest.raises(raised):
+        if verb == 'infer':
+            client.infer({})
+        else:
+            client.reset(session_id='an-episode')
+
+    connection.close.assert_called_once()
+    assert client._connection is None
+
+
+@pytest.mark.parametrize(
+    'failure', [TimeoutError('timed out'), wire.PeerDisconnected('gone'), roboarena_wire.TextAnswer('x')]
+)
+def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failure):
+    connection = MagicMock(**{'recv.side_effect': failure})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = connection
+        with pytest.raises(type(failure)):
+            client.connect()
+
+    connection.close.assert_called_once()
+    assert client._connection is None
+
+
+def test_an_inference_with_no_connection_dials_one_and_keeps_it():
+    connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize([0.0] * 8)]})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = connection
+        assert client.infer({}) == [0.0] * 8
+
+    assert client._connection is connection
+    connection.close.assert_not_called()
+
+
+def test_a_reset_with_no_connection_dials_one_and_sends_the_keyed_reset():
+    """A failed inference drops the connection, and the backend still holds that session's history."""
+    connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize({'ok': True})]})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = connection
+        client.reset(session_id='an-episode')
+
+    sent = deserialize(connection.send.call_args.args[0])
+    assert sent == {roboarena.ENDPOINT: roboarena.RESET, roboarena.SESSION_ID: 'an-episode'}
+
+
+def test_a_reset_with_no_connection_raises_when_the_server_refuses_the_dial():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.side_effect = wire.ConnectRefused(wire.Refusal.COLD, 'refused')
+        with pytest.raises(wire.ConnectRefused):
+            client.reset(session_id='an-episode')
+
+
 def test_a_reset_acknowledged_in_text_ends_the_session():
     websocket = MagicMock(**{'recv.return_value': roboarena.RESET_ACKNOWLEDGEMENT})
 
@@ -71,18 +150,6 @@ def test_a_reset_acknowledged_in_a_frame_keeps_the_connection():
     assert client._connection is connection
 
 
-def test_a_reset_that_does_not_answer_drops_the_connection():
-    """An acknowledgement arriving after this read gave up would be read by the next inference as its own."""
-    connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
-    client = _client(connection)
-
-    with pytest.raises(TimeoutError):
-        client.reset(session_id='an-episode')
-
-    connection.close.assert_called_once()
-    assert client._connection is None
-
-
 def test_a_readiness_poll_waits_far_less_than_a_handshake():
     """Readiness reads on the short probe timeout, not the handshake's."""
     assert roboarena.READY_PROBE_TIMEOUT_S < roboarena.HANDSHAKE_TIMEOUT_S
@@ -130,28 +197,3 @@ def test_readiness_of_a_refusal_a_retry_may_clear_is_false(refusal):
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = refusal
         assert not client.is_ready()
-
-
-def test_a_handshake_that_does_not_answer_closes_the_connection_it_opened():
-    """Nothing else holds it: `_connection` is assigned after the read, so an unclosed one leaks."""
-    connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
-
-    with patch.object(client, '_wire') as client_wire:
-        client_wire.dial.return_value = connection
-        with pytest.raises(TimeoutError):
-            client.connect()
-
-    connection.close.assert_called_once()
-
-
-def test_an_inference_that_does_not_answer_drops_the_connection():
-    """A reply arriving after this read gave up would be read by the next inference as its own."""
-    connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
-    client = _client(connection)
-
-    with pytest.raises(TimeoutError):
-        client.infer({'observation/joint_position': 0})
-
-    connection.close.assert_called_once()
-    assert client._connection is None

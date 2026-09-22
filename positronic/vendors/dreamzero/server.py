@@ -211,7 +211,7 @@ class DreamZeroModel(Model):
             return
         try:
             client.reset(session_id=session_id)
-        except (OSError, TimeoutError, wire.PeerDisconnected, roboarena_wire.TextAnswer):
+        except (OSError, TimeoutError, wire.ConnectRefused, wire.PeerDisconnected, roboarena_wire.TextAnswer):
             # The backend keeps this session's frame history, so a reset nobody accepted leaves it to
             # condition the next session on this subprocess.
             logger.exception('DreamZero session reset failed; the backend still holds its history')
