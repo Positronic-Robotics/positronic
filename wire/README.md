@@ -45,19 +45,21 @@ needs.
 ## The client interface
 
 `NAME` is what a caller selects a wire by: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
-`grpc_tls`. `ADDRESS` is the address type that wire dials, and `DEFAULT_PORT` the port a URL leaves
-out on the members that name one.
+`grpc_tls`, `roboarena`. `ADDRESS` is the address type that wire dials, and `DEFAULT_PORT` the port a
+URL leaves out on the members that name one.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
-  members write `host:port`. What a wire dials is its own: `websocket` and `websocket_tls` dial this
-  spelling, and the others dial a socket or a target instead.
+  members write `host:port`, and `roboarena` writes the root it dials. What a wire dials is its own:
+  `websocket`, `websocket_tls` and `roboarena` dial this spelling, and the others dial a socket or a
+  target instead.
 - `list_models(address, headers, open_timeout)` — the models the server serves, read on the
   transport that carries this wire's sessions: over HTTP for the network members, and over the
   socket itself for `websocket_unix`. It carries the same `headers` as `dial`, so an edge that
   authenticates on them lets the read through, and refuses in `dial`'s own vocabulary. The gRPC
   members raise `ValueError`: their port carries sessions alone. A server that answers the catalogue
-  serves an HTTP-capable wire beside the gRPC one. No caller builds a URL or a transport.
+  serves an HTTP-capable wire beside the gRPC one. `roboarena` raises too, because a partner's
+  endpoint is the one model it serves. No caller builds a URL or a transport.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
@@ -68,16 +70,17 @@ out on the members that name one.
   server answers; a `Refusal` says why none did, in the terms `dial` uses, `FORBIDDEN` among them for
   a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
-  which a server that is up answers `UNIMPLEMENTED`.
+  which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
+  frame the server announces itself with, which is the only readiness the protocol carries.
 
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
 
 **Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
 type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
 `HostPortAddress` — `host`, `port`, `path` (`session_path(model)`), `query`, as written.
-`websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. A record that names an
-endpoint carries the wire's name and that wire's fields, never a URL, and no address carries a field
-a wire ignores.
+`websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
+`RoboarenaAddress` — `host` and `port`. A record that names an endpoint carries the wire's name and
+that wire's fields, never a URL, and no address carries a field a wire ignores.
 
 `uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
 the network. The address refuses a relative path when it is built, because a relative one names a
@@ -89,6 +92,15 @@ from a socket a server is restarting on is `COLD` too. A path holding something 
 socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed
 out or was reset reached the socket, so the server rather than the path was not ready, and it reads
 `COLD` as it does on a port.
+
+`roboarena` is a partner's own protocol: msgpack frames on a websocket at the bare root of a port the
+partner publishes. The server closes any other path, and it routes on a key inside each frame, so the
+address names no route and no query. It publishes no default port either, so every address states one.
+The server announces its configuration as the first frame of every connection: `dial` leaves that frame
+for the caller's codec, and `probe` reads it and closes. A port that accepts a connection and announces
+nothing is a backend still starting, so it reads `COLD`. The protocol names no URL scheme and the port is
+plain, so no TLS member sits beside this wire; a partner who terminates TLS in front of it refuses a
+handshake in the terms the websocket members already read.
 
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,

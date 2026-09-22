@@ -2,7 +2,6 @@
 
 import logging
 import os
-import socket
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -12,10 +11,11 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-import websockets.sync.client
 from huggingface_hub import snapshot_download
+from positronic_wire import wire
 
 from pimm.logging import init_logging
+from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
@@ -24,7 +24,6 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, RestrictImageSize
 from positronic.utils.checkpoints import list_checkpoints
-from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs, roboarena
 
 logger = logging.getLogger(__name__)
@@ -67,77 +66,6 @@ def _experiment_name(checkpoint_path: str) -> str:
     """The training run a resolved checkpoint belongs to."""
     parts = checkpoint_path.rstrip('/').split('/')
     return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
-
-
-# TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
-# standard (used by DreamZero, potentially GR00T N2, etc.) and other vendors may need it.
-class RoboarenaClient:
-    """Client for DreamZero's roboarena WebSocket server.
-
-    Protocol (from eval_utils/policy_server.py + policy_client.py):
-    - On connect: server sends PolicyServerConfig as first msgpack message
-    - Client sends obs dict with obs["endpoint"] = "infer" or "reset"
-    - Server responds with action as raw numpy array (N, 8) via msgpack
-    - Uses positronic.utils.serialization for msgpack+numpy wire format
-    """
-
-    def __init__(self, host: str = '127.0.0.1', port: int = 9000):
-        self._host = host
-        self._port = port
-        self._ws = None
-        self._server_config: dict | None = None
-
-    def connect(self):
-        self._ws = websockets.sync.client.connect(
-            f'ws://{self._host}:{self._port}', compression=None, max_size=None, ping_interval=60, ping_timeout=600
-        )
-        # First message from server is PolicyServerConfig metadata
-        self._server_config = deserialize(self._ws.recv())
-        logger.info(f'Connected to roboarena server, metadata: {self._server_config}')
-
-    @property
-    def server_config(self) -> dict:
-        """The ``PolicyServerConfig`` this backend announced on connect: which cameras it wants, at what
-        resolution, and whether it tracks sessions."""
-        if self._server_config is None:
-            raise RuntimeError('Not connected: the server announces its config on connect')
-        return self._server_config
-
-    def ping(self) -> bool:
-        """Check if the roboarena server port is accepting connections.
-
-        The eval_utils.policy_server.WebsocketPolicyServer has no HTTP health
-        endpoint, so we use a raw TCP connect check instead.
-        """
-        try:
-            with socket.create_connection((self._host, self._port), timeout=2):
-                return True
-        except OSError:
-            return False
-
-    def infer(self, observation: dict[str, Any]) -> np.ndarray:
-        if self._ws is None:
-            self.connect()
-        observation['endpoint'] = 'infer'
-        self._ws.send(serialize(observation))
-        response = self._ws.recv()
-        if isinstance(response, str):
-            raise RuntimeError(f'Server error: {response}')
-        return deserialize(response)
-
-    def reset(self, session_id: str | None = None):
-        if self._ws is None:
-            return
-        msg: dict[str, Any] = {'endpoint': 'reset'}
-        if session_id is not None:
-            msg['session_id'] = session_id
-        self._ws.send(serialize(msg))
-        self._ws.recv(timeout=10.0)  # Consume "reset successful" response
-
-    def close(self):
-        if self._ws is not None:
-            self._ws.close()
-            self._ws = None
 
 
 def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
@@ -282,6 +210,8 @@ class DreamZeroModel(Model):
             return
         try:
             client.reset(session_id=session_id)
+        except (OSError, TimeoutError, wire.PeerDisconnected):
+            logger.info('DreamZero session reset skipped: backend connection already gone')
         finally:
             client.close()
 

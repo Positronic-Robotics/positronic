@@ -59,8 +59,12 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 
 
-def _refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
-    """What a handshake that did not open says about the server."""
+def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
+    """What a handshake that did not open says about the server.
+
+    Public because every wire the `websockets` library dials reads its errors the same way, and the
+    roboarena wire is the second of them.
+    """
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)
     if isinstance(raised, ssl.SSLCertVerificationError):
@@ -80,7 +84,7 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
 
     def _refusal(self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.AddressT) -> wire.Refusal:
         """What a handshake that did not open says about the server, in this wire's terms."""
-        return _refusal_of(raised)
+        return refusal_of(raised)
 
     @abc.abstractmethod
     def _connect(self, address: wire.AddressT, **settings) -> Connection:
