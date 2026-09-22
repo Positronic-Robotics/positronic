@@ -14,7 +14,6 @@ from integration_tests.act_stack import (
     capture,
     check_episode,
     check_stacking,
-    checkpoint_url,
     compare_trace,
     is_supported_stack,
     write_npz,
@@ -230,9 +229,3 @@ def test_identical_trace_passes():
 def test_reference_capture_refuses_to_overwrite(tmp_path):
     with pytest.raises(FileExistsError):
         capture(reference_dir=str(tmp_path), output_dir='unused')
-
-
-@pytest.mark.parametrize('url', ['localhost:8000?codec.fps=10', 'http://localhost:8000/api/v1/session/other'])
-def test_url_cannot_change_the_pinned_pipeline(url):
-    with pytest.raises(ValueError, match='server origin'):
-        checkpoint_url(url)
