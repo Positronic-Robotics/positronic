@@ -25,9 +25,12 @@ class RoboarenaAddress(wire.SessionAddress):
         return self
 
 
-def text_frame_report(text: str) -> str:
-    """How this wire reports a text frame. The server serves nothing more on that connection."""
-    return f'the server answered this error text: {text}'
+class TextAnswer(Exception):
+    """The server answered in text. It serves nothing more on that connection, and a retry does not change the text."""
+
+    def __init__(self, text: str):
+        super().__init__(f'the server answered this text: {text}')
+        self.text = text
 
 
 class RoboarenaClientConnection(WebsocketClientConnection):
@@ -39,7 +42,7 @@ class RoboarenaClientConnection(WebsocketClientConnection):
         except ConnectionClosed as e:
             raise wire.PeerDisconnected(str(e)) from e
         if isinstance(message, str):
-            raise wire.PeerDisconnected(text_frame_report(message))
+            raise TextAnswer(message)
         return message
 
 
@@ -97,7 +100,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """Whether a server announces itself at ``address``."""
+        """Whether a server announces itself at ``address``. Raises ``TextAnswer`` when it answers in text."""
         try:
             connection = self._open(address, headers, open_timeout)
         except wire.ConnectRefused as e:

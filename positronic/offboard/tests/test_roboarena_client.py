@@ -18,7 +18,6 @@ def _client(connection) -> roboarena.RoboarenaClient:
 
 
 def test_a_reset_acknowledged_in_text_ends_the_session():
-    """The backend answers in text, which the wire reports as the peer ending the session."""
     websocket = MagicMock(**{'recv.return_value': roboarena.RESET_ACKNOWLEDGEMENT})
 
     client = _client(roboarena_wire.RoboarenaClientConnection(websocket))
@@ -34,8 +33,12 @@ def test_a_reset_answered_with_error_text_reaches_the_caller():
     """Error text propagates; it does not count as the reset acknowledgement."""
     websocket = MagicMock(**{'recv.return_value': 'CUDA out of memory'})
 
-    with pytest.raises(wire.PeerDisconnected, match='CUDA out of memory'):
-        _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset(session_id='an-episode')
+    client = _client(roboarena_wire.RoboarenaClientConnection(websocket))
+
+    with pytest.raises(roboarena_wire.TextAnswer, match='CUDA out of memory'):
+        client.reset(session_id='an-episode')
+
+    assert client._connection is None
 
 
 def test_an_error_text_that_ends_with_the_acknowledgement_reaches_the_caller():
@@ -43,7 +46,7 @@ def test_an_error_text_that_ends_with_the_acknowledgement_reaches_the_caller():
     near_miss = f'expected {roboarena.RESET_ACKNOWLEDGEMENT}'
     websocket = MagicMock(**{'recv.return_value': near_miss})
 
-    with pytest.raises(wire.PeerDisconnected, match=near_miss):
+    with pytest.raises(roboarena_wire.TextAnswer, match=near_miss):
         _client(roboarena_wire.RoboarenaClientConnection(websocket)).reset()
 
 
@@ -57,12 +60,27 @@ def test_a_reset_the_peer_never_answered_reaches_the_caller():
     assert ended.value.__cause__ is closed
 
 
-def test_a_reset_acknowledged_in_a_frame_ends_the_session():
+def test_a_reset_acknowledged_in_a_frame_keeps_the_connection():
     connection = MagicMock(**{'recv.return_value': serialize({'ok': True})})
+    client = _client(connection)
 
-    _client(connection).reset()
+    client.reset()
 
     assert deserialize(connection.send.call_args.args[0]) == {roboarena.ENDPOINT: roboarena.RESET}
+    connection.close.assert_not_called()
+    assert client._connection is connection
+
+
+def test_a_reset_that_does_not_answer_drops_the_connection():
+    """An acknowledgement arriving after this read gave up would be read by the next inference as its own."""
+    connection = MagicMock(**{'recv.side_effect': TimeoutError('timed out')})
+    client = _client(connection)
+
+    with pytest.raises(TimeoutError):
+        client.reset(session_id='an-episode')
+
+    connection.close.assert_called_once()
+    assert client._connection is None
 
 
 def test_a_readiness_poll_waits_far_less_than_a_handshake():
@@ -74,6 +92,24 @@ def test_a_readiness_poll_waits_far_less_than_a_handshake():
         client_wire.probe.return_value = None
         assert client.is_ready()
     assert client_wire.probe.call_args.args[2] == roboarena.READY_PROBE_TIMEOUT_S
+
+
+def test_readiness_raises_the_text_a_server_answers_in():
+    """A backend that reports a failure is not a backend still starting, so a readiness poll does not retry it."""
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.return_value = 'CUDA out of memory'
+        with pytest.raises(roboarena_wire.TextAnswer, match='CUDA out of memory'):
+            client.is_ready()
+
+
+def test_readiness_of_a_peer_that_closes_before_announcing_is_false():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.side_effect = ConnectionClosedError(None, None)
+        assert not client.is_ready()
 
 
 def test_a_handshake_that_does_not_answer_closes_the_connection_it_opened():

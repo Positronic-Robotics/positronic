@@ -103,11 +103,27 @@ def test_a_probe_of_a_port_nothing_answers_on_is_cold():
     )
 
 
-def test_a_text_frame_is_the_servers_own_error_and_ends_the_exchange():
-    """The server reports a failure as text on the connection it then serves nothing more on."""
+def test_a_text_frame_raises_the_servers_text():
     connection = roboarena.RoboarenaClientConnection(MagicMock(**{'recv.return_value': 'CUDA out of memory'}))
-    with pytest.raises(wire.PeerDisconnected, match='CUDA out of memory'):
+    with pytest.raises(roboarena.TextAnswer, match='CUDA out of memory') as answered:
         connection.recv()
+    assert answered.value.text == 'CUDA out of memory'
+
+
+def test_a_probe_answered_in_text_raises_the_servers_text():
+    """A backend that reports a failure is not cold: a retry does not change the text."""
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.return_value = 'CUDA out of memory'
+        with pytest.raises(roboarena.TextAnswer, match='CUDA out of memory'):
+            roboarena.RoboarenaClientWire().probe(_ADDRESS, None, 1.0)
+    connect.return_value.close.assert_called_once()
+
+
+def test_a_probe_whose_peer_closes_before_the_announcement_is_cold():
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.side_effect = ConnectionClosedError(None, None)
+        assert roboarena.RoboarenaClientWire().probe(_ADDRESS, None, 1.0) is wire.Refusal.COLD
+    connect.return_value.close.assert_called_once()
 
 
 def test_a_read_on_a_closed_connection_says_the_peer_ended_the_session():

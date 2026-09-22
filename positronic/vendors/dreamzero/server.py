@@ -12,6 +12,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 from huggingface_hub import snapshot_download
+from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 
 from pimm.logging import init_logging
@@ -210,7 +211,7 @@ class DreamZeroModel(Model):
             return
         try:
             client.reset(session_id=session_id)
-        except (OSError, TimeoutError, wire.PeerDisconnected):
+        except (OSError, TimeoutError, wire.PeerDisconnected, roboarena_wire.TextAnswer):
             # The backend keeps this session's frame history, so a reset nobody accepted leaves it to
             # condition the next session on this subprocess.
             logger.exception('DreamZero session reset failed; the backend still holds its history')

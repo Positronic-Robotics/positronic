@@ -61,7 +61,7 @@ class RoboarenaClient:
         return self._server_config
 
     def is_ready(self) -> bool:
-        """Whether the server announces itself."""
+        """Whether the server announces itself. Raises ``TextAnswer`` when it answers in text instead."""
         return self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S) is None
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
@@ -85,16 +85,20 @@ class RoboarenaClient:
         frame: dict[str, Any] = {ENDPOINT: RESET}
         if session_id is not None:
             frame[SESSION_ID] = session_id
-        self._connection.send(serialize(frame))
         try:
+            self._connection.send(serialize(frame))
             self._connection.recv(timeout=RESET_TIMEOUT_S)
-        except wire.PeerDisconnected as e:
-            # The backend acknowledges a reset in text, which the wire reports as the server's error.
-            if str(e) != roboarena_wire.text_frame_report(RESET_ACKNOWLEDGEMENT):
-                raise
-            logger.debug(f'roboarena reset answered: {e}')
-            # The peer ended the exchange to answer, so this connection carries nothing more.
+        except roboarena_wire.TextAnswer as e:
+            # The peer ends the exchange with any text, so this connection carries nothing more.
             self.close()
+            if e.text != RESET_ACKNOWLEDGEMENT:
+                raise
+            logger.debug(f'roboarena reset answered: {e.text}')
+        except BaseException:
+            # An acknowledgement that arrives after this read gave up stays queued, and the next inference reads it
+            # as its own.
+            self.close()
+            raise
 
     def close(self) -> None:
         if self._connection is not None:

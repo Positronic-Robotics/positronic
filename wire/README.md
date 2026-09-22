@@ -39,7 +39,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, `netloc`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, and the call both ends agree on: `SERVICE`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
-| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and how this wire reports a text frame: `text_frame_report(text)` |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
@@ -103,9 +103,11 @@ partner publishes. The server closes any other path, and it routes on a key insi
 address names no route and no query. It publishes no default port either, so every address states one.
 The server announces its configuration as the first frame of every connection: `dial` leaves that frame
 for the caller's codec, and `probe` reads it and closes. A port that accepts a connection and announces
-nothing is a backend still starting, so it reads `COLD`. The protocol names no URL scheme and the port is
-plain, so no TLS member sits beside this wire; a partner who terminates TLS in front of it refuses a
-handshake in the terms the websocket members already read.
+nothing is a backend still starting, so it reads `COLD`. The server reports a failure in a text frame
+and serves nothing more on that connection, so `recv` and `probe` raise `TextAnswer`, which carries the
+text: a retry does not change it. The protocol names no URL scheme and the port is plain, so no TLS
+member sits beside this wire; a partner who terminates TLS in front of it refuses a handshake in the
+terms the websocket members already read.
 
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
