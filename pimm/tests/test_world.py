@@ -1726,3 +1726,55 @@ def test_interrupted_post_terminate_join_still_waits_for_protected_sibling(monke
             monkeypatch.setattr(process, 'join', interrupted_join)
     assert timeouts == [90.0, 2.0, 2.0]
     assert protected.closed.is_set()
+
+
+@pytest.mark.parametrize('stop_before_interrupt', [False, True])
+def test_sigint_during_foreground_step_preserves_protected_shutdown(stop_before_interrupt):
+    closed = []
+
+    class InterruptedDevice(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            if stop_before_interrupt:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            signal.raise_signal(signal.SIGINT)
+            yield Sleep(0.01)
+            while not should_stop.value:
+                yield Sleep(0.01)
+            closed.append(self)
+
+    device = InterruptedDevice()
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with World(virtual_time=True) as world:
+                world.run([device, Finisher(2)])
+        assert closed == [device]
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_foreground_step_reports_device_failure_and_pending_sigint():
+    class FailingDevice(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            signal.raise_signal(signal.SIGINT)
+            raise ValueError('device failed')
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(BaseExceptionGroup) as raised:
+            with World(virtual_time=True) as world:
+                world.run([FailingDevice(), ShutdownWaiter(ready, holding, release, closed)])
+        assert [type(error) for error in raised.value.exceptions] == [ValueError, KeyboardInterrupt]
+        assert closed.is_set()
+    finally:
+        signal.signal(signal.SIGINT, previous)
