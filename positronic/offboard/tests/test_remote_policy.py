@@ -338,6 +338,30 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
 
+class DeclaredPromptModel(FixedModel):
+    def meta(self):
+        return {'model_name': 'fixed', 'prompt': 'A prompt this deployment declares.'}
+
+
+def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unchanged(served):
+    """A ``prompt`` in the handshake appears unchanged in the policy's meta, under the server block. The task an
+    episode sends reaches the model unchanged, with no prompt beside it."""
+    address, model, _ = served(model=DeclaredPromptModel())
+    policy = RemotePolicy('websocket', address)
+    assert policy.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
+
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    run = runtime.start(policy)
+    try:
+        run.send({keys.TASK: 'the task this episode sends'})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        runtime.close()
+        run.close()
+    assert model.observations[-1][keys.TASK] == 'the task this episode sends'
+    assert 'prompt' not in model.observations[-1]
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('payload', [{protocol.OBSERVATION: {}}, {protocol.END_SESSION: True}], ids=['infer', 'end'])
 def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload):

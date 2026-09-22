@@ -85,6 +85,8 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 `compress_images=True` on the deployment enables JPEG transport. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 
+**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`.
+
 ## Running on the same machine
 
 Run the model server beside the robot or simulator, then connect with
