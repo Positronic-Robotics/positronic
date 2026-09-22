@@ -110,12 +110,19 @@ def test_a_text_frame_is_the_servers_own_error_and_ends_the_exchange():
         connection.recv()
 
 
-@pytest.mark.parametrize('verb', ['send', 'recv'])
-def test_a_closed_connection_says_the_peer_ended_the_session(verb):
+def test_a_read_on_a_closed_connection_says_the_peer_ended_the_session():
     closed = ConnectionClosedError(None, None)
-    connection = roboarena.RoboarenaClientConnection(MagicMock(**{f'{verb}.side_effect': closed}))
+    connection = roboarena.RoboarenaClientConnection(MagicMock(**{'recv.side_effect': closed}))
     with pytest.raises(wire.PeerDisconnected) as ended:
-        getattr(connection, verb)(b'') if verb == 'send' else connection.recv()
+        connection.recv()
+    assert ended.value.__cause__ is closed
+
+
+def test_a_send_on_a_closed_connection_says_the_peer_ended_the_session():
+    closed = ConnectionClosedError(None, None)
+    connection = roboarena.RoboarenaClientConnection(MagicMock(**{'send.side_effect': closed}))
+    with pytest.raises(wire.PeerDisconnected) as ended:
+        connection.send(b'')
     assert ended.value.__cause__ is closed
 
 
