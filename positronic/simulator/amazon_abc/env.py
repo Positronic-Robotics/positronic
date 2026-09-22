@@ -5,6 +5,7 @@ Runs in ABC's own interpreter, which the launcher builds.
 
 import argparse
 import functools
+import logging
 from typing import Any
 
 import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv
@@ -14,6 +15,12 @@ import mujoco
 import numpy as np
 import protocol
 from server import EnvProtocol, EnvServer
+
+logger = logging.getLogger(__name__)
+
+
+class PoseOutOfReach(RuntimeError):
+    """The solver did not bring an arm within tolerance of a commanded pose."""
 
 
 class _Arm:
@@ -96,9 +103,17 @@ class AbcEnv(EnvProtocol):
         per_arm = []
         for arm in self._arms:
             command = action[protocol.arm_channel(protocol.ROBOT_COMMAND, arm.name)]
-            joints = arm_action.wire_command_to_arm_action(
-                command, self._measured_q(arm), ik=functools.partial(self._ik, arm), current_eef=self._measured_eef(arm)
-            )
+            try:
+                joints = arm_action.wire_command_to_arm_action(
+                    command,
+                    self._measured_q(arm),
+                    ik=functools.partial(self._ik, arm),
+                    current_eef=self._measured_eef(arm),
+                )
+            except PoseOutOfReach as exc:
+                # The rig's driver refuses such a command and holds, so a bad command fails the task, not the run.
+                logger.warning(f'{command} not applied: {exc}')
+                joints = self._measured_q(arm)
             grip = mapping.invert_grip(action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)])
             per_arm.append(np.append(joints, grip))
         return np.concatenate(per_arm).astype(np.float32)
@@ -154,7 +169,7 @@ class AbcEnv(EnvProtocol):
             dq = jac.T @ np.linalg.solve(jac @ jac.T + damping**2 * np.eye(6), error)
             q = np.clip(q + dq, arm.lower, arm.upper)
         residual = error_at(q)
-        raise RuntimeError(
+        raise PoseOutOfReach(
             f'IK for the {arm.name} arm did not converge in {iterations} iterations: '
             f'{np.linalg.norm(residual[:3]):.2e} m and {np.linalg.norm(residual[3:]):.2e} rad short of '
             f'{target_pos.tolist()}'
