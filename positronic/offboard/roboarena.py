@@ -73,8 +73,7 @@ class RoboarenaClient:
             self._connection.send(serialize({**observation, ENDPOINT: INFER}))
             answer = self._connection.recv(timeout=INFER_TIMEOUT_S)
         except BaseException:
-            # A reply that arrives after this read gave up stays queued, and the next inference reads it
-            # as its own: the arm would run a chunk computed for an observation it has moved on from.
+            # A reply that arrives after this read gave up stays queued, and the next inference reads it as its own.
             self.close()
             raise
         return deserialize(answer)

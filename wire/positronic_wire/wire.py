@@ -1,6 +1,6 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries the ``protocol`` frames as opaque bytes and reads none of them. Nothing here reads a URL:
+A wire carries a protocol's frames as opaque bytes and reads none of them. Nothing here reads a URL:
 a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
 spells whatever its library takes.
 """

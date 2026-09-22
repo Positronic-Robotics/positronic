@@ -14,19 +14,23 @@ uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@
 
 The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit.
 
-`positronic_wire` never imports `positronic`. `positronic` depends on it: the server side of each
-wire, in `positronic.offboard`, imports the facts from here, and `InferenceClient` dials through
-the wires here.
+`positronic_wire` never imports `positronic`. `positronic` depends on it: each server side in
+`positronic.offboard` imports the facts from here, and `InferenceClient` dials through the wires
+here.
 
 ## What a wire is
 
-A wire is one transport that carries the `positronic.offboard.protocol` frames as opaque bytes. It
-has two ends. The client end dials a session and probes a server; the server end accepts sessions
-and refuses an unauthorized peer. Everything specific to a transport — the library, its exception
-types, its status codes, its metadata keys, the path a probe asks for, the URL scheme it writes —
-lives inside that transport's wire classes. Code outside a wire speaks to every transport through
-one interface and reads one answer. A wire over TLS is a member of its own, so no caller holds a
-`secure` flag, and nothing anywhere reads a transport off a URL scheme: a caller names the wire.
+A wire is one transport that carries a protocol's frames as opaque bytes. It has two ends. The
+client end dials a session and probes a server; the server end accepts sessions and refuses an
+unauthorized peer. Everything specific to a transport — the library, its exception types, its
+status codes, its metadata keys, the path a probe asks for, the URL scheme it writes — lives inside
+that transport's wire classes. Code outside a wire speaks to every transport through one interface
+and reads one answer. A wire over TLS is a member of its own, so no caller holds a `secure` flag,
+and nothing anywhere reads a transport off a URL scheme: a caller names the wire.
+
+Most wires here carry the `positronic.offboard.protocol` frames, and `positronic.offboard` serves
+their other end. `roboarena` is the exception: it carries a partner's own protocol, the partner
+serves it, and this package holds the client end alone.
 
 ## The package boundary
 
@@ -179,7 +183,7 @@ A consumer moves onto the wire in this order, each step green on its own:
 
 ## What is not shared
 
-- The server side of each wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
+- The server side of each offboard wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
 - The session protocol and the policy stack, which shape an observation and need `numpy` and the
   codecs. A consumer that warms an endpoint with a real observation runs that in an environment
   carrying `positronic`.
