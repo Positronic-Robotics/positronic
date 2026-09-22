@@ -7,7 +7,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
-from positronic.policy.codec import Codec, RestrictImageSize
+from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.sequential import Sequential
@@ -55,6 +55,17 @@ def test_sequential_combines_component_metadata():
             return {'config': {'fault_handling': True, 'fps': 20}}
 
     assert Sequential(NamedStop(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
+
+
+@pytest.mark.parametrize('translation', [0.1, 0.2])
+def test_sequential_rejects_two_frame_conversions(translation):
+    outer = ChangeEEFrame([0.1, 0, 0, 1, 0, 0, 0])
+    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | RestrictImageSize()
+    schedule = ChunkedSchedule(fps=10)
+    stack = Sequential(outer, schedule)
+    assert stack.meta() == outer.meta | schedule.meta()
+    with pytest.raises(ValueError, match='Only one component'):
+        Sequential(stack, inner).meta()
 
 
 def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path):

@@ -3,6 +3,7 @@
 from collections.abc import Generator
 from typing import Any
 
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.policy.base import SEQ, InputT, OutputT, Processor, ProcessorRun, Runtime
 from positronic.policy.codec import Codec
 from positronic.utils import flatten_dict
@@ -48,10 +49,12 @@ class Sequential(Processor[InputT, OutputT]):
                 child.close()
 
     def meta(self) -> dict[str, Any]:
-        """Combine component metadata; later components take precedence on shared keys."""
+        """Combine metadata, allowing one frame conversion; later components override other shared keys."""
         meta = {}
         for component in self._components:
             values = component.meta() if isinstance(component, Processor) else component.meta
+            if roboarm_keys.EE_FRAME in meta and roboarm_keys.EE_FRAME in values:
+                raise ValueError('Only one component in a sequence may convert the end-effector frame')
             meta.update(flatten_dict(values))
         return meta
 

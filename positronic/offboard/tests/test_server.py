@@ -17,7 +17,8 @@ from fastapi import APIRouter
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
-from websockets.sync.client import connect
+from websockets.exceptions import ConnectionClosedOK
+from websockets.sync.client import connect, unix_connect
 
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
@@ -512,6 +513,25 @@ def test_a_session_over_a_socket_carries_the_model_id(unix_stub_server):
         assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
     finally:
         session.close()
+
+
+@pytest.mark.parametrize('model_id', ['', 'stub'])
+@pytest.mark.parametrize('client_closes', [True, False])
+def test_session_end_leaves_time_to_read_the_ack(unix_stub_server, socket_path, monkeypatch, model_id, client_closes):
+    if not client_closes:
+        monkeypatch.setattr(websocket_wire.WebsocketWire, 'CLOSE_TIMEOUT_SEC', 0.05)
+    _served, model = unix_stub_server
+    with unix_connect(socket_path, uri=f'ws://localhost{wire.session_path(model_id)}') as conn:
+        ready = deserialise(conn.recv(timeout=5))
+        message = {protocol.SESSION_ID: ready[protocol.SESSION_ID], protocol.END_SESSION: True}
+        conn.send(serialise(message))
+        assert deserialise(conn.recv(timeout=5)) == message
+        model.end_session.assert_called_once_with(ready[protocol.SESSION_ID])
+        if client_closes:
+            assert conn.ping().wait(5), 'The server closed before the client could read the acknowledgement'
+        else:
+            with pytest.raises(ConnectionClosedOK):
+                conn.recv(timeout=5)
 
 
 def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_server):
