@@ -133,10 +133,9 @@ one symbol here, and the set of wires is `registry.CLIENT_WIRES`. A literal spel
 in another repository drifts the day either side edits it, and nothing reports the drift; an
 imported symbol cannot.
 
-A scheme table disappears with them. A record that names an endpoint carries the wire's name, the
-host, the port, the model and the query as five fields — and the socket path as a sixth, where the
-wire is `websocket_unix` — so no reader of the record derives a transport, a TLS setting or a
-default port from the spelling of a URL.
+A scheme table disappears with them. A record that names an endpoint carries the wire's name and the
+fields that wire's address declares, so no reader of the record derives a transport, a TLS setting or
+a default port from the spelling of a URL.
 
 The port a server serves a wire on, and the server flag that names it, stay literals where they are
 spelled: they are a deployment's configuration, not wire facts. A test in the consumer that installs
@@ -169,9 +168,9 @@ A consumer moves onto the wire in this order, each step green on its own:
 
 1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
    local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
-   names its wire, then that wire's address** — host, port, model and query for a network wire, the
-   socket path for `websocket_unix`. Report the registry's names in the deploy handshake and retire
-   any per-transport version floor.
+   names its wire, then that wire's address** — the fields `ClientWire.ADDRESS` declares, which differ
+   per wire. Report the registry's names in the deploy handshake and retire any per-transport version
+   floor.
 2. Replace the transport-specific dial with `probe`, and the exception-name match with
    `isinstance(raised, (wire.ConnectRefused, wire.PeerDisconnected, TimeoutError))`.
 3. Move the consumer's own transports into their own `ClientWire` subclasses, each declaring the

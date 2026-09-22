@@ -89,8 +89,8 @@ class UnixSocketAddress(SessionAddress):
 AddressT = TypeVar('AddressT', bound=SessionAddress)
 
 
-# The largest frame a session may carry, on either wire. An observation is a stack of camera frames, and
-# the gRPC default of 4 MiB refuses one.
+# The largest frame a wire may carry. An observation is a stack of camera frames, and the gRPC default
+# of 4 MiB refuses one.
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
