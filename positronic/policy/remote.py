@@ -1,6 +1,7 @@
 import collections.abc as cabc
+import logging
 from contextlib import closing
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any
 
 import numpy as np
@@ -59,6 +60,28 @@ def round_trip(
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
             telemetry.set_attrs(span, **served)
+
+
+logger = logging.getLogger(__name__)
+
+# FOOTGUN: the wire's close waits for the server to answer a close handshake, with no bound. A server
+# that never answers blocks the process for ever, so a finished run neither exits nor reports, and a
+# watcher reading liveness calls a dead run healthy. Measured on the yambox bench: ten minutes elapsed
+# against eighteen seconds of CPU, blocked in this one call.
+_CLOSE_TIMEOUT_S = 5.0
+
+
+def _close_within_bound(session: Any) -> None:
+    """Close the session, and abandon the connection if the server does not answer within the bound."""
+    closer = Thread(target=session.close, name='RemotePolicy.close', daemon=True)
+    closer.start()
+    closer.join(_CLOSE_TIMEOUT_S)
+    if closer.is_alive():
+        logger.warning(
+            'The server did not answer the session close within %.1fs; abandoning the connection so the run '
+            'can exit. The socket goes with the process.',
+            _CLOSE_TIMEOUT_S,
+        )
 
 
 class RemotePolicy(Policy):
@@ -129,4 +152,4 @@ class RemotePolicy(Policy):
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.
             with connection_lock:
-                session.close()
+                _close_within_bound(session)
