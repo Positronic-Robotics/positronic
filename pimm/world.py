@@ -31,6 +31,7 @@ from .core import (
     FakeEmitter,
     FakeReceiver,
     Message,
+    ShutdownPolicy,
     SignalEmitter,
     SignalReceiver,
     Sleep,
@@ -468,9 +469,9 @@ def _bg_wrapper(
     clock: Clock,
     name: str,
     parent_component_levels: Mapping[str, int],
-    shutdown_timeout_s: float | None,
+    shutdown_policy: ShutdownPolicy,
 ):
-    if shutdown_timeout_s is None:
+    if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
         # Ctrl-C stops the parent World; the device must complete its own shutdown before losing control.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
@@ -519,7 +520,7 @@ class World:
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
-        self._shutdown_timeouts = {}
+        self._shutdown_policies = {}
         self._foreground_shutdown: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
@@ -536,29 +537,51 @@ class World:
                 # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.entered = False
-        logger.info('Stopping background processes...')
-        self.request_stop()
+    def _finish_foreground_shutdown(self) -> None:
+        errors: list[Exception] = []
 
-        self._drive(self._interleave(self._foreground_shutdown))
+        def finish(loop: Iterator[Command]) -> Iterator[Command]:
+            try:
+                yield from loop
+            except Exception as exc:
+                errors.append(exc)
 
+        self._drive(self._interleave([finish(loop) for loop in self._foreground_shutdown]))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup('Foreground shutdown failed', errors)
+
+    def _join_background_processes(self) -> None:
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
-            process.join(timeout=self._shutdown_timeouts[process])
+            policy = self._shutdown_policies[process]
+            timeout_s = None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0
+            process.join(timeout=timeout_s)
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
-                process.join(timeout=2)  # Give it a moment to terminate
+                process.join(timeout=2)
                 if process.is_alive():
                     logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
 
-        for emitter, receivers in self._cleanup_emitters_readers:
-            [receiver.close() for receiver in (receivers if isinstance(receivers, list) else [receivers])]
-            emitter.close()
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.entered = False
+        logger.info('Stopping background processes...')
+        self.request_stop()
+        try:
+            try:
+                self._finish_foreground_shutdown()
+            finally:
+                self._join_background_processes()
+        finally:
+            for emitter, receivers in self._cleanup_emitters_readers:
+                for receiver in receivers if isinstance(receivers, list) else [receivers]:
+                    receiver.close()
+                emitter.close()
 
     def request_stop(self):
         self._stop_event.set()
@@ -861,11 +884,14 @@ class World:
                 logical._bind(receiver_wrp(physical))
 
         for cs in spawned:
-            self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_timeout_s=cs.shutdown_timeout_s)
-        loops = [_CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock) for cs in in_process]
-        self._foreground_shutdown.extend(
-            loop for cs, loop in zip(in_process, loops, strict=True) if cs.shutdown_timeout_s is None
-        )
+            self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_policy=cs.shutdown_policy)
+        loops = []
+        for cs in in_process:
+            loop = _CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock)
+            loops.append(loop)
+            if cs.shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
+                # Keep the device iterator alive even if a sibling closes the scheduler by raising.
+                self._foreground_shutdown.append(loop)
         return self._interleave(loops)
 
     def run(
@@ -885,7 +911,9 @@ class World:
         """
         self._drive(self.start(main_process, background))
 
-    def start_in_subprocess(self, *background_loops: ControlLoop, shutdown_timeout_s: float | None = 90.0):
+    def start_in_subprocess(
+        self, *background_loops: ControlLoop, shutdown_policy: ShutdownPolicy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
+    ):
         """Starts background control loops. Can be called multiple times for different control loops.
 
         Use `start` whenever possible, as this method is internal.
@@ -899,7 +927,7 @@ class World:
             # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels, shutdown_timeout_s),
+                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels, shutdown_policy),
                 daemon=True,
                 name=name,
             )
@@ -917,7 +945,7 @@ class World:
                     'inside the background process or run them in the main process.'
                 ) from e
             self.background_processes.append(p)
-            self._shutdown_timeouts[p] = shutdown_timeout_s
+            self._shutdown_policies[p] = shutdown_policy
             logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:

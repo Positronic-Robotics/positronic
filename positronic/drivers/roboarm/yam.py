@@ -190,26 +190,29 @@ class _Arm(DriverRun[command.CommandType]):
         self._kin = _Kinematics()
 
     def observations(self) -> dict[str, np.ndarray]:
-        """What the arm reports right now."""
+        """Read the current joint and gripper measurements."""
         return self.vendor.get_observations()
 
     @staticmethod
     def _grip(obs: dict[str, np.ndarray]) -> float:
-        """How closed the fingers are, from the width they read back."""
+        """Convert measured open width to the closed-fraction grip convention."""
         return 1.0 - float(obs[_GRIPPER_POS][0])
 
-    def encode(self, obs: dict[str, np.ndarray], status: RobotStatus) -> None:
+    def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
+        """Publish measured state; default to ERROR after a failed move, otherwise AVAILABLE."""
+        if status is None:
+            status = RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE
         q = obs[_JOINT_POS]
         self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q), status)
-
-    def publish(self, obs: dict[str, np.ndarray]) -> None:
-        """Publish measured arm and gripper state, marked ERROR after a failed move."""
-        self.encode(obs, RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
         self.grip_out.emit(self._grip(obs))
 
+    def command_target(self, joints: np.ndarray, grip: float) -> None:
+        """Append the gripper target in the vendor's open-width convention."""
+        self.vendor.command_joint_pos(np.append(joints, 1.0 - grip))
+
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
-        """Command the arm to stay where it reads, publish that, and return it as the target to hold."""
+        """Hold the measured joint and gripper positions, publish state, and return the hold target."""
         obs = self.observations()
         self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
         self.publish(obs)
@@ -223,7 +226,7 @@ class _Arm(DriverRun[command.CommandType]):
         return solution
 
     def to_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold; raises what the arm cannot be asked for."""
+        """Convert a command to joint targets; reject unsupported modes and unreachable poses."""
         # TODO: accept the modes the arm can run instead of leaving them to what a command omits. Its
         # joints are position-servoed, so `PositionControl` names the rule already running.
         command.require_native_mode(cmd, 'YAM')
@@ -242,10 +245,22 @@ class _Arm(DriverRun[command.CommandType]):
     def _arrived(
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tolerance_rad: float, require_stopped: bool
     ) -> bool:
-        return (
-            bool(np.all(np.abs(obs[_JOINT_POS] - target) < tolerance_rad))
-            and abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
-            and (not require_stopped or bool(np.all(np.abs(obs[_JOINT_VEL]) < self._PARK_VELOCITY_TOL_RAD_S)))
+        if not np.all(np.abs(obs[_JOINT_POS] - target) < tolerance_rad):
+            return False
+        if not abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL:
+            return False
+        return not require_stopped or bool(np.all(np.abs(obs[_JOINT_VEL]) < self._PARK_VELOCITY_TOL_RAD_S))
+
+    def _move_timeout(
+        self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
+    ) -> TimeoutError:
+        joint_error = np.max(np.abs(obs[_JOINT_POS] - target))
+        joint_speed = np.max(np.abs(obs[_JOINT_VEL]))
+        return TimeoutError(
+            f'joint error {joint_error:.4f} rad (tolerance {tolerance_rad:.4f}) after '
+            f'{timeout_s:g}s; target={target}, measured={obs[_JOINT_POS]}, '
+            f'max joint speed={joint_speed:.4f} rad/s; '
+            f'grip target={grip:.3f}, measured={self._grip(obs):.3f}'
         )
 
     def move_to(
@@ -257,52 +272,48 @@ class _Arm(DriverRun[command.CommandType]):
         tolerance_rad: float = _MOVE_TOLERANCE_RAD,
         max_speed_rad_s: float = math.inf,
         require_stopped: bool = False,
-        at_teardown: bool = False,
+        interrupt_on_stop: bool = True,
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Ramp to the exact target and verify measured arrival before the deadline."""
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
-            travel_s = max(self._MIN_MOVE_TIME_S, float(np.max(np.abs(target - start))) / max_speed_rad_s)
+            distance_rad = float(np.max(np.abs(target - start)))
+            travel_s = max(self._MIN_MOVE_TIME_S, distance_rad / max_speed_rad_s)
             still_time_s = self._PARK_STILL_TIME_S if require_stopped else 0.0
             arrived_since = None
             started = self.clock.now()
             while True:
-                if self.should_stop.value and not at_teardown:
+                if self.should_stop.value and interrupt_on_stop:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
                 obs = self.observations()
                 if elapsed > timeout_s:
-                    error = np.max(np.abs(obs[_JOINT_POS] - target))
-                    raise TimeoutError(
-                        f'joint error {error:.4f} rad (tolerance {tolerance_rad:.4f}) after '
-                        f'{timeout_s:g}s; target={target}, measured={obs[_JOINT_POS]}, '
-                        f'max joint speed={np.max(np.abs(obs[_JOINT_VEL])):.4f} rad/s; '
-                        f'grip target={grip:.3f}, measured={self._grip(obs):.3f}'
-                    )
-                if elapsed >= travel_s and self._arrived(obs, target, grip, tolerance_rad, require_stopped):
-                    if arrived_since is None:
-                        arrived_since = elapsed
-                    if elapsed - arrived_since >= still_time_s:
-                        break
-                else:
+                    raise self._move_timeout(obs, target, grip, timeout_s, tolerance_rad)
+
+                at_target = elapsed >= travel_s and self._arrived(obs, target, grip, tolerance_rad, require_stopped)
+                if not at_target:
                     arrived_since = None
-                alpha = min(elapsed / travel_s, 1.0)
-                self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
-                self.encode(obs, RobotStatus.BUSY)
-                self.out.emit(self.state)
-                self.grip_out.emit(self._grip(obs))
+                elif arrived_since is None:
+                    arrived_since = elapsed
+                if arrived_since is not None and elapsed - arrived_since >= still_time_s:
+                    break
+
+                fraction = min(elapsed / travel_s, 1.0)
+                joint_target = (1 - fraction) * start + fraction * target
+                self.command_target(joint_target, grip)
+                self.publish(obs, RobotStatus.BUSY)
                 yield self.limiter.wait()
         except Exception:
             self.moves.errored = True
             raise
 
-        self.vendor.command_joint_pos(np.append(target, 1.0 - grip))
+        self.command_target(target, grip)
         self.moves.errored = False
         self.publish(self.observations())
         return MoveStatus.ARRIVED
 
     def park(
-        self, grip: float, *, at_teardown: bool = False
+        self, grip: float, *, interrupt_on_stop: bool = True
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Move to parking at bounded speed and verify sustained arrival with low joint velocity."""
         logger.info('Moving the arm to the parking pose')
@@ -314,7 +325,7 @@ class _Arm(DriverRun[command.CommandType]):
                 tolerance_rad=self._PARK_TOLERANCE_RAD,
                 max_speed_rad_s=self._PARK_MAX_SPEED_RAD_S,
                 require_stopped=True,
-                at_teardown=at_teardown,
+                interrupt_on_stop=interrupt_on_stop,
             )
             if status is MoveStatus.ARRIVED:
                 logger.info('Arm parked')
@@ -326,21 +337,22 @@ class _Arm(DriverRun[command.CommandType]):
         return self.hold_where_it_stopped()
 
     def shutdown(self) -> Generator[pimm.Command, None, None]:
-        held = None
+        hold_target = None
         try:
-            held = yield from self.park(self._grip(self.observations()), at_teardown=True)
+            hold_target = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
             if not self.moves.errored:
                 return
         except Exception:
             self.moves.errored = True
             logger.exception('Could not verify parking; keeping the arm powered')
+
         logger.critical('Parking failed; arm still powered. Shutdown blocked: operator assistance required.')
         while True:
             try:
-                if held is None:
-                    held = self.hold_where_it_stopped()
-                q, grip = held
-                self.vendor.command_joint_pos(np.append(q, 1.0 - grip))
+                if hold_target is None:
+                    hold_target = self.hold_where_it_stopped()
+                q, grip = hold_target
+                self.command_target(q, grip)
                 self.publish(self.observations())
             except Exception:
                 # A failed hold cannot authorize torque release; keep trying with the connection open.
@@ -350,10 +362,7 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(
         self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Put the arm where ``call`` asks, hold it wherever it ends up, and answer it once that is out.
-
-        Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
-        """
+        """Execute a move and answer its caller; hold the measured position if the move fails or stops."""
         try:
             target = self.to_joints(call.request, q)
             if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
@@ -363,10 +372,10 @@ class _Arm(DriverRun[command.CommandType]):
             try:
                 held = self.hold_where_it_stopped()
             finally:
-                call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
+                call.set_exception(exc)  # Answer even if reading the hold position fails.
             return held
         held = self.hold_where_it_stopped()
-        call.set_exception(MoveAbandoned())  # the state saying where the arm stopped is out
+        call.set_exception(MoveAbandoned())
         return held
 
 
@@ -382,7 +391,7 @@ def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Ite
     else:
         try:
             vendor.zero_torque_mode()
-        finally:  # an arm that will not go limp still has a handle to give back
+        finally:
             vendor.close()
 
 
@@ -395,7 +404,7 @@ class Robot(pimm.ControlSystem):
     ``grip``/``target_grip`` ports (SO-101 precedent).
     """
 
-    shutdown_timeout_s = None
+    shutdown_policy = pimm.ShutdownPolicy.WAIT_FOR_COMPLETION
 
     def __init__(
         self,
@@ -451,14 +460,20 @@ class Robot(pimm.ControlSystem):
 
             q_target, grip_target = yield from arm.park(arm._grip(arm.observations()))
             idle_since = None
+            parking = None
 
             while not should_stop.value:
-                if (grip := pimm.value_updated(self.target_grip)) is not None:
+                grip = pimm.value_updated(self.target_grip)
+                asked = arm.moves.next_request()
+                if parking is not None and (grip is not None or asked is not None):
+                    parking.close()
+                    parking = None
+                    q_target, grip_target = arm.hold_where_it_stopped()
+                if grip is not None:
                     grip_target = float(grip)
                     idle_since = clock.now()
 
                 q = arm.observations()[_JOINT_POS]
-                asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     q_target, grip_target = yield from arm.sync_move(asked, q, grip_target)
                     idle_since = clock.now()
@@ -467,15 +482,24 @@ class Robot(pimm.ControlSystem):
                         q_target = arm.to_joints(asked, q)
                     idle_since = clock.now()
                 elif self._should_park(idle_since, clock.now()):
-                    q_target, grip_target = yield from arm.park(grip_target)
+                    parking = arm.park(grip_target)
                     idle_since = None
 
-                arm.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
+                if parking is not None:
+                    try:
+                        yield next(parking)
+                        continue
+                    except StopIteration as done:
+                        q_target, grip_target = done.value
+                        parking = None
 
-                # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
+                arm.command_target(q_target, grip_target)
+                # Synchronous moves can take seconds; publish a fresh observation.
                 arm.publish(arm.observations())
                 yield arm.limiter.wait()
 
+            if parking is not None:
+                parking.close()
             yield from arm.shutdown()
 
 

@@ -21,6 +21,7 @@ from pimm.core import (
     FakeReceiver,
     Message,
     ReceiverDict,
+    ShutdownPolicy,
     SignalEmitter,
     SignalReceiver,
     Sleep,
@@ -29,7 +30,16 @@ from pimm.core import (
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
+from pimm.world import (
+    EventReceiver,
+    LocalQueueEmitter,
+    MultiprocessEmitter,
+    MultiprocessReceiver,
+    QueueEmitter,
+    SystemClock,
+    VirtualClock,
+    World,
+)
 
 
 def dummy_process(stop_reader, clock):
@@ -545,7 +555,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -585,7 +595,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -616,7 +626,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops, shutdown_timeout_s):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -1397,7 +1407,7 @@ class TestChildLogging:
 
 
 class ShutdownWaiter(ControlSystem):
-    shutdown_timeout_s = None
+    shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
 
     def __init__(self, ready, holding, release, closed):
         self.ready, self.holding, self.release, self.closed = ready, holding, release, closed
@@ -1476,3 +1486,39 @@ def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure)
     assert ready.is_set()
     assert holding.is_set()
     assert closed.is_set()
+
+
+def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(monkeypatch):
+    class FailingShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            raise RuntimeError('shutdown failed')
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    waiter = ShutdownWaiter(ready, holding, release, closed)
+    join, close, emitter_close, receiver_close = (Mock() for _ in range(4))
+    with pytest.raises(RuntimeError, match='shutdown failed'):
+        with World(virtual_time=True) as world:
+            loop = world.start([FailingShutdown(), waiter], Finisher(1))
+            next(loop)
+            process = world.background_processes[0]
+            join.side_effect = process.join
+            close.side_effect = process.close
+            monkeypatch.setattr(process, 'join', join)
+            monkeypatch.setattr(process, 'close', close)
+            emitter, receivers = world.mp_pipes()
+            assert isinstance(emitter, MultiprocessEmitter)
+            assert isinstance(receivers, MultiprocessReceiver)
+            emitter_close.side_effect = emitter.close
+            receiver_close.side_effect = receivers.close
+            monkeypatch.setattr(emitter, 'close', emitter_close)
+            monkeypatch.setattr(receivers, 'close', receiver_close)
+    assert holding.is_set() and closed.is_set()
+    join.assert_called_once_with(timeout=90.0)
+    close.assert_called_once()
+    emitter_close.assert_called_once()
+    receiver_close.assert_called_once()
