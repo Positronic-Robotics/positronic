@@ -14,9 +14,18 @@ RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 
 
 class FakeYam(yam._FakeYam):
+    """A ``_FakeYam`` that can miss what it is asked for, the two ways the yambox station's chain does.
+
+    ``bias`` offsets every joint by a fixed amount, whatever it is asked for. ``gives_back`` is the fraction
+    of the way from ``floats_at`` to the command that the chain actually travels, so a correction only
+    partly lands and the rest of the gap survives into the next one.
+    """
+
     def __init__(self):
         super().__init__()
         self.bias = np.zeros(6)
+        self.gives_back = 1.0
+        self.floats_at = np.zeros(6)
         self.stuck = False
         self.targets = []
         self.released_at = []
@@ -27,6 +36,7 @@ class FakeYam(yam._FakeYam):
         if not self.stuck:
             position = joint_pos.copy()
             position[:6] += self.bias
+            position[:6] = self.floats_at + self.gives_back * (position[:6] - self.floats_at)
             position[1:3] = np.maximum(position[1:3], 0.0)
             super().command_joint_pos(position)
 
@@ -158,6 +168,37 @@ def test_parking_corrects_servo_bias_before_releasing_torque(rig):
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
+
+
+# What the yambox station measured of its own chain: a correction lands about two thirds of the way, and
+# the chain floats 66 mrad above its stops on the three joints that carry the arm's weight.
+GIVES_BACK = 0.65
+FLOATS_AT = np.array([0.0, 0.066, 0.066, 0.066, 0.0, 0.0])
+
+
+def test_a_chain_that_gives_back_part_of_a_correction_still_lands_on_its_stops(rig):
+    """Torque is cut right after the stow, so the gap the settle leaves is the height the chain falls.
+
+    Corrections that do not add up never close this gap: they swing about three fifths of the first one,
+    which on this chain is the centimetre of height the arm was dropping from. The gap is named here rather
+    than read from ``_PARK_TOL``, because the gate is half of what is under test: 5 mrad is below anything
+    the swinging correction reaches on this chain, whatever gate lets it stop.
+    """
+    rig.raise_arm()
+    rig.vendor.gives_back = GIVES_BACK
+    rig.vendor.floats_at = FLOATS_AT
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
+def test_a_settle_that_never_lands_still_bounds_what_it_asks_for(rig):
+    """The corrections add up, so a chain that gives nothing back would march the reference away with no
+    bound. ``_PARK_MAX_CORRECTION`` is what keeps the settle off a mechanical stop."""
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.finish()
+    asked = np.array([target[:6] for target in rig.vendor.targets])
+    assert np.min(asked) >= -yam._Chain._PARK_MAX_CORRECTION
 
 
 def test_failed_parking_is_bounded_and_reported_then_closes(rig, caplog):

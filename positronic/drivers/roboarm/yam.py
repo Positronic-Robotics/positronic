@@ -179,10 +179,11 @@ class _Chain(DriverRun[command.CommandType]):
     _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
     _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
-    # The park ends where the driver already calls the chain arrived. Measured on the yambox station, the
-    # worst joint settles about 10 mrad short under the gravity compensation that station declares, so a
-    # tighter gate never closes and every teardown reports a failed park.
-    _PARK_TOL = _ARRIVED_TOL
+    # Torque is cut at the end of a park, so the gap the settle leaves is the height the chain falls. This
+    # gate is therefore much tighter than arrival. Measured on the yambox station, the settle reaches
+    # 4.2 mrad on the worst joint of either arm, and a gate under that one never closes. Missing this one
+    # costs an ERROR line and no height, because every pass leaves the chain lower than the pass before it.
+    _PARK_TOL = 0.005
     _PARK_ATTEMPTS = 6  # how many settle-and-correct passes a park makes before it gives up
     _PARK_MAX_CORRECTION = 0.05  # radians of total reference bias around the park pose
 
@@ -305,15 +306,22 @@ class _Chain(DriverRun[command.CommandType]):
         return MoveStatus.ARRIVED
 
     def _settle_onto(
-        self, grip: float, target: np.ndarray, *, at_teardown: bool
+        self, grip: float, target: np.ndarray, tol: float, *, at_teardown: bool
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle the chain onto ``target``, biasing the reference to close the gap the position servo holds.
 
         The servo holds the arm a little short of its reference, so a single move leaves the joints hanging
-        above ``target``. Each pass measures that residual and biases the reference past it — bounded by
-        ``_PARK_MAX_CORRECTION`` so it cannot keep loading a mechanical stop — until the measured pose is
-        within ``_PARK_TOL`` of ``target``. Returns the biased reference the chain settles under, which is
-        what holds it there. Raises ``TimeoutError`` if the passes run out first.
+        above ``target``. Each pass measures that residual and takes it off the reference the chain already
+        holds, bounded by ``_PARK_MAX_CORRECTION`` so it cannot keep loading a mechanical stop. It stops
+        when the measured pose is within ``tol`` of ``target``.
+
+        The corrections add up because the chain gives back only part of each one: on the yambox station a
+        pass closes about two thirds of the gap it is given. Taking the correction from ``target`` and the
+        latest gap instead never converges. It swings about three fifths of the first gap, so the chain is
+        left wherever ``tol`` first admits a pass, and it falls that gap when torque goes.
+
+        Returns the biased reference the chain settles under, which is what holds it there. Raises
+        ``TimeoutError`` if the passes run out first.
         """
         goal = np.asarray(target, dtype=np.float64)
         reference = goal.copy()
@@ -341,7 +349,7 @@ class _Chain(DriverRun[command.CommandType]):
                 self.publish(self.observations())
                 logger.info('Arm parked')
                 return reference, grip
-            reference = np.clip(goal - error, goal - self._PARK_MAX_CORRECTION, goal + self._PARK_MAX_CORRECTION)
+            reference = np.clip(reference - error, goal - self._PARK_MAX_CORRECTION, goal + self._PARK_MAX_CORRECTION)
         error = self.observations()[_JOINT_POS] - goal
         raise TimeoutError(f'the arm is still {np.max(np.abs(error)):.3f} rad from the park pose')
 
@@ -353,7 +361,7 @@ class _Chain(DriverRun[command.CommandType]):
         back and drops the chain limp)."""
         logger.info('Moving the arm to the park pose')
         try:
-            return (yield from self._settle_onto(grip, target, at_teardown=at_teardown))
+            return (yield from self._settle_onto(grip, target, self._PARK_TOL, at_teardown=at_teardown))
         # rules-allow: swallowed-error — a chain that will not park reads ERROR; it does not end the run
         except Exception as exc:
             self.moves.errored = True
@@ -373,7 +381,9 @@ class _Chain(DriverRun[command.CommandType]):
             # amount that depends on the pose, so a single ramp lands joints outside the arrival tolerance and
             # the move reports failure with the chain a hair away. Measured on the yambox bench: joint 3 short
             # by 28.5 mrad at the episode start pose, against a 20 mrad tolerance, with every other joint in.
-            held = yield from self._settle_onto(grip, target, at_teardown=False)
+            # A move settles to arrival, not to the park gate: a caller waits for this, and the tight gate buys
+            # a caller nothing, because nothing cuts torque at the end of a move.
+            held = yield from self._settle_onto(grip, target, self._ARRIVED_TOL, at_teardown=False)
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
