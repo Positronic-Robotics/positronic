@@ -1,5 +1,6 @@
 import collections.abc as cabc
 import logging
+import threading
 import time
 from typing import Any
 
@@ -108,14 +109,29 @@ class RemoteSession(Session):
     def meta(self) -> dict[str, Any]:
         return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._session.metadata})
 
+    # FOOTGUN: the wire's close waits for the server to answer a close handshake, with no bound. A server
+    # that never answers blocks the process for ever, so a finished run neither exits nor reports, and a
+    # watcher reading liveness calls a dead run healthy. Measured on the yambox bench: ten minutes elapsed
+    # against eighteen seconds of CPU, blocked in this one call.
+    _CLOSE_TIMEOUT_S = 5.0
+
     def close(self):
         in_flight = self._answer is not None and not self._answer.done()
         logger.info('RemoteSession.close: answer_in_flight=%s', in_flight)
         assert not in_flight, (
             'close the runtime serving this session first: the round trip in flight uses the connection this closes'
         )
-        self._session.close()
-        logger.info('RemoteSession.close: session closed')
+        closer = threading.Thread(target=self._session.close, name='RemoteSession.close', daemon=True)
+        closer.start()
+        closer.join(self._CLOSE_TIMEOUT_S)
+        if closer.is_alive():
+            logger.warning(
+                'RemoteSession.close: the server did not answer the close within %.1fs; abandoning the connection '
+                'so the run can exit. The socket goes with the process.',
+                self._CLOSE_TIMEOUT_S,
+            )
+        else:
+            logger.info('RemoteSession.close: session closed')
 
 
 class _Endpoint(Policy):
