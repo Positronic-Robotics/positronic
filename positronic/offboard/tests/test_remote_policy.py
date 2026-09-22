@@ -340,7 +340,7 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
 
 class DeclaredPromptModel(FixedModel):
     def meta(self):
-        return {'model_name': 'fixed', 'prompt': 'Pick up the green cube and place it on the red cube.'}
+        return {'model_name': 'fixed', 'prompt': 'A prompt this deployment declares.'}
 
 
 def test_a_prompt_the_server_declares_is_recorded_as_sent_and_the_task_still_goes_out(served):
@@ -348,17 +348,17 @@ def test_a_prompt_the_server_declares_is_recorded_as_sent_and_the_task_still_goe
     block, it is not the episode's task, and the task the episode sends reaches the model unchanged."""
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
-    assert policy.meta()['server.prompt'] == 'Pick up the green cube and place it on the red cube.'
+    assert policy.meta()['server.prompt'] == 'A prompt this deployment declares.'
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     run = runtime.start(policy)
     try:
-        run.send({keys.TASK: 'put the banana on the plate'})
+        run.send({keys.TASK: 'the task this episode sends'})
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
     finally:
         runtime.close()
         run.close()
-    assert model.observations[-1][keys.TASK] == 'put the banana on the plate'
+    assert model.observations[-1][keys.TASK] == 'the task this episode sends'
     assert 'prompt' not in model.observations[-1]
 
 
