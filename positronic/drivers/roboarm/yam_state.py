@@ -1,6 +1,6 @@
 """The state of one i2rt YAM chain: six joints, the end-effector pose and the status.
 
-The real driver and every simulator of the arm publish it, so it carries no vendor dependency.
+The real driver and every simulator of the arm publish it, so it must not import i2rt.
 """
 
 from typing import Any

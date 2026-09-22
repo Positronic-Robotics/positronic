@@ -14,20 +14,16 @@ ARM_JOINTS = 6
 CONTROL_SITE = '{arm}_grasp_site'
 JOINT = '{arm}_joint{index}'
 
-# What the eval selects, and what a task record answers with.
 SELECT_TASKS = 'tasks'
 TASK_NAME = 'name'
 
-# The reset token.
 TOKEN_TASK = 'task'
 TOKEN_SEED = 'seed'
 TOKEN_CAMERA_HEIGHT = 'camera_height'
 TOKEN_CAMERA_WIDTH = 'camera_width'
 
-# The scene meta a reset reports.
 META_TASK = 'task'
 
-# What ABC's own observation and step info carry.
 ABC_OBS_STATE = 'state'  # ``[joints(6), aperture]`` per arm, in the order ABC names its robots.
 ABC_OBS_IMAGES = 'images'
 ABC_OBS_PROMPT = 'prompt'
@@ -43,5 +39,5 @@ OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
 
 def invert_grip(value: Any) -> float:
-    """Between positronic's closure (1 closed) and i2rt's aperture (1 open); the two are inverses."""
+    """Between positronic's closure (1 closed) and i2rt's aperture (1 open)."""
     return 1.0 - float(np.clip(value, 0.0, 1.0))

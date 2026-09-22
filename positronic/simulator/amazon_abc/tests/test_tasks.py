@@ -1,7 +1,4 @@
-"""Which tasks an ABC eval runs, and how each arm's signals map onto the canonical contract.
-
-``RemoteEnvControlSystem.tasks`` is stubbed, since a real task list needs ABC's own interpreter.
-"""
+"""Which tasks an ABC eval runs, and how each arm's signals map onto the canonical contract."""
 
 from typing import Any
 
@@ -22,7 +19,7 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 
 @pytest.fixture
 def asked(monkeypatch) -> list[Any]:
-    """The specs the eval sends the proxy; every spec is answered with two of ABC's tasks."""
+    """The specs the eval sends the proxy."""
     specs: list[Any] = []
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -54,7 +51,6 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
 
 
 def test_the_env_answers_which_tasks_the_sweep_runs(asked):
-    """The sweep is asked for when the run starts, and the render size the config owns joins each task."""
     ev = abc_cfg.put_bottles.override(trial_count=2, seed=3).instantiate()
     assert asked == []
 
@@ -110,7 +106,6 @@ def test_a_camera_arrives_as_height_width_channels():
 
 
 def test_the_grip_conventions_are_inverses():
-    """ABC drives i2rt's aperture, where 1 is open; positronic's grip is closure, where 1 is closed."""
     assert mapping.invert_grip(0.0) == 1.0
     assert mapping.invert_grip(1.0) == 0.0
     assert mapping.invert_grip(mapping.invert_grip(0.3)) == pytest.approx(0.3)

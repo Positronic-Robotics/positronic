@@ -42,7 +42,6 @@ TARGET_GRIP = 'target_grip'
 
 
 def arm_channel(channel: str, arm: str) -> str:
-    """``channel`` for the arm named ``arm``."""
     return f'{channel}.{arm}'
 
 

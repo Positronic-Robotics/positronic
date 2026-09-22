@@ -201,7 +201,7 @@ YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 
 
 def bundled_yam_model() -> dict:
-    """The i2rt YAM for ``robot_meta``: its joint names and the ``DEFAULT_FRAME`` its ``ee_pose`` is measured at."""
+    """i2rt YAM model metadata: its joint names and the ``DEFAULT_FRAME`` its ``ee_pose`` is measured at."""
     return {
         'robot': 'i2rt_yam',
         roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),
