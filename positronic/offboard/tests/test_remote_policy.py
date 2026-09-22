@@ -348,7 +348,7 @@ def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unch
     episode sends reaches the model unchanged, with no prompt beside it."""
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
-    assert policy.meta()['server.prompt'] == 'A prompt this deployment declares.'
+    assert policy.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     run = runtime.start(policy)
