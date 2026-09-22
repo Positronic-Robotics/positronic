@@ -10,70 +10,19 @@ from typing import Any
 import configuronic as cfn
 import msgpack
 import pos3
-from websockets.sync.client import connect
+from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready
-from positronic.offboard.spec import ModelSource
-from positronic.policy import Codec, Policy, Session
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Runtime
+from positronic.policy.base import Obs
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import remote
 from positronic.utils.serialization import serialize
 from positronic.vendors.galaxea import codecs, protocol
-
-
-class _GalaxeaSession(Session):
-    def __init__(self, url: str, timeout: float, rt: Runtime):
-        self._rt = rt
-        self._timeout = timeout
-        self._answer: Answer | None = None
-        self._cancelled = False
-        self._connection = connect(url, compression=None, max_size=None)
-        try:
-            handshake = msgpack.unpackb(self._connection.recv(timeout=timeout))
-            if handshake.get(protocol.PROTOCOL) != protocol.FULL_CHUNK_V1:
-                raise ValueError('Expected the Galaxea full-chunk backend; see vendors/galaxea/README.md')
-        except Exception:
-            self._connection.close()
-            raise
-
-    @staticmethod
-    def infer(connection, obs, timeout: float) -> list[dict[str, Any]]:
-        try:
-            connection.send(serialize(obs))
-            response = msgpack.unpackb(connection.recv(timeout=timeout))
-        except Exception:
-            connection.close()
-            raise
-        if protocol.ERROR in response:
-            raise RuntimeError(f'G0.5 inference failed: {response[protocol.ERROR]}')
-        actions = response[protocol.ACTIONS]
-        if not isinstance(actions, list) or not actions or any(not isinstance(step, dict) for step in actions):
-            raise ValueError('G0.5 must return a nonempty list of action dictionaries')
-        return actions
-
-    def __call__(self, obs, time_ns):
-        if self._answer is None:
-            self._answer = self._rt.fns['infer'](self._connection, obs, self._timeout)
-            return None
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        self._answer, self._cancelled = None, False
-        actions = answer.result()
-        return None if cancelled else actions
-
-    def cancel(self):
-        self._cancelled = self._answer is not None
-
-    def close(self):
-        assert self._answer is None or self._answer.done(), 'Close the runtime before its session'
-        self._connection.close()
-
 
 PYTHONPATH = 'PYTHONPATH'
 VIRTUAL_ENV = 'VIRTUAL_ENV'
@@ -147,25 +96,52 @@ class _BackendProcess:
         self._process = None
 
 
-class GalaxeaPolicy(Policy):
+class GalaxeaModel(Model):
+    """Own the full-chunk backend and each session's connection."""
+
     def __init__(self, backend: _BackendProcess, infer_timeout: float, meta: dict[str, Any]):
         self._backend = backend
         self._timeout = infer_timeout
         self._meta = meta
+        self._connections: dict[str, ClientConnection] = {}
 
-    @property
-    def functions(self):
-        return {'infer': _GalaxeaSession.infer}
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
+        if session_id not in self._connections:
+            connection = connect(self._backend.url, compression=None, max_size=None)
+            try:
+                handshake = msgpack.unpackb(connection.recv(timeout=self._timeout))
+                if handshake.get(protocol.PROTOCOL) != protocol.FULL_CHUNK_V1:
+                    raise ValueError('Expected the Galaxea full-chunk backend; see vendors/galaxea/README.md')
+            except Exception:
+                connection.close()
+                raise
+            self._connections[session_id] = connection
+        connection = self._connections[session_id]
+        try:
+            connection.send(serialize(obs))
+            response = msgpack.unpackb(connection.recv(timeout=self._timeout))
+        except Exception:
+            self.end_session(session_id)
+            raise
+        if protocol.ERROR in response:
+            raise RuntimeError(f'G0.5 inference failed: {response[protocol.ERROR]}')
+        actions = response[protocol.ACTIONS]
+        if not isinstance(actions, list) or not actions or any(not isinstance(step, dict) for step in actions):
+            raise ValueError('G0.5 must return a nonempty list of action dictionaries')
+        return actions
 
-    def new_session(self, context=None, rt=None):
-        if rt is None:
-            raise ValueError('GalaxeaPolicy requires a runtime for inference')
-        return _GalaxeaSession(self._backend.url, self._timeout, rt)
+    def end_session(self, session_id: str) -> None:
+        connection = self._connections.pop(session_id, None)
+        if connection is not None:
+            connection.close()
 
     def meta(self) -> dict[str, Any]:
         return self._meta
 
     def close(self):
+        for connection in self._connections.values():
+            connection.close()
+        self._connections.clear()
         self._backend.stop()
 
 
@@ -189,7 +165,7 @@ class GalaxeaSource(ModelSource):
     def get_models(self) -> list[str]:
         return [protocol.MODEL_ID]
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         if model_id != protocol.MODEL_ID:
             raise ValueError(f'Unknown Galaxea model: {model_id}')
         backend = _BackendProcess(self._root, self._checkpoint, self._device, self._port)
@@ -198,19 +174,23 @@ class GalaxeaSource(ModelSource):
         except Exception:
             backend.stop()
             raise
-        return GalaxeaPolicy(
+        return GalaxeaModel(
             backend,
             self._timeout,
             {policy_keys.CHECKPOINT_PATH: str(self._checkpoint), 'usage': 'internal non-commercial evaluation only'},
         )
 
 
-@cfn.config(codec=codecs.droid, source=cfn.Config(GalaxeaSource))
-def pipeline(codec: Codec, source: ModelSource):
+@cfn.config(codec=cfn.Config(codecs.DroidCodec), source=cfn.Config(GalaxeaSource))
+def pipeline(codec: codecs.DroidCodec, source: ModelSource, execution_steps: int = 16):
     # TODO: Add an opt-in local layer for RoboArena's missing-gripper behavior. Capture the measured
     # grip per inference request, with state isolated per session, and fill omitted targets in its chunk.
     # Keep preserving the previous target as the default; this state belongs in the layer, not the codec.
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+    return PolicyDeployment(
+        source,
+        Sequential(StopOnFault(), ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
+        codecs.droid(action=codec),
+    )
 
 
 COMMANDS = {name: serve.override(pipeline=pipeline) for name in ('', 'serve', 'droid')}

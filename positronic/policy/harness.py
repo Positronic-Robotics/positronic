@@ -31,8 +31,6 @@ class Rollout:
     The harness creates and owns the runtime and the generator returned by
     ``runtime.start(policy)``. The policy supplies its own dependencies.
     An ``output_path`` of ``None`` records nothing.
-
-    TODO: Migrate rollout callers to processor definitions and remove caller-side episode cleanup.
     """
 
     task: Task
@@ -246,7 +244,10 @@ class Harness(pimm.ControlSystem):
             while not should_stop.value and payload is None:
                 if completed or resume_at_ns is None or runtime.time_ns >= resume_at_ns:
                     resume_at_ns = self._step(task, runtime, policy_run)
-                completed = yield from self._wait_for_next_tick(runtime, resume_at_ns)
+                wake_at_ns = resume_at_ns
+                if deadline_ns is not None:
+                    wake_at_ns = deadline_ns if wake_at_ns is None else min(wake_at_ns, deadline_ns)
+                completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
                 if call := next(self.perform_task.incoming(), None):
                     call.set_exception(RuntimeError('An episode is already running'))
                 pimm.read_updated(self.manual_command)

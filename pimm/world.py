@@ -577,8 +577,8 @@ class World:
 
         The timeline is integer nanoseconds (the resolution recorded timestamps use), so
         a ``Sleep`` advances at least one nanosecond and distinct instants never round to
-        the same recorded timestamp — loops sleeping the same duration land on the exact
-        same instant instead of drifting sub-nanosecond apart.
+        the same recorded timestamp. Each sleep starts when its loop yields; on a wall
+        clock, work done before yielding shifts that loop's next wake-up.
 
         In a virtual-time world the world owns the clock and advances it here, so
         simulated time runs as fast as the machine allows. In a wall-clock world time

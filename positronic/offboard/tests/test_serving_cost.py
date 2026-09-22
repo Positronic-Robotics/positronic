@@ -19,13 +19,10 @@ def _ticks(count: int, period_ns: int = 66_666_666):
     rng = np.random.default_rng(0)
     for tick in range(count):
         frame = rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)
-        yield {
-            keys.EE_POSE: np.zeros(7),
-            keys.GRIP: 0.0,
-            keys.ROBOT_STATUS: 0,
-            keys.OBS_TIME_NS: 1_000_000_000 + tick * period_ns,
-            **dict.fromkeys(CAMERAS, frame),
-        }
+        yield (
+            1_000_000_000 + tick * period_ns,
+            {keys.EE_POSE: np.zeros(7), keys.GRIP: 0.0, keys.ROBOT_STATUS: 0, **dict.fromkeys(CAMERAS, frame)},
+        )
 
 
 def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_server):

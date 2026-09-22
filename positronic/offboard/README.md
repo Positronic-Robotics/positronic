@@ -4,10 +4,8 @@ This package implements the protocol and utilities for offboard policy inference
 
 ## Protocol v1
 
-The protocol connects clients to callable models. ACT uses a server-declared processor stack on the
-client, with codecs configured separately on either side of the connection.
-
-TODO: Migrate the remaining vendor configurations to callable models and explicit `PolicyDeployment` arguments.
+The protocol connects clients to callable models. Each deployment declares a client stack of
+processors and codecs, with an optional codec around the server call.
 
 ### Wires
 
@@ -216,7 +214,7 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
 
 **Server → Client (Actions):**
 
-For ACT, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
+For the vendor deployments, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
 scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel.
 `robot_command` carries the control command, and a rig with more than one arm names the channel per arm
 (`robot_command.left`):

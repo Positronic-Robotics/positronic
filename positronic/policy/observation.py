@@ -9,7 +9,8 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
+from positronic.policy.base import ARGS, NAME
+from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
 # shares a value with ``keys.TASK`` by vocabulary, not by contract: that one names the prompt on the way in.
@@ -44,7 +45,7 @@ class ObservationCodec(Codec):
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
             if isinstance(features, dict):
-                lerobot_features[name] = lerobot_state(sum(features.values()), list(features.keys()))
+                lerobot_features[name] = lerobot_vector(sum(features.values()), list(features.keys()))
         for name, (_, (w, h)) in images.items():
             lerobot_features[name] = lerobot_image(w, h)
         self._training_meta = {LEROBOT_FEATURES: lerobot_features}
@@ -99,7 +100,4 @@ class ObservationCodec(Codec):
     def to_spec(self):
         # Normalized to lists so the spec is identical before and after a wire round-trip.
         images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
-        return {
-            'name': self.WIRE_NAME,
-            'args': {'state': self._state, 'images': images, 'task_field': self._task_field},
-        }
+        return {NAME: self.WIRE_NAME, ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field}}

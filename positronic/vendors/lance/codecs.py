@@ -30,12 +30,12 @@ class _StaticScalars(Codec):
         return Derive(**self._derivations)
 
 
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None, uuid=False)
-def _compose(obs, action, fps: float, horizon: float | None, binarize_grip, uuid: bool):
+@cfn.config(training_fps=15.0, binarize_grip=None, uuid=False)
+def _compose(obs, action, training_fps: float, binarize_grip, uuid: bool):
     derivations = {'current_task': Get(keys.TASK, ''), 'language_instruction1': Get(keys.TASK, '')}
     if uuid:
         derivations['uuid'] = _random_uuid
-    inner = base.compose(obs=obs, action=action, fps=fps, horizon=horizon, binarize_grip=binarize_grip)
+    inner = base.compose(obs=obs, action=action, training_fps=training_fps, binarize_grip=binarize_grip)
     return inner & _StaticScalars(**derivations)
 
 

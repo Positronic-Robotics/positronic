@@ -3,6 +3,7 @@
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -969,5 +970,27 @@ def test_robot_observation_serialization_and_typed_command_emission():
         assert obs[keys.ROBOT_STATUS] == state.status
         assert obs[keys.TASK] == 'move'
         assert obs[keys.DESCRIPTOR] == 'robot'
-        assert keys.OBS_TIME_NS not in obs and keys.WALL_TIME_NS not in obs
+        assert 'obs_time_ns' not in obs and 'wall_time_ns' not in obs
         assert emitted.values == [(0, policy.command)]
+
+
+def test_real_sleep_stops_at_episode_deadline(episode_harness):
+    h = episode_harness
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
+    h.observation.emit(1)
+
+    class SlowPoll(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 10**9)
+
+    answer = h.caller(Rollout(Task('test', 0.02), SlowPoll(), None))
+    wake = next(h.loop)
+    assert isinstance(wake, pimm.Sleep)
+    assert wake.seconds == pytest.approx(0.02)
+    h.world.clock.advance_to_ns(20_000_000)
+    next(h.loop)
+    assert h.deadlines.values[-1] == (20_000_000, None)
+    next(h.loop)
+    assert answer.result() == {eval_keys.TERMINATED: False}

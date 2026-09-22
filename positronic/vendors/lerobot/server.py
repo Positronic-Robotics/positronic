@@ -8,15 +8,14 @@ import pos3
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
-from positronic.offboard.spec import ModelSource, PolicyDeployment
-from positronic.policy import Codec, Policy
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import remote
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
-from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, warm_observation
+from positronic.vendors.lerobot.policy import LerobotModel, _detect_device, warm_observation
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +39,13 @@ class LerobotSource(ModelSource):
     def resolve(self, model_id: str | None) -> str:
         return resolve_checkpoint(self.checkpoints_dir, self.checkpoint, model_id)
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         checkpoint_path = f'{self.checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         local = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
-        policy = LerobotPolicy(
+        policy = LerobotModel(
             str(local),
             self.device,
             extra_meta={
@@ -65,8 +64,10 @@ lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
 # No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
 # so none has a transform to declare.
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipeline(codec: Codec, source: ModelSource) -> PolicyDeployment:
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(512, 512) | remote | codec | source
+def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = 1.0) -> PolicyDeployment:
+    return PolicyDeployment(
+        source, Sequential(StopOnFault(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec
+    )
 
 
 ee = pipeline

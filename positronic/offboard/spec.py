@@ -1,7 +1,4 @@
-"""Model loading and policy deployment configuration for the inference server.
-
-TODO: Migrate the remaining vendor pipeline configs to explicit PolicyDeployment arguments.
-"""
+"""Model loading and policy deployment configuration for the inference server."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -35,7 +32,8 @@ class ModelSource(ABC):
     """Configuration that discovers and loads models; loaded resources belong to the returned model."""
 
     @abstractmethod
-    def get_models(self) -> list[str]: ...
+    def get_models(self) -> list[str]:
+        """Available IDs, oldest first. The default resolver selects the last entry."""
 
     def resolve(self, model_id: str | None) -> str:
         models = self.get_models()

@@ -27,8 +27,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
-from positronic.policy import Policy, Session
-from positronic.policy.codec import ActionTimestamp
+from positronic.policy import Policy
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server import protocol
@@ -660,11 +659,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
         trial = number_trials([(replace(next(iter(ev.tasks())), timeout_sec=0.1), {eval_keys.SEED: 100})])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, tasks=partial(iter, [trial]))],
-            output_dir=str(tmp_path),
-        )
+        main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -693,24 +688,19 @@ def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
 class _JointposChunks(Policy):
     """Encode ``chunk * 100 + step`` in grip values to identify executed actions in recordings."""
 
-    def __init__(self, command: roboarm_command.CommandType, chunk_len: int):
+    def __init__(self, command: roboarm_command.CommandType, chunk_len: int, fps: float):
         self.command = command
         self.chunk_len = chunk_len
+        self.fps = fps
         self.chunks = 0
 
-    def new_session(self, context=None, rt=None):
-        return _JointposChunkSession(self)
+    def run(self, runtime):
+        yield from ChunkedSchedule(self.fps).run(runtime, self.infer)
 
-
-class _JointposChunkSession(Session):
-    def __init__(self, policy: _JointposChunks):
-        self._policy = policy
-
-    def __call__(self, obs, time_ns):
-        self._policy.chunks += 1
+    def infer(self, obs):
+        self.chunks += 1
         return [
-            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
-            for i in range(self._policy.chunk_len)
+            {keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.chunks * 100.0 + i} for i in range(self.chunk_len)
         ]
 
 
@@ -718,19 +708,17 @@ class _JointposChunkSession(Session):
 def test_full_chunk_executes_between_replans(env_server, tmp_path):
     """Every chunk action must execute, with a full control period for the final action.
 
-    ``ActionTimestamp``'s validity sentinel must keep replans ``chunk_len`` control periods apart.
+    Replans must stay ``chunk_len`` control periods apart.
     """
     host, port = env_server
-    probe = make_mujoco_env([])
-    control_dt = probe.reset(0)[protocol.FRAME_CONTROL_DT]
-    probe.close()
+    control_dt = 0.02  # Policy cadence; the simulator integrates at a faster physics rate.
 
     chunk_len = 5
-    raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
-    policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
+    raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len, fps=1.0 / control_dt)
+    policy = raw
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt)
+        task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt, charge_inference_time=False)
         trial = number_trials([(task, {eval_keys.SEED: 100})])[0]
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 

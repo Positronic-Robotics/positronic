@@ -5,13 +5,14 @@ from operator import and_, or_
 from typing import Any, cast
 
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
-from positronic.policy.base import PAR, SEQ, Processor
+from positronic.policy.base import ARGS, NAME, PAR, SEQ, Processor
 from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     Codec,
     FlipGrip,
+    Metadata,
     RestrictImageSize,
 )
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -25,6 +26,7 @@ WIRE_CODECS = {
         BinarizeGripTraining,
         BinarizeGripInference,
         FlipGrip,
+        Metadata,
         RestrictImageSize,
         ChangeEEFrame,
         ObservationCodec,
@@ -49,8 +51,8 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         if not parts or not all(isinstance(part, Codec) for part in parts):
             raise ValueError('Parallel specs require at least one codec')
         return reduce(and_, cast(list[Codec], parts))
-    name = node.get('name')
+    name = node.get(NAME)
     registered = WIRE_PROCESSORS | WIRE_CODECS
     if name not in registered:
         raise ValueError(f'Unknown local-stack entry {name!r}; this build knows {sorted(registered)}')
-    return registered[name](**node.get('args', {}))
+    return registered[name](**node.get(ARGS, {}))

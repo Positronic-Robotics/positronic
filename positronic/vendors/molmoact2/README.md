@@ -61,7 +61,7 @@ backwards** until the convention is unified ([#456](https://github.com/Positroni
 See the [Inference Guide](../../../docs/inference.md) for the remote-policy protocol and options.
 
 Codec arguments are tunable per session without restarting the server — the client passes them as query params
-as `--policy.address.query` (e.g. `--policy.address.query='codec.fps=10&codec.flip_grip=true'`). The model source
+as `--policy.address.query` (e.g. `--policy.address.query='fps=10&codec.flip_grip=true'`). The model source
 (`hf_repo`, `device_map`, …) is fixed at launch and cannot be changed this way.
 See the [offboard README](../../offboard/README.md) for the session-param rules.
 

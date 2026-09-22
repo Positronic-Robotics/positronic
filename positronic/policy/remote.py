@@ -41,9 +41,7 @@ def round_trip(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    The observation is prepared here rather than in the session, because a JPEG encode of an HD frame
-    stack must not run on the thread that calls the session. The span starts after it, because that
-    encode is not inference.
+    Image preparation has its own span; the inference span covers only the server round trip.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
         prepared = prepare_obs(obs, compress_images)

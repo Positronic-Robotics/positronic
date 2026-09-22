@@ -1,7 +1,4 @@
-"""Threaded policy execution with answer visibility on the episode's clock.
-
-TODO: Migrate callers of the blocking policy adapter to the Processor API.
-"""
+"""Threaded policy execution with answer visibility on the episode's clock."""
 
 import concurrent.futures
 import contextvars

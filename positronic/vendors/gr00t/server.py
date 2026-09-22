@@ -17,12 +17,12 @@ from pimm.logging import init_logging
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.offboard.spec import ModelSource
-from positronic.policy import Policy, Session
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import codecs
@@ -189,34 +189,20 @@ class Gr00tSubprocess:
             self.process = None
 
 
-class _Gr00tSession(Session):
-    def __init__(self, client: PolicyClient, meta: dict[str, Any]):
-        self._client = client
-        self._meta = meta
-
-    def __call__(self, obs, time_ns):
-        action_response, _info = self._client.get_action(obs)
-        action = {k: v[0] for k, v in action_response.items()}
-        lengths = {len(v) for v in action.values()}
-        assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
-        time_horizon = lengths.pop()
-        return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
-
-    @property
-    def meta(self):
-        return self._meta
-
-
-class Gr00tPolicy(Policy):
+class Gr00tModel(Model):
     """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``."""
 
     def __init__(self, groot: Gr00tSubprocess, meta: dict[str, Any]):
         self._groot = groot
         self._meta = meta
 
-    def new_session(self, context=None, rt=None):
-        self._groot.client.reset()
-        return _Gr00tSession(self._groot.client, self._meta)
+    def __call__(self, obs: Obs, *, session_id: str):
+        action_response, _info = self._groot.client.get_action(dict(obs))
+        action = {k: v[0] for k, v in action_response.items()}
+        lengths = {len(v) for v in action.values()}
+        assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
+        time_horizon = lengths.pop()
+        return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
 
     def meta(self) -> dict[str, Any]:
         return self._meta
@@ -323,7 +309,7 @@ class Gr00tSource(ModelSource):
             gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
         }
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         if self._is_hub_model:
             self.resolve(model_id)
             model_path = self.model_source
@@ -342,7 +328,7 @@ class Gr00tSource(ModelSource):
         )
         try:
             groot.start(on_progress)
-            policy = Gr00tPolicy(
+            policy = Gr00tModel(
                 groot,
                 {
                     policy_keys.TYPE: 'groot',
@@ -364,10 +350,14 @@ gr00t_source = cfn.Config(Gr00tSource)
 
 
 @cfn.config(codec=codecs.droid, source=gr00t_source)
-def pipeline(codec: Codec, source: cfn.Config):
+def pipeline(codec: Codec, source: cfn.Config, fps: float = 15.0, horizon_sec: float = 1.0):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
     model_source = source(modality=codec.training_encoder.meta[GR00T_MODALITY])
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | model_source
+    return PolicyDeployment(
+        model_source,
+        Sequential(StopOnFault(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(*gr00t.IMAGE_SIZE)),
+        codec,
+    )
 
 
 droid = pipeline

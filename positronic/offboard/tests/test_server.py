@@ -28,7 +28,7 @@ from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served
 from positronic.policy import Codec
-from positronic.policy.codec import ActionTimestamp
+from positronic.policy.base import ARGS
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
@@ -758,19 +758,19 @@ def test_session_params_coerce_json_values(param_server):
 
 
 def _fps_pipe(source: ModelSource, fps: float = 10.0):
-    return PolicyDeployment(source, ChunkedSchedule(fps=10), codec=ActionTimestamp(fps=fps))
+    return PolicyDeployment(source, ChunkedSchedule(fps=fps))
 
 
-def test_session_param_retunes_the_served_remote_half(start_server):
+def test_session_param_retunes_the_client_schedule(start_server):
     pipe_cfg = cfn.Config(_fps_pipe, source=cfn.Config(DictSource, models={'default': _ScriptedModel()}))
     host, port, *_ = start_server(pipe_cfg)
 
-    # The wire carries the server-side half's output: relative timestamps spaced 1/fps.
     default_session = _param_session(host, port, [])
     tuned_session = _param_session(host, port, [('fps', '5')])
     try:
-        assert [a['timestamp'] for a in default_session.infer({})] == pytest.approx([0.0, 0.1, 0.2, 0.3])
-        assert [a['timestamp'] for a in tuned_session.infer({})] == pytest.approx([0.0, 0.2, 0.4, 0.6])
+        assert default_session.metadata[offboard_keys.LOCAL_STACK][ARGS]['fps'] == 10
+        assert tuned_session.metadata[offboard_keys.LOCAL_STACK][ARGS]['fps'] == 5
+        assert default_session.infer({}) == tuned_session.infer({})
     finally:
         default_session.close()
         tuned_session.close()

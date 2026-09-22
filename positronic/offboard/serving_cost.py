@@ -87,19 +87,19 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
 STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
 
 
-def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[dict[str, Any]]:
-    """The episode as the harness hands it to the stack: one observation per control tick."""
+def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[tuple[int, Obs]]:
+    """Replay time and observation for each sampled control tick."""
     period_ns = int(1e9 / rate_hz)
     for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
         sample = episode.time[ts]
         obs = {key: sample[key] for key in (*STATE_KEYS, *cameras) if key in sample}
         if keys.TASK in sample:
             obs[keys.TASK] = sample[keys.TASK]
-        yield {**obs, keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
+        yield ts, obs
 
 
 def capture(
-    ticks: Iterable[dict[str, Any]], stack: Policy, model: Callable[[Obs], Any], requests: int
+    ticks: Iterable[tuple[int, Obs]], stack: Policy, model: Callable[[Obs], Any], requests: int
 ) -> list[dict[str, Any]]:
     """Run the rig-side stack over ``ticks`` and collect the first ``requests`` payloads it sends."""
     sent: list[dict[str, Any]] = []
@@ -112,14 +112,13 @@ def capture(
     runtime = Executor(lambda: now_ns, simulated=True, charge_inference_time=False)
     run = runtime.start(stack, infer)
     try:
-        for obs in ticks:
-            now_ns = obs[keys.OBS_TIME_NS]
-            values = {key: value for key, value in obs.items() if key not in (keys.OBS_TIME_NS, keys.WALL_TIME_NS)}
+        for replay_ns, obs in ticks:
+            now_ns = replay_ns
             runtime.start_tick()
-            run.send(values)
+            run.send(obs)
             while runtime.has_pending:
                 if runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY:
-                    run.send(values)
+                    run.send(obs)
             if len(sent) >= requests:
                 break
     finally:

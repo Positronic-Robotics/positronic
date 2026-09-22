@@ -1,7 +1,6 @@
 import io
 import logging
 import sys
-import time
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
@@ -16,23 +15,27 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.inference import KeyboardOperator, real
 from positronic.policy import Policy
-from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
+from positronic.policy.base import Step
+from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
 
 class _IdlePolicy(Policy):
     """Enough policy for the attended path to run an episode and close; it commands nothing."""
 
     def __init__(self):
-        self.warmed = False
+        self.started = False
         self.closed = False
         self.observations: list[dict] = []
 
-    def new_session(self, *_args, **_kwargs):
-        self.warmed = True
-        return IdleSession(self)
-
-    def close(self):
-        self.closed = True
+    def run(self, runtime):
+        self.started = True
+        try:
+            obs = yield
+            while True:
+                self.observations.append(obs)
+                obs = yield Step({}, runtime.time_ns + 100_000_000)
+        finally:
+            self.closed = True
 
 
 class _ReadyDevices(pimm.ControlSystem):
@@ -71,7 +74,7 @@ def _trial(instruction: str = 'stub') -> Callable[[], Task]:
 
 @pytest.mark.timeout(30.0)
 def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
-    """How an attended run finishes: the operator returns, the world stops, ``real`` closes the policy.
+    """How an attended run finishes: the operator returns, the world stops, no policy run is started.
 
     A stdin that is not a terminal is the return the test can force; ``q`` is the other one.
     """
@@ -80,10 +83,8 @@ def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
 
     real(policy=policy, embodiment=_embodiment(), next_task=_trial())
 
-    assert policy.closed
-    # Not warmed: an attended run opens no throwaway session here. A binary that wants an endpoint
-    # driven through its cold start does that itself, before it calls in.
-    assert not policy.warmed
+    assert not policy.closed
+    assert not policy.started
 
 
 def test_the_keyboard_path_refuses_a_simulated_embodiment():
@@ -93,38 +94,23 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
 
 
-class _ScriptedKeys:
-    """Stands in for a person at the terminal: starts an episode, stops it once it is running, then quits.
-
-    ``policy`` is what says the episode is running. The rig's devices are spawned, so how long they take to
-    answer the trial's prepare is nothing a fixed beat could name. The beat between the stop and the quit is
-    the window in which the operator prints what the episode ended on.
-    """
-
-    def __init__(self, policy, beat_sec: float = 0.3):
-        self._policy = policy
-        self._beat_sec = beat_sec
-        self._started = False
-        self._stopped_at: float | None = None
-
-    def __call__(self) -> str | None:
-        if not self._started:
-            self._started = True
-            return 's'
-        if self._stopped_at is None:
-            if not self._policy.observations:
-                return None
-            self._stopped_at = time.monotonic()
-            return 'p'
-        return 'q' if time.monotonic() - self._stopped_at > self._beat_sec else None
-
-
 @pytest.mark.timeout(30.0)
 def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     """The press is the whole start signal: the rig's devices ready, the episode opens on the instruction it
     was given, and it runs until the operator stops it."""
     policy = _IdlePolicy()
-    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, _ScriptedKeys(policy)))
+
+    def presses():
+        yield 's'
+        while not policy.observations:
+            yield None
+        yield 'p'
+        while 'Episode ended:' not in caplog.text:
+            yield None
+        yield 'q'
+
+    script = presses()
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(script, None)))
 
     with caplog.at_level(logging.INFO):
         real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
@@ -135,22 +121,19 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     assert policy.closed
 
 
-def test_a_press_that_cannot_open_a_session_keeps_the_run(monkeypatch, caplog):
-    """A model that refuses a session ends the press, not the run: the operator hears it and the rig stays
-    up for the next one."""
-
-    class _RefusingPolicy(Policy):
-        def new_session(self, *_args, **_kwargs):
-            raise RuntimeError('endpoint down')
-
+def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, caplog):
     presses = iter(['s'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _RefusingPolicy(), None)
+    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
-        world.pair(operator.perform_task)
-        with caplog.at_level(logging.ERROR):
-            drive_scheduler(world.start([operator, scripted_driver((None, 0.05), (None, 0.05))]))
+        handler = world.pair(operator.perform_task)
 
+        def refuse():
+            for call in handler.incoming():
+                call.set_exception(RuntimeError('endpoint down'))
+
+        with caplog.at_level(logging.ERROR):
+            drive_scheduler(world.start([operator, scripted_driver((refuse, 0.1), (None, 0.1))]))
     assert 'endpoint down' in caplog.text
 
 

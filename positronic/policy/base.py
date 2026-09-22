@@ -15,6 +15,8 @@ from positronic import telemetry
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
 PAR = 'par'
+NAME = 'name'
+ARGS = 'args'
 
 
 class NotAnswered(RuntimeError):

@@ -19,12 +19,12 @@ from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Policy, Step
 from positronic.policy.codec import (
-    ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     Codec,
     FlipGrip,
+    Metadata,
     RestrictImageSize,
     SetControlMode,
 )
@@ -205,16 +205,16 @@ class TestCodecComposition:
 
     def test_codec_and_stays_codec_only(self):
         """& only works between codecs, not layers."""
-        c1 = ActionTimestamp(fps=10.0)
-        c2 = ActionTimestamp(fps=5.0)
+        c1 = Metadata({'action_fps': 10.0})
+        c2 = Metadata({'action_fps': 5.0})
         composed = c1 & c2
         assert isinstance(composed, Codec)
 
     def test_agreeing_declarations_merge(self):
-        assert (ActionTimestamp(fps=10.0) | ActionTimestamp(fps=10.0)).meta['action_fps'] == 10.0
+        assert (Metadata({'action_fps': 10.0}) | Metadata({'action_fps': 10.0})).meta['action_fps'] == 10.0
 
     def test_disagreeing_declarations_have_no_merged_answer(self):
-        composed = ActionTimestamp(fps=10.0) & ActionTimestamp(fps=5.0)
+        composed = Metadata({'action_fps': 10.0}) & Metadata({'action_fps': 5.0})
         with pytest.raises(ValueError, match='action_fps'):
             _ = composed.meta
 
@@ -242,9 +242,9 @@ class TestCodecComposition:
 class TestSetControlMode:
     def test_every_command_in_a_chunk_carries_the_mode(self):
         chunk = [
-            {keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7)), keys.ACTION_TIMESTAMP: 0.0},
-            {keys.ROBOT_COMMAND: JointDelta(velocities=np.ones(7)), keys.ACTION_TIMESTAMP: 0.1},
-            {keys.ACTION_TIMESTAMP: 0.2},  # the horizon sentinel carries no command
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))},
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.ones(7))},
+            {keys.TARGET_GRIP: 0.5},
         ]
         decoded = SetControlMode(IMPEDANCE).decode(chunk)
         assert isinstance(decoded, list)
@@ -394,6 +394,7 @@ def test_wire_names_match_the_registered_components():
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),
         'flip_grip': FlipGrip(),
+        'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSize(),
         'observation_codec': ObservationCodec(state={}, images={}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),

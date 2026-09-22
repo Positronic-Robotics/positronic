@@ -5,13 +5,13 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import (
-    ActionHorizon,
-    ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     FlipGrip,
+    Metadata,
     SetControlMode,
 )
 from positronic.policy.observation import ObservationCodec
@@ -76,23 +76,18 @@ def compose_data(
     return result
 
 
-# TODO: Move training cadence metadata out of timing codecs and migrate the remaining vendor configs.
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False, ee_frame=None)
+@cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None)
 def compose(
     obs,
     action,
-    fps: float,
-    horizon: float | None,
+    training_fps: float,
     binarize_grip: tuple[str, ...] | None,
     flip_grip: bool,
     ee_frame: geom.Transform3D | None,
 ):
-    """Data conversions with action timestamps, a horizon, and training cadence metadata."""
+    """Data conversions with the sampling cadence recorded in training metadata."""
     result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)
-    result = ActionTimestamp(fps=fps) | result
-    if horizon is not None:
-        result = ActionHorizon(horizon) | result
-    return result
+    return Metadata({policy_keys.ACTION_FPS: training_fps}) | result
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.TARGET_GRIP)

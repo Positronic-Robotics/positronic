@@ -1,5 +1,7 @@
 from pathlib import Path
+from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 pytest.importorskip('huggingface_hub')
@@ -171,3 +173,27 @@ def test_a_server_that_announces_no_resolution_cannot_be_warmed():
 
     with pytest.raises(ValueError, match='no image resolution'):
         _warm_observation(announced, 'session-1')
+
+
+def test_session_owns_video_cache_and_probe_cannot_reset_it(monkeypatch):
+    first, second = Mock(), Mock()
+    first.infer.return_value = second.infer.return_value = np.zeros((24, 8))
+    monkeypatch.setattr(server, 'RoboarenaClient', Mock(side_effect=[first, second]))
+    backend = Mock(roboarena_port=1234)
+    model = server.DreamZeroModel(backend, {})
+    try:
+        assert len(model({}, session_id='first')) == 24
+        assert first.infer.call_args.args[0][roboarena.SESSION_ID] == 'first'
+        model.end_session('probe')
+        first.reset.assert_not_called()
+        with pytest.raises(RuntimeError, match='another session'):
+            model({}, session_id='second')
+        model.end_session('first')
+        first.reset.assert_called_once_with(session_id='first')
+        first.close.assert_called_once()
+        assert len(model({}, session_id='second')) == 24
+        model.end_session('second')
+        second.reset.assert_called_once_with(session_id='second')
+    finally:
+        model.close()
+    backend.stop.assert_called_once()

@@ -4834,22 +4834,6 @@
                     "endColumn": 60,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportCallIssue",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/server/dataset_utils.py": [

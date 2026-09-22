@@ -3,7 +3,7 @@
 from positronic import keys
 from positronic.cfg import codecs
 
-ee = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
+ee = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
 phail_v1 = ee.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action))
 joints = ee.override(obs=codecs.joints_obs)
 
@@ -15,7 +15,6 @@ joints_traj = codecs.compose.override(
     obs=codecs.joints_obs,
     action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
     binarize_grip=(keys.GRIP,),
-    horizon=1.0,
 )
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK

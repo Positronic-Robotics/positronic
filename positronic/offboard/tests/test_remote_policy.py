@@ -23,6 +23,7 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
@@ -456,10 +457,10 @@ def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, mo
         session.close()
 
 
-def test_act_codec_matches_data_conversions_without_timing():
+def test_training_metadata_does_not_change_inference_data():
     config = {'obs': codecs.eepose_obs, 'action': codecs.absolute_pos_action, 'flip_grip': True}
     data_codec = codecs.compose_data.override(**config).instantiate()
-    timed_codec = codecs.compose.override(**config, fps=15.0, horizon=1.0).instantiate()
+    training_codec = codecs.compose.override(**config, training_fps=15.0).instantiate()
     obs = {
         keys.EE_POSE: np.array([0.1, 0.2, 0.3, 1, 0, 0, 0]),
         keys.GRIP: 0.25,
@@ -468,18 +469,18 @@ def test_act_codec_matches_data_conversions_without_timing():
         keys.TASK: 'stack',
     }
     encoded = data_codec.encode(obs)
-    expected = timed_codec.encode(obs)
+    expected = training_codec.encode(obs)
     for key in expected:
         np.testing.assert_array_equal(encoded[key], expected[key])
     actions = [{'action': np.array([0.1, 0.2, 0.3, 1, 0, 0, 0, 0.25])} for _ in range(50)]
     decoded = data_codec.decode(actions)
-    timed = timed_codec.decode(actions)
+    trained = training_codec.decode(actions)
     assert len(decoded) == 50
-    assert len(timed) == 16
-    for actual, reference in zip(decoded[:15], timed[:15], strict=True):
-        assert keys.ACTION_TIMESTAMP not in actual
-        assert actual.keys() == reference.keys() - {keys.ACTION_TIMESTAMP}
-        assert protocol.serialise(actual) == protocol.serialise({key: reference[key] for key in actual})
+    assert len(trained) == 50
+    for actual, reference in zip(decoded, trained, strict=True):
+        assert 'timestamp' not in actual
+        assert protocol.serialise(actual) == protocol.serialise(reference)
+    assert training_codec.training_encoder.meta[policy_keys.ACTION_FPS] == 15
     rebuilt = from_spec(data_codec.to_spec())
     assert isinstance(rebuilt, Codec)
     assert rebuilt.to_spec() == data_codec.to_spec()

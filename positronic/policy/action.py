@@ -7,6 +7,7 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
+from positronic.policy.base import ARGS, NAME
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
 
 RotRep = geom.Rotation.Representation
@@ -43,8 +44,8 @@ class AbsolutePositionAction(Codec):
 
     def to_spec(self):
         return {
-            'name': self.WIRE_NAME,
-            'args': {
+            NAME: self.WIRE_NAME,
+            ARGS: {
                 'tgt_ee_pose_key': self.tgt_ee_pose_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'rotation_rep': self.rot_rep.value,
@@ -83,8 +84,8 @@ class AbsoluteJointsAction(Codec):
 
     def to_spec(self):
         return {
-            'name': self.WIRE_NAME,
-            'args': {
+            NAME: self.WIRE_NAME,
+            ARGS: {
                 'tgt_joints_key': self.tgt_joints_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'num_joints': self.num_joints,
@@ -166,4 +167,4 @@ class JointDeltaAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), keys.TARGET_GRIP: grip}
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'num_joints': self.num_joints}}
+        return {NAME: self.WIRE_NAME, ARGS: {'num_joints': self.num_joints}}

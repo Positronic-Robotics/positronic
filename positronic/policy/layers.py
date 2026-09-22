@@ -24,7 +24,19 @@ import numpy as np
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
+from positronic.policy.base import (
+    ARGS,
+    NAME,
+    Answer,
+    Commands,
+    Obs,
+    Policy,
+    PolicyRun,
+    Processor,
+    ProcessorRun,
+    Runtime,
+    Step,
+)
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -42,7 +54,7 @@ def _arms_available(obs) -> bool:
     return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
 
 
-MILLISECOND = 10**6  # In nanoseconds
+MILLISECOND_NS = 10**6
 
 
 class StopOnFault(Policy):
@@ -60,10 +72,10 @@ class StopOnFault(Policy):
             if _arms_available(obs):
                 obs = yield inner.send(obs)
             else:
-                obs = yield Step({}, runtime.time_ns + MILLISECOND)
+                obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
 
     def to_spec(self) -> dict[str, Any]:
-        return {'name': self.WIRE_NAME}
+        return {NAME: self.WIRE_NAME}
 
 
 class ChunkedSchedule(Policy):
@@ -129,7 +141,7 @@ class ChunkedSchedule(Policy):
         args = {'fps': self._fps}
         if self._horizon_sec is not None:
             args['horizon_sec'] = self._horizon_sec
-        return {'name': self.WIRE_NAME, 'args': args}
+        return {NAME: self.WIRE_NAME, ARGS: args}
 
 
 class _StackBuffer:
@@ -210,6 +222,6 @@ class TemporalStack(Processor[Obs, OutputT]):
 
     def to_spec(self) -> dict[str, Any]:
         return {
-            'name': self.WIRE_NAME,
-            'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
+            NAME: self.WIRE_NAME,
+            ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }
