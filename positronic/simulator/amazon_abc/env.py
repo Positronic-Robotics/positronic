@@ -129,22 +129,29 @@ class AbcEnv(EnvProtocol):
         q = self._measured_q(arm).astype(np.float64)
         rotation_error = np.empty(3)
         quat = np.empty(4)
-        for _ in range(iterations):
+
+        def error_at(q: np.ndarray) -> np.ndarray:
             data.qpos[arm.qpos_ids] = q
             mujoco.mj_forward(model, data)
             reached_rot = data.site_xmat[arm.site_id].reshape(3, 3)
             mujoco.mju_mat2Quat(quat, np.ascontiguousarray(target_rot @ reached_rot.T).reshape(9))
             mujoco.mju_quat2Vel(rotation_error, quat, 1.0)
-            error = np.concatenate([target_pos - data.site_xpos[arm.site_id], rotation_error])
+            return np.concatenate([target_pos - data.site_xpos[arm.site_id], rotation_error])
+
+        for _ in range(iterations):
+            error = error_at(q)
             if np.linalg.norm(error) < tolerance:
-                break
+                return q
             jacp = np.zeros((3, model.nv))
             jacr = np.zeros((3, model.nv))
             mujoco.mj_jacSite(model, data, jacp, jacr, arm.site_id)
             jac = np.vstack([jacp, jacr])[:, arm.dof_ids]
             dq = jac.T @ np.linalg.solve(jac @ jac.T + damping**2 * np.eye(6), error)
             q = np.clip(q + dq, arm.lower, arm.upper)
-        return q
+        raise RuntimeError(
+            f'IK for the {arm.name} arm did not converge in {iterations} iterations: '
+            f'residual {np.linalg.norm(error_at(q)):.2e} for target {target_pos.tolist()}'
+        )
 
     def _observe(self, obs: dict[str, Any]) -> dict[str, Any]:
         self._sync_sites()
