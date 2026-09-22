@@ -87,7 +87,7 @@ class AbcEnv(EnvProtocol):
         return {
             protocol.FRAME_OBS: self._observe(obs),
             protocol.FRAME_DONE: bool(terminated or truncated),
-            protocol.FRAME_SUCCESS: bool(info.get(mapping.ABC_INFO_SUCCESS, False)),
+            protocol.FRAME_SUCCESS: bool(info[mapping.ABC_INFO_SUCCESS]),
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
 
