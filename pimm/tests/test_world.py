@@ -1595,3 +1595,35 @@ def test_interrupt_during_shutdown_sleep_still_finishes_every_device(monkeypatch
     else:
         assert isinstance(raised.value, BaseExceptionGroup)
         assert list(raised.value.exceptions) == interrupts
+
+
+@pytest.mark.parametrize('first_policy', list(ShutdownPolicy))
+def test_interrupted_join_waits_for_all_protected_children(monkeypatch, first_policy):
+    ctx = mp.get_context('spawn')
+    waiters = [ShutdownWaiter(*(ctx.Event() for _ in range(4))) for _ in range(2)]
+    waiters[0].shutdown_policy = first_policy
+    error = KeyboardInterrupt()
+    interruptions = []
+    with pytest.raises(KeyboardInterrupt) as raised:
+        with World() as world:
+            world.start([], [*waiters])
+            assert all(waiter.ready.wait(5) for waiter in waiters)
+            first = world.background_processes[0]
+            join = first.join
+
+            def interrupted_join(timeout):
+                if not interruptions:
+                    interruptions.append(error)
+                    raise error
+                try:
+                    assert all(waiter.holding.wait(5) for waiter in waiters)
+                    assert all(not waiter.closed.is_set() for waiter in waiters)
+                finally:
+                    for waiter in waiters:
+                        waiter.release.set()
+                join(timeout=5)
+
+            monkeypatch.setattr(first, 'join', interrupted_join)
+    assert raised.value is error
+    assert interruptions == [error]
+    assert all(waiter.closed.is_set() for waiter in waiters)
