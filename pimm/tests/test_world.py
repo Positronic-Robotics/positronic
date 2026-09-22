@@ -1627,3 +1627,23 @@ def test_interrupted_join_waits_for_all_protected_children(monkeypatch, first_po
     assert raised.value is error
     assert interruptions == [error]
     assert all(waiter.closed.is_set() for waiter in waiters)
+
+
+@pytest.mark.parametrize('body_error', [None, ValueError('body failed')])
+def test_world_reports_errors_from_every_cleanup_phase(monkeypatch, body_error):
+    errors = [RuntimeError('foreground failed'), KeyboardInterrupt(), OSError('receiver close failed')]
+    emitter_close = Mock()
+    receiver_close = Mock(side_effect=errors[2])
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with World() as world:
+            monkeypatch.setattr(world, '_finish_foreground_shutdown', Mock(side_effect=errors[0]))
+            monkeypatch.setattr(world, '_join_background_processes', Mock(side_effect=errors[1]))
+            emitter, receiver = world.mp_pipes()
+            monkeypatch.setattr(receiver, 'close', receiver_close)
+            monkeypatch.setattr(emitter, 'close', emitter_close)
+            if body_error is not None:
+                raise body_error
+    expected = errors if body_error is None else [body_error, *errors]
+    assert list(raised.value.exceptions) == expected
+    receiver_close.assert_called_once()
+    emitter_close.assert_called_once()

@@ -366,23 +366,39 @@ def test_shutdown_read_failure_blocks_release_even_after_reading_recovers(rig, m
     np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
 
 
-@pytest.mark.parametrize('operation', ['get_observations', 'command_joint_pos'])
-def test_failed_hold_does_not_end_blocked_shutdown(rig, monkeypatch, caplog, operation):
+@pytest.fixture
+def blocked_shutdown_rig(rig):
     rig.raise_arm()
     rig.vendor.stuck = True
     rig.stop.stopped = True
     rig.tick(12)
+    return rig
+
+
+def test_failed_read_does_not_end_blocked_shutdown(blocked_shutdown_rig, monkeypatch, caplog):
+    def fail_read():
+        raise OSError('CAN read failed')
+
     with monkeypatch.context() as patch:
-
-        def fail(*args):
-            raise OSError('CAN operation failed')
-
-        patch.setattr(rig.vendor, operation, fail)
-        rig.tick(0.05)
-    rig.tick(1)
+        patch.setattr(blocked_shutdown_rig.vendor, 'get_observations', fail_read)
+        blocked_shutdown_rig.tick(0.05)
+    blocked_shutdown_rig.tick(1)
     assert 'Could not hold the arm; shutdown remains blocked' in caplog.text
-    assert not rig.vendor.closed
-    assert not rig.vendor.released_at
+    assert not blocked_shutdown_rig.vendor.closed
+    assert not blocked_shutdown_rig.vendor.released_at
+
+
+def test_failed_command_does_not_end_blocked_shutdown(blocked_shutdown_rig, monkeypatch, caplog):
+    def fail_command(joint_pos):
+        raise OSError('CAN write failed')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(blocked_shutdown_rig.vendor, 'command_joint_pos', fail_command)
+        blocked_shutdown_rig.tick(0.05)
+    blocked_shutdown_rig.tick(1)
+    assert 'Could not hold the arm; shutdown remains blocked' in caplog.text
+    assert not blocked_shutdown_rig.vendor.closed
+    assert not blocked_shutdown_rig.vendor.released_at
 
 
 def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
