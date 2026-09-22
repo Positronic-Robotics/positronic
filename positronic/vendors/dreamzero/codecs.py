@@ -23,7 +23,7 @@ from positronic.policy.codec import (
     Codec,
     lerobot_action,
     lerobot_image,
-    lerobot_state,
+    lerobot_vector,
 )
 from positronic.vendors.dreamzero import roboarena
 
@@ -41,7 +41,7 @@ class DreamZeroObservationCodec(Codec):
     For training (training_encoder): outputs flat LeRobot keys (state.joint_position,
     state.gripper_position, video columns).
     For inference (encode): outputs roboarena keys (observation/joint_position, etc.)
-    with images resized to 320x176 and session_id for stateful frame tracking.
+    with images resized to 320x176.
     """
 
     def __init__(
@@ -68,8 +68,8 @@ class DreamZeroObservationCodec(Codec):
 
         self._training_meta = {
             LEROBOT_FEATURES: {
-                'state.joint_position': lerobot_state(7),
-                'state.gripper_position': lerobot_state(1),
+                'state.joint_position': lerobot_vector(7),
+                'state.gripper_position': lerobot_vector(1),
                 'video.wrist_image_left': lerobot_image(w, h),
                 'video.exterior_image_1_left': lerobot_image(w, h),
                 'video.exterior_image_2_left': lerobot_image(w, h),
@@ -156,8 +156,8 @@ class DreamZeroActionCodec(Codec):
         self._training_meta = {
             LEROBOT_FEATURES: {
                 ACTION: lerobot_action(num_joints + 1),
-                'action.joint_position': lerobot_state(num_joints),
-                'action.gripper_position': lerobot_state(1),
+                'action.joint_position': lerobot_vector(num_joints),
+                'action.gripper_position': lerobot_vector(1),
             },
             GR00T_MODALITY: {
                 ACTION: {
@@ -218,11 +218,8 @@ def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
     return DreamZeroActionCodec(tgt_joints_key=tgt_joints_key, tgt_grip_key=tgt_grip_key, num_joints=num_joints)
 
 
-# Composed codec: DreamZero observation + action + timing. compose defaults to the full chunk
-# (horizon=None), so all 24 actions DreamZero returns execute and the re-query aligns with the
-# frame-stack window.
 _action = dreamzero_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
-joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
+joints = codecs.compose.override(obs=dreamzero_obs, action=_action, training_fps=15.0)
 phail_v1 = joints.override(action=codecs.phail_v1_execution.override(action=_action))
 
 # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames; the wan2.2 fine-tunes resize the
@@ -230,15 +227,14 @@ phail_v1 = joints.override(action=codecs.phail_v1_execution.override(action=_act
 droid = codecs.compose.override(
     obs=dreamzero_obs.override(image_size=(IMAGE_WIDTH, 180)),
     action=codecs.droid_execution.override(action=_action),
-    fps=15.0,
+    training_fps=15.0,
 )
 droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})
 
 _traj_action = dreamzero_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP)
-joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
+joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, training_fps=15.0)
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
-_ik_action = codecs.ik_joints_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 
 
 @cfn.config(solver='dls_limits')
@@ -249,7 +245,7 @@ def _ik_dreamzero_action(solver: str):
     return ik | DreamZeroActionCodec(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 
 
-joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)
+joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, training_fps=15.0)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
 

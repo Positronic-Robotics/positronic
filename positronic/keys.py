@@ -54,11 +54,3 @@ IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
-
-# The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
-# clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.
-# ``ACTION_TIMESTAMP`` is where a decoded action carries its schedule slot, in seconds from the
-# observation it answers.
-OBS_TIME_NS = 'obs_time_ns'
-WALL_TIME_NS = 'wall_time_ns'
-ACTION_TIMESTAMP = 'timestamp'

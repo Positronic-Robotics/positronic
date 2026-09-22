@@ -65,7 +65,6 @@ dependencies = [
 positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
-positronic-probe="positronic.probe:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 
 
@@ -253,7 +252,7 @@ ignore = [
 "positronic/cfg/**" = ["PLC0415"]  # Configs defer hardware imports into their `@cfn.config` bodies
 
 [tool.ruff.lint.mccabe]
-max-complexity = 10
+max-complexity = 15
 
 [tool.ruff.format]
 quote-style = "single"

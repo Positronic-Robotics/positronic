@@ -29,7 +29,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 from positronic.vendors import openpi
 
@@ -60,7 +60,7 @@ class ObservationCodec(Codec):
         w, h = image_size
         self._training_meta: dict[str, Any] = {
             LEROBOT_FEATURES: {
-                'observation.state': lerobot_state(state_dim, list(state_features.keys())),
+                'observation.state': lerobot_vector(state_dim, list(state_features.keys())),
                 'observation.images.left': lerobot_image(w, h),
                 'observation.images.side': lerobot_image(w, h),
             }
@@ -158,18 +158,12 @@ joints_traj = codecs.compose.override(
 joints_ik = codecs.compose.override(obs=joints_obs, action=codecs.ik_joints_action)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
-# DROID re-queries after its 8-step open-loop horizon; truncate the served chunk to match (8/15 s
-# at 15 fps) so the client re-queries every 8 steps instead of playing the full chunk open-loop.
-droid = codecs.compose.override(
-    obs=droid_obs, action=codecs.droid_execution.override(action=codecs.joint_delta_action), horizon=8 / 15
-)
+droid = codecs.compose.override(obs=droid_obs, action=codecs.droid_execution.override(action=codecs.joint_delta_action))
 
 # The DROID jointpos models (openpi `*_droid_jointpos` configs — the RoboLab leaderboard policies): the
 # server returns absolute joint-position chunks ``(action_horizon, 8)`` and RoboLab's client
 # (``policies/pi0_family/client.py``) executes the whole chunk before re-querying, gripper binarized at
 # 0.5 — its ``open_loop_horizon`` defaults equal each variant's ``action_horizon`` (pi05 = 15, pi0 = 10).
-# No ``horizon`` here: the timestamp codec's validity sentinel closes the chunk, so re-inference lands
-# after the full chunk executes, whatever each variant's length.
 droid_jointpos = codecs.compose.override(
     obs=droid_obs,
     action=codecs.droid_execution.override(
@@ -270,9 +264,5 @@ class LiberoObservationCodec(Codec):
 libero_obs = cfn.Config(LiberoObservationCodec)
 libero_action = cfn.Config(PoseDeltaAction)
 
-# pi05_libero emits a 10-step chunk; openpi's official LIBERO eval (`replan_steps=5`) executes the first 5 before
-# re-querying. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at 20 fps (one step per 0.05 s). Truncating at
-# 0.25 s keeps the first five steps (timestamps < 0.25 s); the horizon sentinel marks 0.25 s as the chunk's
-# validity end, so the fifth step runs its full period and re-inference lands right after it — five steps per
-# query, matching replan_steps=5.
-libero = codecs.compose.override(obs=libero_obs, action=libero_action, fps=20.0, horizon=0.25)
+# LIBERO training observations are sampled at 20 Hz.
+libero = codecs.compose.override(obs=libero_obs, action=libero_action, training_fps=20.0)

@@ -8,16 +8,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.base import Policy, Session
-from positronic.policy.codec import (
-    ActionHorizon,
-    ActionTimestamp,
-    ActionTiming,
-    BinarizeGripInference,
-    BinarizeGripTraining,
-    Codec,
-    FlipGrip,
-)
+from positronic.policy.codec import BinarizeGripInference, BinarizeGripTraining, Codec, FlipGrip, Metadata
 from positronic.policy.observation import ObservationCodec
 
 
@@ -115,27 +106,6 @@ def test_absolute_joints_action_encode_decode():
     assert np.isclose(target_grip, g[0])
 
 
-class _FixedSession(Session):
-    def __init__(self, result):
-        self._result = result
-
-    def __call__(self, obs, time_ns):
-        return self._result
-
-
-class _ChunkPolicy(Policy):
-    def __init__(self, actions: list[dict]):
-        self._actions = actions
-
-    def new_session(self, context=None, rt=None):
-        return _FixedSession(list(self._actions))
-
-
-class _SinglePolicy(Policy):
-    def new_session(self, context=None, rt=None):
-        return _FixedSession({'v': 42})
-
-
 class _PassthroughCodec(Codec):
     def __init__(self, tag):
         self._tag = tag
@@ -143,128 +113,6 @@ class _PassthroughCodec(Codec):
     def encode(self, data):
         data[f'encoded_by_{self._tag}'] = True
         return data
-
-
-class _MetaSession(_FixedSession):
-    @property
-    def meta(self):
-        return {'base_key': 'base_value'}
-
-
-class _MetaPolicy(Policy):
-    def new_session(self, context=None, rt=None):
-        return _MetaSession({})
-
-
-_T0_OBS = {obs_keys.OBS_TIME_NS: 0}
-
-
-def test_action_horizon_sec_truncates_chunk():
-    actions = [{'v': i} for i in range(10)]
-    # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
-    codec = ActionTiming(fps=30.0, horizon_sec=0.1)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
-    assert result[-1] == {'timestamp': pytest.approx(0.1)}  # horizon sentinel
-
-
-def test_action_horizon_sec_none_returns_full_chunk():
-    actions = [{'v': i} for i in range(5)]
-    codec = ActionTiming(fps=30.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 6  # 5 actions + timestamp sentinel
-
-
-def test_action_horizon_sec_larger_than_chunk():
-    actions = [{'v': i} for i in range(3)]
-    # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
-    codec = ActionTiming(fps=10.0, horizon_sec=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 4  # 3 actions + timestamp sentinel (nothing truncated)
-
-
-def test_timestamps_embedded_in_actions():
-    actions = [{'v': i} for i in range(4)]
-    codec = ActionTiming(fps=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 5  # 4 actions + timestamp sentinel
-    for i, action in enumerate(result):
-        assert action['timestamp'] == pytest.approx(i * 0.1)
-
-
-def test_action_horizon_sec_seconds_truncates():
-    actions = [{'v': i} for i in range(100)]
-    # 0.1s at 30fps -> 3 actions
-    codec = ActionTiming(fps=30.0, horizon_sec=0.1)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 4  # 3 actions + horizon sentinel
-    dt = 1.0 / 30.0
-    for i, action in enumerate(result):
-        assert action['timestamp'] == pytest.approx(i * dt)
-
-
-def test_action_timestamp_stamps_chunk():
-    actions = [{'v': i} for i in range(4)]
-    codec = ActionTimestamp(fps=10.0)
-    result = codec.decode(actions)
-    assert len(result) == 5  # 4 actions + timestamp sentinel
-    for i, action in enumerate(result):
-        assert action['timestamp'] == pytest.approx(i * 0.1)
-
-
-def test_action_timestamp_single_action():
-    codec = ActionTimestamp(fps=15.0)
-    result = codec.decode({'v': 42})
-    assert result['timestamp'] == 0.0
-
-
-def test_action_timestamp_meta():
-    codec = ActionTimestamp(fps=15.0)
-    assert codec.meta == {'action_fps': 15.0}
-
-
-def test_action_horizon_truncates():
-    actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
-    codec = ActionHorizon(0.3)
-    result = codec.decode(actions)
-    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
-    assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
-
-
-def test_action_horizon_passes_single_action():
-    action = {'v': 1, 'timestamp': 0.0}
-    codec = ActionHorizon(0.5)
-    result = codec.decode(action)
-    assert result == {'v': 1, 'timestamp': 0.0}
-
-
-def test_action_horizon_meta():
-    codec = ActionHorizon(1.0)
-    assert codec.meta == {'action_horizon_sec': 1.0}
-
-
-def test_action_timestamp_and_horizon_compose():
-    actions = [{'v': i} for i in range(10)]
-    codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 4  # 3 actions + horizon sentinel
-    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
-    assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
-
-
-def test_single_action_has_zero_timestamp():
-    codec = ActionTiming(fps=15.0)
-    policy = codec.wrap(_SinglePolicy())
-    result = policy.new_session()(_T0_OBS, 0)
-    assert isinstance(result, dict)
-    assert result['timestamp'] == 0.0
-    assert result['v'] == 42
 
 
 def test_codec_composition():
@@ -278,42 +126,8 @@ def test_codec_composition():
     assert result['encoded_by_right'] is True
 
 
-def test_codec_wrap_meta_merges():
-    """A wrapped session reports the base meta and the codec meta."""
-    codec = ActionTiming(fps=15.0, horizon_sec=1.0)
-    policy = codec.wrap(_MetaPolicy())
-    meta = policy.new_session().meta
-    assert meta['base_key'] == 'base_value'
-    assert meta['action_fps'] == 15.0
-    assert meta['action_horizon_sec'] == 1.0
-
-
-def test_timestamps_survive_action_decoder_composition():
-    """Timestamps from ActionTiming must survive through composed action decoders."""
-    action_codec = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
-    timing = ActionTiming(fps=15.0, horizon_sec=1.0)
-    composed = timing | action_codec
-
-    # Build a raw action vector: 4 quat + 3 trans + 1 grip = 8
-    raw_action = np.zeros(8, dtype=np.float32)
-    raw_action[:4] = Rotation.identity.as_quat
-    raw_action[4:7] = [0.1, 0.2, 0.3]
-    raw_action[7] = 0.5
-
-    raw_chunk = [{'action': raw_action} for _ in range(5)]
-    decoded = composed.decode(raw_chunk)
-
-    assert len(decoded) == 6  # 5 actions + timestamp sentinel
-    for i, action in enumerate(decoded[:5]):
-        assert obs_keys.ROBOT_COMMAND in action
-        assert 'target_grip' in action
-        assert 'timestamp' in action, f'Action {i} missing timestamp — stripped by action decoder'
-        assert action['timestamp'] == pytest.approx(i / 15.0)
-    assert decoded[-1] == {'timestamp': pytest.approx(5 / 15.0)}  # timestamp sentinel
-
-
 def test_composed_training_encoder_uses_parallel():
-    """``timing | (obs & action)`` training encoder produces only derived keys, no originals."""
+    """``metadata | (obs & action)`` training encoder produces only derived keys, no originals."""
     ts = [1000, 2000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     grip = [0.5, 0.6]
@@ -334,8 +148,8 @@ def test_composed_training_encoder_uses_parallel():
         images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
     )
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
-    timing = ActionTiming(fps=15.0)
-    composed = timing | (obs & action)
+    metadata = Metadata({'action_fps': 15.0})
+    composed = metadata | (obs & action)
 
     encoder = composed.training_encoder
     result = encoder(ep)

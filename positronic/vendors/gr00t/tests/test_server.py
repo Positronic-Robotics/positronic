@@ -109,7 +109,7 @@ def test_same_camera_checkpoint_with_incompatible_modalities_stops_before_warmup
 
 def test_session_timing_overrides_preserve_source_equality():
     server = PolicyServer(gr00t_server.droid)
-    variant = server._session_pipeline({'codec.fps': 10.0})
+    variant = server._session_pipeline({'fps': 10.0})
     assert variant.source == gr00t_server.droid().source
 
 

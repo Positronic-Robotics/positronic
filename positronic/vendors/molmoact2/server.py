@@ -1,18 +1,17 @@
 import logging
 from collections.abc import Callable
-from typing import Any
 
 import configuronic as cfn
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
-from positronic.policy import Codec, Policy
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
-from positronic.vendors.molmoact2.policy import MolmoAct2Policy, warm_observation
+from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
 
 logger = logging.getLogger(__name__)
 
@@ -40,27 +39,26 @@ class MolmoAct2Source(ModelSource):
         # (/api/v1/session/{model_id}), so it must be slash-free — derive it from the repo name.
         return [self._hf_repo.split('/')[-1]]
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         message = f'Loading MolmoAct2 model {self._hf_repo} (device_map={self._device_map})'
         logger.info(message)
         if on_progress is not None:
             on_progress(message)
-        policy = MolmoAct2Policy(
+        policy = MolmoAct2Model(
             self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
         )
         warmup(policy, warm_observation(), on_progress)
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {'model_id': model_id, 'hf_repo': self._hf_repo}
 
 
 molmoact2_source = cfn.Config(MolmoAct2Source)
 
 
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
-def pipeline(codec: Codec, source: ModelSource):
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = None):
+    return PolicyDeployment(
+        source, Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
+    )
 
 
 droid = pipeline

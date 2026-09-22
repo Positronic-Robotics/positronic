@@ -44,7 +44,6 @@ class KeyboardOperator(KeyboardControl):
         self._policy = policy
         self._output_path = output_path
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
-        self._rollout: Rollout | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
@@ -60,23 +59,13 @@ class KeyboardOperator(KeyboardControl):
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                if self._rollout is not None:
-                    self._rollout.close()
-                    self._rollout = None
                 try:
-                    self._rollout = Rollout(self._next_task(), self._policy, self._output_path)
-                    self._pending = self.perform_task(self._rollout)
+                    rollout = Rollout(self._next_task(), self._policy, self._output_path)
+                    self._pending = self.perform_task(rollout)
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
                 self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        try:
-            yield from super().run(should_stop, clock)
-        finally:
-            if self._rollout is not None:
-                self._rollout.close()
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
@@ -90,17 +79,11 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
-    # The policy is this function's to close from here on, and everything below can raise:
-    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` builds the
-    # world the rig runs in.
-    try:
-        with scoped_env_var(ENV_TELEMETRY_DIR):
-            output_path = prepare_output_dir(output_dir)
-            operator = KeyboardOperator(next_task, policy, output_path)
-            logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-            run_world(embodiment, operator, record=output_path is not None, done=operator.done)
-    finally:
-        policy.close()
+    with scoped_env_var(ENV_TELEMETRY_DIR):
+        output_path = prepare_output_dir(output_dir)
+        operator = KeyboardOperator(next_task, policy, output_path)
+        logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
+        run_world(embodiment, operator, record=output_path is not None, done=operator.done)
 
 
 real_cfg = cfn.Config(

@@ -4,7 +4,7 @@
 
 SmolVLA is a compact vision-language-action model from [HuggingFace LeRobot](https://github.com/huggingface/lerobot) (0.4.x). It combines a VLM backbone with action prediction for language-conditioned manipulation. This vendor also supports ACT, Diffusion, and any other lerobot 0.4.x policy — the policy type is auto-detected from the checkpoint config.
 
-See [Model Selection Guide](../../docs/model-selection.md) for comparison with other models.
+See [Model Selection Guide](../../../docs/model-selection.md) for comparison with other models.
 
 ## Hardware Requirements
 
@@ -48,7 +48,7 @@ uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.address.host=localhost --policy.address.port=8000
 ```
 
-See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
+See [Training Workflow](../../../docs/training-workflow.md) for detailed step-by-step instructions.
 
 ## Available Codecs
 
@@ -68,7 +68,7 @@ Each codec is served as the policy pipeline of the same name (the serve subcomma
 - Quaternion rotation representation (7D)
 - Absolute action space
 
-See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
+See [Codecs Guide](../../../docs/codecs.md) for comprehensive codec documentation.
 
 ## Configuration Reference
 
@@ -111,23 +111,22 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 | `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
-| `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
-**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` is the `ee` pipeline with its `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` is the `ee` pipeline with its `checkpoints_dir` bound (e.g. `lerobot-server phail`).
 
 **Session parameters:** A client can tune the served pipeline per session with query params on the session URL —
-dotted paths into the pipeline config with JSON-literal values (e.g. `?codec.fps=10`). The model source
+dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`). The model source
 (`checkpoints_dir`, `checkpoint`, `device`) is fixed at launch and cannot be changed per session. See the
 [offboard README](../../offboard/README.md) for the full syntax and error behavior.
 
 ## See Also
 
 **Positronic Documentation:**
-- [Model Selection Guide](../../docs/model-selection.md) — When to use SmolVLA vs ACT vs GR00T vs OpenPI
-- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
-- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
-- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
+- [Model Selection Guide](../../../docs/model-selection.md) — When to use SmolVLA vs ACT vs GR00T vs OpenPI
+- [Codecs Guide](../../../docs/codecs.md) — Understanding observation/action encoding
+- [Training Workflow](../../../docs/training-workflow.md) — Unified training steps across all models
+- [Inference Guide](../../../docs/inference.md) — Deployment and evaluation patterns
 
 **Other Models:**
 - [LeRobot ACT (0.3.3)](../lerobot_0_3_3/README.md) — Single-task transformer

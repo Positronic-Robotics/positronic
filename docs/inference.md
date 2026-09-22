@@ -6,7 +6,10 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified session protocol connects any hardware to any model (LeRobot, GR00T, OpenPI); the same frames cross either wire, a websocket or gRPC. A heavy model (OpenPI needs ~62GB, GR00T ~8GB) runs on GPU hardware separate from the robot/simulator machine.
 
-Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server droid` launches that one. The available names are listed in each vendor's README.
+Each server carries a `PolicyDeployment`: a model source, a client processor stack,
+and an optional server codec. The handshake declares the client stack, which
+`RemotePolicy` builds automatically. Each vendor supplies named deployment configs
+as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
@@ -54,7 +57,7 @@ uv run positronic eval run --eval=.real.droid.pick_place \
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.wire=websocket_tls --policy.address.host=gpu-server --policy.address.port=443 \
-  --policy.address.model=checkpoint-20000 --policy.address.query='codec.fps=10&local.pad_start=false'
+  --policy.address.model=20000 --policy.address.query='fps=10'
 ```
 
 **A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=/run/policy.sock` dials the socket a server bound with `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock`, over no network. `--policy.address.model` and `--policy.address.query` name a checkpoint and session params as they do on any other wire; this wire's address has no host and no port to fill. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
@@ -77,22 +80,17 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint with `--policy.address.model` instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
-**What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares, and only that — connecting to a server that declares no stack fails with an error naming the version it runs. What the declared stack must achieve is checked where it matters: the harness refuses to emit an action scheduled further than `MAX_ACTION_SKEW_SEC` from now, which is what a stack that never anchored its chunk to the rig's clock produces.
+**The server declares data preparation.** Its client stack can contain
+`RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
+`compress_images=True` on the deployment enables JPEG transport. The model returns
+full chunks; client scheduling emits commands immediately when they become due.
 
-> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
+## Running on the same machine
 
-## Local Inference
-
-Load model directly on robot/simulator machine. Only ACT is supported locally (GR00T and OpenPI use remote inference).
-
-```bash
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
-  --policy.base.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --policy.base.checkpoint=10000
-```
-
-Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
+Run the model server beside the robot or simulator, then connect with
+`--policy=.remote --policy.address.host=localhost`. A Unix socket also works, using
+the address configuration above. The same model and processor APIs apply whether
+the server is local or on another machine.
 
 ## Who Decides Episode Boundaries
 
@@ -102,7 +100,7 @@ Something has to say when an episode starts and when it finishes. There are two 
 
 **Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
 
-Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the session the episode runs on and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 
 ## Recording and Replay
 

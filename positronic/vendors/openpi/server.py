@@ -14,11 +14,12 @@ from pimm.logging import init_logging
 from positronic import geom
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import Codec, Policy, Session
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -125,26 +126,20 @@ class OpenpiSubprocess:
 ###########################################################################################
 
 
-class _OpenpiSession(Session):
-    def __init__(self, client: WebsocketClientPolicy):
-        self._client = client
+class OpenpiModel(Model):
+    """A running OpenPI subprocess; ``close()`` stops the subprocess."""
 
-    def __call__(self, obs, time_ns):
-        response = self._client.infer(obs)
+    def __init__(self, subproc: OpenpiSubprocess, meta: dict[str, Any]):
+        self._subproc = subproc
+        self._meta = meta
+
+    def __call__(self, obs: Obs, *, session_id: str):
+        response = self._subproc.client.infer(obs)
         actions = response['actions']
         return [{ACTION: a} for a in actions]
 
-
-class OpenpiPolicy(Policy):
-    """A running OpenPI subprocess as a Policy; ``close()`` stops the subprocess."""
-
-    def __init__(self, subproc: OpenpiSubprocess):
-        self._subproc = subproc
-
-    def new_session(self, context=None, rt=None):
-        client = self._subproc.client
-        client.reset()
-        return _OpenpiSession(client)
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
         self._subproc.stop()
@@ -212,7 +207,7 @@ class OpenpiSource(ModelSource):
             return self.checkpoint
         return get_latest_checkpoint(self.checkpoints_dir)
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         if self._passthrough:
             checkpoint_dir = self.checkpoints_dir  # openpi's subprocess downloads gs:// itself
         else:
@@ -225,23 +220,23 @@ class OpenpiSource(ModelSource):
         )
         try:
             subproc.start(on_progress)
-            policy = OpenpiPolicy(subproc)
+            policy = OpenpiModel(
+                subproc,
+                {
+                    policy_keys.TYPE: 'openpi',
+                    policy_keys.CONFIG_NAME: self.config_name,
+                    policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
+                    if self._passthrough
+                    else f'{self.checkpoints_dir}/{model_id}',
+                    policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
+                },
+            )
             # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
             warmup(policy, self.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise
         return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {
-            policy_keys.TYPE: 'openpi',
-            policy_keys.CONFIG_NAME: self.config_name,
-            policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
-            if self._passthrough
-            else f'{self.checkpoints_dir}/{model_id}',
-            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
-        }
 
 
 ###########################################################################################
@@ -255,17 +250,23 @@ openpi_source = cfn.Config(OpenpiSource)
 # ``ee_frame`` takes no default: a missing frame does not error, it just puts the arm somewhere else, so a
 # deployment that omits one is indistinguishable from a deployment that means ``None``.
 @cfn.config(codec=codecs.ee, source=openpi_source)
-def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | None):
+def pipeline(
+    codec: Codec,
+    source: ModelSource,
+    ee_frame: geom.Transform3D | None,
+    fps: float = 15.0,
+    horizon_sec: float | None = None,
+):
     """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source.
 
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
     (``models.DROID_EE_FRAME``); ``None`` for a checkpoint trained in ``default``, or one speaking joints.
     """
-    local = StopOnFault() | ChunkedSchedule() | RestrictImageSize(224, 224)
+    local = Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
-        local = ChangeEEFrame(ee_frame) | local
-    return local | remote | codec | source
+        local = Sequential(ChangeEEFrame(ee_frame), local)
+    return PolicyDeployment(source, local, codec)
 
 
 # These bind no checkpoint, so they state no frame: whoever binds one passes ``--pipeline.ee_frame`` with it.
@@ -278,11 +279,15 @@ ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
 # The joint-space codecs put no pose on the wire, so no checkpoint bound here can need a transform. An EE-space
 # DROID checkpoint would take ``ee_frame=models.DROID_EE_FRAME`` instead.
 joints_traj = pipeline.override(codec=codecs.joints_traj, ee_frame=None)
-droid_pipe = pipeline.override(codec=codecs.droid, ee_frame=None, **{'source.config_name': 'pi05_droid'})
+droid_pipe = pipeline.override(
+    codec=codecs.droid, ee_frame=None, horizon_sec=8 / 15, **{'source.config_name': 'pi05_droid'}
+)
 droid_jointpos_pipe = pipeline.override(
     codec=codecs.droid_jointpos, ee_frame=None, **{'source.config_name': 'pi05_droid_jointpos'}
 )
-libero_pipe = pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'})
+libero_pipe = pipeline.override(
+    codec=codecs.libero, fps=20.0, horizon_sec=0.25, **{'source.config_name': 'pi05_libero'}
+)
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
@@ -303,8 +308,7 @@ COMMANDS = {
             codec=codecs.phail_v1,
             ee_frame=None,
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/'},
-        ),
-        recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
+        )
     ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
     # Its poses are the sim panda's ``default``, which sits 45 mm along the approach axis from the FR3's, so
@@ -314,8 +318,7 @@ COMMANDS = {
         pipeline=ee_flip_grip.override(
             ee_frame=None,
             **{'source.checkpoints_dir': 's3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/'},
-        ),
-        recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
+        )
     ),
     'droid': serve.override(
         pipeline=droid_pipe.override(**{

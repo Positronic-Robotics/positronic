@@ -1,17 +1,43 @@
-"""Composable policy layers — scheduling, fault handling and temporal frame stacking.
+"""Policy processors for scheduling, fault handling, and temporal frame stacking.
 
-Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
-from the observation (``obs_time_ns``); ``ChunkedSchedule`` anchors a chunk with the ``time_ns`` of the
-call, which is the caller's clock reading in nanoseconds.
+Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
+locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
+
+Describe a local stack without creating episode state::
+
+    from positronic.policy.sequential import Sequential
+
+    definition = Sequential(
+        PauseOnUnavailable(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)
+    )
+    episode = runtime.start(definition, infer)
+    step = episode.send(obs)
 """
 
 from collections import deque
+from collections.abc import Callable, Sequence
+from math import isfinite
+from typing import Any, TypeVar
 
 import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import DelegatingSession, Layer, Session
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import (
+    ARGS,
+    NAME,
+    VERSION,
+    Answer,
+    Commands,
+    Obs,
+    Policy,
+    PolicyRun,
+    Processor,
+    ProcessorRun,
+    Runtime,
+    Step,
+)
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -29,77 +55,98 @@ def _arms_available(obs) -> bool:
     return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
 
 
-class StopOnFault(Layer):
-    """Stop the arm while it will not take a command, and plan afresh once it will.
+MILLISECOND_NS = 10**6
 
-    An arm the driver has taken, or that is faulted, is not tracking the plan it was given: this answers the
-    empty trajectory and resets the sessions below. It goes outside the scheduling layer, which would
-    otherwise answer "keep playing" without seeing the status. Every arm is checked, so a bimanual rig stops
-    on either.
+
+class PauseOnUnavailable(Policy):
+    """Withhold commands and child calls while any arm is unavailable.
+
+    An unavailable arm causes an empty command set and a status check one millisecond later. Once every
+    arm is available, calls resume on the same child policy, retaining queued commands and pending answers.
+
+    TODO(#789): Define plan invalidation and recovery after robot unavailability.
     """
 
-    WIRE_NAME = 'stop_on_fault'
+    WIRE_NAME = 'stop_on_fault'  # Stable protocol identifier, independent of the Python class name.
+    WIRE_VERSION = 2
 
-    class _Session(DelegatingSession):
-        def __call__(self, obs, time_ns):
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        obs = yield
+        while True:
             if _arms_available(obs):
-                return self._inner(obs, time_ns)
-            self.cancel()
-            return []
+                obs = yield inner.send(obs)
+            else:
+                obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
 
-    def make_session(self, inner: Session):
-        return StopOnFault._Session(inner)
-
-    def to_spec(self):
-        return {'name': self.WIRE_NAME}
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class ChunkedSchedule(Layer):
-    """Wait for the current trajectory to finish before calling the inner policy again.
+class ChunkedSchedule(Policy):
+    """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
-    Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
-    this layer anchors them to the call's ``time_ns``, in the seconds a timestamp is written in. Returns
-    ``None`` ("keep executing the current trajectory") until the last action's timestamp is reached, then
-    calls the inner policy.
-
-    The call's ``time_ns`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
-    comes from the first, and the test for a complete chunk uses the second.
+    ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
+    command is due when the completed answer is read; subsequent commands are spaced by ``1 / fps``.
+    A chunk of K commands covers K periods, including the final command's execution period.
+    ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
+    At most one call is pending, and another starts when the current chunk's duration ends.
     """
 
     WIRE_NAME = 'chunked_schedule'
+    WIRE_VERSION = 2
 
-    class _Session(DelegatingSession):
-        """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
+    def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
+        if not isfinite(fps) or fps <= 0:
+            raise ValueError('fps must be finite and positive')
+        if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
+            raise ValueError('horizon_sec must be finite and positive')
+        self._fps = fps
+        self._horizon_sec = horizon_sec
 
-        def __init__(self, inner: Session):
-            super().__init__(inner)
-            self._trajectory_end_ns: int | None = None
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+        period_sec = 1 / self._fps
+        answer: Answer[Sequence[Commands]] | None = None
+        trajectory: deque[tuple[Commands, int]] = deque()
+        end_ns = 0
+        obs = yield
+        try:
+            while True:
+                now_ns = runtime.time_ns
+                if answer is None and now_ns >= end_ns:
+                    answer = runtime.submit(infer, obs)
+                if answer is not None and answer.done():
+                    chunk, answer = answer.result(), None
+                    duration_sec = len(chunk) * period_sec
+                    if self._horizon_sec is not None:
+                        duration_sec = min(duration_sec, self._horizon_sec)
+                    end_ns = now_ns + round(duration_sec * 1e9)
+                    trajectory = deque(
+                        (waypoint, now_ns + round(i * period_sec * 1e9))
+                        for i, waypoint in enumerate(chunk)
+                        if i * period_sec < duration_sec
+                    )
 
-        def __call__(self, obs, time_ns):
-            if self._trajectory_end_ns is not None and obs[keys.OBS_TIME_NS] < self._trajectory_end_ns:
-                return None
-            result = self._inner(obs, time_ns)
-            if result is not None:
-                # A single-action session may return a bare dict, and a no-codec path may omit
-                # ``timestamp`` (servers can stamp/truncate themselves); normalize both so an
-                # immediate action executes instead of raising.
-                if isinstance(result, dict):
-                    result = [result]
-                # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                anchor = time_ns / 1e9
-                result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
-                self._trajectory_end_ns = round(result[-1][keys.ACTION_TIMESTAMP] * 1e9) if result else None
-            return result
+                commands: dict[str, Any] = {}
+                while trajectory and trajectory[0][1] <= now_ns:
+                    commands.update(trajectory.popleft()[0])
+                resume_at_ns = trajectory[0][1] if trajectory else end_ns
+                # Pending inference asks for the earliest allowed poll; action cadence is independent.
+                obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
+        finally:
+            if answer is not None:
+                answer.cancel()
 
-        def cancel(self):
-            self._trajectory_end_ns = None
-            super().cancel()
+    def meta(self) -> dict[str, Any]:
+        meta = {policy_keys.ACTION_FPS: self._fps}
+        if self._horizon_sec is not None:
+            meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
+        return meta
 
-    def make_session(self, inner: Session):
-        return ChunkedSchedule._Session(inner)
-
-    def to_spec(self):
-        return {'name': self.WIRE_NAME}
+    def to_spec(self) -> dict[str, Any]:
+        args = {'fps': self._fps}
+        if self._horizon_sec is not None:
+            args['horizon_sec'] = self._horizon_sec
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
 class _StackBuffer:
@@ -145,45 +192,24 @@ class _StackBuffer:
         return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
 
 
-class TemporalStack(Layer):
+OutputT = TypeVar('OutputT')
+
+
+class TemporalStack(Processor[Obs, OutputT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
-    A model that conditions on a short window of history (e.g. DreamZero's video context) needs several
-    samples spanning the just-executed chunk at the cadence seen in training, but the harness only
-    forwards an observation to the policy at re-query boundaries. This layer sits outside the
-    scheduling layer so it sees every control tick: it records the named ``keys`` and substitutes, for
-    each, a ``(len(offsets_sec), ...)`` stack sampled at ``offsets_sec`` (ascending negative seconds
-    relative to now), so every stacked step carries its own value at that time rather than the current
-    one repeated across history.
+    Every sent observation records the selected channels on the runtime's clock, then passes the stacked
+    observations to ``inner`` and yields its result. Offsets are ascending seconds relative to now.
+    Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
-    ``pad_start`` controls the stack before a full window of history exists (the first
-    ``-min(offsets_sec)`` seconds of a session). ``True`` repeats the oldest sample so the stack always
-    has ``len(offsets_sec)`` steps — for servers that require the trained window length. ``False``
-    sends only observed samples (the stack grows from 1 to ``len(offsets_sec)``), so the server sees a
-    genuine episode start instead of a fabricated static history — a model conditioned on "nothing has
-    moved for the whole window" predicts near-zero motion, and servers with a cold-start path (e.g. a
-    chunk-0 empty prefix) never engage it on a padded full-length stack.
+    With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
+    are omitted, and the stack grows until the full window has been observed.
     """
 
     WIRE_NAME = 'temporal_stack'
+    WIRE_VERSION = 2
 
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
-            super().__init__(inner)
-            self._keys = keys
-            self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
-
-        def __call__(self, obs, time_ns):
-            now = obs[keys.OBS_TIME_NS] / 1e9
-            self._buffer.append(now, {k: obs[k] for k in self._keys})
-            stacked = self._buffer.sample(now)
-            return self._inner({**obs, **stacked}, time_ns)
-
-        def cancel(self):
-            self._buffer.reset()
-            super().cancel()
-
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True):
+    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
         self._pad_start = pad_start
@@ -192,11 +218,17 @@ class TemporalStack(Layer):
             'in-range targets and the stack would be empty'
         )
 
-    def make_session(self, inner: Session):
-        return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
+    def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT]) -> ProcessorRun[Obs, OutputT]:
+        buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
+        obs = yield
+        while True:
+            now_sec = runtime.time_ns / 1e9
+            buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            obs = yield inner.send({**obs, **buffer.sample(now_sec)})
 
-    def to_spec(self):
+    def to_spec(self) -> dict[str, Any]:
         return {
-            'name': self.WIRE_NAME,
-            'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }

@@ -16,8 +16,7 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm.command import JointPosition
 from positronic.eval import keys as eval_keys
-from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.tests.test_harness import SpyPolicy
+from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
@@ -179,20 +178,21 @@ class _MolmoObservationEnv(EnvProtocol):
 def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch, tmp_path, done_after, timeout, seed):
     env = _MolmoObservationEnv(done_after)
     joints = env.observation[mapping.OBS_JOINT_POS]
-    policy = SpyPolicy(command=JointPosition(joints), target_grip=0.0)
+    policy = StubPolicy(command=JointPosition(joints), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
         monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, seed=seed, timeout=timeout).instantiate()
-        main(policy=ChunkedSchedule().wrap(policy), evals=[ev], output_dir=tmp_path)
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
 
     assert env.selections == [{**env.BENCHMARK._asdict(), mapping.SELECT_EPISODES: 3}]
     assert env.tokens == [{**env.BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: seed}]
-    assert policy.last_obs is not None
-    assert policy.last_obs[keys.TASK] == env.INSTRUCTION
-    np.testing.assert_array_equal(policy.last_obs[keys.JOINTS], joints)
-    assert policy.last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
+    assert policy.observations
+    last_obs = policy.observations[-1]
+    assert last_obs[keys.TASK] == env.INSTRUCTION
+    np.testing.assert_array_equal(last_obs[keys.JOINTS], joints)
+    assert last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
     for logical, candidates in CAMERAS.items():
-        np.testing.assert_array_equal(policy.last_obs[logical], env.observation[candidates[-1]])
+        np.testing.assert_array_equal(last_obs[logical], env.observation[candidates[-1]])
     wires = [protocol.single_arm(action) for action in env.actions]
     commands = [w for w in wires if w[protocol.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS]
     assert commands, 'the policy command never reached the environment'

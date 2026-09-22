@@ -22,8 +22,8 @@ OpenPI supports multiple codecs for different use cases:
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
-- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
-- **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
+- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and the client scheduler executes DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
+- **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and the client scheduler executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 Both DROID codecs execute each chunk under DROID's impedance gains (`codecs.droid_execution`; see [Control mode](../../../docs/codecs.md#control-mode)).
 
@@ -144,7 +144,6 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
 - `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
 - `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
-- `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
 ### API Endpoints
@@ -165,51 +164,15 @@ The server exposes the following endpoints:
 - Same protocol as default session
 
 **Session parameters:** query params on the session URL tune the serving pipeline per session — each key
-is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?codec.fps=10`. Values must
+is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
 be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
-1. Client connects to WebSocket
-2. Server may stream `{'status': 'loading', ...}` updates while it downloads and starts the subprocess, then sends `{'status': 'ready', 'meta': {...}}` (checkpoint info, codec metadata)
-3. For each inference step:
-   - Client sends: serialized observation dict
-   - Server responds: `{'result': [<action_dict>, ...]}` (a **list** of action dicts) or `{'error': error_message}`
-
-### Example Client Connection
-
-```python
-from websockets.sync.client import connect
-from positronic.offboard.protocol import serialise, deserialise
-
-# Connect to server
-ws = connect('ws://localhost:8000/api/v1/session')
-
-# Status handshake: the server streams 'loading' updates while it downloads the
-# checkpoint and starts the OpenPI subprocess. Read messages until it is ready.
-while True:
-    message = deserialise(ws.recv())
-    if message.get('status') == 'ready':
-        meta = message['meta']
-        break
-    if message.get('status') in ('loading', 'waiting'):
-        print(f"Server status: {message.get('message', message['status'])}")
-        continue
-    raise RuntimeError(f"Unexpected server response: {message}")
-
-print(f"Connected to checkpoint: {meta['checkpoint_id']}")
-
-# Send observation and receive actions
-observation = {
-    'robot_state.ee_pose': [0.1, 0.2, 0.3, 0, 0, 0, 1],
-    'grip': [0.5],
-    'image.wrist': wrist_image,
-    'image.exterior': exterior_image,
-}
-ws.send(serialise(observation))
-response = deserialise(ws.recv())
-actions = response['result']  # list of action dicts (one per action in the chunk)
-```
+`RemotePolicy` handles the handshake, session ID, inference requests, and session cleanup.
+For a low-level client, use `InferenceClient` and `InferenceSession` as described in the
+[offboard protocol](../../offboard/README.md). The session must end after its outstanding
+calls finish. Inference replies contain full action chunks.
 
 ## 5. Run Inference
 

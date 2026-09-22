@@ -16,9 +16,11 @@ Usage
 import json
 import threading
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import configuronic as cfn
 import numpy as np
@@ -34,69 +36,49 @@ from positronic.dataset.episode import Episode
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
-from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy.base import Obs, Policy
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import prepare_obs
-from positronic.policy.spec import PolicySource, remote
+from positronic.policy.sequential import Sequential
 
 
-class InstantChunk(Policy):
+class InstantChunk(Model):
     """The model the probe serves: it answers a fixed chunk of ``rows`` and does no work at all."""
 
-    def __init__(self, rows: int, period_s: float):
+    def __init__(self, rows: int):
         self.chunk = [
-            {
-                keys.ACTION_TIMESTAMP: row * period_s,
-                keys.TARGET_JOINTS: np.zeros(7, dtype=np.float32),
-                keys.TARGET_GRIP: np.float32(0.0),
-            }
-            for row in range(rows)
+            {keys.TARGET_JOINTS: np.zeros(7, dtype=np.float32), keys.TARGET_GRIP: np.float32(0.0)} for _ in range(rows)
         ]
 
-    def new_session(self, context: dict[str, Any] | None = None, rt=None) -> Session:
-        return InstantChunk._Session(self.chunk)
-
-    class _Session(Session):
-        def __init__(self, chunk: list[dict[str, Any]]):
-            self._chunk = chunk
-
-        def __call__(self, obs, time_ns):
-            return self._chunk
+    def __call__(self, obs, *, session_id: str):
+        return self.chunk
 
 
-class CapturingWire(DelegatingPolicy):
-    """Stands where the wire stands during capture: answers like the server and keeps what it was sent.
+class InstantSource(ModelSource):
+    """Load the probe's fixed-size action chunk."""
 
-    It collects the messages the rig would have put on the wire, and the replay sends those.
-    """
+    def __init__(self, rows: int):
+        self._rows = rows
 
-    def __init__(self, inner: Policy):
-        super().__init__(inner)
-        self.sent: list[dict[str, Any]] = []
+    def get_models(self) -> list[str]:
+        return ['instant']
 
-    def new_session(self, context: dict[str, Any] | None = None, rt=None) -> Session:
-        return CapturingWire._Session(self._inner.new_session(context, rt), self.sent)
-
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, sent: list[dict[str, Any]]):
-            super().__init__(inner)
-            self._sent = sent
-
-        def __call__(self, obs, time_ns):
-            self._sent.append(dict(obs))
-            return super().__call__(obs, time_ns)
+    def load(self, model_id: str, on_progress=None) -> Model:
+        return InstantChunk(self._rows)
 
 
-def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, height: int) -> Layer:
+def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, height: int) -> Policy:
     """The rig-side stack the client builds, with the depth and the image bound the caller names."""
     offsets = tuple(-(frames - 1 - step) / rate_hz for step in range(frames))
     stacked = (*cameras, keys.EE_POSE, keys.GRIP)
-    return (
-        StopOnFault()
-        | TemporalStack(stacked, offsets)
-        | ChunkedSchedule()
-        | RestrictImageSize(width=width, height=height)
+    return Sequential(
+        PauseOnUnavailable(),
+        TemporalStack(stacked, offsets),
+        ChunkedSchedule(fps=rate_hz),
+        RestrictImageSize(width=width, height=height),
     )
 
 
@@ -105,29 +87,44 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
 STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
 
 
-def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[dict[str, Any]]:
-    """The episode as the harness hands it to the stack: one observation per control tick."""
+def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[tuple[int, Obs]]:
+    """Replay time and observation for each sampled control tick."""
     period_ns = int(1e9 / rate_hz)
     for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
         sample = episode.time[ts]
         obs = {key: sample[key] for key in (*STATE_KEYS, *cameras) if key in sample}
         if keys.TASK in sample:
             obs[keys.TASK] = sample[keys.TASK]
-        yield {**obs, keys.OBS_TIME_NS: ts, keys.WALL_TIME_NS: ts}
+        yield ts, obs
 
 
-def capture(ticks: Iterable[dict[str, Any]], stack: Layer, model: Policy, requests: int) -> list[dict[str, Any]]:
+def capture(
+    ticks: Iterable[tuple[int, Obs]], stack: Policy, model: Callable[[Obs], Any], requests: int
+) -> list[dict[str, Any]]:
     """Run the rig-side stack over ``ticks`` and collect the first ``requests`` payloads it sends."""
-    wire = CapturingWire(model)
-    session = stack.wrap(wire).new_session()
+    sent: list[dict[str, Any]] = []
+
+    def infer(obs):
+        sent.append(dict(obs))
+        return model(obs)
+
+    now_ns = 0
+    runtime = Executor(lambda: now_ns, simulated=True, charge_inference_time=False)
+    run = runtime.start(stack, infer)
     try:
-        for obs in ticks:
-            session(obs, obs[keys.OBS_TIME_NS])
-            if len(wire.sent) >= requests:
+        for replay_ns, obs in ticks:
+            now_ns = replay_ns
+            runtime.start_tick()
+            run.send(obs)
+            while runtime.has_pending:
+                if runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY:
+                    run.send(obs)
+            if len(sent) >= requests:
                 break
     finally:
-        session.close()
-    return wire.sent
+        runtime.close()
+        run.close()
+    return sent
 
 
 def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
@@ -218,17 +215,17 @@ def main(
 ):
     # configuronic hands the CLI token through as a string.
     out_path = Path(out) if out is not None else None
-    model = InstantChunk(chunk_rows, 1.0 / rate_hz)
+    model = InstantChunk(chunk_rows)
     stack = rig_stack(cameras, frames, rate_hz, width, height)
 
     chosen = dataset[episode]
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
-    payloads = capture(observations(chosen, cameras, rate_hz), stack, model, requests)
+    payloads = capture(observations(chosen, cameras, rate_hz), stack, partial(model, session_id=uuid4().hex), requests)
     if not payloads:
         raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
     print(f'captured {len(payloads)} payload(s) off episode {episode}')
 
-    server, thread, port = serve(stack | remote(compress_images=compress_images) | PolicySource(model))
+    server, thread, port = serve(PolicyDeployment(InstantSource(chunk_rows), stack, compress_images=compress_images))
     try:
         address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')
         session = InferenceClient(WebsocketClientWire(), address).new_session()

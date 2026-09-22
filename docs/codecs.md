@@ -34,17 +34,11 @@ The two codecs that do the real work are the **observation encoder** and the **a
 
 By default, action codecs label actions with the **commanded** targets (`robot_commands.pose`, `target_grip`) — "what the controller was told to do." The `_traj` variants instead use the **actual** robot trajectory (`robot_state.ee_pose`, `grip`) — "what the robot actually did" — and binarize the observed grip (continuous → open/close), since the model should learn a discrete grip. Same raw data, two different notions of the action label.
 
-## Timing codecs
+## Timing
 
-A returned trajectory also needs timing — *when* each action runs. That is handled by an optional extra stage, composed to the left of the obs/action codecs (see `compose` in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py); implementation in [`positronic/policy/codec.py`](../positronic/policy/codec.py)):
-
-| Codec | Signature | Effect |
-|-------|-----------|--------|
-| `ActionTimestamp` | `ActionTimestamp(fps=...)` (keyword-only) | Stamps each decoded action with a relative `timestamp = i / fps` (seconds from the start of the trajectory, starting at 0). At training time surfaces `action_fps` as transform metadata. (`codec.py:199`) |
-| `ActionHorizon` | `ActionHorizon(horizon_sec)` (positional) | Drops decoded actions whose relative `timestamp` is `>= horizon_sec`. Single (untimestamped) actions pass through. At training time surfaces `action_horizon_sec`. (`codec.py:245`) |
-| `ActionTiming` | `ActionTiming(fps=..., horizon_sec=None)` | Factory: returns `ActionTimestamp(fps=fps) \| ActionHorizon(horizon_sec)` when `horizon_sec` is set, otherwise just `ActionTimestamp(fps=fps)`. (`codec.py:289`) |
-
-These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to the clock reading it gave to the call that returns the chunk (`time_ns` in seconds, plus `timestamp`), which absorbs the round-trip latency. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
+Codecs return full action chunks without timestamps. The client processor
+`ChunkedSchedule(fps, horizon_sec)` determines when commands run and how much of
+each chunk executes. `training_fps` supplies training cadence metadata, independently of the deployment's playback `fps`.
 
 ## End-effector frames
 
@@ -80,7 +74,7 @@ Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decod
 
 ## Codec catalog by vendor
 
-These are the ready-made codecs each vendor ships. The standard composition is `[ActionHorizon] | ActionTimestamp | [BinarizeGrip…] | observation & action` (the bracketed stages are controlled by `compose`'s `horizon` and `binarize_grip=` arguments).
+These are the codecs each vendor ships. `compose` combines observation and action conversion, optional grip/frame conversion, and training cadence metadata. `ChunkedSchedule` owns inference cadence and the execution horizon; codecs return full chunks without timestamps.
 
 At conversion time a codec is referenced by import path (`--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`). At serving time each vendor's server exposes its codecs as **named pipelines**, each one a server subcommand of the same name, so the same name selects the same codec on both sides.
 

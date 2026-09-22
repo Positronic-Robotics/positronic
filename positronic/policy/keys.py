@@ -7,6 +7,8 @@ TYPE = 'type'
 CHECKPOINT_PATH = 'checkpoint_path'
 EXPERIMENT_NAME = 'experiment_name'
 CONFIG_NAME = 'config_name'
+ACTION_FPS = 'action_fps'
+ACTION_HORIZON_SEC = 'action_horizon_sec'
 SERVER = 'server'
 
 POLICY_META = 'inference.policy'

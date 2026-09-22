@@ -200,7 +200,7 @@ uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --eval.trial_count=2
 ```
 
-`local` is the rig-side video-context stack, `codec` the server-side codec (e.g. `{"codec.fps": 10}`);
+`local` is the rig-side video-context stack, `codec` the server-side codec (cadence is `local.fps`);
 protocol details in the [Inference Guide](../../../docs/inference.md).
 
 ## Technical Details

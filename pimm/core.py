@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection, Iterable, Iterator
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar, final
+from typing import Generic, TypeAlias, TypeVar, final
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -109,6 +109,9 @@ class Yield:
 
 # A control loop yields these to cooperate with the scheduler.
 Command = Sleep | Yield
+
+# A cooperative generator, parameterized by the value returned to its caller.
+Run: TypeAlias = Generator[Command, None, T]
 
 
 # In pimm a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.

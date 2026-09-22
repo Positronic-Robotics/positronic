@@ -11,7 +11,6 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import models
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
-from positronic.policy.spec import split
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server
 from positronic.vendors.gr00t.codecs import droid, droid_three_cameras
@@ -87,8 +86,9 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
 @pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
 def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation):
     pipeline = config()
-    local, _, codec = split(pipeline)
-    resize = next(layer for layer in local._layers() if isinstance(layer, RestrictImageSize))
+    local, codec = pipeline.local, pipeline.codec
+    assert codec is not None
+    resize = next(layer for layer in local._components if isinstance(layer, RestrictImageSize))
     wire_observation = resize.encode(observation)
     for source in codec.meta[Codec.IMAGE_SIZES]:
         assert wire_observation[source].shape[0] <= gr00t.IMAGE_SIZE[1]

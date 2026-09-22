@@ -7,23 +7,33 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from positronic_wire import websocket, wire
+from positronic_wire import registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
-from positronic.drivers.roboarm import command
+from positronic.cfg import codecs
+from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.geom import Transform3D
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, DEFAULT_OPEN_TIMEOUT, InferenceClient, _ConnectRetries
-from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
-from positronic.policy import RemotePolicy
-from positronic.policy.codec import ActionHorizon
-from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.remote import prepare_obs
-from positronic.policy.spec import PolicySource, remote
+from positronic.offboard import protocol
+from positronic.offboard.client import (
+    DEFAULT_INFER_TIMEOUT,
+    DEFAULT_OPEN_TIMEOUT,
+    InferenceClient,
+    InferenceSession,
+    _ConnectRetries,
+)
+from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.offboard.tests.conftest import DictSource
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs, Step
+from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
+from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
+from positronic.policy.sequential import Sequential
+from positronic.policy.spec import from_spec
 
-# These fixtures stand in for a server, so they spell the handshake fields rather than importing the
-# ``keys`` constants the client reads: sharing a constant makes the two agree whatever its value, which
-# would leave nothing pinning the client to the wire.
-CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
+CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
 
 class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
@@ -80,15 +90,9 @@ def _mock_remote_policy(metadata=None, infer_return=None):
     if infer_return is not None:
         mock_session.infer.return_value = infer_return
     policy = RemotePolicy('websocket', _address('localhost', 0))
-    policy._endpoint._client = MagicMock()
-    policy._endpoint._client.new_session.return_value = mock_session
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = mock_session
     return policy, mock_session
-
-
-def _mock_endpoint(metadata=None, infer_return=None):
-    """The bare wire connection, with no declared stack in front of it."""
-    policy, mock_session = _mock_remote_policy(metadata, infer_return)
-    return policy._endpoint, mock_session
 
 
 def _make_image(h, w):
@@ -238,6 +242,469 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 2 * len(one_session)
 
 
+def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
+    headers = {'Modal-Key': 'k'}
+    policy = RemotePolicy(
+        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
+    )
+    client = policy._client
+    assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
+    assert client.headers == headers
+
+
+class FixedModel(Model):
+    def __init__(self):
+        self.observations = []
+        self.session_ids = []
+        self.ended_sessions = []
+
+    def __call__(self, obs: Obs, *, session_id: str):
+        self.observations.append(obs)
+        self.session_ids.append(session_id)
+        if obs.get('fail'):
+            raise ValueError('model failed')
+        return [{'value': index} for index in range(4)]
+
+    def meta(self):
+        return {'model_name': 'fixed'}
+
+    def end_session(self, session_id: str) -> None:
+        self.ended_sessions.append(session_id)
+
+
+@pytest.fixture
+def served(start_server):
+    def start(*, codec=None, local=None, transport='websocket', model=None):
+        model = FixedModel() if model is None else model
+        pipeline = PolicyDeployment(
+            DictSource({'050000': model}),
+            local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
+            codec=codec,
+        )
+        server = start_server(pipeline, grpc=transport == 'grpc')
+        address = server.ws(model='050000')[1] if transport == 'websocket' else server.grpc(model='050000')[1]
+        return address, model, pipeline
+
+    return start
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+@pytest.mark.parametrize('resize_first', [False, True])
+def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first):
+    resize = RestrictImageSize(8, 8)
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2)
+    local = (
+        Sequential(resize, PauseOnUnavailable(), schedule)
+        if resize_first
+        else Sequential(PauseOnUnavailable(), schedule, resize)
+    )
+    address, model, pipeline = served(local=local, transport=transport)
+    policy = RemotePolicy(transport, address)
+    assert policy.meta()['server.model_name'] == 'fixed'
+    assert policy.meta()['server.action_fps'] == 10
+    assert policy.meta()['server.action_horizon_sec'] == 0.2
+    assert len(model.ended_sessions) == 1  # The metadata probe also ends its session.
+    obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
+    for episode in range(2):
+        now = [0]
+        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(policy)
+        try:
+            first = run.send(obs)
+            assert isinstance(first, Step)
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            step = run.send(obs)
+            assert isinstance(step, Step)
+            assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
+            now[0] = 100_000_000
+            step = run.send(obs)
+            assert isinstance(step, Step) and step.commands == {'value': 1}
+            assert len(model.observations) == 2 * episode + 1
+            assert model.observations[-1]['image'].shape == (8, 8, 3)
+            now[0] = 200_000_000
+            first = run.send(obs)
+            assert isinstance(first, Step)
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            step = run.send(obs)
+            assert isinstance(step, Step)
+            assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
+            assert len(model.observations) == 2 * episode + 2
+        finally:
+            runtime.close()
+            run.close()
+        assert len(model.ended_sessions) == episode + 2
+        assert model.session_ids[-2:] == [model.ended_sessions[-1]] * 2
+    assert len(set(model.ended_sessions)) == 3
+    assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+@pytest.mark.parametrize('payload', [{protocol.OBSERVATION: {}}, {protocol.END_SESSION: True}], ids=['infer', 'end'])
+def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload):
+    address, model, _ = served(transport=transport)
+    client = InferenceClient(registry.client_wire(transport), address)
+    first, second = client.new_session(), client.new_session()
+    try:
+        assert first.session_id != second.session_id
+        assert protocol.SESSION_ID not in first.metadata
+        first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
+        response = protocol.deserialise(first._conn.recv(timeout=5))
+        assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
+        assert 'session ID' in response[protocol.ERROR]
+        with pytest.raises(wire.PeerDisconnected):
+            first._conn.recv(timeout=5)
+        assert model.observations == []
+        assert model.ended_sessions == [first.session_id]
+        with pytest.raises(wire.PeerDisconnected):
+            first.infer({})
+        assert second.infer({})[0] == {'value': 0}
+        assert model.session_ids == [second.session_id]
+        first.close()
+        first.close()
+        assert model.ended_sessions == [first.session_id]
+        with pytest.raises(wire.PeerDisconnected, match='closed'):
+            first.infer({})
+    finally:
+        first.close()
+        second.close()
+    assert model.ended_sessions == [first.session_id, second.session_id]
+
+
+def test_fatal_server_error_closes_client_without_masking_the_error():
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
+        protocol.serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: 'session ID mismatch'}),
+    ]
+    session = InferenceSession(conn)
+    with pytest.raises(RuntimeError, match='session ID mismatch'):
+        session.infer({})
+    session.close()
+    assert conn.send.call_count == 1
+    conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize('failure', [TimeoutError(), wire.PeerDisconnected('connection lost')])
+def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(failure):
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
+        failure,
+    ]
+    session = InferenceSession(conn)
+    with pytest.raises(type(failure)):
+        session.infer({})
+    session.close()
+    assert conn.send.call_count == 1
+    conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'response, error',
+    [
+        (wire.PeerDisconnected('no acknowledgement'), wire.PeerDisconnected),
+        (protocol.serialise({protocol.SESSION_ID: 'wrong', protocol.END_SESSION: True}), RuntimeError),
+        (protocol.serialise({protocol.ERROR: 'cleanup failed'}), RuntimeError),
+    ],
+    ids=['no-ack', 'wrong-session', 'cleanup-error'],
+)
+def test_close_still_requires_a_valid_ack_when_the_final_write_reports_disconnect(response, error):
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = [
+        protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.READY,
+            protocol.META: {},
+            protocol.SESSION_ID: 's',
+            protocol.PROTOCOL_VERSION: 2,
+        }),
+        response,
+    ]
+    conn.send.side_effect = wire.PeerDisconnected('stream ended')
+    session = InferenceSession(conn)
+    with pytest.raises(error):
+        session.close()
+    conn.close.assert_called_once()
+
+
+class OffsetCodec(Codec):
+    def encode(self, data):
+        return {**data, 'encoded': 42}
+
+    def _decode_single(self, data):
+        return {'value': data['value'] + 10}
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_server_codec_wraps_model_and_errors_leave_connection_usable(served, transport):
+    address, model, pipeline = served(codec=OffsetCodec(), transport=transport)
+    session = InferenceClient(registry.client_wire(transport), address).new_session()
+    try:
+        assert session.metadata[offboard_keys.LOCAL_STACK] == pipeline.local.to_spec()
+        assert session.infer({}) == [{'value': index + 10} for index in range(4)]
+        assert model.observations[-1]['encoded'] == 42
+        assert session.served_timing[protocol.TIMING_INFER] >= session.served_timing[protocol.TIMING_MODEL] >= 0
+        with pytest.raises(RuntimeError, match='model failed'):
+            session.infer({'fail': True})
+        assert session.served_timing == {}
+        assert session.infer({})[0] == {'value': 10}
+    finally:
+        session.close()
+
+
+def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, monkeypatch):
+    transport = 'websocket'
+    now_ns = 0
+    monkeypatch.setattr('positronic.offboard.server.time.time_ns', lambda: now_ns)
+
+    class TimedModel(FixedModel):
+        def __call__(self, obs: Obs, *, session_id: str):
+            nonlocal now_ns
+            now_ns += obs['duration_ns']
+            return super().__call__(obs, session_id=session_id)
+
+    class TimedCodec(Codec):
+        def encode(self, data):
+            nonlocal now_ns
+            now_ns += 3_000_000
+            return data
+
+        def decode(self, data):
+            nonlocal now_ns
+            now_ns += 5_000_000
+            return data
+
+    address, _, _ = served(model=TimedModel(), codec=TimedCodec())
+    session = InferenceClient(registry.client_wire(transport), address).new_session()
+    try:
+        for model_ms in (2, 7):
+            assert session.infer({'duration_ns': model_ms * 1_000_000}) == [{'value': index} for index in range(4)]
+            assert session.served_timing[protocol.TIMING_MODEL] == model_ms
+            assert session.served_timing[protocol.TIMING_INFER] == model_ms + 8
+            assert session.served_timing[protocol.timing_key('timed_codec')] == model_ms + 8
+            assert session.served_timing[protocol.timing_key(telemetry_keys.SPAN_POLICY_ENCODE)] == 3
+            with pytest.raises(RuntimeError, match='model failed'):
+                session.infer({'duration_ns': 11_000_000, 'fail': True})
+            assert session.served_timing == {}
+    finally:
+        session.close()
+
+
+def test_training_metadata_does_not_change_inference_data():
+    config = {'obs': codecs.eepose_obs, 'action': codecs.absolute_pos_action, 'flip_grip': True}
+    data_codec = codecs.compose_data.override(**config).instantiate()
+    training_codec = codecs.compose.override(**config, training_fps=15.0).instantiate()
+    obs = {
+        keys.EE_POSE: np.array([0.1, 0.2, 0.3, 1, 0, 0, 0]),
+        keys.GRIP: 0.25,
+        keys.WRIST_IMAGE: np.full((224, 224, 3), 32, dtype=np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((224, 224, 3), 64, dtype=np.uint8),
+        keys.TASK: 'stack',
+    }
+    encoded = data_codec.encode(obs)
+    expected = training_codec.encode(obs)
+    for key in expected:
+        np.testing.assert_array_equal(encoded[key], expected[key])
+    actions = [{'action': np.array([0.1, 0.2, 0.3, 1, 0, 0, 0, 0.25])} for _ in range(50)]
+    decoded = data_codec.decode(actions)
+    trained = training_codec.decode(actions)
+    assert len(decoded) == 50
+    assert len(trained) == 50
+    for actual, reference in zip(decoded, trained, strict=True):
+        assert 'timestamp' not in actual
+        assert protocol.serialise(actual) == protocol.serialise(reference)
+    assert training_codec.training_encoder.meta[policy_keys.ACTION_FPS] == 15
+    rebuilt = from_spec(data_codec.to_spec())
+    assert isinstance(rebuilt, Codec)
+    assert rebuilt.to_spec() == data_codec.to_spec()
+
+
+def test_act_codec_can_run_on_either_side_of_the_connection(served):
+    transport = 'websocket'
+
+    class EchoStateModel(FixedModel):
+        def __call__(self, obs: Obs, *, session_id: str):
+            self.observations.append(obs)
+            return [{'action': obs['observation.state']}]
+
+    codec = codecs.compose_data.override(
+        obs=codecs.eepose_obs, action=codecs.absolute_pos_action, flip_grip=True
+    ).instantiate()
+    obs = {
+        keys.EE_POSE: np.array([0.1, 0.2, 0.3, 1, 0, 0, 0]),
+        keys.GRIP: 0.25,
+        keys.WRIST_IMAGE: np.full((224, 224, 3), 32, dtype=np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((224, 224, 3), 64, dtype=np.uint8),
+        keys.TASK: 'stack',
+    }
+    outputs = []
+    inputs = []
+    for placement in (
+        {'codec': codec},
+        {'local': Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), codec)},
+        {'local': Sequential(PauseOnUnavailable(), codec, ChunkedSchedule(fps=10))},
+    ):
+        address, model, _ = served(model=EchoStateModel(), **placement)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(transport, address))
+        try:
+            first = run.send(obs)
+            assert isinstance(first, Step)
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            completed = run.send(obs)
+            assert isinstance(completed, Step)
+            outputs.append(protocol.serialise(dict(first.commands) | dict(completed.commands)))
+            inputs.append(protocol.serialise(model.observations[0]))
+        finally:
+            runtime.close()
+            run.close()
+    assert inputs[0] == inputs[1] == inputs[2]
+    assert outputs[0] == outputs[1] == outputs[2]
+
+
+def test_pipeline_rejects_frame_conversion_on_both_sides():
+    local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
+    with pytest.raises(ValueError, match='Only one side'):
+        PolicyDeployment(DictSource({'050000': FixedModel()}), local, codec=ChangeEEFrame(Transform3D.identity))
+
+
+@pytest.fixture
+def runtime():
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('declaration', [None, {'seq': []}, {'name': 'run_arbitrary_code'}, {'name': 'flip_grip'}])
+def test_invalid_declaration_fails_before_inference_and_closes_connection(runtime, declaration):
+    metadata = {} if declaration is None else {offboard_keys.LOCAL_STACK: declaration}
+    policy, session = _mock_remote_policy(metadata)
+    with pytest.raises(ValueError):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
+    started, release = threading.Event(), threading.Event()
+    order = []
+    stack = Sequential(TemporalStack(('image',), (0.0,)), ChunkedSchedule(fps=10))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+
+    def infer(obs):
+        started.set()
+        assert release.wait(5), 'inference was not released'
+        order.append('inference finished')
+        return [{}]
+
+    session.infer.side_effect = infer
+    session.close.side_effect = lambda: order.append('session closed')
+    run = runtime.start(policy)
+    releaser = threading.Timer(0.05, release.set)
+    try:
+        run.send({'image': _make_image(8, 8)})
+        assert started.wait(5)
+        releaser.start()
+        with pytest.raises(KeyError, match='image'):
+            run.send({})
+    finally:
+        release.set()
+        releaser.cancel()
+        runtime.close()
+        run.close()
+    assert order == ['inference finished', 'session closed']
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_compression_follows_the_handshake(runtime, compressed):
+    policy, session = _mock_remote_policy(
+        {**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: compressed}, infer_return=[{'value': 42}]
+    )
+    run = runtime.start(policy)
+    try:
+        run.send({'image': _make_image(48, 64)})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        sent = session.infer.call_args.args[0]['image']
+        assert isinstance(sent, dict if compressed else np.ndarray)
+    finally:
+        runtime.close()
+        run.close()
+    session.close.assert_called_once()
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp_path, monkeypatch, fails):
+    session = _mock_session()
+    session.served_timing = {}
+    if fails:
+        session.infer.side_effect = TimeoutError('server stalled')
+    encoded_at = []
+
+    def encode(image):
+        encoded_at.append(time.time_ns())
+        return {'jpeg': b''}
+
+    monkeypatch.setattr('positronic.policy.remote.encode_jpeg', encode)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-infer'):
+        if fails:
+            with pytest.raises(TimeoutError, match='server stalled'):
+                round_trip(session, {'image': _make_image(48, 64)}, compress_images=True)
+        else:
+            assert round_trip(session, {'image': _make_image(48, 64)}, compress_images=True) == {'action': 'test'}
+    spans = {s.name: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
+    assert set(spans) == {telemetry_keys.SPAN_POLICY_PREPARE, telemetry_keys.SPAN_POLICY_INFER}
+    prepare = spans[telemetry_keys.SPAN_POLICY_PREPARE]
+    assert prepare.start_ns <= encoded_at[0] <= prepare.end_ns
+    assert prepare.end_ns <= spans[telemetry_keys.SPAN_POLICY_INFER].start_ns
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
+    pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
+    server = start_server(
+        PolicyDeployment(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc'
+    )
+    address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
+        run = runtime.start(RemotePolicy(transport, address))
+        try:
+            first = run.send({})
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            completed = run.send({})
+            assert isinstance(first, Step) and isinstance(completed, Step)
+            commands = dict(first.commands) | dict(completed.commands)
+            command = commands[keys.ROBOT_COMMAND]
+            assert isinstance(command, CartesianPosition)
+            np.testing.assert_allclose(command.pose.translation, [0.4, 0.0, 0.6])
+        finally:
+            runtime.close()
+            run.close()
+    spans = {s.span_id: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
+    [span] = [s for s in spans.values() if s.name == telemetry_keys.SPAN_WIRE_RECV]
+    for parent_name in (
+        telemetry_keys.SPAN_POLICY_INFER,
+        telemetry_keys.SPAN_POLICY_SUBMIT,
+        'chunked_schedule',
+        'remote_policy',
+    ):
+        assert span.parent_id is not None
+        span = spans[span.parent_id]
+        assert span.name == parent_name
+    assert span.parent_id is None
+
+
 def test_a_client_refuses_a_wire_handed_the_other_wire_address():
     """The registry answers by name, so the type cannot catch this one; the client does, before it dials."""
     socket_address = wire.UnixSocketAddress(pathlib.Path('/run/policy.sock'), wire.SESSION_PATH, '')
@@ -257,312 +724,6 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
         client.new_session()
 
 
-def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
-    headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy(
-        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
-    )
-    client = policy._endpoint._client
-    assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
-    assert client.headers == headers
-
-
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
         RemotePolicy('ws', _address('localhost', 8000))
-
-
-class TestActionHorizonWrapping:
-    def test_truncates_action_chunks(self, open_session):
-        actions = [
-            {'a': 1, 'timestamp': 0.0},
-            {'a': 2, 'timestamp': 0.25},
-            {'a': 3, 'timestamp': 0.5},
-            {'a': 4, 'timestamp': 0.75},
-        ]
-        endpoint, _ = _mock_endpoint(infer_return=actions)
-        session, rt = open_session(ActionHorizon(0.5).wrap(endpoint))
-
-        actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
-        assert actions is not None
-        assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
-        assert actions[0]['timestamp'] == 0.0
-        assert actions[1]['timestamp'] == 0.25
-        assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
-
-    def test_no_truncation_without_horizon(self, open_session):
-        endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}])
-
-        session, rt = open_session(endpoint)
-
-        actions = round_trip(session, rt, {})
-        assert actions is not None
-        assert len(actions) == 2
-
-
-def test_remote_session_normalizes_single_dict(open_session):
-    """Server returning a single action dict is wrapped into a 1-element list."""
-    endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
-    session, rt = open_session(endpoint)
-
-    assert round_trip(session, rt, {}) == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
-
-
-def test_remote_session_passes_through_none(open_session):
-    endpoint, mock_session = _mock_endpoint()
-    mock_session.infer.return_value = None
-    session, rt = open_session(endpoint)
-
-    assert round_trip(session, rt, {}) is None
-
-
-def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
-    """A session never waits. Every call while the round trip is in flight answers ``None``, and none of
-    them starts a second round trip."""
-    chunk = [{'a': 1, 'timestamp': 0.0}]
-    endpoint, mock_session = _mock_endpoint()
-    started, release = threading.Event(), threading.Event()
-
-    def blocked(obs):
-        started.set()
-        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
-        return chunk
-
-    mock_session.infer.side_effect = blocked
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    assert started.wait(ANSWER_SEC), 'the round-trip never started'
-    assert session({}, 0) is None
-    assert mock_session.infer.call_count == 1
-
-    release.set()
-    rt.wait(ANSWER_SEC)
-    assert session({}, 0) == chunk
-
-
-def test_opening_a_session_without_a_runtime_is_refused():
-    """Nothing serves the round trip without a runtime, so the session is refused where it is opened, and not
-    at the first observation it is given."""
-    endpoint, _ = _mock_endpoint()
-
-    with pytest.raises(ValueError, match='runs its inference on a runtime'):
-        endpoint.new_session()
-
-
-def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
-    """A cancelled session drops the chunk it waited for, because that chunk applies to a world the cancel
-    says has gone, and it asks for a new one."""
-    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-
-    assert session({}, 0) is None  # the cancelled answer, read and thrown away
-    assert session({}, 0) is None  # a round-trip of its own
-    rt.wait(ANSWER_SEC)
-    assert mock_session.infer.call_count == 2
-
-
-def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
-    """A dropped chunk drops no failure. The session reads a cancelled answer, so a stalled server raises
-    to the caller that asked for the episode."""
-    endpoint, mock_session = _mock_endpoint()
-    mock_session.infer.side_effect = TimeoutError('server stalled')
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-
-    with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0)
-
-
-def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
-    """A cancel ends with the round trip it was made against, even when that round trip fails. A caller
-    that catches the failure and keeps the session gets the next chunk."""
-    endpoint, mock_session = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    mock_session.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-    with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0)
-
-    assert round_trip(session, rt, {}) == [{'a': 1, 'timestamp': 0.0}]
-
-
-def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
-    """A runtime closes before the session it serves. A caller that closes the connection under a round trip
-    gets an error that names the order, and not a failure on a dead connection."""
-    endpoint, mock_session = _mock_endpoint()
-    release = threading.Event()
-
-    def blocked(obs):
-        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
-        return None
-
-    mock_session.infer.side_effect = blocked
-    session, _rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    with pytest.raises(AssertionError, match='close the runtime'):
-        session.close()
-
-    release.set()
-
-
-def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
-    """The remote inference boundary records ``policy.infer``, and the preparation before it records
-    ``policy.prepare``."""
-    endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session, rt = open_session(endpoint)
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
-        assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}) is not None
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    assert {s.name for s in spans} == {telemetry_keys.SPAN_POLICY_PREPARE, telemetry_keys.SPAN_POLICY_INFER}
-
-
-def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_session):
-    """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
-    client CPU work into the span would inflate the inference percentiles and the policy-server capacity
-    estimate the report derives from them."""
-    endpoint, _ = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
-    session, rt = open_session(endpoint)
-    encoded_at: list[int] = []
-
-    def _stamp_encode(image):
-        encoded_at.append(time.time_ns())
-        return {'jpeg': b''}
-
-    with patch('positronic.policy.remote.encode_jpeg', side_effect=_stamp_encode):
-        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-prep'):
-            round_trip(session, rt, {'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
-
-    spans = {s.name: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
-    assert encoded_at, 'the observation carried an image to compress'
-    # Every encode finishes before the infer span opens, and falls inside the span that does measure it.
-    assert spans[telemetry_keys.SPAN_POLICY_INFER].start_ns >= encoded_at[-1]
-    prepare = spans[telemetry_keys.SPAN_POLICY_PREPARE]
-    assert prepare.start_ns <= encoded_at[0] and prepare.end_ns >= encoded_at[-1]
-
-
-def test_records_infer_span_when_inference_raises(tmp_path, open_session):
-    """A round trip that raises still records the time it took to fail, and the answer raises it again at
-    the call that reads it."""
-    endpoint, mock_session = _mock_endpoint()
-    mock_session.infer.side_effect = TimeoutError('server stalled')
-    session, rt = open_session(endpoint)
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
-        with pytest.raises(TimeoutError):
-            round_trip(session, rt, {keys.OBS_TIME_NS: 0})
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    assert telemetry_keys.SPAN_POLICY_INFER in {s.name for s in spans}
-
-
-def test_missing_declaration_fails_before_motion():
-    """A handshake carrying no ``local_stack`` leaves nothing to build, so no session opens."""
-    policy, _ = _mock_remote_policy({'positronic_version': '0.1.0'})
-    with pytest.raises(ValueError, match='0.1.0'):
-        policy.new_session()
-
-
-def test_empty_declaration_fails_before_motion():
-    """An empty stack declares nothing to build, so it is refused like an absent one."""
-    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
-    with pytest.raises(ValueError, match='declares no rig-side stack'):
-        policy.new_session()
-
-
-def test_declared_stack_built_at_session_open(open_session):
-    """The server-declared local stack runs in front of the connection."""
-    policy, mock_session = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session, rt = open_session(policy)
-
-    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 1.0}]
-
-
-def test_unknown_declared_entry_fails_before_motion():
-    policy, _ = _mock_remote_policy({
-        'local_stack': {'name': 'run_arbitrary_code'},
-        offboard_keys.POSITRONIC_VERSION: '9.9.9',
-    })
-    with pytest.raises(ValueError, match='9.9.9'):
-        policy.new_session()
-
-
-def test_compression_follows_the_server_declaration(open_session):
-    """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
-    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: True}, infer_return=[])
-    session, rt = open_session(endpoint)
-
-    round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_session.infer.call_args.args[0]['cam'], dict)
-
-
-def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
-    endpoint, mock_session = _mock_endpoint({offboard_keys.COMPRESS_IMAGES: False}, infer_return=[])
-    session, rt = open_session(endpoint)
-
-    round_trip(session, rt, {'cam': _make_image(48, 64)})
-    assert isinstance(mock_session.infer.call_args.args[0]['cam'], np.ndarray)
-
-
-# rules-allow: hardcoded-keys — the command mapping below is spelled the way a server sends it. Reading
-# the decoder's own constants would make test and decoder agree whatever those names became, leaving the
-# wire itself unpinned.
-def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mock_policy, open_session):
-    """A command served as a bare mapping — no ``__cmd__`` envelope, the vector a plain sequence — survives a
-    real msgpack round trip over the socket and reaches the rig typed, under the stack the handshake declares."""
-    pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
-    wire_action = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'timestamp': 0.0}]
-    policy = make_mock_policy(wire_action, {'model_name': 'm'})
-    served = start_server(ChunkedSchedule() | remote | PolicySource(policy))
-
-    session, rt = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
-    actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
-
-    assert actions is not None, 'the chunk was swallowed before any command reached a driver'
-    decoded = actions[0][keys.ROBOT_COMMAND]
-    assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
-    np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
-
-
-def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
-    """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
-    served = inference_server
-
-    policy = RemotePolicy('websocket', _address(served.host, served.port))
-    session, rt = open_session(policy)
-
-    meta = session.meta
-    assert meta['server.model_name'] == 'test_model'
-    assert meta['type'] == 'remote'
-
-    action = round_trip(session, rt, {'dataset': 'test'})
-    # Single-dict server response is normalized to a 1-element list (Session contract) and
-    # anchored to absolute time by the declared ChunkedSchedule.
-    assert action == [{'action_data': [1, 2, 3], 'timestamp': 0.0}]
-
-    session.close()
-
-    # New session
-    session2, _ = open_session(policy)
-    session2.close()
-
-
-def test_remote_session_meta(inference_server, open_session):
-    """Session meta must include server metadata."""
-    served = inference_server
-    session, _ = open_session(RemotePolicy('websocket', _address(served.host, served.port)))
-
-    meta = session.meta
-    assert meta['type'] == 'remote'
-    assert meta['server.model_name'] == 'test_model'
-
-    session.close()
