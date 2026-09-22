@@ -128,6 +128,12 @@ def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
     assert np.array_equal(signals['.bottle_in_bin_mask'], [True, False, False])
 
 
+def test_a_task_metric_with_rows_arrives_flat():
+    signals = mapping.task_eval_signals({'bottle_center_offsets': [[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]]})
+
+    assert np.array_equal(signals['.bottle_center_offsets'], [0.0, 0.0, 0.1, 0.0, 0.0, 0.2])
+
+
 def test_the_task_metrics_drop_names_and_empty_lists():
     signals = mapping.task_eval_signals({'bottles_in_bin': ['bottle_0'], 'bottle_names': [], 'reward': 1.0})
 
