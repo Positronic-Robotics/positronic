@@ -211,7 +211,9 @@ class DreamZeroModel(Model):
         try:
             client.reset(session_id=session_id)
         except (OSError, TimeoutError, wire.PeerDisconnected):
-            logger.info('DreamZero session reset skipped: backend connection already gone')
+            # The backend keeps this session's frame history, so a reset nobody accepted leaves it to
+            # condition the next session on this subprocess.
+            logger.exception('DreamZero session reset failed; the backend still holds its history')
         finally:
             client.close()
 

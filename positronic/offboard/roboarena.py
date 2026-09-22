@@ -27,6 +27,8 @@ SESSION_ID = 'session_id'
 HANDSHAKE_TIMEOUT_S = 60.0
 INFER_TIMEOUT_S = 120.0
 RESET_TIMEOUT_S = 10.0
+# A readiness poll answers between heartbeats, so it waits far less than a handshake a caller committed to.
+READY_PROBE_TIMEOUT_S = 5.0
 
 
 class RoboarenaClient:
@@ -44,8 +46,8 @@ class RoboarenaClient:
         try:
             announced: dict[str, Any] = deserialize(connection.recv(timeout=HANDSHAKE_TIMEOUT_S))
         except BaseException:
-            # A connection left behind here carries the next episode's inference, so one transient
-            # handshake failure becomes two.
+            # Nothing else holds this connection: `_connection` is assigned below, so an unclosed one
+            # here leaks its socket until the process ends.
             connection.close()
             raise
         self._server_config = announced
@@ -62,7 +64,7 @@ class RoboarenaClient:
 
     def is_ready(self) -> bool:
         """Whether the server announces itself."""
-        return self._wire.probe(self._address, None, HANDSHAKE_TIMEOUT_S) is None
+        return self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S) is None
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""
@@ -73,14 +75,19 @@ class RoboarenaClient:
         return deserialize(self._connection.recv(timeout=INFER_TIMEOUT_S))
 
     def reset(self, session_id: str | None = None) -> None:
-        """End the server's history for ``session_id``, and read the acknowledgement it answers with."""
+        """End the server's history for ``session_id``, and read the acknowledgement off the connection."""
         if self._connection is None:
             return
         frame: dict[str, Any] = {ENDPOINT: RESET}
         if session_id is not None:
             frame[SESSION_ID] = session_id
         self._connection.send(serialize(frame))
-        self._connection.recv(timeout=RESET_TIMEOUT_S)
+        try:
+            self._connection.recv(timeout=RESET_TIMEOUT_S)
+        except wire.PeerDisconnected as e:
+            # The bundled backend acknowledges a reset in a text frame, which the wire reports as the
+            # peer's own word. A session ends after its reset either way, so both readings end it here.
+            logger.debug(f'roboarena reset answered: {e}')
 
     def close(self) -> None:
         if self._connection is not None:
