@@ -10,8 +10,9 @@ both directions.
 Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
 (``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, the gravity
 compensation each joint needs (``gravity_comp_factor``), physical gripper polarity and joint-range check,
-mount pose survey (``base_pose``), teleop latency, the chain going limp on close (``zero_torque_mode``), and
-the teardown stow settling onto ``YAM_STOW_JOINTS`` before torque is cut.
+mount pose survey (``base_pose``), teleop latency, the chain going limp on close (``zero_torque_mode``), the
+teardown stow settling onto ``YAM_STOW_JOINTS`` before torque is cut, and the motors reading off rather than
+blinking an error after it.
 """
 
 import contextlib
@@ -36,6 +37,7 @@ from .models import DEFAULT_FRAME
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
 with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
+    from i2rt.motor_drivers.dm_driver import DMSingleMotorCanInterface  # pyright: ignore[reportMissingImports]
     from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
     from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
 
@@ -63,6 +65,48 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
     so seeding near the goal is what makes limit-clamped IK reliable."""
     az = np.arctan2(y, x)
     return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
+
+
+_POWER_OFF_ATTEMPTS = 3  # per motor; the station's own disable saw motor 1 miss the first send it got
+
+
+def _switched_off(interface: Any, motor_id: int) -> bool:
+    """Whether ``motor_id`` took the disable inside ``_POWER_OFF_ATTEMPTS`` tries."""
+    for _ in range(_POWER_OFF_ATTEMPTS):
+        # rules-allow: swallowed-error — a motor that will not answer must not leave the rest of them on
+        try:
+            interface.motor_off(motor_id)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _power_off(vendor: Any) -> None:
+    """Switch the chain's motors off, once ``close()`` has stopped and joined i2rt's control thread.
+
+    A chain left limp keeps its motors enabled, so each one reaches its own 8 s command timeout and latches
+    an error. i2rt switches them on one at a time and offers no matching off, so this sends the same
+    per-motor disable over an interface of its own: ``close()`` has already shut the chain's.
+    """
+    chain = getattr(vendor, 'motor_chain', None)
+    motors = getattr(chain, 'motor_list', None)
+    if chain is None or not motors:
+        return  # i2rt's own sim chain and the fakes carry no motors to switch off
+    # rules-allow: swallowed-error — the run is over, and a chain that will not answer must not hide
+    # whatever ended it
+    try:
+        interface = DMSingleMotorCanInterface(
+            channel=chain.channel, control_mode=chain.motor_interface.control_mode, name='power-off'
+        )
+        try:
+            missed = [motor_id for motor_id, _ in motors if not _switched_off(interface, motor_id)]
+        finally:
+            interface.close()
+        if missed:
+            logger.warning(f'Motors {missed} stayed on, so they will latch their own command timeout')
+    except Exception as exc:
+        logger.warning(f'The chain kept its motors on: {exc}')
 
 
 def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
@@ -404,7 +448,8 @@ def _opened(
     sim: bool,
     gravity_comp_factor: np.ndarray | None,
 ) -> Iterator[Any]:
-    """The chain, left limp and its handle given back however the run ends — including one that never starts."""
+    """The chain, left limp, switched off and its handle given back however the run ends — including one
+    that never starts."""
     vendor = connect(channel, sim, gravity_comp_factor)
     try:
         yield vendor
@@ -413,6 +458,9 @@ def _opened(
             vendor.zero_torque_mode()
         finally:  # a chain that will not go limp still has a handle to give back
             vendor.close()
+            # Only now: `close()` joins i2rt's control thread, and a disable that beats it makes that thread
+            # fail on a motor it is still driving.
+            _power_off(vendor)
 
 
 class Robot(pimm.ControlSystem):

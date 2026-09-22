@@ -1,4 +1,5 @@
 import logging
+import types
 
 import numpy as np
 import pytest
@@ -276,7 +277,7 @@ def test_a_station_that_measured_none_leaves_the_vendor_its_own():
 _DT = 0.01  # seconds per pump; matches the driver's 100 Hz tick so the ramp behaves as it does on the rig
 
 # Event tags the recording fake logs, so the fake and the assertions agree on one spelling.
-_CMD, _ZERO_TORQUE, _CLOSE = 'cmd', 'zero_torque', 'close'
+_CMD, _ZERO_TORQUE, _CLOSE, _MOTOR_OFF = 'cmd', 'zero_torque', 'close', 'motor_off'
 
 
 class _RunLoopCrash(RuntimeError):
@@ -368,12 +369,14 @@ def _in_run_loop(status: _StatusSpy) -> bool:
 
 def _assert_stowed_then_limp(fake: _RecordingYam) -> None:
     """The arm read the stow pose when torque was cut, no command went out afterwards, and the handle was
-    then given back."""
+    then given back. Only the motor disable follows that, and it has to: it needs the control thread joined."""
     assert fake.pos_at_zero_torque is not None, 'the chain was never cut limp'
     np.testing.assert_allclose(fake.pos_at_zero_torque, yam.YAM_STOW_JOINTS, atol=yam._Chain._PARK_TOL)
     cut = fake.events.index(_ZERO_TORQUE)
     assert _CMD not in fake.events[cut + 1 :], 'a joint command went out after the chain was cut limp'
-    assert fake.events[-1] == _CLOSE, 'the handle was not given back last'
+    given_back = fake.events.index(_CLOSE)
+    assert given_back > cut, 'the handle was given back before the chain was cut limp'
+    assert set(fake.events[given_back + 1 :]) <= {_MOTOR_OFF}, 'the run did more than disable motors at the end'
 
 
 def test_a_normal_stop_stows_the_arm_before_it_goes_limp():
@@ -388,6 +391,109 @@ def test_a_normal_stop_stows_the_arm_before_it_goes_limp():
     stop.stopped = True
     _pump_to_end(loop, clock)
 
+    _assert_stowed_then_limp(fake)
+
+
+class _FakeMotorInterface:
+    """Stands for i2rt's single-motor CAN interface, the only thing that can switch a motor off."""
+
+    def __init__(self, events: list[str], **opened_with):
+        self.events = events
+        self.opened_with = opened_with
+        self.refuses: set[int] = set()
+        self.off: list[int] = []
+        self.closed = False
+
+    def motor_off(self, motor_id: int) -> None:
+        if motor_id in self.refuses:
+            raise OSError(f'motor {motor_id} did not answer')
+        self.off.append(motor_id)
+        self.events.append(_MOTOR_OFF)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeMotorChain:
+    """The CAN chain i2rt hangs off a real YAM: seven motors, the interface that drives them, and a name."""
+
+    def __init__(self):
+        self.channel = 'can_follower_l'
+        self.motor_list = [(motor_id, 'DM4310') for motor_id in range(1, 8)]
+        self.motor_interface = types.SimpleNamespace(control_mode='mit')
+
+
+class _ChainedYam(_RecordingYam):
+    """A ``_RecordingYam`` carrying i2rt's CAN chain, so the driver can reach the motors behind it."""
+
+    def __init__(self):
+        super().__init__()
+        self.motor_chain = _FakeMotorChain()
+
+
+def _interfaces_opened(monkeypatch, events: list[str], refuses: tuple[int, ...] = ()) -> list[_FakeMotorInterface]:
+    """Stand in for i2rt's CAN interface and collect every one the driver opens. Motors named in ``refuses``
+    never answer."""
+    opened: list[_FakeMotorInterface] = []
+
+    def open_interface(**kwargs):
+        interface = _FakeMotorInterface(events, **kwargs)
+        interface.refuses = set(refuses)
+        opened.append(interface)
+        return interface
+
+    monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', open_interface)
+    return opened
+
+
+def _run_to_the_end(fake: _RecordingYam) -> None:
+    """Start the driver over ``fake``, let the startup park finish, then stop it and drain the teardown."""
+    stop, clock = StopFlag(), MockClock()
+    _, status, loop = _driven(fake, stop, clock)
+    _pump_until(loop, clock, lambda: _in_run_loop(status))
+    stop.stopped = True
+    _pump_to_end(loop, clock)
+
+
+def test_a_stopped_run_switches_the_motors_off_after_it_gives_the_handle_back(monkeypatch):
+    """A chain left limp keeps its motors enabled, so each reaches its own 8 s command timeout and latches an
+    error. The disable has to follow ``close()``, which is what stops and joins i2rt's control thread: one
+    that beats it makes that thread fail on a motor it is still driving."""
+    fake = _ChainedYam()
+    opened = _interfaces_opened(monkeypatch, fake.events)
+
+    _run_to_the_end(fake)
+
+    assert len(opened) == 1, 'the teardown opened more than one interface'
+    assert opened[0].off == [1, 2, 3, 4, 5, 6, 7]
+    assert opened[0].closed, 'the interface that switched the motors off was not closed'
+    assert opened[0].opened_with['channel'] == fake.motor_chain.channel
+    assert fake.events.index(_CLOSE) < fake.events.index(_MOTOR_OFF), 'a motor was disabled before close()'
+
+
+def test_a_chain_with_no_motors_behind_it_is_left_alone(monkeypatch):
+    """i2rt's own sim and the fakes carry no CAN motors, so the teardown has nothing to open or switch off."""
+    fake = _RecordingYam()
+    opened = _interfaces_opened(monkeypatch, fake.events)
+
+    _run_to_the_end(fake)
+
+    assert not opened
+    _assert_stowed_then_limp(fake)
+
+
+def test_a_motor_that_will_not_answer_stops_neither_the_others_nor_the_teardown(monkeypatch, caplog):
+    """The disable runs in the teardown's own ``finally``, so it may not raise, and one dead motor may not
+    leave the other six drawing current."""
+    caplog.set_level(logging.WARNING, logger=yam.__name__)
+    fake = _ChainedYam()
+    opened = _interfaces_opened(monkeypatch, fake.events, refuses=(3,))
+
+    _run_to_the_end(fake)
+
+    assert opened[0].off == [1, 2, 4, 5, 6, 7]
+    assert '[3]' in caplog.text
+    assert opened[0].closed
     _assert_stowed_then_limp(fake)
 
 

@@ -25,6 +25,8 @@ I2RT = 'i2rt'
 I2RT_ROBOTS = f'{I2RT}.robots'
 I2RT_GET_ROBOT = f'{I2RT_ROBOTS}.get_robot'
 I2RT_UTILS = f'{I2RT_ROBOTS}.utils'
+I2RT_MOTOR_DRIVERS = f'{I2RT}.motor_drivers'
+I2RT_DM_DRIVER = f'{I2RT_MOTOR_DRIVERS}.dm_driver'
 
 
 def _install_vendor_stub() -> None:
@@ -84,10 +86,24 @@ def _install_i2rt_stub() -> None:
 
     robots = types.ModuleType(I2RT_ROBOTS)
     robots.__dict__.update(get_robot=get_robot, utils=utils)
-    package = types.ModuleType(I2RT)
-    package.__dict__.update(robots=robots)
 
-    sys.modules.update({I2RT: package, I2RT_ROBOTS: robots, I2RT_GET_ROBOT: get_robot, I2RT_UTILS: utils})
+    # The teardown opens one of these to switch the motors off. A test that wants it stands in for it.
+    dm_driver = types.ModuleType(I2RT_DM_DRIVER)
+    dm_driver.__dict__.update(DMSingleMotorCanInterface=object)
+    motor_drivers = types.ModuleType(I2RT_MOTOR_DRIVERS)
+    motor_drivers.__dict__.update(dm_driver=dm_driver)
+
+    package = types.ModuleType(I2RT)
+    package.__dict__.update(robots=robots, motor_drivers=motor_drivers)
+
+    sys.modules.update({
+        I2RT: package,
+        I2RT_ROBOTS: robots,
+        I2RT_GET_ROBOT: get_robot,
+        I2RT_UTILS: utils,
+        I2RT_MOTOR_DRIVERS: motor_drivers,
+        I2RT_DM_DRIVER: dm_driver,
+    })
 
 
 # Both are reached for only inside the functions that use them, so an empty module carries the import
