@@ -7,7 +7,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.yam_state import YamState
+from positronic.drivers.roboarm.yam import YamState
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping

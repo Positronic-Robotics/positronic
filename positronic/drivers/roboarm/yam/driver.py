@@ -27,17 +27,10 @@ from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
 
-from .. import RobotStatus, command
+from .. import RobotStatus, State, command
 from ..ik import qpos_from_site_pose
 from ..models import DEFAULT_FRAME, YAM_JOINT_NAMES, bundled_yam_model
-from ..yam_state import YamState
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
-
-# i2rt lives in the `yam` extra, which the type-check environment does not install.
-with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
-    from i2rt.motor_drivers.dm_driver import DMSingleMotorCanInterface  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +47,7 @@ _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+_YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
 class ChainFault(RuntimeError):
@@ -76,6 +70,10 @@ def _chain_call() -> Iterator[None]:
 
 def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
+    # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
+    with vendor_import('i2rt', 'YAM support', hint=_YAM_EXTRA_HINT):
+        from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from i2rt.robots.utils import GripperType  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
     return get_yam_robot(
         channel,
         gripper_type=GripperType.LINEAR_4310,
@@ -83,6 +81,44 @@ def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
         sim=sim,
         gravity_comp_factor=gravity_comp_factor,
     )
+
+
+class YamState(State, pimm.shared_memory.NumpySMAdapter):
+    Q_OFFSET = 0
+    DQ_OFFSET = Q_OFFSET + 6
+    EE_POSE_OFFSET = DQ_OFFSET + 6
+    STATUS_OFFSET = EE_POSE_OFFSET + 7
+    TOTAL = STATUS_OFFSET + 1
+
+    def __init__(self):
+        super().__init__(shape=(YamState.TOTAL,), dtype=np.dtype(np.float32))
+
+    def instantiation_params(self) -> tuple[Any, ...]:
+        return ()
+
+    @property
+    def q(self) -> np.ndarray:
+        return self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6].copy()
+
+    @property
+    def dq(self) -> np.ndarray:
+        return self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6].copy()
+
+    @property
+    def ee_pose(self) -> geom.Transform3D:
+        pose = self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 7].copy()
+        return geom.Transform3D(pose[:3], geom.Rotation.from_quat(pose[3:7]))
+
+    @property
+    def status(self) -> RobotStatus:
+        return RobotStatus(int(self.array[YamState.STATUS_OFFSET]))
+
+    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus):
+        self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6] = q
+        self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6] = dq
+        self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 3] = ee_pose.translation
+        self.array[YamState.EE_POSE_OFFSET + 3 : YamState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
+        self.array[YamState.STATUS_OFFSET] = status.value
 
 
 class _Kinematics:
@@ -544,6 +580,11 @@ def _power_off(vendor: Any) -> None:
     if chain is None or not getattr(chain, 'motor_list', None):
         return  # i2rt's own sim chain and the fakes carry no motors
     motor_ids = [motor_id for motor_id, _ in chain.motor_list]
+    # Imported here for the reason `_connect` gives.
+    with vendor_import('i2rt', 'YAM support', hint=_YAM_EXTRA_HINT):
+        from i2rt.motor_drivers.dm_driver import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+            DMSingleMotorCanInterface,
+        )
     # rules-allow: swallowed-error — the run is over; a silent chain must not hide what ended it
     try:
         interface = DMSingleMotorCanInterface(
