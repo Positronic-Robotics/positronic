@@ -304,7 +304,7 @@ class _Chain(DriverRun[command.CommandType]):
         self.publish(self.observations())
         return MoveStatus.ARRIVED
 
-    def _park(
+    def _settle_onto(
         self, grip: float, target: np.ndarray, *, at_teardown: bool
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle the chain onto ``target``, biasing the reference to close the gap the position servo holds.
@@ -353,7 +353,7 @@ class _Chain(DriverRun[command.CommandType]):
         back and drops the chain limp)."""
         logger.info('Moving the arm to the park pose')
         try:
-            return (yield from self._park(grip, target, at_teardown=at_teardown))
+            return (yield from self._settle_onto(grip, target, at_teardown=at_teardown))
         # rules-allow: swallowed-error — a chain that will not park reads ERROR; it does not end the run
         except Exception as exc:
             self.moves.errored = True
@@ -369,17 +369,21 @@ class _Chain(DriverRun[command.CommandType]):
         """
         try:
             target = self.to_joints(call.request, q)
-            if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
-                call.set_result(None)
-                return target, grip
+            # Settled rather than ramped once: the position servo holds the chain short of its reference by an
+            # amount that depends on the pose, so a single ramp lands joints outside the arrival tolerance and
+            # the move reports failure with the chain a hair away. Measured on the yambox bench: joint 3 short
+            # by 28.5 mrad at the episode start pose, against a 20 mrad tolerance, with every other joint in.
+            held = yield from self._settle_onto(grip, target, at_teardown=False)
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
             finally:
                 call.set_exception(exc)  # a chain the driver cannot read still leaves nobody waiting
             return held
-        held = self.hold_where_it_stopped()
-        call.set_exception(MoveAbandoned())  # the state saying where the chain stopped is out
+        if self.should_stop.value:  # the settle returns where it stopped rather than at the target
+            call.set_exception(MoveAbandoned())  # the state saying where the chain stopped is out
+        else:
+            call.set_result(None)
         return held
 
 
