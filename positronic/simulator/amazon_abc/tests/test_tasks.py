@@ -71,7 +71,7 @@ def test_an_unbound_task_lets_the_env_offer_its_whole_catalogue(asked):
 
 
 def _frame(**overrides: Any) -> dict[str, Any]:
-    raw: dict[str, Any] = {mapping.OBS_SIM_STATE: np.zeros(4)}
+    raw: dict[str, Any] = {mapping.OBS_SIM_STATE: np.zeros(4), mapping.OBS_TASK_EVAL: {}}
     for index, arm in enumerate(mapping.ARMS):
         raw.update({
             protocol.arm_channel(mapping.OBS_JOINT_POS, arm): np.full(mapping.ARM_JOINTS, float(index)),
@@ -103,6 +103,35 @@ def test_a_camera_arrives_as_height_width_channels():
     obs = AbcAdapter(CAMERAS).observations(_frame())
 
     assert obs[keys.WRIST_LEFT_IMAGE].array.shape == (4, 6, 3)
+
+
+def test_the_privileged_channel_carries_the_physics_state_and_the_task_metrics():
+    metrics = {'.reward': np.float64(0.5), '.num_bottles_in_bin': np.int64(1)}
+
+    privileged = AbcAdapter(CAMERAS).privileged(_frame(**{mapping.OBS_TASK_EVAL: metrics}))
+
+    assert set(privileged) == {mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL}
+    assert privileged[mapping.OBS_TASK_EVAL] == metrics
+
+
+def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
+    signals = mapping.task_eval_signals({
+        'reward': 0.5,
+        'success': False,
+        'num_bottles_in_bin': 1,
+        'bottle_in_bin_mask': [True, False, False],
+    })
+
+    assert signals['.reward'] == 0.5
+    assert signals['.success'] == np.False_
+    assert signals['.num_bottles_in_bin'] == 1
+    assert np.array_equal(signals['.bottle_in_bin_mask'], [True, False, False])
+
+
+def test_the_task_metrics_drop_names_and_empty_lists():
+    signals = mapping.task_eval_signals({'bottles_in_bin': ['bottle_0'], 'bottle_names': [], 'reward': 1.0})
+
+    assert set(signals) == {'.reward'}
 
 
 def test_the_grip_conventions_are_inverses():

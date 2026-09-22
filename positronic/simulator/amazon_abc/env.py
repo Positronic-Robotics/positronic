@@ -79,7 +79,7 @@ class AbcEnv(EnvProtocol):
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
         return {
-            protocol.FRAME_OBS: self._observe(obs),
+            protocol.FRAME_OBS: self._observe(obs, self._env.evaluate_task().to_info(squeeze=True)),
             protocol.FRAME_META: {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]},
             protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -88,7 +88,7 @@ class AbcEnv(EnvProtocol):
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         obs, _reward, terminated, truncated, info = self._env.step(self._joint_action(action))
         return {
-            protocol.FRAME_OBS: self._observe(obs),
+            protocol.FRAME_OBS: self._observe(obs, info[mapping.ABC_INFO_TASK_EVAL]),
             protocol.FRAME_DONE: bool(terminated or truncated),
             protocol.FRAME_SUCCESS: bool(info[mapping.ABC_INFO_SUCCESS]),
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -176,10 +176,13 @@ class AbcEnv(EnvProtocol):
             f'{target_pos.tolist()}'
         )
 
-    def _observe(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def _observe(self, obs: dict[str, Any], task_eval: dict[str, Any]) -> dict[str, Any]:
         self._sync_sites()
         per_arm = np.asarray(obs[mapping.ABC_OBS_STATE]).reshape(len(self._arms), mapping.ARM_JOINTS + 1)
-        payload: dict[str, Any] = {mapping.OBS_SIM_STATE: self._physics_state()}
+        payload: dict[str, Any] = {
+            mapping.OBS_SIM_STATE: self._physics_state(),
+            mapping.OBS_TASK_EVAL: mapping.task_eval_signals(task_eval),
+        }
         for index, arm in enumerate(self._arms):
             pos, rot = self._measured_eef(arm)
             quat = np.empty(4)
