@@ -21,6 +21,11 @@ PACKAGE = 'positronic_franka'
 VENDOR = f'{PACKAGE}._franka'
 DESK = f'{PACKAGE}.desk'
 
+I2RT = 'i2rt'
+I2RT_ROBOTS = f'{I2RT}.robots'
+I2RT_GET_ROBOT = f'{I2RT_ROBOTS}.get_robot'
+I2RT_UTILS = f'{I2RT_ROBOTS}.utils'
+
 
 def _install_vendor_stub() -> None:
     """Bind the names ``positronic_franka`` gives the Franka driver. Reached as ``franka.pf.*``, never imported."""
@@ -64,32 +69,25 @@ def _install_vendor_stub() -> None:
     sys.modules.update({PACKAGE: package, VENDOR: vendor, DESK: desk})
 
 
-I2RT = 'i2rt'
-
-
 def _install_i2rt_stub() -> None:
-    """Bind the two names the YAM driver takes from ``i2rt``. It ships in the ``yam`` extra, and the driver
-    reaches the vendor only through the ``connect`` factory a test replaces."""
+    """Bind the names the YAM driver imports from ``i2rt`` at module load. The driver reaches the vendor only
+    through the ``connect`` factory, so a test injecting ``_FakeYam`` needs no vendor behaviour — just the
+    symbols the top-level import binds."""
 
     class GripperType(Enum):
         LINEAR_4310 = 'linear_4310'
 
-    get_robot = types.ModuleType(f'{I2RT}.robots.get_robot')
-    get_robot.get_yam_robot = lambda *args, **kwargs: None
-    utils = types.ModuleType(f'{I2RT}.robots.utils')
-    utils.GripperType = GripperType
+    get_robot = types.ModuleType(I2RT_GET_ROBOT)
+    get_robot.__dict__.update(get_yam_robot=lambda *args, **kwargs: None)
+    utils = types.ModuleType(I2RT_UTILS)
+    utils.__dict__.update(GripperType=GripperType)
 
-    robots = types.ModuleType(f'{I2RT}.robots')
+    robots = types.ModuleType(I2RT_ROBOTS)
     robots.__dict__.update(get_robot=get_robot, utils=utils)
     package = types.ModuleType(I2RT)
-    package.robots = robots
+    package.__dict__.update(robots=robots)
 
-    sys.modules.update({
-        I2RT: package,
-        f'{I2RT}.robots': robots,
-        f'{I2RT}.robots.get_robot': get_robot,
-        f'{I2RT}.robots.utils': utils,
-    })
+    sys.modules.update({I2RT: package, I2RT_ROBOTS: robots, I2RT_GET_ROBOT: get_robot, I2RT_UTILS: utils})
 
 
 # Both are reached for only inside the functions that use them, so an empty module carries the import
@@ -104,13 +102,6 @@ if importlib.util.find_spec(I2RT) is None:
 for _name in _EMPTY_STUBS:
     if importlib.util.find_spec(_name) is None:
         sys.modules[_name] = types.ModuleType(_name)
-
-
-if importlib.util.find_spec('i2rt') is None:
-    for _name in ('i2rt', 'i2rt.robots', 'i2rt.robots.get_robot', 'i2rt.robots.utils'):
-        sys.modules[_name] = types.ModuleType(_name)
-    sys.modules['i2rt.robots.get_robot'].__dict__['get_yam_robot'] = None
-    sys.modules['i2rt.robots.utils'].__dict__['GripperType'] = types.SimpleNamespace(LINEAR_4310=object())
 
 
 @pytest.fixture
