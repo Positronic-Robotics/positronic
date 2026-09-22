@@ -869,9 +869,24 @@ class World:
 
     def _run_foreground(self, cs: ControlSystem) -> Iterator[Command]:
         loop = _CallAnsweringLoop(cs)(self.should_stop_reader(), self._clock)
-        if cs.shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
-            self._protected_foreground_loops.append(loop)
-        for command in loop:  # noqa: UP028 — yield from would close the protected device with this wrapper
+        if cs.shutdown_policy is not ShutdownPolicy.WAIT_FOR_COMPLETION:
+            yield from loop
+            return
+        self._protected_foreground_loops.append(loop)
+        while True:
+            errors: list[BaseException] = []
+            command = None
+            with self._defer_sigint(errors):
+                try:
+                    command = next(loop, None)
+                except BaseException as exc:
+                    errors.append(exc)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup('Foreground step failed', errors)
+            if command is None:
+                return
             yield command
 
     def start(  # noqa: C901
