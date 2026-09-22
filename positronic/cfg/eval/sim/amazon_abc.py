@@ -20,7 +20,7 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     task=None,
     trial_count=1,
 )
-def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_width, seed):
+def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_width, seed):
     """An ABC eval on the bimanual i2rt YAM.
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
@@ -43,4 +43,4 @@ def _abc_eval(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 
 
-put_bottles = _abc_eval.override(task='put_plastic_bottles_in_bin')
+put_bottles = all_tasks.override(task='put_plastic_bottles_in_bin')

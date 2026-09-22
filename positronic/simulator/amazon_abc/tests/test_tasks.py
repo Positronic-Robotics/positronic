@@ -65,7 +65,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 
 
 def test_an_unbound_task_lets_the_env_offer_its_whole_catalogue(asked):
-    abc_cfg._abc_eval.instantiate().tasks()
+    abc_cfg.all_tasks.instantiate().tasks()
 
     assert asked == [{}]
 
