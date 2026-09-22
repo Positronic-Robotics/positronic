@@ -1559,3 +1559,39 @@ def test_unstarted_protected_foreground_loop_is_not_run_on_exit():
     assert not ready.is_set()
     assert not holding.is_set()
     assert not closed.is_set()
+
+
+@pytest.mark.parametrize('interrupt_count', [1, 2])
+def test_interrupt_during_shutdown_sleep_still_finishes_every_device(monkeypatch, interrupt_count):
+    closed = []
+
+    class SlowShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            for _ in range(4):
+                yield Sleep(0.01)
+            closed.append(self)
+
+    devices = [SlowShutdown(), SlowShutdown()]
+    interrupts = []
+
+    def interrupted_sleep(seconds):
+        if len(interrupts) < interrupt_count:
+            error = KeyboardInterrupt()
+            interrupts.append(error)
+            raise error
+
+    with pytest.raises(BaseException) as raised:
+        with World() as world:
+            next(world.start([*devices]))
+            monkeypatch.setattr(time, 'sleep', interrupted_sleep)
+    assert closed == devices
+    assert len(interrupts) == interrupt_count
+    if interrupt_count == 1:
+        assert raised.value is interrupts[0]
+    else:
+        assert isinstance(raised.value, BaseExceptionGroup)
+        assert list(raised.value.exceptions) == interrupts

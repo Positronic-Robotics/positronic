@@ -546,7 +546,14 @@ class World:
             except BaseException as exc:
                 errors.append(exc)
 
-        self._drive(self._interleave([finish(loop) for loop in self._protected_foreground_loops]))
+        loops = [finish(loop) for loop in self._protected_foreground_loops]
+        while True:
+            try:
+                self._drive(self._interleave(loops))
+            except BaseException as exc:
+                errors.append(exc)
+            else:
+                break
         if len(errors) == 1:
             raise errors[0]
         if errors:
