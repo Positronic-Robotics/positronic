@@ -176,7 +176,7 @@ class ActionTimestampV1(Codec):
     def encode(self, data):
         return data
 
-    def decode(self, data):
+    def decode(self, data, *, obs: Obs | None = None):
         if isinstance(data, list):
             stamped = [{**action, TIMESTAMP: i * self._dt} for i, action in enumerate(data)]
             if stamped:
@@ -201,7 +201,7 @@ class ActionHorizonV1(Codec):
     def encode(self, data):
         return data
 
-    def decode(self, data):
+    def decode(self, data, *, obs: Obs | None = None):
         if not isinstance(data, list):
             return data
         kept = [action for action in data if action.get(TIMESTAMP, 0.0) < self._horizon_sec]

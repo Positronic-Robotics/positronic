@@ -16,7 +16,13 @@ from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
+from positronic.policy.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    DeltaToAbsolute,
+    IKJointsAction,
+    JointDeltaAction,
+)
 from positronic.policy.base import Policy, Step
 from positronic.policy.codec import (
     BinarizeGripInference,
@@ -400,6 +406,7 @@ def test_wire_names_match_the_registered_components():
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
+        'delta_to_absolute': DeltaToAbsolute(),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
     }
     registered = spec.COMPONENTS

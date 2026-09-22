@@ -43,7 +43,7 @@ class Delay(Codec):
         time.sleep(self._delay_sec)
         return data
 
-    def decode(self, data):
+    def decode(self, data, *, obs: Obs | None = None):
         return data
 
 

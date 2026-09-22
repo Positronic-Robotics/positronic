@@ -178,10 +178,9 @@ class PoseDeltaAction(Codec):
 
     The policy emits a chunk of per-step actions ``[Δpos(3), Δrotvec(3), grip(1)]`` normalized to ``[-1, 1]`` in
     robosuite OSC_POSE space. Each step's pose delta is scaled by the controller's per-step output range
-    (``OUTPUT_MAX``) and forwarded as a world-frame ``CartesianDelta`` the driver composes onto its live measured
-    pose, reproducing robosuite's feed-forward OSC control (``goal = live_eef ∘ Δ`` every step). Integrating the
-    chunk into absolute waypoints instead chases the open-loop trajectory and folds the OSC tracking residual back
-    into each command — dynamics the policy was never trained against. The grip channel maps to the absolute
+    (``OUTPUT_MAX``) and forwarded as a world-frame ``CartesianDelta``. An outer ``DeltaToAbsolute`` anchors it
+    on the observed pose when that action is emitted. The chunk must not be integrated against a single
+    observation. The grip channel maps to the absolute
     ``[0, 1]`` closure the gripper command uses.
     """
 

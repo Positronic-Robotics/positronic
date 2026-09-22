@@ -502,7 +502,7 @@ def test_model_timing_excludes_codec_work_and_belongs_to_each_request(served, mo
             now_ns += 3_000_000
             return data
 
-        def decode(self, data):
+        def decode(self, data, *, obs=None):
             nonlocal now_ns
             now_ns += 5_000_000
             return data

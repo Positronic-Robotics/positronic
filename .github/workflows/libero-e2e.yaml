@@ -3,7 +3,7 @@ name: LIBERO env-server e2e
 # Heavy, GPU-free lane: the env server builds LIBERO's own 3.10 interpreter (via `uv run --no-project`) and runs
 # two on-box checks with software rendering (`MUJOCO_GL=osmesa`, no GPU/display) — a recorded demo replayed over
 # the socket, then `validate.py`'s command-transform + gripper checks against robosuite's own control path.
-# Path-filtered to simulator changes so it never slows unrelated PRs. The replay self-skips until its `.npz`
+# Path-filtered to simulator and policy changes so it never slows unrelated PRs. The replay self-skips until its `.npz`
 # fixture is committed (generate once on a LIBERO box with `make_fixture.py`).
 
 on:
@@ -11,11 +11,15 @@ on:
     branches: [main]
     paths:
       - 'positronic/simulator/**'
+      - 'positronic/policy/**'
+      - 'positronic/vendors/openpi/codecs.py'
       - '.github/workflows/libero-e2e.yaml'
   pull_request:
     branches: [main]
     paths:
       - 'positronic/simulator/**'
+      - 'positronic/policy/**'
+      - 'positronic/vendors/openpi/codecs.py'
       - '.github/workflows/libero-e2e.yaml'
 
 jobs:

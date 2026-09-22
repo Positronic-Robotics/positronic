@@ -5,7 +5,7 @@ from functools import reduce
 from operator import and_, or_
 from typing import Any, cast
 
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, DeltaToAbsolute, JointDeltaAction
 from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Processor
 from positronic.policy.codec import (
     BinarizeGripInference,
@@ -48,6 +48,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         AbsolutePositionAction,
         AbsoluteJointsAction,
         JointDeltaAction,
+        DeltaToAbsolute,
     )
 }
 for component in (ChunkedScheduleV1, StopOnFaultV1, TemporalStackV1, ActionTimestampV1, ActionHorizonV1):

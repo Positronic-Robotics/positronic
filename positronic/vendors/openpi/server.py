@@ -17,6 +17,7 @@ from positronic.offboard.server_utils import run_with_progress, wait_for_subproc
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
+from positronic.policy.action import DeltaToAbsolute
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
@@ -266,7 +267,7 @@ def pipeline(
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = Sequential(ChangeEEFrame(ee_frame), local)
-    return PolicyDeployment(source, local, codec)
+    return PolicyDeployment(source, Sequential(DeltaToAbsolute(), local), codec)
 
 
 # These bind no checkpoint, so they state no frame: whoever binds one passes ``--pipeline.ee_frame`` with it.

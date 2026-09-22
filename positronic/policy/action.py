@@ -7,10 +7,56 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.policy.base import ARGS, NAME, VERSION
+from positronic.policy.base import ARGS, NAME, VERSION, Obs
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
 
 RotRep = geom.Rotation.Representation
+
+
+class DeltaToAbsolute(Codec):
+    """Anchor one emitted delta on the current observation, leaving absolute commands unchanged.
+
+    Place outside scheduling and frame conversion: deltas are resolved per control step in the
+    observation's frame, not against the observation that started inference. Empty steps emit nothing;
+    the robot keeps its last absolute target. Instances hold no observation or episode state.
+    """
+
+    WIRE_NAME = 'delta_to_absolute'
+
+    def __init__(
+        self, command_key: str = keys.ROBOT_COMMAND, joints_key: str = keys.JOINTS, ee_pose_key: str = keys.EE_POSE
+    ):
+        self._command_key = command_key
+        self._joints_key = joints_key
+        self._ee_pose_key = ee_pose_key
+
+    def encode(self, data):
+        return data
+
+    def decode(self, data, *, obs: Obs | None = None):
+        if isinstance(data, list):
+            raise ValueError('DeltaToAbsolute must wrap the scheduler, not an action chunk')
+        value = data.get(self._command_key)
+        if not isinstance(value, command.JointDelta | command.CartesianDelta):
+            return data
+        if obs is None:
+            raise ValueError('DeltaToAbsolute needs an observation to anchor a delta')
+        if isinstance(value, command.JointDelta):
+            joints = np.asarray(obs[self._joints_key])
+            if joints.shape != np.shape(value.velocities):
+                raise ValueError(f'Joint delta shape {np.shape(value.velocities)} does not match joints {joints.shape}')
+            absolute = command.JointPosition(joints + value.velocities, value.mode)
+        else:
+            pose = geom.Transform3D.from_vector(obs[self._ee_pose_key], RotRep.QUAT)
+            absolute = command.CartesianPosition(value.apply(pose), value.mode)
+        return {**data, self._command_key: absolute}
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'command_key': self._command_key, 'joints_key': self._joints_key, 'ee_pose_key': self._ee_pose_key},
+        }
 
 
 class AbsolutePositionAction(Codec):
@@ -134,7 +180,7 @@ class JointDeltaAction(Codec):
     """DROID-style joint-delta action decoder (inference only).
 
     Scales the model's per-step joint velocities (clipped to ``[-1, 1]``) by ``MAX_JOINT_DELTA``
-    into a ``JointDelta`` command; the driver integrates each delta onto the live measured joints.
+    into a ``JointDelta``. An outer ``DeltaToAbsolute`` anchors each emitted delta on observed joints.
     """
 
     WIRE_NAME = 'joint_delta_action'

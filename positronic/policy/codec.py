@@ -60,7 +60,8 @@ class Codec:
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
-    (action decoding). The ``training_encoder`` property
+    (action decoding). Override ``decode(data, *, obs=None)`` when decoding needs the input observation;
+    ``wrap`` supplies it per call, so the codec need not retain mutable state. The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
 
     Reserved ``meta`` key:
@@ -77,9 +78,10 @@ class Codec:
     def encode(self, data: dict) -> dict:
         return {}
 
-    def decode(self, data: Any) -> Any:
+    def decode(self, data: Any, *, obs: Obs | None = None) -> Any:
+        """Decode an output, optionally using the observation passed to this codec's encoder."""
         if isinstance(data, list):
-            return [self.decode(d) for d in data]
+            return [self.decode(d, obs=obs) for d in data]
         return self._decode_single(data)
 
     def _decode_single(self, data: dict) -> dict:
@@ -111,7 +113,9 @@ class Codec:
             run = self._wrap_run(function)
             next(run)
             return run
+        return self._wrap_call(function)
 
+    def _wrap_call(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]:
         encode = telemetry.traced(
             telemetry_keys.SPAN_POLICY_ENCODE, **{telemetry_keys.ATTR_CODEC: type(self).__name__}
         )(self.encode)
@@ -121,8 +125,12 @@ class Codec:
             encoded = encode(dict(obs))
             result = function(encoded)
             if isinstance(result, Step):
-                return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
-            return self.decode(result) if result is not None else None
+                return (
+                    Step(self.decode(dict(result.commands), obs=obs), result.resume_at_ns)
+                    if result.commands
+                    else result
+                )
+            return self.decode(result, obs=obs) if result is not None else None
 
         return call
 
@@ -190,8 +198,13 @@ class _ComposedCodec(Codec):
     def encode(self, data):
         return self._right.encode(self._left.encode(data))
 
-    def decode(self, data):
-        return self._left.decode(self._right.decode(data))
+    def decode(self, data, *, obs: Obs | None = None):
+        right_obs = self._left.encode(dict(obs)) if obs is not None else None
+        return self._left.decode(self._right.decode(data, obs=right_obs), obs=obs)
+
+    def _wrap_call(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]:
+        # Nest complete calls so each decoder sees its own input, without encoding that input twice.
+        return self._left.wrap(self._right.wrap(function))
 
     @property
     def training_encoder(self):
@@ -224,9 +237,9 @@ class _ParallelCodec(Codec):
     def encode(self, data):
         return {**self._left.encode(data), **self._right.encode(data)}
 
-    def decode(self, data):
-        left_out = self._left.decode(data)
-        right_out = self._right.decode(data)
+    def decode(self, data, *, obs: Obs | None = None):
+        left_out = self._left.decode(data, obs=obs)
+        right_out = self._right.decode(data, obs=obs)
         if isinstance(data, list):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
         return {**left_out, **right_out}
@@ -254,7 +267,7 @@ class Metadata(Codec):
     def encode(self, data):
         return data
 
-    def decode(self, data):
+    def decode(self, data, *, obs: Obs | None = None):
         return data
 
     @property
@@ -453,7 +466,7 @@ class RestrictImageSize(Codec):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             return list(pool.map(scale, stack))
 
-    def decode(self, data):
+    def decode(self, data, *, obs: Obs | None = None):
         return data
 
     @property

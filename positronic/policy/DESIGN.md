@@ -262,9 +262,11 @@ processor can keep state in its run and use the episode clock.
   converts the answer. Around a policy run, encode converts the observations
   going down and decode converts commands coming up, leaving the requested next
   call time untouched. An empty command mapping emits nothing.
-- Codecs and processors can mix anywhere in a sequence. Context-dependent
-  decoding belongs around the inference callable so it uses that call's input;
-  a codec around the scheduler sees the current control input.
+- Codecs and processors can mix anywhere in a sequence. A decoder can use the
+  observation from its matching call. Around inference, that is the model's input;
+  around scheduling, it is the current control input. `DeltaToAbsolute` belongs
+  outside scheduling and frame conversion: it anchors each emitted delta on the
+  observed robot position. Between commands, the robot keeps its absolute target.
 - Codecs also compose sequentially, feeding one transform into another, or in
   parallel, merging their outputs. They do not attach action timestamps.
 
@@ -428,7 +430,7 @@ class Codec:
     def encode(self, data: dict) -> dict: ...
 
     # `data` may be a list of commands; the codec decodes each one.
-    def decode(self, data: Any) -> Any: ...
+    def decode(self, data: Any, *, obs: Obs | None = None) -> Any: ...
 
     def wrap(
         self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any]

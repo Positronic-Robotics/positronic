@@ -154,6 +154,7 @@ class CartesianDelta:
         return _compose_delta(current * self.frame, self.delta) * self.frame.inv
 
 
+# TODO: Retire driver-side delta handling once observation-based conversion is validated on real rigs.
 CommandType = CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
 
