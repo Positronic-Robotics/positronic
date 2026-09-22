@@ -600,7 +600,13 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         world.connect(harness.prepare[RESET], motion.reset)
         loop = world.start([harness, motion])
         observations.emit(0)
-        answer = caller(Rollout(Task('move', 2.0, prepare_args={RESET: None} if prepare else {}), definition, None))
+        answer = caller(
+            Rollout(
+                Task('move', 2.0, prepare_args={RESET: None} if prepare else {}, charge_inference_time=False),
+                definition,
+                None,
+            )
+        )
         try:
             for _ in range(1100):
                 next(loop)
@@ -819,7 +825,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
         world.connect(harness.ds_command, recorder.command)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion, recorder])
-        answer = caller(Rollout(Task('move', 0.21), Move(), tmp_path))
+        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
         try:
             for _ in range(1000):
                 next(loop)

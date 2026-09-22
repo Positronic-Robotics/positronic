@@ -500,9 +500,5 @@ def serve(
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
     """
-    server = PolicyServer(
-        pipeline,
-        idle_timeout_min=idle_timeout_min,
-        auth_token=os.environ.get(AUTH_TOKEN_ENV),
-    )
+    server = PolicyServer(pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
     server.serve([w for w in (websocket, grpc) if w is not None])

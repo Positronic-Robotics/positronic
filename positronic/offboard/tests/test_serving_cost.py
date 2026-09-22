@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.offboard import protocol
@@ -34,7 +35,9 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
     assert payloads, 'the stack sent nothing'
 
     host, port, *_ = start_server(PolicyDeployment(InstantSource(2), stack, compress_images=True))
-    session = InferenceClient.from_url(f'ws://{host}:{port}').new_session()
+    session = InferenceClient(
+        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    ).new_session()
     try:
         rows = replay(session, payloads, compress_images=True)
     finally:

@@ -72,7 +72,9 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
-        self._client = InferenceClient(registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout)
+        self._client = InferenceClient(
+            registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
+        )
         self._server_meta: dict[str, Any] | None = None
 
     def meta(self) -> dict[str, Any]:

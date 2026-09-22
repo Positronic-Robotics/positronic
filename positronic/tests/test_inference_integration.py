@@ -23,7 +23,6 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -84,11 +83,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
         )
         task = next(iter(ev.tasks()))
         trials = number_trials([(task, {eval_keys.SEED: 100 + i}) for i in range(2)])
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, tasks=partial(iter, trials))],
-            output_dir=str(tmp_path),
-        )
+        main(policy=policy, evals=[replace(ev, tasks=partial(iter, trials))], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     # Two trials: the driver walks the plan, each trial ending at the task's timeout.
@@ -200,7 +195,10 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
     embodiment = Embodiment(
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
-        commands={keys.ROBOT_COMMAND: Command(producer.commands[keys.ROBOT_COMMAND], Serializers.robot_command)},
+        commands={
+            keys.ROBOT_COMMAND: Command(producer.commands[keys.ROBOT_COMMAND], Serializers.robot_command),
+            keys.TARGET_GRIP: Command(producer.commands[keys.TARGET_GRIP], None),
+        },
         prepare_handlers={eval_keys.SCENE: producer.env_reset},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=producer.robot_meta,
@@ -245,9 +243,7 @@ def test_an_untimed_sweep_writes_the_harness_sidecar_under_the_output_dir(tmp_pa
     task = next(iter(ev.tasks()))
     with pos3.mirror():
         main(
-            policy=ChunkedSchedule().wrap(
-                RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-            ),
+            policy=RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
             evals=[replace(ev, tasks=partial(iter, number_trials([(task, {})])))],
             output_dir=str(tmp_path),
         )
@@ -275,9 +271,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path, monkeypatch):
     trials = number_trials([(task, {}), (task, {})])
     with pos3.mirror():
         main(
-            policy=ChunkedSchedule().wrap(
-                RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-            ),
+            policy=RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
             evals=[replace(ev, tasks=partial(iter, trials))],
             output_dir=str(tmp_path),
             timing=True,
@@ -306,8 +300,13 @@ def test_timing_writes_telemetry_sidecars(tmp_path, monkeypatch):
     assert all(episode.parent_id == pass_id for episode in by_name[telemetry_keys.SPAN_EPISODE])
     # The phase spans all parent to some episode — record.io most of all, since it is committed by a
     # different control system after the harness emits STOP.
+    by_id = {rec.span_id: rec for rec in spans}
     for name in (telemetry_keys.SPAN_RESET, telemetry_keys.SPAN_RECORD_IO, telemetry_keys.SPAN_POLICY_INFER):
-        assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
+        for rec in by_name[name]:
+            parent_id = rec.parent_id
+            while parent_id not in episode_ids:
+                assert parent_id in by_id, f'{name} has no episode ancestor'
+                parent_id = by_id[parent_id].parent_id
 
     stats = list(telemetry.read_stats(telemetry.stats_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert len(stats) >= 1

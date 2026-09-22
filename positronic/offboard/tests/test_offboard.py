@@ -2,6 +2,7 @@ from types import MappingProxyType
 
 import numpy as np
 import pytest
+from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -21,7 +22,7 @@ from positronic.utils.serialization import encode_jpeg
 def test_inference_client_connect_and_infer(inference_server, mock_model):
     """Test standard client connection and inference flow."""
     host, port = inference_server
-    client = InferenceClient.from_url(f'{host}:{port}')
+    client = InferenceClient(websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, ''))
 
     session = client.new_session()
     try:
@@ -40,7 +41,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_model):
 
 def test_connections_reuse_the_loaded_model(inference_server, mock_model):
     host, port = inference_server
-    client = InferenceClient.from_url(f'{host}:{port}')
+    client = InferenceClient(websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, ''))
     for index in range(2):
         session = client.new_session()
         try:
@@ -53,9 +54,10 @@ def test_connections_reuse_the_loaded_model(inference_server, mock_model):
 
 def test_session_url_selects_the_model(multi_model_server):
     host, port, policies = multi_model_server
-    endpoint = f'{host}:{port}'
 
-    default_session = InferenceClient.from_url(endpoint).new_session()
+    default_session = InferenceClient(
+        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    ).new_session()
     try:
         assert default_session.metadata['model_name'] == 'alpha'
         action = default_session.infer({'obs': 'default'})
@@ -63,7 +65,9 @@ def test_session_url_selects_the_model(multi_model_server):
     finally:
         default_session.close()
 
-    alpha_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/alpha').new_session()
+    alpha_session = InferenceClient(
+        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('alpha'), '')
+    ).new_session()
     try:
         assert alpha_session.metadata['model_name'] == 'alpha'
         action = alpha_session.infer({'obs': 'alpha'})
@@ -71,7 +75,9 @@ def test_session_url_selects_the_model(multi_model_server):
     finally:
         alpha_session.close()
 
-    beta_session = InferenceClient.from_url(f'{endpoint}/api/v1/session/beta').new_session()
+    beta_session = InferenceClient(
+        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('beta'), '')
+    ).new_session()
     try:
         assert beta_session.metadata['model_name'] == 'beta'
         action = beta_session.infer({'obs': 'beta'})

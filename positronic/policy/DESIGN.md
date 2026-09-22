@@ -395,6 +395,7 @@ closes what it made itself. `close` never travels through the chain.
 
 ## Deferred, not to decide now
 
+- TODO: Record dropped and late waypoints in the scheduling processor; the harness emits commands directly.
 - The shape of the robot description, and a server's ability to refuse one.
 - The exact wire protocol a server must support — the handshake that
   delivers the description, the inference calls, and the versioning that
