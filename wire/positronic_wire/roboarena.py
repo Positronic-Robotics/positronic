@@ -15,10 +15,7 @@ from websockets.sync.client import connect
 
 @dataclasses.dataclass(frozen=True)
 class RoboarenaAddress(wire.SessionAddress):
-    """A session on a roboarena server, named by the host and the port the partner published.
-
-    The port has no default. A roboarena server publishes none, so a guess dials a machine nobody named.
-    """
+    """A session on a roboarena server, named by the host and the port the partner published."""
 
     host: str
     port: int

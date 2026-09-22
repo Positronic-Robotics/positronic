@@ -44,9 +44,9 @@ needs.
 
 ## The client interface
 
-`NAME` is what a caller selects a wire by: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
-`grpc_tls`, `roboarena`. `ADDRESS` is the address type that wire dials, and `DEFAULT_PORT` the port a
-URL leaves out on the members that name one.
+A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
+`roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
+leaves out on the members that carry one.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
