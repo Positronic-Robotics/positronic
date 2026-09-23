@@ -307,6 +307,9 @@ _SOCKET_GRAMMAR = [
     ('unix:///api/v1/session', 'names none'),
     # Trailing slash
     ('unix:///run/policy.sock/', 'names none'),
+    ('unix:///run/policy.sock%2F', 'names none'),
+    ('unix:///run/policy.sock/.', 'names none'),
+    ('unix:///run/policy.sock%2F..', 'names none'),
     ('unix:///run/policy.sock/api/v1/session/', ('/run/policy.sock', _SESSION, '')),
     ('unix:///run/policy.sock/api/v1/session/model/', ('/run/policy.sock', '/api/v1/session/model/', '')),
     # A path that repeats the session route
@@ -315,6 +318,7 @@ _SOCKET_GRAMMAR = [
         ('/run/policy.sock', '/api/v1/session/api/v1/session', ''),
     ),
     ('unix:///run%2Fapi%2Fv1%2Fsession%2Fpolicy.sock', 'holds the session route'),
+    ('unix:///run/policy.sock%2Fapi%2Fv1%2Fsession', 'holds the session route'),
     # Params
     ('unix:///run/policy;v=1.sock/api/v1/session/model;v=1', ('/run/policy;v=1.sock', '/api/v1/session/model;v=1', '')),
     # Query
@@ -323,6 +327,7 @@ _SOCKET_GRAMMAR = [
     ('unix:///run/policy#1.sock', 'names a fragment'),
     # Percent-encoding
     ('unix:///run/my%20policy%3F%231.sock?x=a%20b', ('/run/my policy?#1.sock', _SESSION, 'x=a%20b')),
+    ('unix:///run/policy%2Fsock.sock', ('/run/policy/sock.sock', _SESSION, '')),
     ('unix:///run/policy%00.sock', 'holds a NUL byte'),
 ]
 

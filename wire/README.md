@@ -135,13 +135,13 @@ back to the same address. The table covers every component of a URL. The host-an
 | Empty host | Refused: `no host` | Required: `scheme:///<socket>` | Refused: `names no host and port` |
 | IPv6 literal (`[::1]`) | `host` without the brackets | Refused: `names no host` | `host` without the brackets |
 | Port | `port`; absent or empty is `DEFAULT_PORT`. Not a number, or out of range: refused by `urllib` (`Port could not be cast`, `Port out of range`) | Refused: `names no host` | `port`, required: `names no host and port`. Not a number, or out of range: refused by `urllib` |
-| Path | Empty or `/api/v1/session`: `SESSION_PATH`. `/api/v1/session/<model>`: `path`, as written. Anything else: refused, `unexpected path` | The socket runs to the first `/api/v1/session` that ends a segment, and the rest reads as the host-and-port path. A socket that names no file: refused, `names none` | Empty or `/`. Anything else: refused, `a path` |
+| Path | Empty or `/api/v1/session`: `SESSION_PATH`. `/api/v1/session/<model>`: `path`, as written. Anything else: refused, `unexpected path` | The socket runs to the first `/api/v1/session` that ends a segment, and the rest reads as the host-and-port path. A socket whose last segment is empty, `.` or `..` names no file: refused, `names none` | Empty or `/`. Anything else: refused, `a path` |
 | Trailing slash | `/api/v1/session/` is `SESSION_PATH`. After a model, kept in `path` | After the socket: refused, `names none`. After the route: as the host-and-port path | `/` is the root |
 | A path that repeats the session route | The second one is part of the model: `/api/v1/session/api/v1/session` is model `api/v1/session` | The first one ends the socket. A socket path that holds the route: refused when built, `holds the session route` | Refused: `a path` |
 | Params (`;`) | Part of the path: `/api/v1/session;x` is refused, `unexpected path`; `/api/v1/session/<model>;x` is kept | Part of the socket or the route | Refused: `a path` |
 | Query | `query`, as written | `query`, as written | A non-empty one: refused, `a query`. A bare `?` carries nothing |
 | Fragment (any `#`, even an empty one) | Refused: `names a fragment` | Refused: `names a fragment` | Refused: `names a fragment` |
-| Percent-encoding | Path and query kept as written; the server decodes them | Socket decoded, and a decoded NUL byte refused, `holds a NUL byte`; `session_url` encodes every other character than `/` and the unreserved ones. Route and query kept as written | Host as written |
+| Percent-encoding | Path and query kept as written; the server decodes them | Socket decoded, then checked: a socket that names no file, `names none`, and a NUL byte, `holds a NUL byte`; `session_url` encodes every other character than `/` and the unreserved ones. Route and query kept as written | Host as written |
 
 `address_of(session_url(address)) == address` holds for every address `address_of` returns, and for
 every address a caller builds with `session_path(model)` and a query `address_of` can return. An address

@@ -11,7 +11,7 @@ import re
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import ClassVar, Generic, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
@@ -135,18 +135,20 @@ class UnixSocketAddress(SessionAddress):
     def from_url(cls, url: str) -> 'UnixSocketAddress':
         """The socket and the session ``scheme:///<socket>[/api/v1/session[/<model>]][?query]`` names.
 
-        The socket path runs to the session route, and is percent-decoded; ``socket_url_path`` encodes it.
-        Raises ``ValueError`` where ``url`` names a host, which a socket cannot reach, or a path that ends in
-        a slash, which names a directory.
+        The socket path runs to the session route, and is percent-decoded before any check reads it;
+        ``socket_url_path`` encodes it. Raises ``ValueError`` where ``url`` names a host, which a socket cannot
+        reach, or a socket whose last segment is empty, ``.`` or ``..``, which names a directory.
         """
         split = split_url(url)
         if split.netloc:
             raise ValueError(f'a socket URL names no host, and this one names {split.netloc!r}: {url!r}')
         route = _SESSION_ROUTE.search(split.path)
-        socket, path = (split.path, '') if route is None else (split.path[: route.start()], split.path[route.start() :])
-        if not PurePosixPath(socket).name or socket.endswith('/'):
+        quoted, path = (split.path, '') if route is None else (split.path[: route.start()], split.path[route.start() :])
+        # `Path` drops a trailing `/` and a last `.`, so it cannot tell a directory from the socket in it.
+        socket = urllib.parse.unquote(quoted)
+        if socket.rpartition('/')[2] in ('', '.', '..'):
             raise ValueError(f'a socket URL names a socket file, and this one names none: {url!r}')
-        return cls(Path(urllib.parse.unquote(socket)), _session_route(path, url), split.query)
+        return cls(Path(socket), _session_route(path, url), split.query)
 
     def socket_url_path(self) -> str:
         """``uds`` as a URL path: each character a URL reads as a delimiter or as an escape is percent-encoded."""
