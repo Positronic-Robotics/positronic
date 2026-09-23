@@ -25,7 +25,7 @@ from rerun.urdf import UrdfTree
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import Kind, Signal
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -749,10 +749,10 @@ def _to_centiseconds(durations: np.ndarray) -> np.ndarray:
     return np.round(durations / step).astype(np.int64) * step
 
 
-def _recording_start(ep: Episode, signals: EpisodeSignals) -> np.datetime64:
+def _recording_start(ep_signals: dict[str, Signal[Any]], signals: EpisodeSignals) -> np.datetime64:
     """The first time the recording logs, which the viewer's time and its `?t=` link count from."""
     logged = {*signals.videos, *signals.plotted, *signals.texts, *signals.poses, *signals.joints}
-    starts = [ep.signals[name].start_ts for name in logged if len(ep.signals[name])]
+    starts = [ep_signals[name].start_ts for name in logged if len(ep_signals[name])]
     return np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
 
 
@@ -762,9 +762,10 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
     A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
     """
     plotted = signals.plotted_texts
-    recording_start = _recording_start(ep, signals)
+    ep_signals = ep.signals  # `Episode.signals` builds a new dict on every read
+    recording_start = _recording_start(ep_signals, signals)
     for key in signals.texts:
-        sig = ep.signals[key]
+        sig = ep_signals[key]
         ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
