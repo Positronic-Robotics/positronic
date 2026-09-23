@@ -333,6 +333,20 @@ def _jitter_velocity_readings(rig, monkeypatch, noise_rad_s):
 
 
 @pytest.mark.parametrize(
+    ('min_ramp_s', 'still_time_s'), [(DEFAULT_TUNING.min_ramp_s, DEFAULT_TUNING.still_time_s), (4.0, 1.0)]
+)
+def test_the_shortest_ramp_and_the_still_window_are_tuned_per_arm(min_ramp_s, still_time_s):
+    tuning = dataclasses.replace(DEFAULT_TUNING, min_ramp_s=min_ramp_s, still_time_s=still_time_s)
+    rig = Rig(tuning)
+    rig.raise_arm()
+    stopped = rig.clock.now()
+    rig.finish()
+    ramp_s = max(min_ramp_s, float(np.max(RAISED)) / tuning.max_speed_rad_s)
+    assert ramp_s + still_time_s <= rig.clock.now() - stopped < ramp_s + still_time_s + 0.5
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
+@pytest.mark.parametrize(
     ('still_velocity_rad_s', 'parks'), [(DEFAULT_TUNING.still_velocity_rad_s, False), (0.05, True)]
 )
 def test_an_arm_with_noisy_velocity_readings_is_tuned_not_edited(monkeypatch, still_velocity_rad_s, parks):

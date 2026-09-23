@@ -172,9 +172,6 @@ class _Kinematics:
 class _Arm(DriverRun[command.CommandType]):
     """Control and report one YAM arm and its gripper for a driver run."""
 
-    _MIN_RAMP_S = 2.0  # minimum duration of a commanded joint-position ramp
-    _STILL_TIME_S = 0.2
-
     def __init__(
         self,
         vendor: Any,
@@ -293,10 +290,10 @@ class _Arm(DriverRun[command.CommandType]):
         """Ramp to ``reference`` at the tuning's pace, then wait until every joint holds still.
 
         Return the reading and where the chain rests. ``ON_GOAL`` needs every joint within tolerance and still
-        for ``_STILL_TIME_S`` with no break. Return None when a stop abandons the move.
+        for ``tuning.still_time_s`` with no break. Return None when a stop abandons the move.
         """
         start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
-        travel_s = max(self._MIN_RAMP_S, float(np.max(np.abs(reference - start))) / tuning.max_speed_rad_s)
+        travel_s = max(tuning.min_ramp_s, float(np.max(np.abs(reference - start))) / tuning.max_speed_rad_s)
         timeout_s = travel_s + tuning.settle_timeout_s
         still_since = arrived_since = None
         started = self.clock.now()
@@ -312,9 +309,9 @@ class _Arm(DriverRun[command.CommandType]):
             arrived = still and self._arrived(obs, goal, grip, tuning)
             still_since = (elapsed if still_since is None else still_since) if still else None
             arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
-            if arrived_since is not None and elapsed - arrived_since >= self._STILL_TIME_S:
+            if arrived_since is not None and elapsed - arrived_since >= tuning.still_time_s:
                 return obs, self._Rest.ON_GOAL
-            if arrived_since is None and still_since is not None and elapsed - still_since >= self._STILL_TIME_S:
+            if arrived_since is None and still_since is not None and elapsed - still_since >= tuning.still_time_s:
                 return obs, self._Rest.SHORT_OF_GOAL
 
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
