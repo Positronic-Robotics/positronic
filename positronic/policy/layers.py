@@ -149,6 +149,28 @@ class ChunkedSchedule(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
+class _StackedObs(Mapping[str, Any]):
+    """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
+
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
+        self._obs = obs
+        self._picked = picked
+        self._stacks: dict[str, np.ndarray] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in self._picked[0]:
+            return self._obs[key]
+        if key not in self._stacks:
+            self._stacks[key] = np.stack([entry[key] for entry in self._picked])
+        return self._stacks[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._obs)
+
+    def __len__(self) -> int:
+        return len(self._obs)
+
+
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, values)`` entries, capped to the sampled window.
 
@@ -189,28 +211,6 @@ class _StackBuffer:
     def _at_or_before(times: np.ndarray, target: float) -> int:
         """Index of the latest entry at or before ``target``; clamps to the oldest when none precedes it."""
         return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
-
-
-class _StackedObs(Mapping[str, Any]):
-    """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
-
-    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
-        self._obs = obs
-        self._picked = picked
-        self._stacks: dict[str, np.ndarray] = {}
-
-    def __getitem__(self, key: str) -> Any:
-        if key not in self._picked[0]:
-            return self._obs[key]
-        if key not in self._stacks:
-            self._stacks[key] = np.stack([entry[key] for entry in self._picked])
-        return self._stacks[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._obs)
-
-    def __len__(self) -> int:
-        return len(self._obs)
 
 
 OutputT = TypeVar('OutputT')

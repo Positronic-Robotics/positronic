@@ -111,7 +111,7 @@ def test_temporal_stack_builds_a_stack_only_for_a_sent_request(execution, monkey
             clock.advance_to_ns(tick * 5_000_000)
             run.send({POSITION: np.array([tick]), keys.TASK: f'tick {tick}'})
         assert len(requests) == 1 and stacks == []
-        # The window is the one sampled at tick 0, although later ticks appended to the buffer.
+        # Tick 0 sampled this window. Later ticks appended to the buffer and did not change it.
         np.testing.assert_array_equal(requests[0][POSITION][:, 0], [0, 0])
         assert len(stacks) == 1
         assert dict(requests[0]).keys() == {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
