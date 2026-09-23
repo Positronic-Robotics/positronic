@@ -13,6 +13,7 @@ from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
@@ -191,6 +192,28 @@ def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     clock.advance_to_ns(225_000_000)
     assert run.send({}) == Step({POSITION: 2, MOTOR: 3}, 300_000_000)
     run.close()
+
+
+def test_an_overrun_skips_all_but_the_last_due_row_and_counts_the_skip(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 100_000_000, 350_000_000, 400_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    meta = runtime.episode_meta()
+    run.close()
+    assert emitted == [0, 1, 3, 4]
+    prefix = f'{eval_keys.SCHEDULE}.{MOTOR}'
+    assert meta == {
+        f'{prefix}.{eval_keys.SCHEDULED}': 5,
+        f'{prefix}.{eval_keys.EMITTED}': 4,
+        f'{prefix}.{eval_keys.DROPPED}': 1,
+        f'{prefix}.{eval_keys.LATE_P50_MS}': 0.0,
+        f'{prefix}.{eval_keys.LATE_P90_MS}': pytest.approx(35.0),
+        f'{prefix}.{eval_keys.LATE_MAX_MS}': 50.0,
+        f'{prefix}.{eval_keys.GAP_MAX_MS}': 250.0,
+    }
 
 
 def test_horizon_cuts_commands_but_preserves_boundary(execution):

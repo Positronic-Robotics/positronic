@@ -253,7 +253,8 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
-            self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(rollout), **(payload or {})}))
+            meta = {**self._build_episode_meta(rollout), **runtime.episode_meta(), **(payload or {})}
+            self.ds_command.emit(DsWriterCommand.STOP(meta))
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
