@@ -14,10 +14,13 @@ from platform_client.eval_plan import (
     Cascade,
     Endpoint,
     EvalPlan,
+    RegistryCredential,
+    RegistryCredentialFile,
     TaskNode,
     credential_from_file,
     password_from_file,
     plan_of_image,
+    plan_with_passwords_read,
 )
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
@@ -481,7 +484,68 @@ def test_a_windows_line_ending_goes_with_the_newline(tmp_path: Path):
 def test_a_tilde_path_is_read_from_the_home_it_names(tmp_path: Path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
     (tmp_path / 'registry-password').write_text(f'{A_PASSWORD}\n')
-    assert password_from_file('~/registry-password') == A_PASSWORD
+    assert password_from_file(Path('~/registry-password')) == A_PASSWORD
+
+
+def test_a_tilde_naming_no_user_is_refused():
+    with pytest.raises(ValueError, match='names no home directory'):
+        password_from_file(Path('~no-such-user-on-this-machine/registry-password'))
+
+
+def test_a_request_refuses_a_credential_that_names_a_file(password_file: Path):
+    # The gateway validates the request model, so it never opens a path a caller sends.
+    with pytest.raises(ValidationError, match='password_file'):
+        a_plan_with({'username': 'a-reader', 'password_file': str(password_file)})
+
+
+def a_plan_file_with(credential: dict, *, on_task: dict | None = None) -> EvalPlan[RegistryCredentialFile]:
+    task = (
+        SPOONS if on_task is None else {'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=on_task)]}
+    )
+    return EvalPlan[RegistryCredentialFile].model_validate({
+        'tasks': [task],
+        'endpoints': [an_image_endpoint(image_credential=credential)],
+        'episodes_per_endpoint': 2,
+    })
+
+
+@pytest.mark.parametrize('stated', [[], 1])
+def test_a_plan_file_refuses_a_password_file_that_is_no_path(stated: object):
+    with pytest.raises(ValidationError, match=r'image_credential\.password_file'):
+        a_plan_file_with({'username': 'a-reader', 'password_file': stated})
+
+
+def test_a_plan_file_refuses_a_password_it_states():
+    with pytest.raises(ValidationError, match=r'image_credential\.password\n'):
+        a_plan_file_with({'username': 'a-reader', 'password': A_PASSWORD})
+
+
+def test_each_password_file_of_a_plan_is_read_into_its_credential(tmp_path: Path, password_file: Path):
+    on_task = tmp_path / 'task-password'
+    on_task.write_text('the-task-password\n')
+    stated = a_plan_file_with(
+        {'username': 'a-reader', 'password_file': str(password_file)},
+        on_task={'username': 'a-reader', 'password_file': str(on_task)},
+    )
+
+    plan = plan_with_passwords_read(stated)
+
+    task_endpoints = plan.tasks[0].endpoints
+    assert task_endpoints is not None
+    read = [plan.endpoints[0].image_credential, task_endpoints[0].image_credential]
+    assert all(isinstance(credential, RegistryCredential) for credential in read)
+    assert [credential.secret() for credential in read if credential is not None] == [A_PASSWORD, 'the-task-password']
+    assert plan.model_fields_set == stated.model_fields_set
+
+
+def test_a_password_file_that_is_not_there_is_refused_at_its_credential(tmp_path: Path, password_file: Path):
+    stated = a_plan_file_with(
+        {'username': 'a-reader', 'password_file': str(password_file)},
+        on_task={'username': 'a-reader', 'password_file': str(tmp_path / 'never-written')},
+    )
+    with pytest.raises(ValidationError, match=r'tasks\.0\.endpoints\.0\.image_credential\.password') as caught:
+        plan_with_passwords_read(stated)
+    assert A_PASSWORD not in str(caught.value)
 
 
 def test_plan_of_image_carries_the_credential_onto_its_one_endpoint(password_file: Path):

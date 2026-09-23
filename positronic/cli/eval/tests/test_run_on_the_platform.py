@@ -225,3 +225,15 @@ def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platf
             registry_password_file=str(tmp_path / 'never-written'),
         )
     assert platform.seen is None
+
+
+def test_a_credential_naming_no_such_home_is_refused_before_the_submission(platform, run_command):
+    with pytest.raises(SystemExit, match='names no home directory'):
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file='~no-such-user-on-this-machine/registry-password',
+        )
+    assert platform.seen is None

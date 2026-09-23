@@ -104,8 +104,11 @@ image, and how to build, test and submit it.
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
 the eval whose tasks it runs. `plan_of_image` builds that shape.
 
-An `image` endpoint whose registry serves no anonymous caller states `image_credential`, which
-names the registry user and the FILE the password is in.
+An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
+file names the registry user and the FILE the password is in. `positronic eval run --from-file`
+reads it as `EvalPlan[RegistryCredentialFile]`, then `plan_with_passwords_read` gives the `EvalPlan`
+a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
+builds that credential.
 
 ```yaml
 endpoints:

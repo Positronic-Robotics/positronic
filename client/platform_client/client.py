@@ -227,7 +227,7 @@ class PlatformClient:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
     def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
-        # This dump reveals the registry password. Every other dump names the file.
+        # This dump reveals the registry password. Every other dump masks it.
         body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
         return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
 

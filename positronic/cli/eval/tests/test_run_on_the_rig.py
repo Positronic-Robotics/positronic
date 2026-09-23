@@ -266,6 +266,90 @@ def test_a_malformed_plan_still_says_where_the_fault_is(platform, run_command, t
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
 
 
+def test_a_scalar_where_a_plan_lists_its_tasks_is_refused(platform, run_command, tmp_path: Path):
+    payload = f'tasks: 1\nendpoints:\n  - name: baseline\n    url: {BASELINE}\nepisodes_per_endpoint: 4\n'
+    with pytest.raises(SystemExit, match='tasks: Input should be a valid list'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def a_plan_with_credentials(on_plan: str, on_task: str | None = None) -> str:
+    """A plan whose image endpoint states `on_plan` as its credential, and whose task states `on_task`."""
+
+    def endpoint(credential: str, indent: str) -> str:
+        lines = ['- name: private', '  kind: image', '  image: registry.example/policy:v1', '  image_credential:']
+        lines += [f'    {line}' for line in credential.splitlines()]
+        return ''.join(f'{indent}{line}\n' for line in lines)
+
+    task = (
+        f'  - {SPOONS}\n'
+        if on_task is None
+        else f'  - task_id: {SPOONS}\n    endpoints:\n' + endpoint(on_task, '      ')
+    )
+    return f'tasks:\n{task}endpoints:\n{endpoint(on_plan, "  ")}episodes_per_endpoint: 4\n'
+
+
+def a_credential_naming(password_file: Path | str) -> str:
+    return f'username: reader\npassword_file: {password_file}'
+
+
+def test_a_plan_file_sends_the_password_each_of_its_files_holds(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    on_plan = tmp_path / 'plan-password'
+    on_plan.write_text(f'{REGISTRY_PASSWORD}\n')
+    on_task = tmp_path / 'task-password'
+    on_task.write_text('the-task-password\n')
+
+    run_command(
+        run,
+        from_file=a_plan_file(
+            tmp_path, 'plan.yaml', a_plan_with_credentials(a_credential_naming(on_plan), a_credential_naming(on_task))
+        ),
+    )
+
+    body = platform.body
+    assert body['endpoints'][0]['image_credential'] == {'username': 'reader', 'password': REGISTRY_PASSWORD}
+    assert body['tasks'][0]['endpoints'][0]['image_credential'] == {
+        'username': 'reader',
+        'password': 'the-task-password',
+    }
+
+
+@pytest.mark.parametrize('stated', ['[]', '1'])
+def test_a_password_file_that_is_no_path_is_refused(platform, run_command, tmp_path: Path, stated: str):
+    payload = a_plan_with_credentials(a_credential_naming(stated))
+    with pytest.raises(SystemExit, match=r'image_credential\.password_file: Input is not a valid path'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def test_a_plan_file_stating_a_password_is_refused_at_it(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(f'username: reader\npassword: {REGISTRY_PASSWORD}')
+    with pytest.raises(SystemExit, match=r'image_credential\.password: Extra inputs are not permitted') as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert REGISTRY_PASSWORD not in str(refusal.value)
+    assert platform.seen is None
+
+
+def test_a_password_file_under_no_such_home_is_refused(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(a_credential_naming('~no-such-user-on-this-machine/registry-password'))
+    with pytest.raises(SystemExit, match='names no home directory'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def test_a_password_file_that_is_not_there_is_refused_at_its_credential(platform, run_command, tmp_path: Path):
+    on_plan = tmp_path / 'plan-password'
+    on_plan.write_text(f'{REGISTRY_PASSWORD}\n')
+    payload = a_plan_with_credentials(a_credential_naming(on_plan), a_credential_naming(tmp_path / 'never-written'))
+    with pytest.raises(
+        SystemExit, match=r'tasks\.0\.endpoints\.0\.image_credential\.password: .*is not a file'
+    ) as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert REGISTRY_PASSWORD not in str(refusal.value)
+    assert platform.seen is None
+
+
 def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='absent.yaml'):
         run_command(run, from_file=str(tmp_path / 'absent.yaml'))

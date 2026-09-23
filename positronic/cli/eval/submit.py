@@ -3,6 +3,8 @@
 Not a command of its own: running an eval is one act, and where it runs is an argument to it.
 """
 
+from pathlib import Path
+
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import RegistryCredential, credential_from_file, plan_of_image
 from platform_client.evals import EvalRef
@@ -19,7 +21,7 @@ def _credential(username: str | None, password_file: str | None) -> RegistryCred
         raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
     if username is None or password_file is None:
         return None
-    return credential_from_file(username, password_file)
+    return credential_from_file(username, Path(password_file))
 
 
 def submit(

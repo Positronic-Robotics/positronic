@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Self
+from typing import Generic, Self
 
 import httpx
 from platform_client.enums import CameraVantage, EndpointKind, Placement
@@ -18,6 +18,7 @@ from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
 from pydantic import BaseModel, Field, SecretStr, SerializationInfo, model_serializer, model_validator
+from typing_extensions import TypeVar
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
@@ -88,9 +89,7 @@ REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 class RegistryCredential(BaseModel):
     """The username and password that open the registry one image endpoint names.
 
-    A request carries this model, so it holds the password as a value and no field of it names a
-    path. `password_from_file` opens the file a caller states, and nothing else in this package
-    opens one.
+    A request carries this model. It holds the password as a value, and no field of it names a path.
     """
 
     model_config = INPUT_MODEL_CONFIG
@@ -107,14 +106,35 @@ class RegistryCredential(BaseModel):
         return {'username': self.username, 'password': self.secret() if reveal else str(self.password)}
 
 
-def password_from_file(password_file: str | Path) -> str:
+class RegistryCredentialFile(BaseModel):
+    """A registry credential as a plan file states it: the username, and the file the password is in.
+
+    The gateway never validates this model. `plan_with_passwords_read` turns a plan of it into the
+    plan a request carries.
+    """
+
+    model_config = INPUT_MODEL_CONFIG
+
+    username: str = Field(min_length=1)
+    password_file: Path
+
+    @property
+    def password(self) -> SecretStr:
+        """Read from the file on each access. `RegistryCredential` validates from these attributes."""
+        return SecretStr(password_from_file(self.password_file))
+
+
+def password_from_file(password_file: Path) -> str:
     """The registry password a caller states as a path, read from the file it names.
 
     The file's last line ending comes off. A path that is mistyped, names a directory, cannot be
     read, or holds only whitespace raises `ValueError`, which every caller of this reports as a
     refusal.
     """
-    path = Path(password_file).expanduser()
+    try:
+        path = password_file.expanduser()
+    except RuntimeError as exc:  # `~name` for a user this machine does not have
+        raise ValueError(f'{password_file} names no home directory: {exc}') from exc
     if not path.is_file():
         raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
     try:
@@ -127,9 +147,14 @@ def password_from_file(password_file: str | Path) -> str:
     return password
 
 
-def credential_from_file(username: str, password_file: str | Path) -> RegistryCredential:
+def credential_from_file(username: str, password_file: Path) -> RegistryCredential:
     """The credential a caller states as a username and the path of the file its password is in."""
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
+
+
+# The credential an image endpoint carries. A request carries a `RegistryCredential`, and so does a
+# plan with no parameter. A plan file carries a `RegistryCredentialFile`.
+Credential = TypeVar('Credential', RegistryCredential, RegistryCredentialFile, default=RegistryCredential)
 
 
 # An endpoint overrides one cascading property; every other property of `Cascade` is per task.
@@ -137,7 +162,7 @@ _ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
 _PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 
 
-class Endpoint(Cascade):
+class Endpoint(Cascade, Generic[Credential]):
     """One policy to run, and where it comes from.
 
     * `remote` — the caller provides the address, as `url`.
@@ -157,7 +182,7 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    image_credential: RegistryCredential | None = None
+    image_credential: Credential | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -222,7 +247,7 @@ class Endpoint(Cascade):
         return self.url is not None or self.spec is not None or self.image is not None
 
 
-class TaskNode(Cascade):
+class TaskNode(Cascade, Generic[Credential]):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
     `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
@@ -231,7 +256,7 @@ class TaskNode(Cascade):
     """
 
     task_id: TaskRef
-    endpoints: list[Endpoint] | None = Field(default=None, min_length=1)
+    endpoints: list[Endpoint[Credential]] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -244,7 +269,7 @@ class TaskNode(Cascade):
         return self
 
 
-class EvalPlan(Cascade):
+class EvalPlan(Cascade, Generic[Credential]):
     """`submissions.create` — one eval to run: the tasks, the endpoints each task runs, and the
     count per endpoint.
 
@@ -254,11 +279,11 @@ class EvalPlan(Cascade):
     client from the key's grant.
     """
 
-    tasks: list[TaskNode] = Field(default_factory=list)
+    tasks: list[TaskNode[Credential]] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
     eval: EvalRef | None = None
-    endpoints: list[Endpoint] = Field(default_factory=list)
+    endpoints: list[Endpoint[Credential]] = Field(default_factory=list)
     # What a reader calls this run. It names nothing and identifies nothing.
     alias: str | None = None
     # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
@@ -362,11 +387,11 @@ class EvalPlan(Cascade):
             )
         return self
 
-    def task_endpoints(self, task: TaskNode) -> list[Endpoint]:
+    def task_endpoints(self, task: TaskNode[Credential]) -> list[Endpoint[Credential]]:
         """The endpoints `task` runs on: its own list, else the plan's."""
         return self.endpoints if task.endpoints is None else task.endpoints
 
-    def episodes_on(self, task: TaskNode, entry: Endpoint) -> int:
+    def episodes_on(self, task: TaskNode[Credential], entry: Endpoint[Credential]) -> int:
         """The episodes `entry` takes for `task`.
 
         The count comes from `entry`, then from its definition, then from `task`, then from the plan.
@@ -388,6 +413,14 @@ class EvalPlan(Cascade):
         expands the name.
         """
         return sum(self.episodes_on(task, entry) for task in self.tasks for entry in self.task_endpoints(task))
+
+
+def plan_with_passwords_read(plan: EvalPlan[RegistryCredentialFile]) -> EvalPlan:
+    """The plan a request carries: `plan`, with the password of each credential read from its file.
+
+    A file that gives no password raises `ValidationError` at the place of its credential in the plan.
+    """
+    return EvalPlan[RegistryCredential].model_validate(plan, from_attributes=True)
 
 
 # The name the one endpoint of an image run carries. Such a run serves one policy, so nothing picks

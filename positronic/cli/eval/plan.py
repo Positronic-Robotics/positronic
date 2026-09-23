@@ -1,11 +1,11 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
 import functools
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, password_from_file
+from platform_client.eval_plan import Endpoint, EvalPlan, RegistryCredentialFile, TaskNode, plan_with_passwords_read
 from platform_client.ids import TransactionKey
 from platform_client.responses import SubmissionCreateResponse
 from platform_client.tasks import TaskRef
@@ -24,8 +24,8 @@ class _KeyGivenTwice(yaml.constructor.ConstructorError):
 
 @functools.cache
 def _plan_field_names() -> frozenset[str]:
-    """Every name the plan schema declares, at any depth."""
-    schema = EvalPlan.model_json_schema()
+    """Every name a plan file's schema declares, at any depth."""
+    schema = EvalPlan[RegistryCredentialFile].model_json_schema()
     names = set(schema.get('properties', ()))
     for definition in schema.get('$defs', {}).values():
         names.update(definition.get('properties', ()))
@@ -69,43 +69,11 @@ def _refusal(exc: yaml.YAMLError) -> str:
     return f'it reads as neither YAML nor JSON{where}'
 
 
-CREDENTIAL_FIELD = 'image_credential'
-PASSWORD_FILE_FIELD = 'password_file'
-PASSWORD_FIELD = 'password'
-
-
-def _stated_credentials(payload: object) -> Iterator[dict]:
-    """Each credential mapping a plan states, at the plan's level and on each of its tasks."""
-    if not isinstance(payload, dict):
-        return
-    levels = [payload, *(task for task in payload.get('tasks') or [] if isinstance(task, dict))]
-    for level in levels:
-        for entry in level.get('endpoints') or []:
-            credential = entry.get(CREDENTIAL_FIELD) if isinstance(entry, dict) else None
-            if isinstance(credential, dict):
-                yield credential
-
-
-def _read_the_password_files(payload: object, path: Path) -> None:
-    """Replace each `password_file` a plan states with the password its file holds.
-
-    A plan names the file, so nothing that reads, renders or refuses the plan holds the password.
-    The model a request carries holds the value, and this is where the one spelling becomes the
-    other.
-    """
-    for credential in _stated_credentials(payload):
-        if PASSWORD_FIELD in credential:
-            raise SystemExit(f'{path}: a plan states {PASSWORD_FILE_FIELD}; the password stays in the file it names')
-        if PASSWORD_FILE_FIELD not in credential:
-            continue
-        try:
-            credential[PASSWORD_FIELD] = password_from_file(credential.pop(PASSWORD_FILE_FIELD))
-        except ValueError as exc:
-            raise SystemExit(f'{path}: {exc}') from exc
-
-
 def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
     """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
+
+    A credential in the file names the file its password is in, and the plan this returns holds the
+    password read from it.
 
     `--transaction-key` and `--alias` are the plan fields the command line states beside a file: each
     belongs to one filing, and the file names the plan. A file carrying either takes no flag for it.
@@ -122,9 +90,8 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
         if field in payload:
             raise SystemExit(f'{path} carries {field}; drop --{field.replace("_", "-")}')
         payload = {**payload, field: stated}
-    _read_the_password_files(payload, path)
     try:
-        return EvalPlan.model_validate(payload)
+        return plan_with_passwords_read(EvalPlan[RegistryCredentialFile].model_validate(payload))
     except ValidationError as exc:
         raise SystemExit(f'{path}: {one_line(exc)}') from exc
 
