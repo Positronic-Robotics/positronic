@@ -205,7 +205,7 @@ class _StackBuffer:
         targets = [now + off for off in self._offsets_sec]
         if not self._pad_start:
             targets = [t for t in targets if t >= times[0]]
-        return _StackedObs(obs, [self._entries[self._at_or_before(times, t)][1] for t in targets])
+        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][1] for t in targets])
 
     @staticmethod
     def _at_or_before(times: np.ndarray, target: float) -> int:
