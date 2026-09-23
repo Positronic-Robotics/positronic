@@ -557,6 +557,7 @@ class Robot(pimm.ControlSystem):
             raise
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        fault = None
         with _opened(self._connect, self._channel, self._sim) as vendor:
             arm = _Arm(
                 vendor,
@@ -577,10 +578,24 @@ class Robot(pimm.ControlSystem):
             }
             self.robot_meta.emit(meta)
 
-            q_target, grip_target = yield from arm.park(arm._grip(arm.observations()))
-            idle_since = None
-            parking = None
+            # rules-allow: swallowed-error — the fault is raised again once the arm is parked and let go
+            try:
+                yield from self._serve(arm, should_stop, clock)
+            except Exception as exc:
+                fault = exc
+                logger.exception('The arm driver failed during the run; parking the arm before it lets go')
+            yield from arm.shutdown()
+        if fault is not None:
+            raise fault
 
+    def _serve(
+        self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, None]:
+        """Park on startup, then answer commands and park when idle until ``should_stop``."""
+        q_target, grip_target = yield from arm.park(arm._grip(arm.observations()))
+        idle_since = None
+        parking = None
+        try:
             while not should_stop.value:
                 grip = pimm.value_updated(self.target_grip)
                 asked = arm.moves.next_request()
@@ -617,10 +632,9 @@ class Robot(pimm.ControlSystem):
                 # Synchronous moves can take seconds; publish a fresh observation.
                 arm.publish(arm.observations())
                 yield arm.limiter.wait()
-
+        finally:
             if parking is not None:
                 parking.close()
-            yield from arm.shutdown()
 
 
 class _FakeYam:

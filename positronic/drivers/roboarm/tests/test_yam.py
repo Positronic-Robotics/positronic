@@ -498,6 +498,33 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
     assert vendor.closed
 
 
+def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
+    vendor = FakeYam()
+    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    read = vendor.get_observations
+    armed = []
+
+    def read_once_failing():
+        if armed == [True]:
+            armed.append(False)
+            raise OSError('CAN read failed')
+        return read()
+
+    vendor.get_observations = read_once_failing
+    with pytest.raises(OSError, match='CAN read failed'):
+        with pimm.World(virtual_time=True) as world:
+            loop = world.start(driver)
+            for _ in range(1000):  # past the startup park, into the command loop
+                next(loop)
+            vendor._pos[:6] = RAISED
+            armed.append(True)
+            for _ in range(3000):
+                next(loop)
+    assert armed == [True, False]
+    np.testing.assert_allclose(vendor.released_at[0][:6], PARK, atol=0.005)
+    assert vendor.closed
+
+
 @pytest.mark.parametrize('distance', [0.1, 1.0, 3.0])
 def test_parking_command_speed_is_bounded_for_different_distances(rig, monkeypatch, distance):
     rig.tick(3)
@@ -785,13 +812,15 @@ def test_sync_call_is_answered_when_idle_parking_setup_read_fails(world, parking
         return read()
 
     monkeypatch.setattr(parking_rig.vendor, 'get_observations', fail_during_setup)
-    with pytest.raises(OSError, match='CAN read failed'):
-        parking_rig.tick()
+    parking_rig.tick()
     assert answer.done()
     with pytest.raises(OSError, match='CAN read failed') as raised:
         answer.result()
     assert raised.value is error
     assert not parking_rig.vendor.released_at
+    with pytest.raises(OSError, match='CAN read failed'):
+        parking_rig.finish()
+    np.testing.assert_allclose(parking_rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
 def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world, parking_rig, monkeypatch):
@@ -799,15 +828,62 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
     wire_call(world, caller, parking_rig.driver.sync_move)
     answer = caller(command.JointPosition(RAISED))
     error = OSError('CAN write failed')
+    raised_once = []
 
     def fail_hold(joint_pos):
+        # A fresh error after the first: one object raised again grows its traceback on every raise.
+        if raised_once:
+            raise OSError(*error.args)
+        raised_once.append(True)
         raise error
 
     monkeypatch.setattr(parking_rig.vendor, 'command_joint_pos', fail_hold)
-    with pytest.raises(OSError, match='CAN write failed'):
-        parking_rig.tick()
+    parking_rig.tick()
     assert answer.done()
     with pytest.raises(OSError, match='CAN write failed') as raised:
         answer.result()
     assert raised.value is error
+    parking_rig.tick(30)
     assert not parking_rig.vendor.released_at
+    assert not parking_rig.vendor.closed
+
+
+class Fault:
+    """Makes one vendor call raise, once or on every call from a chosen moment."""
+
+    def __init__(self, rig, monkeypatch, method, error):
+        self.rig, self.error, self.armed, self.persistent = rig, error, False, False
+        self.call = getattr(rig.vendor, method)
+        monkeypatch.setattr(rig.vendor, method, self)
+
+    def __call__(self, *args):
+        if self.armed:
+            self.armed = self.persistent
+            # A fresh error per call: one object raised again grows its traceback on every raise.
+            raise self.error if not self.persistent else type(self.error)(*self.error.args)
+        return self.call(*args)
+
+
+@pytest.mark.parametrize('method', ['get_observations', 'command_joint_pos'])
+def test_a_fault_during_the_run_parks_releases_and_is_raised_again(rig, monkeypatch, method):
+    rig.raise_arm()
+    fault = Fault(rig, monkeypatch, method, OSError('CAN failed'))
+    fault.armed = True
+    rig.tick()
+    assert not rig.vendor.released_at
+    with pytest.raises(OSError, match='CAN failed') as raised:
+        rig.finish(within_s=30)
+    assert raised.value is fault.error
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+@pytest.mark.parametrize('method', ['get_observations', 'command_joint_pos'])
+def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(rig, monkeypatch, caplog, method):
+    rig.raise_arm()
+    fault = Fault(rig, monkeypatch, method, OSError('CAN failed'))
+    fault.armed = fault.persistent = True
+    rig.tick(30)
+    assert 'Shutdown blocked' in caplog.text
+    assert not rig.vendor.released_at
+    assert not rig.vendor.closed
