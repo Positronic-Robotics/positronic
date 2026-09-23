@@ -84,20 +84,35 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-An endpoint says where its policy comes from and the wire a session with it runs over. `wire` is a
-name from `positronic_wire.registry`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
-`grpc_tls` or `roboarena`. A `remote` endpoint then carries the `address` that wire dials, and each
-wire declares its own fields: `host`, `port`, `path` and `query` on the websocket and gRPC wires;
-`uds`, `path` and `query` on `websocket_unix`; `host` and `port` on `roboarena`. `path` is the
-session route (`/api/v1/session`, or `/api/v1/session/<model>`), and `query` defaults to empty. A
-`served` endpoint names the `spec` the platform brings up, and the platform records the address. An
-`image` endpoint names the container the platform runs, and it takes only the `websocket` wire: the
-platform opens every image session over the websocket. Every kind names its wire, and there is no
-default. A record carries no URL: a `url` field is refused, and so is a scheme in `host`. The kinds
-refuse each other's fields, so an entry cannot carry two answers to the same question.
+An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
+Every kind names its wire. There is no default.
+
+`wire` is a name from `positronic_wire.registry`. Each wire dials its own address fields:
+
+| `wire` | Address fields |
+|---|---|
+| `websocket` | `host`, `port`, `path`, `query` |
+| `websocket_tls` | `host`, `port`, `path`, `query` |
+| `websocket_unix` | `uds`, `path`, `query` |
+| `grpc` | `host`, `port`, `path`, `query` |
+| `grpc_tls` | `host`, `port`, `path`, `query` |
+| `roboarena` | `host`, `port` |
+
+`path` is the session route: `/api/v1/session`, or `/api/v1/session/<model>`. `query` defaults to empty.
+
+Each kind carries its own locator:
+
+| `kind` | Carries |
+|---|---|
+| `remote` | `address`, the fields its `wire` dials |
+| `served` | `spec`; the platform brings it up and records the address |
+| `image` | `image`, the container; takes only the `websocket` wire, which the platform opens every image session over |
+
+- A record carries no URL. A `url` field is refused. A scheme in `host` is refused.
+- The kinds refuse each other's fields. An entry carries one answer to each question.
 
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
-so the grammar admits only values that the wire can write as they are:
+so the grammar admits only a value the wire can write as it is:
 
 | Field | Holds | Refused |
 |---|---|---|
