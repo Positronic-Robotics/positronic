@@ -1,14 +1,11 @@
-"""Observation keys of the roboarena wire protocol.
+"""Observation keys of the roboarena wire protocol, named once so both ends spell them the same."""
 
-The codec writes them when it encodes an observation and the source rebuilds them when it warms a freshly
-loaded checkpoint, so they are named once here rather than spelled out at each end.
-"""
+from positronic.offboard.roboarena import SESSION_ID as SESSION_ID
 
 JOINT_POSITION = 'observation/joint_position'
 GRIPPER_POSITION = 'observation/gripper_position'
 WRIST_IMAGE = 'observation/wrist_image_left'
 PROMPT = 'prompt'
-SESSION_ID = 'session_id'
 
 
 def exterior_image(index: int) -> str:
