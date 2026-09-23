@@ -4,6 +4,8 @@ import os
 import re
 import signal
 import struct
+import subprocess
+import sys
 import threading
 import time
 from functools import partial
@@ -1802,3 +1804,30 @@ def test_foreground_step_reports_device_failure_and_pending_sigint():
         assert closed.is_set()
     finally:
         signal.signal(signal.SIGINT, previous)
+
+
+def _gone(pid: int) -> bool:
+    try:
+        with open(f'/proc/{pid}/stat') as stat:
+            return stat.read().split(')')[-1].split()[0] == 'Z'
+    except FileNotFoundError:
+        return True
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+@pytest.mark.parametrize('parent_signal', [signal.SIGTERM, signal.SIGKILL])
+def test_a_signalled_parent_leaves_no_child_running(tmp_path, parent_signal):
+    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)])
+    child_pid_file = tmp_path / 'child.pid'
+    deadline = time.monotonic() + 60
+    while not child_pid_file.exists():
+        assert time.monotonic() < deadline and parent.poll() is None, 'the child never started'
+        time.sleep(0.05)
+    child = int(child_pid_file.read_text())
+    parent.send_signal(parent_signal)
+    parent.wait(timeout=30)
+    deadline = time.monotonic() + 30
+    while not _gone(child):
+        assert time.monotonic() < deadline, 'the child outlived its parent'
+        time.sleep(0.05)
+    assert (tmp_path / 'shut_down').exists()

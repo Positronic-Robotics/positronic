@@ -466,6 +466,28 @@ class _CallAnsweringLoop:
                 handler.fail_queued()
 
 
+_ORPHAN_POLL_S = 0.5
+
+
+def _exit_on_sigterm(signum, frame) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _stop_when_orphaned(stop_event: EventClass, name: str) -> None:
+    """Stop this child's World once its parent is gone, so the child runs its own shutdown and exits."""
+    parent = os.getppid()
+
+    def watch() -> None:
+        while not stop_event.is_set():
+            if os.getppid() != parent:
+                logger.warning(f'{name}: the parent process {parent} is gone; stopping')
+                stop_event.set()
+                return
+            time.sleep(_ORPHAN_POLL_S)
+
+    threading.Thread(target=watch, name=f'{name}.orphan-watch', daemon=True).start()
+
+
 def _bg_wrapper(
     run_func: ControlLoop,
     stop_event: EventClass,
@@ -477,6 +499,7 @@ def _bg_wrapper(
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
         # Ctrl-C stops the parent World; the device must complete its own shutdown before losing control.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _stop_when_orphaned(stop_event, name)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
@@ -527,10 +550,15 @@ class World:
         self._protected_foreground_loops: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
+        self._previous_sigterm = None
         self._connections = []
 
     def __enter__(self):
         self.entered = True
+        self._previous_sigterm = None
+        if threading.current_thread() is threading.main_thread():
+            # A SIGTERM ends the World through `__exit__`, which stops and joins its children.
+            self._previous_sigterm = signal.signal(signal.SIGTERM, _exit_on_sigterm)
         return self
 
     def _drive(self, loop: Iterator[Command]) -> None:
@@ -644,6 +672,8 @@ class World:
                     finish()
                 except BaseException as exc:
                     errors.append(exc)
+        if self._previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, self._previous_sigterm)
         if errors and exc_value is not None:
             errors.insert(0, exc_value)
         if len(errors) == 1:
