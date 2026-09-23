@@ -260,7 +260,7 @@ def _jitter_velocity_readings(rig, monkeypatch, noise_rad_s):
 
     def noisy():
         obs = read()
-        obs['joint_vel'] = obs['joint_vel'] + noise_rad_s
+        obs[yam._JOINT_VEL] = obs[yam._JOINT_VEL] + noise_rad_s
         return obs
 
     monkeypatch.setattr(rig.vendor, 'get_observations', noisy)
