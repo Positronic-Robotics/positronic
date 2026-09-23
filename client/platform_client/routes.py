@@ -11,7 +11,6 @@ API_PREFIX = '/v1'
 USERS_REGISTER = f'{API_PREFIX}/users.register'
 USERS_ME = f'{API_PREFIX}/users.me'
 SUBMISSIONS_CREATE = f'{API_PREFIX}/submissions.create'
-# The plan as it would run, with nothing filed and no quota spent.
 SUBMISSIONS_RESOLVE = f'{API_PREFIX}/submissions.resolve'
 SUBMISSIONS_LIST = f'{API_PREFIX}/submissions.list'
 SUBMISSIONS_GET = f'{API_PREFIX}/submissions.get'

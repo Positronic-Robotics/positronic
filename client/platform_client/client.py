@@ -169,8 +169,7 @@ class PlatformClient:
         return self._post(routes.SUBMISSIONS_CREATE, plan, SubmissionCreateResponse)
 
     def resolve_plan(self, plan: EvalPlan) -> ResolvedPlan:
-        """The plan as it would run (`routes.SUBMISSIONS_RESOLVE`). Under a `transaction_key`,
-        `create_submission` then makes the same draws."""
+        """The plan as it would run, with nothing filed."""
         return self._post(routes.SUBMISSIONS_RESOLVE, plan, ResolvedPlan)
 
     def list_submissions(
