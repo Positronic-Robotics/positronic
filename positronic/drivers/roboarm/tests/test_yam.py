@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 import pimm
+import positronic.cfg.embodiment as embodiment_cfg
+import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.roboarm import RobotStatus, command, yam
 from positronic.drivers.roboarm.tests.fakes import StopFlag
@@ -249,6 +251,15 @@ def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
+
+
+def test_the_hardware_configs_give_each_arm_its_own_park_tuning():
+    wide = yam.ParkTuning(max_correction_rad=0.2)
+    arm = roboarm_cfg.yam.override(**{'park_tuning.max_correction_rad': 0.2}).instantiate()
+    assert arm._park_tuning == wide
+    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, **{'park_tuning.left.max_correction_rad': 0.2})
+    arms = [system for system in bimanual.instantiate().control_systems if isinstance(system, yam.Robot)]
+    assert [arm._park_tuning for arm in arms] == [wide, DEFAULT_TUNING]
 
 
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
