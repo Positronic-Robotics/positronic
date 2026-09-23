@@ -1,4 +1,5 @@
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -142,16 +143,20 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
-    def _read_obs(self, task: Task) -> Obs | None:
+    def _read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
         Return ``None`` if a required signal has no message. Conversion errors propagate.
+        Put each signal's read and conversion durations into ``step_ms``.
         """
         inputs: dict[str, Any] = {}
         assert_default_frame(self._statics())
         for name, obs in self._embodiment.observations.items():
+            read_started_ns = time.perf_counter_ns()
             message = self.observations[name].read()
+            convert_started_ns = time.perf_counter_ns()
+            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
             if message is None:
                 return None
             if message.updated or name not in self._obs_by_signal:
@@ -163,23 +168,42 @@ class Harness(pimm.ControlSystem):
                     for full_name, entry in expand_suffixed(name, value)
                     if entry is not None
                 }
+                converted_ns = time.perf_counter_ns() - convert_started_ns
+                step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = converted_ns / 1e6
             inputs.update(self._obs_by_signal[name])
         inputs[keys.TASK] = task.instruction
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
 
-    def _step(self, task: Task, runtime: Executor, policy_run: PolicyRun) -> int | None:
-        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time."""
-        obs = self._read_obs(task)
-        if obs is None:
-            return None
-        runtime.start_tick()
-        started_at_ns = runtime.time_ns
-        step = policy_run.send(obs)
-        assert step is not None, 'a policy must yield a Step for each observation'
-        self._telemetry.step()
-        for name, value in step.commands.items():
-            self.commands[name].emit(value)
+    def _step(self, task: Task, runtime: Executor, policy_run: PolicyRun, due_ns: int | None) -> int | None:
+        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time.
+
+        ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
+        records the step's durations.
+        """
+        step_ms: dict[str, float] = {}
+        with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span:
+            try:
+                if due_ns is not None and runtime.time_ns >= due_ns:
+                    step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
+                observe_started_ns = time.perf_counter_ns()
+                obs = self._read_obs(task, step_ms)
+                policy_started_ns = time.perf_counter_ns()
+                step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
+                if obs is None:
+                    return None
+                runtime.start_tick()
+                started_at_ns = runtime.time_ns
+                step = policy_run.send(obs)
+                assert step is not None, 'a policy must yield a Step for each observation'
+                emit_started_ns = time.perf_counter_ns()
+                step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
+                self._telemetry.step()
+                for name, value in step.commands.items():
+                    self.commands[name].emit(value)
+                step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
+            finally:
+                telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
         return started_at_ns + round(period_sec * 1e9)
@@ -243,7 +267,7 @@ class Harness(pimm.ControlSystem):
             completed = ()
             while not should_stop.value and payload is None:
                 if completed or resume_at_ns is None or runtime.time_ns >= resume_at_ns:
-                    resume_at_ns = self._step(task, runtime, policy_run)
+                    resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
                 wake_at_ns = resume_at_ns
                 if deadline_ns is not None:
                     wake_at_ns = deadline_ns if wake_at_ns is None else min(wake_at_ns, deadline_ns)
