@@ -157,10 +157,9 @@ class _StackBuffer:
     its value, and carry-over sampling reuses the stored one — then drops entries before the oldest
     sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
     with a stack holding, for each offset, the latest value at or before that time — carry-over, never
-    the future. Offsets that
-    precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
-    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
-    ``len(offsets_sec)`` as history accumulates).
+    the future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``,
+    a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1
+    to ``len(offsets_sec)`` as history accumulates).
     """
 
     def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
@@ -193,10 +192,7 @@ class _StackBuffer:
 
 
 class _StackedObs(Mapping[str, Any]):
-    """``obs`` with each buffered key replaced by its stack, built on the first read of that key.
-
-    Only a sent request reads the stacks, so a tick that sends nothing builds none.
-    """
+    """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
 
     def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
         self._obs = obs
@@ -224,7 +220,8 @@ class TemporalStack(Processor[Obs, OutputT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     Every sent observation records the selected channels on the runtime's clock, then passes the stacked
-    observations to ``inner`` and yields its result. Offsets are ascending seconds relative to now.
+    observations to ``inner`` and yields its result. A stack is built when ``inner`` first reads its key, so
+    a call that reads none builds none. Offsets are ascending seconds relative to now.
     Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
