@@ -8,7 +8,7 @@ installable on its own, with `grpcio` and `websockets` as its only dependencies.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.6.0"
+uv add "positronic-wire==0.7.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
