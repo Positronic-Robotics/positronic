@@ -135,9 +135,9 @@ def password_from_file(password_file: Path) -> str:
         path = password_file.expanduser()
     except RuntimeError as exc:  # `~name` for a user this machine does not have
         raise ValueError(f'{password_file} names no home directory: {exc}') from exc
-    if not path.is_file():
-        raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
     try:
+        if not path.is_file():
+            raise ValueError(f'{path} is not a file; password_file names the file the registry password is in')
         held = path.read_text()
     except OSError as exc:
         raise ValueError(f'{path} cannot be read: {exc.strerror}') from exc

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -452,6 +453,11 @@ def test_a_password_file_of_only_whitespace_is_refused(tmp_path: Path):
         password_from_file(blank)
 
 
+# Root reads and searches past every mode bit, so a mode cannot refuse it.
+runs_as_root = pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root ignores file modes')
+
+
+@runs_as_root
 def test_a_password_file_nothing_may_read_is_refused(tmp_path: Path):
     unreadable = tmp_path / 'registry-password'
     unreadable.write_text('a-password\n')
@@ -461,6 +467,19 @@ def test_a_password_file_nothing_may_read_is_refused(tmp_path: Path):
             password_from_file(unreadable)
     finally:
         unreadable.chmod(0o600)
+
+
+@runs_as_root
+def test_a_password_file_in_a_directory_nothing_may_search_is_refused(tmp_path: Path):
+    closed = tmp_path / 'closed'
+    closed.mkdir()
+    (closed / 'registry-password').write_text('a-password\n')
+    closed.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match='cannot be read'):
+            password_from_file(closed / 'registry-password')
+    finally:
+        closed.chmod(0o700)
 
 
 def test_the_password_keeps_the_spaces_at_its_own_edges(tmp_path: Path):
