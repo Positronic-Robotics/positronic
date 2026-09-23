@@ -24,11 +24,12 @@ from pydantic_ai.messages import (
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import OBS_TIME_NS, Images, LLMPolicy, llm
+from positronic.vendors.llm.policy import Images, LLMPolicy, llm
 
 
 def observation(x=0.0):
@@ -128,7 +129,7 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     assert states[1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
     assert Image.open(io.BytesIO(frames(requests[-1][0])[0].data)).size == (8, 4)
-    assert [e[OBS_TIME_NS] for e in states] == [0, 1_000_000_000, 2_000_000_000]
+    assert [e[policy_keys.OBS_TIME_NS] for e in states] == [0, 1_000_000_000, 2_000_000_000]
     assert [e['call'] for e in events if e['event'] == 'accepted'] == [1, 2, 3]
     assert len([e for e in events if e['event'] == 'instructions']) == 1
     assert 'privileged-value-never-send' not in json.dumps(events)
@@ -183,7 +184,7 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
             assert len(frames(messages)) == 2 * min(len(pictured), image_horizon)
         messages = requests[-1][0]
         retained = [
-            message.metadata[OBS_TIME_NS]
+            message.metadata[policy_keys.OBS_TIME_NS]
             for message in messages
             if isinstance(message, ModelRequest) and message.metadata is not None and frames([message])
         ]
@@ -217,7 +218,7 @@ def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, rep
         assert len(requests) == 2
         assert not run.send(later).commands
         events = runtime.metadata['transcript']
-    assert [e[OBS_TIME_NS] for e in events if e['event'] == 'request'] == [1, 1]
+    assert [e[policy_keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [1, 1]
     assert len([e for e in events if e['event'] == 'observation']) == 1
     if reply.tool_calls:
         pictures = frames(requests[1][0])
@@ -355,7 +356,7 @@ def test_corrected_replies_are_preserved_in_transcript(model, bad):
     assert [e['call'] for e in events if e['event'] == 'response'] == [1, 2]
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [1]
     assert [e['call'] for e in events if e['event'] == 'accepted'] == [2]
-    assert [e[OBS_TIME_NS] for e in events if e['event'] == 'request'] == [123, 123]
+    assert [e[policy_keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [123, 123]
 
 
 @pytest.mark.parametrize('requested_x,current_x,expected_x', [(0.2, 0, 0.05), (0.04, -0.1, -0.05), (0.2, 0.18, 0.2)])

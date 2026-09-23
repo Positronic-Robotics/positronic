@@ -18,7 +18,7 @@ from positronic.policy.layers import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import OBS_TIME_NS, LLMPolicy
+from positronic.vendors.llm.policy import LLMPolicy
 
 
 class Arm(pimm.ControlSystem):
@@ -139,7 +139,10 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         before, after = states[index * 2 : index * 2 + 2]
         assert [e['call'] for e in requests] == [1, 2]
         assert [e['call'] for e in responses] == [1, 2]
-        assert [e[OBS_TIME_NS] for e in requests] == [before[OBS_TIME_NS], after[OBS_TIME_NS]]
+        assert [e[policy_keys.OBS_TIME_NS] for e in requests] == [
+            before[policy_keys.OBS_TIME_NS],
+            after[policy_keys.OBS_TIME_NS],
+        ]
         assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]

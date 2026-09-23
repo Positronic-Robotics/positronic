@@ -8,8 +8,9 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from positronic import keys
+from positronic.policy import keys as policy_keys
 from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.policy import OBS_TIME_NS, llm
+from positronic.vendors.llm.policy import llm
 from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
 
 
@@ -105,7 +106,7 @@ def test_run_records_compact_reply_and_usage():
     assert 'iVBOR' not in recorded
     events = meta['transcript']
     request = next(e for e in events if e['event'] == 'request')
-    assert request[OBS_TIME_NS] == 1000
+    assert request[policy_keys.OBS_TIME_NS] == 1000
     assert request['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
     response = next(e for e in events if e['event'] == 'response')
     assert response['tools'][0]['name'] == 'done'

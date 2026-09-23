@@ -35,8 +35,6 @@ from positronic.policy.sequential import Sequential
 from .client import Endpoint
 from .motion import Motion, MoveTo
 
-OBS_TIME_NS = 'obs_time_ns'
-
 
 class Images(StrEnum):
     ALWAYS = 'always'
@@ -102,7 +100,7 @@ class _Observation:
     def state(self, target: MoveTo | None) -> dict[str, Any]:
         state = {
             'task': self.task,
-            OBS_TIME_NS: self.time_ns,
+            policy_keys.OBS_TIME_NS: self.time_ns,
             'position_m': self.pose.translation.tolist(),
             'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
             'gripper': self.grip,
@@ -126,7 +124,7 @@ class _Observation:
                 f'Camera {camera}, observation {self.time_ns} ns:',
                 BinaryContent(data.getvalue(), media_type='image/png'),
             ])
-        return ModelRequest([UserPromptPart(content)], metadata={OBS_TIME_NS: self.time_ns})
+        return ModelRequest([UserPromptPart(content)], metadata={policy_keys.OBS_TIME_NS: self.time_ns})
 
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
@@ -257,7 +255,7 @@ class LLMPolicy(Policy):
         def _prune_images(self) -> None:
             observations = list(
                 dict.fromkeys(
-                    message.metadata[OBS_TIME_NS]
+                    message.metadata[policy_keys.OBS_TIME_NS]
                     for message in self._messages
                     if isinstance(message, ModelRequest) and message.metadata is not None
                 )
@@ -267,7 +265,7 @@ class LLMPolicy(Policy):
                 if (
                     not isinstance(message, ModelRequest)
                     or message.metadata is None
-                    or message.metadata[OBS_TIME_NS] in retained
+                    or message.metadata[policy_keys.OBS_TIME_NS] in retained
                 ):
                     continue
                 (part,) = message.parts
@@ -288,7 +286,7 @@ class LLMPolicy(Policy):
                 'event': 'request',
                 'call': self._calls,
                 'cameras': sorted(self._revealed),
-                OBS_TIME_NS: self._obs.time_ns,
+                policy_keys.OBS_TIME_NS: self._obs.time_ns,
             })
             return list(self._messages)
 
