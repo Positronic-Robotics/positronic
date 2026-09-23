@@ -202,7 +202,15 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
         'tasks': [
             {
                 'task_id': 'stack-the-cubes',
-                'endpoints': [{'name': 'a', 'kind': 'remote', 'url': 'wss://a.example/ws', 'episodes': 2}],
+                'endpoints': [
+                    {
+                        'name': 'a',
+                        'kind': 'remote',
+                        'wire': 'websocket_tls',
+                        'address': {'host': 'a.example', 'port': 443, 'path': '/api/v1/session'},
+                        'episodes': 2,
+                    }
+                ],
                 'cap_per_episode_sec': 90,
                 'policy_preset': 'example_preset',
                 'tote_placement': 'none',
@@ -213,7 +221,13 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     gateway = Gateway(200, resolved)
     plan = EvalPlan(
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[
+            Endpoint(
+                name='a',
+                wire=Wire.websocket_tls,
+                address=HostPortAddress(host='a.example', port=443, path='/api/v1/session'),
+            )
+        ],
         episodes_per_endpoint=2,
     )
 

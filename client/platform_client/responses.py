@@ -21,8 +21,9 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
-from platform_client.eval_plan import Clutter
+from platform_client.eval_plan import Clutter, EndpointAddress
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
@@ -184,7 +185,8 @@ class ResolvedEndpoint(BaseModel):
 
     name: str
     kind: Slugged[EndpointKind]
-    url: str | None = None
+    wire: Slugged[Wire] | None = None
+    address: EndpointAddress | None = None
     provider: str | None = None
     spec: str | None = None
     episodes: int = Field(ge=1)

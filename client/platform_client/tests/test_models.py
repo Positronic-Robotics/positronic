@@ -21,7 +21,15 @@ from platform_client.enums import (
     Wire,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, RoboarenaAddress, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    Clutter,
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    RoboarenaAddress,
+    TaskNode,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
@@ -159,8 +167,21 @@ SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 RESOLVED_TASK = ResolvedTask(
     task_id=TaskRef('stack-the-cubes'),
     endpoints=[
-        ResolvedEndpoint(name='baseline', kind=EndpointKind.remote, url='wss://baseline.example/ws', episodes=2),
-        ResolvedEndpoint(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05', episodes=1),
+        ResolvedEndpoint(
+            name='baseline',
+            kind=EndpointKind.remote,
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session', query='mode=native'),
+            episodes=2,
+        ),
+        ResolvedEndpoint(
+            name='pi05',
+            kind=EndpointKind.served,
+            wire=Wire.websocket_unix,
+            provider='droid_cohost',
+            spec='pi05',
+            episodes=1,
+        ),
     ],
     cap_per_episode_sec=90,
     policy_preset='example_candidate',
