@@ -22,7 +22,6 @@ RESOLUTION = 'image_resolution'
 NEEDS_WRIST_CAMERA = 'needs_wrist_camera'
 NEEDS_STEREO_CAMERA = 'needs_stereo_camera'
 NUM_EXTERIOR_CAMERAS = 'n_external_cameras'
-# Sent by a stock roboarena server and not by DreamZero's own. ``NEEDS_SESSION_ID`` decides whether the observation
-# carries ``SESSION_ID`` at all.
+# Sent by a stock roboarena server and not by DreamZero's own.
 NEEDS_SESSION_ID = 'needs_session_id'
 ACTION_SPACE = 'action_space'

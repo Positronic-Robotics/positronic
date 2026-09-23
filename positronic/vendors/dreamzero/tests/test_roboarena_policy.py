@@ -7,6 +7,7 @@ import pytest
 from positronic_wire.roboarena import RoboarenaAddress
 
 from positronic import keys as rig
+from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codec import ACTION
 from positronic.policy.executor import Executor, WaitStatus
@@ -380,3 +381,22 @@ class TestTheStack:
 
         assert len(emitted) == 32
         assert all(rig.ROBOT_COMMAND in commands for _, commands in emitted)
+
+    @pytest.mark.parametrize('status', [RobotStatus.ERROR, RobotStatus.BUSY])
+    def test_an_unavailable_arm_is_sent_no_command_and_the_server_no_observation(self, status):
+        client = FakeClient(np.zeros((32, 8), dtype=np.float32))
+        runtime, run = start_stack(client, Clock())
+        try:
+            steps = [run.send(rig_observation(**{rig.ROBOT_STATUS: status})) for _ in range(3)]
+        finally:
+            runtime.close()
+            run.close()
+
+        assert [step.commands for step in steps] == [{}, {}, {}]
+        assert client.sent == []
+
+    def test_an_available_arm_is_served(self):
+        client = FakeClient(np.zeros((32, 8), dtype=np.float32))
+        one_inference(client, rig_observation(**{rig.ROBOT_STATUS: RobotStatus.AVAILABLE}))
+
+        assert len(client.sent) == 1

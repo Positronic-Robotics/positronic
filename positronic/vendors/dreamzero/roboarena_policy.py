@@ -20,7 +20,7 @@ from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.dreamzero import codecs, roboarena
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing
@@ -78,8 +78,7 @@ def renaming() -> dict[str, str]:
 def image_size(config: Mapping[str, Any]) -> tuple[int, int]:
     """The (width, height) to encode frames at, from the announced `config`.
 
-    The protocol states the resolution as (height, width). The server rejects a frame of any other size, so an
-    unstated resolution is nothing to guess at.
+    The protocol states the resolution as (height, width). The server rejects a frame of any other size.
     """
     resolution = config[roboarena.RESOLUTION]
     if resolution is None:
@@ -99,10 +98,11 @@ IMAGE_SIZE_OVERRIDE = 'obs.image_size'
 def local_stack(config: Mapping[str, Any]) -> Sequential:
     """The stack in front of a server announcing `config`: the codec, and a schedule at its training cadence.
 
-    `ChunkedSchedule` plays each chunk from the moment it arrives.
+    `ChunkedSchedule` plays each chunk from the moment it arrives. `PauseOnUnavailable` holds both while the arm
+    is unavailable.
     """
     codec = CODEC.override(**{IMAGE_SIZE_OVERRIDE: image_size(config)}).instantiate()
-    return Sequential(ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
+    return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
 
 
 # The key the chunk arrives under in the server's reply, which is a mapping rather than a bare array.
@@ -173,13 +173,13 @@ class RoboarenaPolicy(Policy):
     def run(self, runtime: Runtime) -> PolicyRun:
         client = RoboarenaClient(self._address.host, self._address.port)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.
-        connection = Lock()
+        connection_lock = Lock()
         config = client.connect()
         try:
             endpoint = RoboarenaEndpoint(client, config)
 
             def infer(obs: Mapping[str, Any]) -> list[dict[str, Any]]:
-                with connection:
+                with connection_lock:
                     return endpoint(obs)
 
             with closing(runtime.start(local_stack(config), infer)) as stack:
@@ -191,5 +191,5 @@ class RoboarenaPolicy(Policy):
                         return
                     obs = yield step
         finally:
-            with connection:
+            with connection_lock:
                 client.close()
