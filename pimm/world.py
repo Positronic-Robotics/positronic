@@ -1131,8 +1131,8 @@ class World:
 
         message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
-        # Every shared-memory emit and read touches these, so they are not manager proxies: each proxy access is
-        # a round trip to the manager process. The lock guards the timestamp and the update flags.
+        # The lock and the values below live in shared memory, not in the manager: every emit and read touches
+        # them, and each proxy access is a round trip to the manager process. The lock guards ts and the flags.
         lock = self._mp_ctx.Lock()
         ts_value = self._mp_ctx.RawValue(ctypes.c_int64, -1)
         up_values = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
