@@ -17,6 +17,7 @@ import contextlib
 import logging
 import math
 from collections.abc import Callable, Generator, Iterator
+from enum import Enum, auto
 from typing import Any
 
 import mujoco as mj
@@ -52,6 +53,13 @@ _IK_ROT_TOL = 1e-2  # radians
 _PARK_JOINTS = np.zeros(6)
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+
+
+class _Rest(Enum):
+    """Where a settle pass left the chain once every joint held still."""
+
+    ON_GOAL = auto()
+    SHORT_OF_GOAL = auto()
 
 
 def _connect(channel: str, sim: bool):
@@ -272,11 +280,11 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _come_to_rest(
         self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
-    ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], bool] | None]:
+    ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], _Rest] | None]:
         """Ramp to ``reference`` at the tuning's pace, then wait until every joint holds still.
 
-        Return the reading and whether the chain rests on ``goal``: within tolerance and still for
-        ``_STILL_TIME_S`` with no break. Return None when a stop abandons the move.
+        Return the reading and where the chain rests. ``ON_GOAL`` needs every joint within tolerance and still
+        for ``_STILL_TIME_S`` with no break. Return None when a stop abandons the move.
         """
         start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         travel_s = max(self._MIN_RAMP_S, float(np.max(np.abs(reference - start))) / tuning.max_speed_rad_s)
@@ -296,9 +304,9 @@ class _Arm(DriverRun[command.CommandType]):
             still_since = (elapsed if still_since is None else still_since) if still else None
             arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
             if arrived_since is not None and elapsed - arrived_since >= self._STILL_TIME_S:
-                return obs, True
+                return obs, _Rest.ON_GOAL
             if arrived_since is None and still_since is not None and elapsed - still_since >= self._STILL_TIME_S:
-                return obs, False
+                return obs, _Rest.SHORT_OF_GOAL
 
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
             yield self.limiter.wait()
@@ -320,8 +328,8 @@ class _Arm(DriverRun[command.CommandType]):
                 rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
                 if rest is None:
                     return None
-                obs, arrived = rest
-                if arrived:
+                obs, rests = rest
+                if rests is _Rest.ON_GOAL:
                     self.command_target(reference, grip)
                     self.moves.errored = False
                     self.publish(self.observations())
@@ -426,15 +434,20 @@ def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Ite
 _POWER_OFF_ATTEMPTS = 3  # per motor; a motor can miss the first disable it is sent
 
 
-def _switched_off(interface: Any, motor_id: int) -> bool:
-    for _ in range(_POWER_OFF_ATTEMPTS):
-        # rules-allow: swallowed-error — a motor that will not answer must not leave the rest of them on
-        try:
-            interface.motor_off(motor_id)
-            return True
-        except Exception:
-            pass
-    return False
+def _disable_motors(interface: Any, motor_ids: list[int]) -> list[int]:
+    """Send each motor its disable, retried; return the motors that refused every attempt."""
+    refused = []
+    for motor_id in motor_ids:
+        for _ in range(_POWER_OFF_ATTEMPTS):
+            # rules-allow: swallowed-error — a motor that will not answer must not leave the rest of them on
+            try:
+                interface.motor_off(motor_id)
+                break
+            except Exception:
+                pass
+        else:
+            refused.append(motor_id)
+    return refused
 
 
 def _power_off(vendor: Any) -> None:
@@ -447,18 +460,18 @@ def _power_off(vendor: Any) -> None:
     chain: Any = getattr(vendor, 'motor_chain', None)
     if chain is None or not getattr(chain, 'motor_list', None):
         return  # i2rt's own sim chain and the fakes carry no motors
-    motors = list(chain.motor_list)
+    motor_ids = [motor_id for motor_id, _ in chain.motor_list]
     # rules-allow: swallowed-error — the run is over, and a chain that will not answer must not hide what ended it
     try:
         interface = DMSingleMotorCanInterface(
             channel=chain.channel, control_mode=chain.motor_interface.control_mode, name='power-off'
         )
         try:
-            missed = [motor_id for motor_id, _ in motors if not _switched_off(interface, motor_id)]
+            refused = _disable_motors(interface, motor_ids)
         finally:
             interface.close()
-        if missed:
-            logger.warning(f'Motors {missed} stayed enabled, so they will latch their own command timeout')
+        if refused:
+            logger.warning(f'Motors {refused} stayed enabled, so they will latch their own command timeout')
     except Exception as exc:
         logger.warning(f'The chain kept its motors enabled: {exc}')
 
