@@ -62,6 +62,11 @@ class RoboarenaClient:
         return announced
 
     @property
+    def url(self) -> str:
+        """The URL this client dials."""
+        return self._wire.session_url(self._address)
+
+    @property
     def server_config(self) -> dict[str, Any]:
         """The ``PolicyServerConfig`` this backend announced on connect."""
         if self._server_config is None:
@@ -78,7 +83,7 @@ class RoboarenaClient:
         if refusal is None:
             return ProbeOutcome.READY
         if self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
-            raise wire.ConnectRefused(refusal, f'{self._wire.session_url(self._address)} refused the connection')
+            raise wire.ConnectRefused(refusal, f'{self.url} refused the connection')
         return ProbeOutcome.NOT_READY
 
     def infer(self, observation: Mapping[str, Any]) -> Any:

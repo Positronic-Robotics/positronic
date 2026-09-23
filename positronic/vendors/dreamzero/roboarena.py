@@ -9,7 +9,10 @@ PROMPT = 'prompt'
 
 
 def exterior_image(index: int) -> str:
-    """The key of the ``index``-th exterior camera, counted from 0 as the server numbers them."""
+    """The key of the ``index``-th exterior camera.
+
+    DreamZero's own server counts ``index`` from 0, and a stock roboarena server counts it from 1.
+    """
     return f'observation/exterior_image_{index}_left'
 
 
@@ -19,3 +22,6 @@ RESOLUTION = 'image_resolution'
 NEEDS_WRIST_CAMERA = 'needs_wrist_camera'
 NEEDS_STEREO_CAMERA = 'needs_stereo_camera'
 NUM_EXTERIOR_CAMERAS = 'n_external_cameras'
+# Sent by a stock roboarena server and not by DreamZero's own.
+NEEDS_SESSION_ID = 'needs_session_id'
+ACTION_SPACE = 'action_space'
