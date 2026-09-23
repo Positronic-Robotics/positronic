@@ -17,6 +17,7 @@ import contextlib
 import logging
 import math
 from collections.abc import Callable, Generator, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import mujoco as mj
@@ -50,6 +51,20 @@ _IK_ROT_TOL = 1e-2  # radians
 _PARK_JOINTS = np.zeros(6)
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+
+
+@dataclass(frozen=True)
+class ParkTuning:
+    """How close the park must land, and what it may spend to get there.
+
+    A position servo holds its chain a steady distance short of the reference, and that distance differs
+    between two arms. The park measures it and asks for a reference past the parking pose, by up to
+    ``max_correction_rad``. The defaults fit the arm the driver was brought up on.
+    """
+
+    tolerance_rad: float = 0.005  # every joint must rest this close to the parking pose
+    attempts: int = 6  # correction passes before the park fails
+    max_correction_rad: float = 0.05  # the most the reference may lie past the parking pose, per joint
 
 
 def _connect(channel: str, sim: bool):
@@ -167,7 +182,6 @@ class _Arm(DriverRun[command.CommandType]):
     _PARK_VELOCITY_TOL_RAD_S = 0.02
     _PARK_STILL_TIME_S = 0.2
     _MOVE_TOLERANCE_RAD = 0.02
-    _PARK_TOLERANCE_RAD = 0.005
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
 
     def __init__(
@@ -180,9 +194,11 @@ class _Arm(DriverRun[command.CommandType]):
         base_pose: geom.Transform3D,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
+        park_tuning: ParkTuning,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=100)
         self.vendor = vendor
+        self.park_tuning = park_tuning
         self.out = out
         self.grip_out = grip_out
         self.state = YamState()
@@ -242,14 +258,13 @@ class _Arm(DriverRun[command.CommandType]):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def _arrived(
-        self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tolerance_rad: float, require_stopped: bool
-    ) -> bool:
+    def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tolerance_rad: float) -> bool:
         if not np.all(np.abs(obs[_JOINT_POS] - target) < tolerance_rad):
             return False
-        if not abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL:
-            return False
-        return not require_stopped or bool(np.all(np.abs(obs[_JOINT_VEL]) < self._PARK_VELOCITY_TOL_RAD_S))
+        return abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
+
+    def _still(self, obs: dict[str, np.ndarray]) -> bool:
+        return bool(np.all(np.abs(obs[_JOINT_VEL]) < self._PARK_VELOCITY_TOL_RAD_S))
 
     def _move_timeout(
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
@@ -270,38 +285,21 @@ class _Arm(DriverRun[command.CommandType]):
         *,
         timeout_s: float = _MOVE_TIMEOUT_S,
         tolerance_rad: float = _MOVE_TOLERANCE_RAD,
-        max_speed_rad_s: float = math.inf,
-        require_stopped: bool = False,
-        interrupt_on_stop: bool = True,
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Ramp to the exact target and verify measured arrival before the deadline."""
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
-            distance_rad = float(np.max(np.abs(target - start)))
-            travel_s = max(self._MIN_MOVE_TIME_S, distance_rad / max_speed_rad_s)
-            still_time_s = self._PARK_STILL_TIME_S if require_stopped else 0.0
-            arrived_since = None
             started = self.clock.now()
             while True:
-                if self.should_stop.value and interrupt_on_stop:
+                if self.should_stop.value:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
                 obs = self.observations()
                 if elapsed > timeout_s:
                     raise self._move_timeout(obs, target, grip, timeout_s, tolerance_rad)
-
-                at_target = elapsed >= travel_s and self._arrived(obs, target, grip, tolerance_rad, require_stopped)
-                if not at_target:
-                    arrived_since = None
-                elif arrived_since is None:
-                    arrived_since = elapsed
-                if arrived_since is not None and elapsed - arrived_since >= still_time_s:
+                if elapsed >= self._MIN_MOVE_TIME_S and self._arrived(obs, target, grip, tolerance_rad):
                     break
-
-                fraction = min(elapsed / travel_s, 1.0)
-                joint_target = (1 - fraction) * start + fraction * target
-                self.command_target(joint_target, grip)
-                self.publish(obs, RobotStatus.BUSY)
+                self._ramp(start, target, grip, elapsed / self._MIN_MOVE_TIME_S, obs)
                 yield self.limiter.wait()
         except Exception:
             self.moves.errored = True
@@ -312,24 +310,91 @@ class _Arm(DriverRun[command.CommandType]):
         self.publish(self.observations())
         return MoveStatus.ARRIVED
 
+    def _ramp(
+        self, start: np.ndarray, target: np.ndarray, grip: float, fraction: float, obs: dict[str, np.ndarray]
+    ) -> None:
+        fraction = min(fraction, 1.0)
+        self.command_target((1 - fraction) * start + fraction * target, grip)
+        self.publish(obs, RobotStatus.BUSY)
+
+    def _come_to_rest(
+        self, reference: np.ndarray, grip: float, *, interrupt_on_stop: bool
+    ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], bool] | None]:
+        """Ramp to ``reference`` at the park speed limit, then wait until every joint holds still.
+
+        Return the reading and whether the chain rests on the parking pose: within tolerance and still for
+        ``_PARK_STILL_TIME_S`` with no break. Return None when a stop abandons the park.
+        """
+        tolerance_rad = self.park_tuning.tolerance_rad
+        start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+        travel_s = max(self._MIN_MOVE_TIME_S, float(np.max(np.abs(reference - start))) / self._PARK_MAX_SPEED_RAD_S)
+        still_since = parked_since = None
+        started = self.clock.now()
+        while True:
+            if self.should_stop.value and interrupt_on_stop:
+                return None
+            elapsed = self.clock.now() - started
+            obs = self.observations()
+            if elapsed > self._PARK_TIMEOUT_S:
+                raise self._move_timeout(obs, _PARK_JOINTS, grip, self._PARK_TIMEOUT_S, tolerance_rad)
+
+            still = elapsed >= travel_s and self._still(obs)
+            parked = still and self._arrived(obs, _PARK_JOINTS, grip, tolerance_rad)
+            still_since = (elapsed if still_since is None else still_since) if still else None
+            parked_since = (elapsed if parked_since is None else parked_since) if parked else None
+            if parked_since is not None and elapsed - parked_since >= self._PARK_STILL_TIME_S:
+                return obs, True
+            if parked_since is None and still_since is not None and elapsed - still_since >= self._PARK_STILL_TIME_S:
+                return obs, False
+
+            self._ramp(start, reference, grip, elapsed / travel_s, obs)
+            yield self.limiter.wait()
+
+    def _settle_onto_park(
+        self, grip: float, *, interrupt_on_stop: bool
+    ) -> Generator[pimm.Command, None, np.ndarray | None]:
+        """Settle the chain onto the parking pose and return the reference that holds it there.
+
+        The servo holds the chain a steady distance short of its reference, so one move leaves the joints
+        above the pose. Each pass takes the measured gap off the reference the chain already holds. The chain
+        gives back only part of each correction, so the corrections must add up: a reference computed from
+        the pose and the latest gap alone swings and does not land. Return None when a stop abandons the
+        park. Raise ``TimeoutError`` when the passes run out, or when the bound stops a further correction.
+        """
+        tuning = self.park_tuning
+        reference = _PARK_JOINTS.copy()
+        for _ in range(tuning.attempts):
+            rest = yield from self._come_to_rest(reference, grip, interrupt_on_stop=interrupt_on_stop)
+            if rest is None:
+                return None
+            obs, parked = rest
+            if parked:
+                self.command_target(reference, grip)
+                self.moves.errored = False
+                self.publish(self.observations())
+                return reference
+            bound = tuning.max_correction_rad
+            gap = obs[_JOINT_POS] - _PARK_JOINTS
+            corrected = np.clip(reference - gap, _PARK_JOINTS - bound, _PARK_JOINTS + bound)
+            if np.array_equal(corrected, reference):
+                break
+            reference = corrected
+        obs = self.observations()
+        raise TimeoutError(
+            f'the arm rests {np.max(np.abs(obs[_JOINT_POS] - _PARK_JOINTS)):.4f} rad from the parking pose '
+            f'(tolerance {tuning.tolerance_rad:.4f}); reference={reference}, measured={obs[_JOINT_POS]}'
+        )
+
     def park(
         self, grip: float, *, interrupt_on_stop: bool = True
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Move to parking at bounded speed and verify sustained arrival with low joint velocity."""
+        """Settle onto the parking pose at bounded speed, and return the joints and grip to hold."""
         logger.info('Moving the arm to the parking pose')
         try:
-            status = yield from self.move_to(
-                _PARK_JOINTS,
-                grip,
-                timeout_s=self._PARK_TIMEOUT_S,
-                tolerance_rad=self._PARK_TOLERANCE_RAD,
-                max_speed_rad_s=self._PARK_MAX_SPEED_RAD_S,
-                require_stopped=True,
-                interrupt_on_stop=interrupt_on_stop,
-            )
-            if status is MoveStatus.ARRIVED:
+            reference = yield from self._settle_onto_park(grip, interrupt_on_stop=interrupt_on_stop)
+            if reference is not None:
                 logger.info('Arm parked')
-                return _PARK_JOINTS.copy(), grip
+                return reference, grip
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; it does not end the run
         except Exception as exc:
             self.moves.errored = True
@@ -396,6 +461,9 @@ def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Ite
             vendor.close()
 
 
+_DEFAULT_PARK_TUNING = ParkTuning()
+
+
 class Robot(pimm.ControlSystem):
     """Drives one YAM chain: FK/IK in the driver, joint-space position-PD on the arm.
 
@@ -414,6 +482,7 @@ class Robot(pimm.ControlSystem):
         base_pose: geom.Transform3D | None = None,
         sim: bool = False,
         park_after_idle_s: float | None = 60.0,
+        park_tuning: ParkTuning = _DEFAULT_PARK_TUNING,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -423,11 +492,13 @@ class Robot(pimm.ControlSystem):
         :param park_after_idle_s: Park after this many seconds without an arm or gripper command.
             For synchronous moves, count from completion.
             None disables idle parking. The driver parks on startup and normal shutdown regardless.
+        :param park_tuning: How close this arm's park must land, and how far past the pose it may ask.
         :param connect: ``(channel, sim) -> i2rt Robot`` factory; the fake-mode smoke injects ``_FakeYam``.
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
             raise ValueError('park_after_idle_s must be finite and positive, or None')
         self._park_after_idle_s = park_after_idle_s
+        self._park_tuning = park_tuning
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
@@ -460,7 +531,15 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         with _opened(self._connect, self._channel, self._sim) as vendor:
             arm = _Arm(
-                vendor, self.sync_move, self.commands, self.state, self.grip, self._base_pose, should_stop, clock
+                vendor,
+                self.sync_move,
+                self.commands,
+                self.state,
+                self.grip,
+                self._base_pose,
+                should_stop,
+                clock,
+                self._park_tuning,
             )
             meta = {
                 'robot': 'i2rt_yam',
@@ -589,7 +668,7 @@ if __name__ == '__main__':
 
         if fake is not None:
             # State round-trip: the parked chain comes back through the driver's FK.
-            assert np.allclose(state.value.q, _PARK_JOINTS, atol=_Arm._PARK_TOLERANCE_RAD), state.value.q
+            assert np.allclose(state.value.q, _PARK_JOINTS, atol=ParkTuning().tolerance_rad), state.value.q
             park_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(_PARK_JOINTS).translation)
             assert park_err < 0.02, park_err
 

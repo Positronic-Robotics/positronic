@@ -11,12 +11,22 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
+DEFAULT_TUNING = yam.ParkTuning()
 
 
 class FakeYam(yam._FakeYam):
+    """A ``_FakeYam`` that can miss what it is asked for, the two ways a real chain does.
+
+    ``bias`` offsets every joint by a fixed amount, whatever it is asked for. ``gives_back`` is the fraction
+    of the way from ``floats_at`` to the command that the chain travels, so a correction lands only in part.
+    Joints 2 and 3 rest on their lower stops at zero.
+    """
+
     def __init__(self):
         super().__init__()
         self.bias = np.zeros(6)
+        self.gives_back = 1.0
+        self.floats_at = np.zeros(6)
         self.stuck = False
         self.targets = []
         self.released_at = []
@@ -27,6 +37,7 @@ class FakeYam(yam._FakeYam):
         if not self.stuck:
             position = joint_pos.copy()
             position[:6] += self.bias
+            position[:6] = self.floats_at + self.gives_back * (position[:6] - self.floats_at)
             position[1:3] = np.maximum(position[1:3], 0.0)
             super().command_joint_pos(position)
 
@@ -40,9 +51,11 @@ class FakeYam(yam._FakeYam):
 
 
 class Rig:
-    def __init__(self):
+    def __init__(self, park_tuning=DEFAULT_TUNING):
         self.vendor = FakeYam()
-        self.driver = yam.Robot(connect=lambda channel, sim: self.vendor, park_after_idle_s=1.0)
+        self.driver = yam.Robot(
+            connect=lambda channel, sim: self.vendor, park_after_idle_s=1.0, park_tuning=park_tuning
+        )
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
         self.states = RecordingEmitter()
@@ -60,11 +73,14 @@ class Rig:
             if isinstance(wait, pimm.Sleep):
                 self.clock.advance(wait.seconds)
 
-    def finish(self):
+    def finish(self, within_s=120.0):
+        """Stop the driver and run it to its end. A blocked shutdown never ends, so it fails the test."""
         self.stop.stopped = True
+        deadline = self.clock.now() + within_s
         for wait in self.loop:
             if isinstance(wait, pimm.Sleep):
                 self.clock.advance(wait.seconds)
+            assert self.clock.now() < deadline, 'shutdown blocked: the driver kept the arm powered'
 
     def raise_arm(self):
         while not self.states.emitted or self.states.emitted[-1][1].status == RobotStatus.BUSY:
@@ -185,16 +201,54 @@ def test_startup_and_shutdown_preserve_the_gripper(rig):
     np.testing.assert_allclose(rig.vendor.released_at[0], np.append(PARK, 0.4), atol=0.005)
 
 
-def test_parking_does_not_offset_the_target_to_compensate_for_bias(rig, caplog):
+# A chain on a real bench: a correction lands about two thirds of the way, and the chain floats 66 mrad
+# above its stops on the three joints that carry the arm's weight. It rests 23 mrad short of a plain park.
+GIVES_BACK = 0.65
+FLOATS_AT = np.array([0.0, 0.066, 0.066, 0.066, 0.0, 0.0])
+MAX_CORRECTION = DEFAULT_TUNING.max_correction_rad
+
+
+def _asked(rig):
+    return np.array([target[:6] for target in rig.vendor.targets])
+
+
+def test_parking_closes_a_steady_servo_gap_before_releasing(rig):
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.01, 0.025, 0.025, 0.0, 0.0])
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert np.min(_asked(rig)) >= -MAX_CORRECTION
+    assert rig.vendor.closed
+
+
+def test_a_chain_that_gives_back_part_of_a_correction_still_lands_on_its_stops(rig):
+    """Corrections computed from the pose and the latest gap alone swing around 14 mrad on this chain and never
+    land; only corrections that add up close the gap before torque is cut."""
+    rig.raise_arm()
+    rig.vendor.gives_back = GIVES_BACK
+    rig.vendor.floats_at = FLOATS_AT
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+def test_a_gap_wider_than_the_correction_bound_keeps_the_arm_powered(rig, caplog):
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.0, 0.12, 0.0, 0.0, 0.0])
     rig.stop.stopped = True
-    rig.tick(12)
+    rig.tick(30)
     assert 'Parking failed; arm still powered' in caplog.text
     assert not rig.vendor.released_at
-    assert not rig.vendor.closed
-    assert np.min(rig.vendor.targets) >= 0.0
-    assert any(np.array_equal(target[:6], PARK) for target in rig.vendor.targets)
+    assert np.min(_asked(rig)) >= -MAX_CORRECTION
+
+
+def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
+    rig = Rig(yam.ParkTuning(max_correction_rad=0.2))
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.0, 0.12, 0.0, 0.0, 0.0])
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
 
 
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
@@ -227,14 +281,15 @@ def test_invalid_idle_timeout_is_rejected(timeout):
         yam.Robot(park_after_idle_s=timeout)
 
 
-def test_starting_at_zero_still_checks_for_bias_after_commanding_the_target(rig):
+def test_starting_at_zero_still_measures_the_gap_after_commanding_the_target(rig):
     rig.vendor.bias = np.array([0.0, 0.01, 0.025, 0.025, 0.0, 0.0])
     rig.tick(12)
-    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
-    assert np.min(rig.vendor.targets) >= 0.0
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    assert np.min(_asked(rig)) < 0.0
 
 
-def test_ordinary_move_can_arrive_while_parking_rejects_the_same_error(world, rig):
+def test_ordinary_move_can_arrive_with_an_error_that_parking_closes(world, rig):
     rig.tick(4)
     rig.vendor.bias = np.array([0.0, 0.01, 0.0, 0.0, 0.0, 0.0])
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
@@ -245,10 +300,8 @@ def test_ordinary_move_can_arrive_while_parking_rejects_the_same_error(world, ri
     answer.result()
     assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
     np.testing.assert_array_equal(rig.vendor.targets[-1][:6], RAISED)
-    rig.stop.stopped = True
-    rig.tick(12)
-    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
-    assert not rig.vendor.released_at
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
 def test_parking_accepts_error_within_its_tolerance(rig):
