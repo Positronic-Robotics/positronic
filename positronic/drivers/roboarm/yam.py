@@ -115,6 +115,14 @@ class _Kinematics:
         ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
         self._lower, self._upper = ranges[:, 0], ranges[:, 1]
 
+    @property
+    def lower(self) -> np.ndarray:
+        return self._lower.copy()
+
+    @property
+    def upper(self) -> np.ndarray:
+        return self._upper.copy()
+
     def fk(self, q: np.ndarray) -> geom.Transform3D:
         self._data.qpos[self._qpos_ids] = q
         mj.mj_kinematics(self._model, self._data)
@@ -311,15 +319,17 @@ class _Arm(DriverRun[command.CommandType]):
             yield self.limiter.wait()
 
     def _settle_onto(
-        self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
+        self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool, within_joint_limits: bool
     ) -> Generator[pimm.Command, None, np.ndarray | None]:
         """Settle the chain onto ``goal`` and return the reference that holds it there.
 
         The servo holds the chain a steady distance short of its reference, so one ramp leaves the joints
         short of ``goal``. Each pass takes the measured gap off the reference the chain already holds. The
         chain gives back only part of each correction, so the corrections must add up: a reference computed
-        from ``goal`` and the latest gap alone swings and does not land. Return None when a stop abandons the
-        move. Raise ``TimeoutError`` when the passes run out, or when the bound stops a further correction.
+        from ``goal`` and the latest gap alone swings and does not land. ``within_joint_limits`` keeps the
+        reference inside the modeled joint ranges; the park leaves it off, to press joints 2 and 3 onto their
+        stops. Return None when a stop abandons the move. Raise ``TimeoutError`` when the passes run out, or
+        when the bounds stop a further correction.
         """
         try:
             reference = goal.copy()
@@ -335,6 +345,8 @@ class _Arm(DriverRun[command.CommandType]):
                     return reference
                 bound = tuning.max_correction_rad
                 corrected = np.clip(reference - (obs[_JOINT_POS] - goal), goal - bound, goal + bound)
+                if within_joint_limits:
+                    corrected = np.clip(corrected, self._kin.lower, self._kin.upper)
                 if np.array_equal(corrected, reference):
                     break
                 reference = corrected
@@ -355,7 +367,7 @@ class _Arm(DriverRun[command.CommandType]):
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
-                _PARK_JOINTS, grip, self.park_tuning, interrupt_on_stop=interrupt_on_stop
+                _PARK_JOINTS, grip, self.park_tuning, interrupt_on_stop=interrupt_on_stop, within_joint_limits=False
             )
             if reference is not None:
                 logger.info('Arm parked')
@@ -397,7 +409,9 @@ class _Arm(DriverRun[command.CommandType]):
         stops."""
         try:
             target = self.to_joints(call.request, q)
-            reference = yield from self._settle_onto(target, grip, self.move_tuning, interrupt_on_stop=True)
+            reference = yield from self._settle_onto(
+                target, grip, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+            )
             if reference is not None:
                 call.set_result(None)
                 return reference, grip

@@ -370,6 +370,19 @@ def test_a_blocking_move_is_paced_by_the_distance_it_travels(world, rig, monkeyp
     assert rig.clock.now() - started >= distance / speed
 
 
+def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
+    """Only the park presses joints 2 and 3 onto their lower stops; a blocking move stops at the limit."""
+    rig.tick(4)
+    rig.vendor.bias = np.array([0.0, 0.03, 0.0, 0.0, 0.0, 0.0])
+    near_the_stop = np.array([0.0, 0.01, 1.0, 0.0, 0.0, 0.0])
+    sent = len(rig.vendor.targets)
+    answer = _sync_caller(world, rig)(command.JointPosition(near_the_stop))
+    _until_answered(rig, answer)
+    with pytest.raises(TimeoutError):
+        answer.result()
+    assert min(target[1] for target in rig.vendor.targets[sent:]) >= 0.0
+
+
 def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
     """A policy's per-step command is its own: it goes to the chain as sent, whatever the servo holds."""
     rig.tick(4)
