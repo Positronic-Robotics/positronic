@@ -41,6 +41,7 @@ from platform_client.responses import (
     PendingSubmissionView,
     RankingsResponse,
     RegisterResponse,
+    ResolvedPlan,
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
@@ -209,6 +210,34 @@ def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_pa
         'username': 'a-reader',
         'password': 'the-registry-password',
     }
+
+
+def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
+    resolved = {
+        'episodes_total': 2,
+        'tasks': [
+            {
+                'task_id': 'stack-the-cubes',
+                'endpoints': [{'name': 'a', 'kind': 'remote', 'url': 'wss://a.example/ws', 'episodes': 2}],
+                'cap_per_episode_sec': 90,
+                'policy_preset': 'example_preset',
+                'tote_placement': 'none',
+                'episode_order': ['a', 'a'],
+            }
+        ],
+    }
+    gateway = Gateway(200, resolved)
+    plan = EvalPlan(
+        tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
+        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        episodes_per_endpoint=2,
+    )
+
+    response = make_client(gateway).resolve_plan(plan)
+
+    assert isinstance(response, ResolvedPlan) and response.episodes_total == 2
+    assert gateway.request().url.path == routes.SUBMISSIONS_RESOLVE
+    assert gateway.body()['episodes_per_endpoint'] == 2
 
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
@@ -483,6 +512,7 @@ def test_every_endpoint_has_exactly_one_method():
         'register',
         'me',
         'create_submission',
+        'resolve_plan',
         'list_submissions',
         'get_submission',
         'list_artifacts',
