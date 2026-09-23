@@ -131,10 +131,8 @@ class _SafeInputs:
     token, and the session that drives the arm must stay on one thread.
     """
 
-    # The levels at which each safe input leaves the driver free to act. x31, the emergency stop, is released
-    # while ACTIVE. x4 and guidingEnableButton are enabling devices, pressed while ACTIVE. x32 and x33 feed
-    # safety functions the safety scenario configures, so no level of theirs has a fixed meaning. A level not
-    # listed here counts as triggered.
+    # ACTIVE releases the emergency stop (x31) and presses an enabling device (x4, guidingEnableButton);
+    # x32 and x33 carry no fixed meaning. A level or an input not listed here counts as triggered.
     _CLEAR_STATES: Mapping[str, frozenset[_SafeInputLevel]] = {
         'x31': frozenset({_SafeInputLevel.ACTIVE}),
         'x4': frozenset({_SafeInputLevel.INACTIVE}),
