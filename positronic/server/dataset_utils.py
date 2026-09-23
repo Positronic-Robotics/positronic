@@ -263,19 +263,19 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
             axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
 
-    def _text_view(sig: str) -> rrb.Horizontal:
-        steps = rrb.TimeSeriesView(
+    def _steps_view(sig: str) -> rrb.TimeSeriesView:
+        return rrb.TimeSeriesView(
             name=sig,
             origin=f'/signals/{sig}',
             plot_legend=rrb.PlotLegend(visible=True),
             axis_y=rrb.ScalarAxis(range=(-0.5, len(signals.texts[sig]) - 0.5), zoom_lock=True),
         )
-        return rrb.Horizontal(steps, _text_log_view(sig), column_shares=[3, 2], name=sig)
 
-    def _view(sig: str) -> rrb.View | rrb.Horizontal:
-        return _text_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
+    def _view(sig: str) -> rrb.TimeSeriesView:
+        return _steps_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
 
-    # Group time series by prefix, each group becomes a Tabs container that opens on its first text signal
+    # Group time series by prefix, each group becomes a Tabs container that opens on its first text signal.
+    # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
     series_views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
@@ -284,6 +284,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
             texts = [index for index, sig in enumerate(sigs) if sig in signals.plotted_texts]
             view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         series_views.append(view)
+        series_views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
     series_views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
     if signals.unplotted:
         series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
@@ -706,6 +707,12 @@ def _changes(values: np.ndarray) -> np.ndarray:
     return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
 
 
+def _to_centiseconds(durations: np.ndarray) -> np.ndarray:
+    """``durations`` rounded to 10 ms, so the viewer prints them short."""
+    step = np.timedelta64(10, 'ms')
+    return np.round(durations / step).astype(np.int64) * step
+
+
 def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
@@ -721,7 +728,7 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
         changes = _changes(texts)
         time_idx = [
             rr.TimeColumn('time', timestamp=ts_arr[changes]),
-            rr.TimeColumn(_TIME_FROM_START, duration=ts_arr[changes] - recording_start),
+            rr.TimeColumn(_TIME_FROM_START, duration=_to_centiseconds(ts_arr[changes] - recording_start)),
         ]
         rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
 

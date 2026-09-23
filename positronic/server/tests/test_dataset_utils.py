@@ -187,7 +187,7 @@ def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_p
     machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         writer.append('robot.q', np.zeros(2), machine_clock)
-        writer.append('progress.state', 'floating', machine_clock + 1_500_000_000)
+        writer.append('progress.state', 'floating', machine_clock + 1_503_456_789)
         writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000)
     ep = DiskEpisode(tmp_path / 'ep')
 
