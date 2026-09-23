@@ -162,8 +162,7 @@ class ResolvedTask(BaseModel):
     """One task of a plan as the rig runs it: every property with its final value.
 
     Each value is the one the nearest level states, else the task's catalogue default, else the
-    platform's draw. The draws are fixed per plan, so every run of the plan lays out this scene,
-    this table and this episode order. `ResolvedPlan.tasks` lists them in the plan's own order.
+    platform's draw (`README.md` §Eval plans). `ResolvedPlan.tasks` lists them in the plan's order.
     """
 
     task_id: TaskRef
