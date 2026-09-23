@@ -18,9 +18,9 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
-# What the control box answers for a safe input, in its own words.
-CLEAR = 'Not triggered (Motion permitted)'
-STOPPED = 'Triggered (Motion prohibited)'
+# The emergency stop (x31), released and pressed.
+CLEAR = 'Active'
+STOPPED = 'Inactive'
 
 
 class Call(StrEnum):
@@ -169,6 +169,10 @@ class FakeArm:
         self._record(Call.SET_LOAD)
 
 
+# The safe inputs as the lab control box reports them while the arm moves under a policy.
+MOVING = {'guidingEnableButton': 'Inactive', 'x31': 'Active', 'x32': 'Inactive', 'x33': 'Inactive', 'x4': 'Inactive'}
+
+
 class FakeDesk:
     """In-memory ``Desk``: records that the session prepared the robot and released control, records every
     brake operation the driver asked for, and reports whatever ``safe_inputs`` holds."""
@@ -177,7 +181,7 @@ class FakeDesk:
         self.prepared = False
         self.released = False
         self.calls: list[Call] = []
-        self.safe_inputs = dict.fromkeys(('x31', 'x32', 'x33', 'x4'), CLEAR)
+        self.safe_inputs = dict(MOVING)
         # A control box that has stopped answering. The driver swallows the error and the reading goes stale.
         self.unreachable = False
 
@@ -841,10 +845,42 @@ def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
 
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
-    """A phrase the driver does not recognise reads as triggered, never as clear."""
-    assert not franka._SafeInputs._triggered(CLEAR)
-    assert franka._SafeInputs._triggered(STOPPED)
-    assert franka._SafeInputs._triggered('a phrase this control box has never sent')
+    """A state or an input the driver does not recognise reads as triggered, never as clear."""
+    assert not franka._SafeInputs._triggered('x31', CLEAR)
+    assert franka._SafeInputs._triggered('x31', STOPPED)
+    assert franka._SafeInputs._triggered('x31', 'a state this control box has never sent')
+    assert franka._SafeInputs._triggered('x5', 'Inactive')
+
+
+def test_the_safe_inputs_of_an_arm_moving_under_a_policy_read_as_clear(desk):
+    """The reading the lab control box sends while the arm moves normally lets the driver clear a fault."""
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+
+    watch.sample()
+
+    assert watch.confirmed_clear
+
+
+@pytest.mark.parametrize(
+    ('name', 'state'),
+    [
+        ('x31', 'Inactive'),
+        ('x31', 'AcknowledgeRequired'),
+        ('x4', 'Active'),
+        ('guidingEnableButton', 'Active'),
+        ('x32', 'AcknowledgeRequired'),
+        ('x33', 'Invalid'),
+    ],
+)
+def test_a_pressed_stop_a_held_enabling_device_or_a_pending_acknowledge_is_not_clear(desk, name, state):
+    """Each state that means a person acts on the arm, or that Desk wants a person to confirm, holds the driver."""
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+    desk.safe_inputs[name] = state
+
+    watch.sample()
+
+    assert watch.triggered == [name]
+    assert not watch.confirmed_clear
 
 
 def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
