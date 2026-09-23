@@ -109,8 +109,8 @@ class RegistryCredential(BaseModel):
 class RegistryCredentialFile(BaseModel):
     """A registry credential as a plan file states it: the username, and the file the password is in.
 
-    The gateway never validates this model. `plan_with_passwords_read` turns a plan of it into the
-    plan a request carries.
+    A request carries no such model. `plan_with_passwords_read` turns a plan of it into the plan a
+    request carries.
     """
 
     model_config = INPUT_MODEL_CONFIG
@@ -120,7 +120,7 @@ class RegistryCredentialFile(BaseModel):
 
     @property
     def password(self) -> SecretStr:
-        """Read from the file on each access. `RegistryCredential` validates from these attributes."""
+        """The password the file holds, read on each access."""
         return SecretStr(password_from_file(self.password_file))
 
 
@@ -128,8 +128,7 @@ def password_from_file(password_file: Path) -> str:
     """The registry password a caller states as a path, read from the file it names.
 
     The file's last line ending comes off. A path that is mistyped, names a directory, cannot be
-    read, or holds only whitespace raises `ValueError`, which every caller of this reports as a
-    refusal.
+    read, or holds only whitespace raises `ValueError`.
     """
     # No message names the path: a caller who pastes the password in its place would see it printed.
     try:
