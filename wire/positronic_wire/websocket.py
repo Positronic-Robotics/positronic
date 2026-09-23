@@ -123,6 +123,9 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
                 additional_headers=headers,
                 ping_interval=20.0,
                 max_size=wire.MAX_MESSAGE_BYTES,
+                # No permessage-deflate. An observation is camera frames: zlib keeps 97% of a JPEG
+                # frame's bytes and 40% of a raw one's, for about 10 ms per 338 KiB in each direction.
+                compression=None,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (connecting to {url})') from e

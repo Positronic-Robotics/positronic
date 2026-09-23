@@ -210,6 +210,8 @@ class WebsocketWire(server_wire.Wire):
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
+            # A client that offers permessage-deflate is refused it, and pays no zlib for asking.
+            ws_per_message_deflate=False,
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
