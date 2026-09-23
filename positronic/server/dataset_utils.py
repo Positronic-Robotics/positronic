@@ -7,7 +7,7 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
@@ -18,6 +18,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 from av.video.stream import VideoStream
+from rerun.blueprint.datatypes import TextLogColumn
 from rerun.urdf import UrdfTree
 
 from positronic.dataset.dataset import Dataset
@@ -56,8 +57,8 @@ def _pose_color(name: str) -> list[int]:
     return _POSE_COLORS['default']
 
 
-# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
-# recording until they never decode.
+# A plot of more elements, or more distinct text values, than this is unreadable, and crowds the video
+# panels out of the recording until they never decode.
 # TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
 _MAX_PLOTTED_WIDTH = 32
 
@@ -69,14 +70,29 @@ class EpisodeSignals:
     dims: dict[str, int]
     poses: list[str]
     joints: list[str]
+    # Each text signal's distinct values, in the order they first appear.
+    texts: dict[str, list[str]] = field(default_factory=dict)
+    neither_numeric_nor_text: list[str] = field(default_factory=list)
 
     @property
     def plotted(self) -> dict[str, int]:
         return {name: self.dims[name] for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH}
 
     @property
-    def unplotted(self) -> dict[str, int]:
-        return {name: dim for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
+    def plotted_texts(self) -> dict[str, list[str]]:
+        return {name: values for name, values in self.texts.items() if len(values) <= _MAX_PLOTTED_WIDTH}
+
+    @property
+    def unplotted(self) -> dict[str, str]:
+        """Each signal left out of the plots, and what it holds that a plot cannot show."""
+        wide = {name: f'{dim} values' for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
+        texts = {
+            name: f'{len(values)} distinct text values'
+            for name, values in self.texts.items()
+            if name not in self.plotted_texts
+        }
+        other = dict.fromkeys(self.neither_numeric_nor_text, 'values that are not numbers or text')
+        return wide | texts | other
 
 
 def _infer_dims(sig) -> int:
@@ -160,12 +176,16 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
 _UNPLOTTED_ENTITY = '/unplotted'
 
 
-def _unplotted_notice(unplotted: dict[str, int]) -> str:
-    lines = '\n'.join(f'- `{name}` — {dim} values' for name, dim in sorted(unplotted.items()))
+_TEXT_LOG_ENTITY = '/text'
+
+
+def _unplotted_notice(unplotted: dict[str, str]) -> str:
+    lines = '\n'.join(f'- `{name}` — {holds}' for name, holds in sorted(unplotted.items()))
     return (
         f'### Not plotted\n\n{lines}\n\n'
-        f'Wider than {_MAX_PLOTTED_WIDTH} values, so a per-element plot is unreadable and crowds out '
-        'the rest of the recording. The signals are in the episode and readable through the dataset API.'
+        f'A plot of more than {_MAX_PLOTTED_WIDTH} values or distinct text values is unreadable and crowds out '
+        'the rest of the recording. A text signal is in the text log. The signals are in the episode and '
+        'readable through the dataset API.'
     )
 
 
@@ -191,6 +211,14 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
                 pass
             continue
 
+        first = sig[0][0] if len(sig) else 0.0
+        if isinstance(first, str):
+            signals.texts[name] = list(dict.fromkeys(str(value) for value in sig.values()))
+            continue
+        if flatten_numeric(first) is None:
+            signals.neither_numeric_nor_text.append(name)
+            continue
+
         try:
             dim = _infer_dims(sig)
         except Exception:
@@ -207,9 +235,18 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
 def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
     """Group plotted signals by prefix before the first '.'. Preserves insertion order."""
     groups: defaultdict[str, list[str]] = defaultdict(list)
-    for sig in signals.plotted:
+    for sig in [*signals.plotted, *signals.plotted_texts]:
         groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
+
+
+def _text_log_view(sig: str) -> rrb.TextLogView:
+    hidden = [TextLogColumn(kind, visible=False) for kind in ('EntityPath', 'LogLevel')]
+    return rrb.TextLogView(
+        name=sig,
+        origin=f'{_TEXT_LOG_ENTITY}/{sig}',
+        columns=rrb.TextLogColumns(text_log_columns=[*hidden, TextLogColumn('Body')]),
+    )
 
 
 def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
@@ -223,14 +260,27 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
             axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
 
+    def _text_view(sig: str) -> rrb.Horizontal:
+        steps = rrb.TimeSeriesView(
+            name=sig,
+            origin=f'/signals/{sig}',
+            plot_legend=rrb.PlotLegend(visible=True),
+            axis_y=rrb.ScalarAxis(range=(-0.5, len(signals.texts[sig]) - 0.5), zoom_lock=True),
+        )
+        return rrb.Horizontal(steps, _text_log_view(sig), column_shares=[2, 1], name=sig)
+
+    def _view(sig: str) -> rrb.View | rrb.Horizontal:
+        return _text_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
+
     # Group time series by prefix, each group becomes a Tabs container
-    series_views = []
+    series_views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
-            view = _ts_view(sigs[0])
+            view = _view(sigs[0])
         else:
-            view = rrb.Tabs(*[_ts_view(sig) for sig in sigs], name=group_name)
+            view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name)
         series_views.append(view)
+    series_views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
     if signals.unplotted:
         series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
 
@@ -453,6 +503,38 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
     return np.asarray(kept, dtype=np.intp)
 
 
+def _changes(values: np.ndarray) -> np.ndarray:
+    """Indices where ``values`` differ from the sample before, the first sample included."""
+    return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
+
+
+def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+    """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
+
+    A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
+    """
+    plotted = signals.plotted_texts
+    for key in signals.texts:
+        sig = ep.signals[key]
+        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        texts = np.asarray([str(value) for value in sig.values()], dtype=object)
+        changes = _changes(texts)
+        time_idx = [rr.TimeColumn('time', timestamp=ts_arr[changes])]
+        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
+
+        if key in plotted:
+            values = plotted[key]
+            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
+            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
+            rr.log(f'/signals/{key}', style, static=True)
+            # The last sample holds the final value to the end of the episode.
+            shown = np.union1d(changes, [len(texts) - 1])
+            index_of = {value: index for index, value in enumerate(values)}
+            indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
+            _send_scalar_columns(key, ts_arr[shown], indices.reshape(-1, 1))
+        yield from drainer.drain()
+
+
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
@@ -662,6 +744,7 @@ def stream_episode_rrd(
     """
 
     ep = ds[episode_id]
+    assert isinstance(ep, Episode)
     logging.info(f'Streaming RRD for episode {episode_id}')
 
     dataset_root = get_dataset_root(ds)
@@ -684,6 +767,7 @@ def stream_episode_rrd(
 
         yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz)
         pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz)
+        yield from _log_text_signals(ep, signals, drainer)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
         yield from _log_pose_signals(ep, signals, pose_data, drainer)
 
