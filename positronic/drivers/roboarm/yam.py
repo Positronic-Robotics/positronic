@@ -196,6 +196,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.state = state
         self._base_pose = base_pose
         self._kin = kinematics
+        self._shutting_down = False
+        self._publish_failure_logged = False
 
     def observations(self) -> dict[str, np.ndarray]:
         """Read the current joint and gripper measurements."""
@@ -207,13 +209,24 @@ class _Arm(DriverRun[command.CommandType]):
         return 1.0 - float(obs[_GRIPPER_POS][0])
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
-        """Publish measured state; default to ERROR after a failed move, otherwise AVAILABLE."""
+        """Publish measured state; default to ERROR after a failed move, otherwise AVAILABLE.
+
+        During shutdown a failed publish is logged and dropped, so only the chain can stop the park.
+        """
         if status is None:
             status = RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE
         q = obs[_JOINT_POS]
         self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q), status)
-        self.out.emit(self.state)
-        self.grip_out.emit(self._grip(obs))
+        # rules-allow: swallowed-error — in shutdown a report must not decide whether the arm is let go
+        try:
+            self.out.emit(self.state)
+            self.grip_out.emit(self._grip(obs))
+        except Exception:
+            if not self._shutting_down:
+                raise
+            if not self._publish_failure_logged:
+                self._publish_failure_logged = True
+                logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def command_target(self, joints: np.ndarray, grip: float) -> None:
         """Append the gripper target in the vendor's open-width convention."""
@@ -392,6 +405,7 @@ class _Arm(DriverRun[command.CommandType]):
             logger.exception('The arm is parked, but its state could not be published')
 
     def shutdown(self) -> Generator[pimm.Command, None, None]:
+        self._shutting_down = True
         hold_target = None
         try:
             joints, grip, ended = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
