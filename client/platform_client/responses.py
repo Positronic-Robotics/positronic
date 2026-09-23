@@ -163,10 +163,9 @@ class ResolvedTask(BaseModel):
 
     Each value is the one the nearest level states, else the task's catalogue default, else the
     platform's draw. The draws are fixed per plan, so every run of the plan lays out this scene,
-    this table and this episode order. `position` is the task's index in the plan's `tasks`.
+    this table and this episode order. `ResolvedPlan.tasks` lists them in the plan's own order.
     """
 
-    position: int = Field(ge=0)
     task_id: TaskRef
     endpoints: list[ResolvedEndpoint] = Field(min_length=1)
     cap_per_episode_sec: int = Field(ge=1)

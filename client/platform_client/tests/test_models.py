@@ -142,7 +142,6 @@ PLAN_OF_AN_IMAGE = plan_of_image(
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 
 RESOLVED_TASK = ResolvedTask(
-    position=0,
     task_id=TaskRef('stack-the-cubes'),
     endpoints=[
         ResolvedEndpoint(name='baseline', kind=EndpointKind.remote, url='wss://baseline.example/ws', episodes=2),
