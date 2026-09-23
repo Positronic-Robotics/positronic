@@ -977,6 +977,30 @@ class SettledStateFails(RecordingEmitter):
         super().emit(data, ts)
 
 
+class FailsOnceStopped(RecordingEmitter):
+    """Refuses every emit once the rig is asked to stop, standing for a transport that closed at shutdown."""
+
+    def __init__(self, stop):
+        super().__init__()
+        self.stop = stop
+
+    def emit(self, data, ts=-1):
+        if self.stop.stopped:
+            raise OSError('transport closed')
+        super().emit(data, ts)
+
+
+def test_a_shutdown_with_every_publish_failing_still_parks_and_releases(caplog):
+    rig = Rig()
+    rig.raise_arm()
+    rig.driver.state._internal[:] = [FailsOnceStopped(rig.stop)]
+    rig.driver.grip._internal[:] = [FailsOnceStopped(rig.stop)]
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    assert caplog.text.count('Publishing the arm state failed during shutdown') == 1
+
+
 def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     rig = Rig()
     rig.raise_arm()
@@ -984,4 +1008,4 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
-    assert 'its state could not be published' in caplog.text
+    assert 'Publishing the arm state failed during shutdown' in caplog.text
