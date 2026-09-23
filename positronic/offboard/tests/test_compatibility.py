@@ -126,6 +126,46 @@ def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypa
         run.close()
 
 
+def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, monkeypatch):
+    runtime, now, calls = controlled_runtime
+    encoded = []
+    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    stack = spec.from_spec({
+        'seq': [
+            {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+            {'name': 'chunked_schedule'},
+            {'name': 'action_timestamp', 'args': {'fps': 10}},
+        ]
+    })
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
+    try:
+        for _ in range(3):
+            now[0] += 5_000_000
+            run.send({'image': np.zeros((4, 4, 3), np.uint8)})
+        assert len(calls) == 1 and len(encoded) == 3
+    finally:
+        run.close()
+
+
+def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
+    runtime, now, calls = controlled_runtime
+    stack = spec.from_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]})
+    run = runtime.start(stack, MagicMock(return_value={'value': 1}))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert run.send({}) == Step({'value': 1}, 1_100_000_000)
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 1
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 2
+    finally:
+        run.close()
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('scheduled', [True, False], ids=['scheduled-chunk', 'codec-only'])
 def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, monkeypatch, transport, scheduled):
