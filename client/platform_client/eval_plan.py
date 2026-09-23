@@ -29,8 +29,8 @@ def _require_unique_names(names: list[str], whose: str) -> None:
 class Clutter(BaseModel):
     """How much of the rest of the object kit a run draws onto the table.
 
-    The draw picks a count between the two bounds per run; at most `large_cap` large objects and
-    `medium_cap` medium ones, and the rest small.
+    The draw picks a count between the two bounds once per plan, and every run of the plan lays out
+    the same table: at most `large_cap` large objects and `medium_cap` medium ones, and the rest small.
     """
 
     model_config = _FORBID_EXTRA
