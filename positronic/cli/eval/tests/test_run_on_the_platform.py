@@ -229,6 +229,19 @@ def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platf
     assert platform.seen is None
 
 
+def test_an_empty_username_is_refused_as_the_username(platform, run_command, tmp_path):
+    with pytest.raises(SystemExit, match='username') as refusal:
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='',
+            registry_password_file=str(a_password_file(tmp_path)),
+        )
+    assert '--registry-password-file' not in str(refusal.value)
+    assert platform.seen is None
+
+
 def test_a_password_pasted_as_its_file_is_not_printed(platform, run_command):
     pasted = 'Zx9QvT7Lm2Rk'
     with pytest.raises(SystemExit, match='--registry-password-file names no readable password') as refusal:

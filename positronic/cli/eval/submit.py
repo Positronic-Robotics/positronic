@@ -6,11 +6,12 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from pathlib import Path
 
 from platform_client.enums import NO_RESULT_STATUSES
-from platform_client.eval_plan import RegistryCredential, credential_from_file, plan_of_image
+from platform_client.eval_plan import RegistryCredential, password_from_file, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
+from pydantic import SecretStr
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
@@ -22,9 +23,10 @@ def _credential(username: str | None, password_file: str | None) -> RegistryCred
     if username is None or password_file is None:
         return None
     try:
-        return credential_from_file(username, Path(password_file))
+        password = password_from_file(Path(password_file))
     except ValueError as exc:
         raise SystemExit(f'--registry-password-file names no readable password: {exc}') from exc
+    return RegistryCredential(username=username, password=SecretStr(password))
 
 
 def submit(
