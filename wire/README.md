@@ -99,7 +99,8 @@ that wire's fields, never a URL, and no address carries a field a wire ignores.
 
 `uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
 the network. The address refuses a relative path when it is built, because a relative one names a
-different socket to each caller. It names no host and no port, because a socket has neither: the
+different socket to each caller. It also refuses a path that holds `/api/v1/session`, because a URL
+ends the socket where that route starts. It names no host and no port, because a socket has neither: the
 handshake carries `localhost` as a stand-in the server never resolves. A socket is same-machine by
 construction, so no TLS member sits beside it. An absent path is `COLD`: the client cannot tell a
 misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A refusal

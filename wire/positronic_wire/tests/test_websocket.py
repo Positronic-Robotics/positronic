@@ -205,6 +205,19 @@ def test_a_socket_address_refuses_a_relative_path():
         wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')
 
 
+def test_a_socket_address_refuses_a_path_that_holds_the_session_route():
+    """A URL ends the socket where the route starts, so no URL names a socket under the route."""
+    with pytest.raises(ValueError, match='holds the session route'):
+        wire.UnixSocketAddress(Path('/run/api/v1/session/policy.sock'), wire.session_path(), '')
+
+
+@pytest.mark.parametrize('uds', [Path('/run/api/v1/session.sock'), Path('/run/api/v1/sessions/policy.sock')])
+def test_a_socket_beside_the_session_route_reads_back_from_its_own_url(uds):
+    client_wire = websocket.WebsocketUnixClientWire()
+    address = wire.UnixSocketAddress(uds, wire.session_path('10000'), 'fps=10')
+    assert client_wire.address_of(client_wire.session_url(address)) == address
+
+
 @pytest.mark.parametrize(
     ('client_wire', 'url', 'address'),
     [
@@ -212,6 +225,16 @@ def test_a_socket_address_refuses_a_relative_path():
         (websocket.WebsocketClientWire(), 'localhost:8000/api/v1/session/', _ADDRESS),
         (websocket.WebsocketClientWire(), 'http://localhost', dataclasses.replace(_ADDRESS, port=80)),
         (websocket.WebsocketClientWire(), 'ws://[::1]:8000', dataclasses.replace(_ADDRESS, host='::1')),
+        (
+            websocket.WebsocketClientWire(),
+            'localhost:8000/api/v1/session?next=http://peer',
+            dataclasses.replace(_ADDRESS, query='next=http://peer'),
+        ),
+        (
+            websocket.WebsocketClientWire(),
+            'ws://gpu-box:9000/api/v1/session?next=http://peer',
+            wire.HostPortAddress('gpu-box', 9000, wire.SESSION_PATH, 'next=http://peer'),
+        ),
         (
             websocket.WebsocketClientWire(),
             'ws://localhost:8000/api/v1/session/org/model?codec.fps=10&pad=false',

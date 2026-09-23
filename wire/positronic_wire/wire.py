@@ -32,10 +32,16 @@ def session_path(model: str = '') -> str:
     return f'{SESSION_PATH}/{urllib.parse.quote(model, safe="/")}' if model else SESSION_PATH
 
 
+# A scheme and its delimiter, which only the start of a URL carries. A query may hold another URL.
+_LEADING_SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://')
+# The session route in a socket URL's path. The socket path ends where it starts.
+_SESSION_ROUTE = re.compile(rf'{re.escape(SESSION_PATH)}(?=/|$)')
+
+
 def split_url(url: str) -> urllib.parse.SplitResult:
-    """``url`` in its parts. A URL with no ``://`` is ``host[:port]...``, and its scheme is empty."""
+    """``url`` in its parts. A URL with no leading ``<scheme>://`` is ``host[:port]...``, and its scheme is empty."""
     stripped = url.strip()
-    return urllib.parse.urlsplit(stripped if '://' in stripped else f'//{stripped}')
+    return urllib.parse.urlsplit(stripped if _LEADING_SCHEME.match(stripped) else f'//{stripped}')
 
 
 def _session_route(path: str, url: str) -> str:
@@ -110,6 +116,8 @@ class UnixSocketAddress(SessionAddress):
         # different socket to each caller.
         if not self.uds.is_absolute():
             raise ValueError(f'{self.uds!r} is a relative socket path; name an absolute one')
+        if _SESSION_ROUTE.search(str(self.uds)):
+            raise ValueError(f'{self.uds!r} holds the session route {SESSION_PATH!r}, so no URL can name it')
 
     @classmethod
     def from_url(cls, url: str) -> 'UnixSocketAddress':
@@ -121,7 +129,7 @@ class UnixSocketAddress(SessionAddress):
         split = split_url(url)
         if split.netloc:
             raise ValueError(f'a socket URL names no host, and this one names {split.netloc!r}: {url!r}')
-        route = re.search(rf'{re.escape(SESSION_PATH)}(?=/|$)', split.path)
+        route = _SESSION_ROUTE.search(split.path)
         socket, path = (split.path, '') if route is None else (split.path[: route.start()], split.path[route.start() :])
         if not PurePosixPath(socket).name or socket.endswith('/'):
             raise ValueError(f'a socket URL names a socket file, and this one names none: {url!r}')
