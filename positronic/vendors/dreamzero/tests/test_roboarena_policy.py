@@ -1,5 +1,6 @@
 """What a roboarena policy sends a server, and what it makes of the answer."""
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -99,17 +100,16 @@ class Clock:
         return self.now_ns
 
 
-class SlowClient(FakeClient):
-    """A server whose answer arrives `ROUND_TRIP_NS` after the observation was taken."""
+class HeldClient(FakeClient):
+    """A server that answers only once the test sets `released`."""
 
-    def __init__(self, chunk, clock: Clock):
+    def __init__(self, chunk):
         super().__init__(chunk)
-        self._clock = clock
+        self.released = threading.Event()
 
     def infer(self, observation):
-        answer = super().infer(observation)
-        self._clock.now_ns += ROUND_TRIP_NS
-        return answer
+        self.released.wait()
+        return super().infer(observation)
 
 
 def endpoint_over(client, config=None):
@@ -149,10 +149,14 @@ def play(chunk_rows: int) -> list[tuple[int, dict]]:
     Returns each step that emitted commands, as (time on the episode clock, commands).
     """
     clock = Clock()
-    runtime, run = start_stack(SlowClient(np.zeros((chunk_rows, 8), dtype=np.float32), clock), clock)
+    client = HeldClient(np.zeros((chunk_rows, 8), dtype=np.float32))
+    runtime, run = start_stack(client, clock)
     emitted = []
     try:
         run.send(rig_observation())
+        # The episode clock belongs to the control thread: moved from the worker, it races the schedule's first read.
+        clock.now_ns += ROUND_TRIP_NS
+        client.released.set()
         wait_for_answer(runtime)
         # Bounded: a stack that plays several rows in one step never emits `chunk_rows` times.
         for _ in range(chunk_rows):
@@ -161,6 +165,7 @@ def play(chunk_rows: int) -> list[tuple[int, dict]]:
                 emitted.append((clock.now_ns, dict(step.commands)))
             clock.now_ns = max(clock.now_ns, step.resume_at_ns)
     finally:
+        client.released.set()
         runtime.close()
         run.close()
     return emitted
