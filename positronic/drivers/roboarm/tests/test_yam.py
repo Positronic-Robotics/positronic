@@ -1,6 +1,8 @@
 import dataclasses
 import logging
 import types
+from enum import Enum
+from typing import Any
 
 import numpy as np
 import pytest
@@ -54,21 +56,82 @@ class FakeYam(yam._FakeYam):
         self.closed = True
 
 
+class Site(Enum):
+    """Every collaborator call the driver makes while the motors are enabled, as (port, method)."""
+
+    CHAIN_READ = ('vendor', 'get_observations')
+    CHAIN_COMMAND = ('vendor', 'command_joint_pos')
+    META_EMIT = ('robot_meta', 'emit')
+    STATE_EMIT = ('state', 'emit')
+    GRIP_EMIT = ('grip', 'emit')
+    COMMANDS_READ = ('commands', 'read')
+    TARGET_GRIP_READ = ('target_grip', 'read')
+
+
+# The calls the driver makes after torque is released, outside the protected region by design.
+TEARDOWN_CALLS = {('vendor', 'zero_torque_mode'), ('vendor', 'close')}
+
+
+class Watch:
+    """Records every collaborator call, and raises ``error`` at ``site`` once armed."""
+
+    def __init__(self, site=None, persistent=False):
+        self.site, self.persistent, self.armed = site, persistent, False
+        self.error = OSError('collaborator failed')
+        self.seen = set()
+
+    def raise_at(self, call):
+        self.seen.add(call)
+        if self.armed and self.site is not None and call == self.site.value:
+            self.armed = self.persistent
+            # A fresh error per call when persistent: one object raised again grows its traceback each time.
+            raise type(self.error)(*self.error.args) if self.persistent else self.error
+
+
+class Watched:
+    """Forwards to ``target``, reporting each method call on ``port`` to ``watch`` first."""
+
+    def __init__(self, target, port, watch):
+        self._target, self._port, self._watch = target, port, watch
+
+    def __getattr__(self, name):
+        attr = getattr(self._target, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            self._watch.raise_at((self._port, name))
+            return attr(*args, **kwargs)
+
+        return call
+
+
 class Rig:
-    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE):
+    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE, watch=None):
         self.vendor = FakeYam()
+        self.commands = ManualCommandReceiver()
+        self.grip = ManualCommandReceiver()
+        self.states = RecordingEmitter()
+        ports: dict[str, Any] = {
+            'vendor': self.vendor,
+            'commands': self.commands,
+            'target_grip': self.grip,
+            'state': self.states,
+        }
+        ports |= {'grip': RecordingEmitter(), 'robot_meta': RecordingEmitter()}
+        if watch is not None:
+            ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
-            connect=lambda channel, sim: self.vendor,
+            connect=lambda channel, sim: ports['vendor'],
             park_after_idle_s=1.0,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
         )
-        self.commands = ManualCommandReceiver()
-        self.grip = ManualCommandReceiver()
-        self.states = RecordingEmitter()
-        self.driver.commands._bind(self.commands)
-        self.driver.target_grip._bind(self.grip)
-        self.driver.state._bind(self.states)
+        self.driver.commands._bind(ports['commands'])
+        self.driver.target_grip._bind(ports['target_grip'])
+        self.driver.state._bind(ports['state'])
+        self.driver.grip._bind(ports['grip'])
+        self.driver.robot_meta._bind(ports['robot_meta'])
         self.clock = MockClock()
         self.stop = StopFlag()
         self.loop = self.driver.run(self.stop, self.clock)
@@ -848,42 +911,44 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
     assert not parking_rig.vendor.closed
 
 
-class Fault:
-    """Makes one vendor call raise, once or on every call from a chosen moment."""
-
-    def __init__(self, rig, monkeypatch, method, error):
-        self.rig, self.error, self.armed, self.persistent = rig, error, False, False
-        self.call = getattr(rig.vendor, method)
-        monkeypatch.setattr(rig.vendor, method, self)
-
-    def __call__(self, *args):
-        if self.armed:
-            self.armed = self.persistent
-            # A fresh error per call: one object raised again grows its traceback on every raise.
-            raise self.error if not self.persistent else type(self.error)(*self.error.args)
-        return self.call(*args)
-
-
-@pytest.mark.parametrize('method', ['get_observations', 'command_joint_pos'])
-def test_a_fault_during_the_run_parks_releases_and_is_raised_again(rig, monkeypatch, method):
+def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
+    """Closes the list below: a new collaborator call fails here until it gets a ``Site`` and its fault test."""
+    watch = Watch()
+    rig = Rig(watch=watch)
     rig.raise_arm()
-    fault = Fault(rig, monkeypatch, method, OSError('CAN failed'))
-    fault.armed = True
-    rig.tick()
-    assert not rig.vendor.released_at
-    with pytest.raises(OSError, match='CAN failed') as raised:
+    rig.grip.push(0.5)
+    rig.tick(0.1)
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, answer)
+    rig.tick(5)  # idle park
+    rig.finish()
+    assert watch.seen == {site.value for site in Site} | TEARDOWN_CALLS
+
+
+@pytest.mark.parametrize('site', list(Site))
+def test_a_fault_at_any_site_parks_releases_and_is_raised_again(site):
+    watch = Watch(site)
+    rig = Rig(watch=watch)
+    if site is not Site.META_EMIT:  # the metadata goes out once, as the run starts
+        rig.raise_arm()
+    watch.armed = True
+    rig.tick()  # the fault lands in the run, before anything asks the driver to stop
+    assert watch.seen >= {site.value} and not watch.armed
+    with pytest.raises(OSError, match='collaborator failed') as raised:
         rig.finish(within_s=30)
-    assert raised.value is fault.error
+    assert raised.value is watch.error
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
 
 
-@pytest.mark.parametrize('method', ['get_observations', 'command_joint_pos'])
-def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(rig, monkeypatch, caplog, method):
+@pytest.mark.parametrize('site', [Site.CHAIN_READ, Site.CHAIN_COMMAND])
+def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, site):
+    watch = Watch(site, persistent=True)
+    rig = Rig(watch=watch)
     rig.raise_arm()
-    fault = Fault(rig, monkeypatch, method, OSError('CAN failed'))
-    fault.armed = fault.persistent = True
+    watch.armed = True
     rig.tick(30)
     assert 'Shutdown blocked' in caplog.text
     assert not rig.vendor.released_at
     assert not rig.vendor.closed
+    rig.loop.close()

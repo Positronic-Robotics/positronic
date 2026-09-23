@@ -186,6 +186,8 @@ class _Arm(DriverRun[command.CommandType]):
         clock: pimm.Clock,
         park_tuning: SettleTuning,
         move_tuning: SettleTuning,
+        kinematics: _Kinematics,
+        state: YamState,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=100)
         self.vendor = vendor
@@ -193,9 +195,9 @@ class _Arm(DriverRun[command.CommandType]):
         self.move_tuning = move_tuning
         self.out = out
         self.grip_out = grip_out
-        self.state = YamState()
+        self.state = state
         self._base_pose = base_pose
-        self._kin = _Kinematics()
+        self._kin = kinematics
 
     def observations(self) -> dict[str, np.ndarray]:
         """Read the current joint and gripper measurements."""
@@ -557,6 +559,13 @@ class Robot(pimm.ControlSystem):
             raise
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        # Built before the chain opens, so nothing between enabling the motors and the protected region can raise.
+        kinematics, state = _Kinematics(), YamState()
+        meta = {
+            'robot': 'i2rt_yam',
+            roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
+            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+        }
         fault = None
         with _opened(self._connect, self._channel, self._sim) as vendor:
             arm = _Arm(
@@ -570,16 +579,12 @@ class Robot(pimm.ControlSystem):
                 clock,
                 self._park_tuning,
                 self._move_tuning,
+                kinematics,
+                state,
             )
-            meta = {
-                'robot': 'i2rt_yam',
-                roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
-                roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            }
-            self.robot_meta.emit(meta)
-
             # rules-allow: swallowed-error — the fault is raised again once the arm is parked and let go
             try:
+                self.robot_meta.emit(meta)
                 yield from self._serve(arm, should_stop, clock)
             except Exception as exc:
                 fault = exc
