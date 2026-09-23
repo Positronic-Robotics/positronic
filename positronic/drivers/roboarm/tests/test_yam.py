@@ -25,7 +25,7 @@ class FakeYam(yam._FakeYam):
 
     ``bias`` offsets every joint by a fixed amount, whatever it is asked for. ``gives_back`` is the fraction
     of the way from ``floats_at`` to the command that the chain travels, so a correction lands only in part.
-    Joints 2 and 3 rest on their lower stops at zero.
+    Joints 2 and 3 rest on their lower stops, which ``stops`` places; a command cannot push them past.
     """
 
     def __init__(self):
@@ -33,6 +33,7 @@ class FakeYam(yam._FakeYam):
         self.bias = np.zeros(6)
         self.gives_back = 1.0
         self.floats_at = np.zeros(6)
+        self.stops = np.zeros(2)
         self.stuck = False
         self.targets = []
         self.released_at = []
@@ -44,7 +45,7 @@ class FakeYam(yam._FakeYam):
             position = joint_pos.copy()
             position[:6] += self.bias
             position[:6] = self.floats_at + self.gives_back * (position[:6] - self.floats_at)
-            position[1:3] = np.maximum(position[1:3], 0.0)
+            position[1:3] = np.maximum(position[1:3], self.stops)
             super().command_joint_pos(position)
 
     def zero_torque_mode(self):
@@ -298,7 +299,7 @@ def test_a_chain_that_gives_back_part_of_a_correction_still_lands_on_its_stops(r
     rig.vendor.gives_back = GIVES_BACK
     rig.vendor.floats_at = FLOATS_AT
     rig.finish()
-    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=DEFAULT_TUNING.tolerance_rad)
     assert rig.vendor.closed
 
 
@@ -555,6 +556,21 @@ def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
     sent = len(rig.vendor.targets)
     rig.tick(0.5)  # inside the rig's one-second idle limit, so no park takes over
     assert all(np.array_equal(target[:6], RAISED) for target in rig.vendor.targets[sent:])
+
+
+@pytest.mark.parametrize(('stop_rad', 'releases'), [(0.006, True), (0.02, False)])
+def test_an_arm_resting_on_a_stop_above_zero_releases_only_near_the_stow_pose(rig, caplog, stop_rad, releases):
+    rig.raise_arm()
+    rig.vendor.stops = np.array([0.0, stop_rad])
+    if releases:
+        rig.finish()
+        np.testing.assert_allclose(rig.vendor.released_at[0][:6], [0.0, 0.0, stop_rad, 0.0, 0.0, 0.0], atol=1e-3)
+        assert rig.vendor.closed
+    else:
+        rig.stop.stopped = True
+        rig.tick(60)
+        assert 'Parking failed; arm still powered' in caplog.text
+        assert not rig.vendor.released_at
 
 
 def test_parking_accepts_error_within_its_tolerance(rig):

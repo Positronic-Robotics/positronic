@@ -24,7 +24,7 @@ class SettleTuning:
 
 # The defaults fit the arm the driver was brought up on. The park lands tighter, because torque is cut there.
 PARK_SETTLE = SettleTuning(
-    tolerance_rad=0.005,
+    tolerance_rad=0.01,  # the stops of joints 2 and 3 can read up to 0.006 rad above zero
     still_position_rad=0.002,
     still_time_s=0.2,
     grip_tolerance=0.05,
