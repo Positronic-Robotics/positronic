@@ -469,7 +469,7 @@ def test_parking_allows_more_time_than_an_ordinary_move(rig):
 
 def test_parking_finishes_after_measured_arrival_and_stopping(rig):
     rig.vendor._pos[:6] = RAISED
-    rig.tick(2.5)
+    rig.tick(float(np.max(RAISED)) / DEFAULT_TUNING.max_speed_rad_s + 0.5)
     assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
 
@@ -542,10 +542,10 @@ def test_parking_command_speed_is_bounded_for_different_distances(rig, monkeypat
     rig.finish()
     times = np.array([time for time, _ in commands])
     targets = np.array([target for _, target in commands])
-    assert np.all(np.abs(np.diff(targets, axis=0)) <= 0.5 * np.diff(times)[:, None] + 1e-10)
+    assert np.all(np.abs(np.diff(targets, axis=0)) <= DEFAULT_TUNING.max_speed_rad_s * np.diff(times)[:, None] + 1e-10)
     assert np.all(targets >= np.minimum(start, PARK) - 1e-10)
     assert np.all(targets <= np.maximum(start, PARK) + 1e-10)
-    assert rig.clock.now() - started >= distance / 0.5
+    assert rig.clock.now() - started >= distance / DEFAULT_TUNING.max_speed_rad_s
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
 
