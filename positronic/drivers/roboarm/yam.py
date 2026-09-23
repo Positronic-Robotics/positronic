@@ -343,7 +343,6 @@ class _Arm(DriverRun[command.CommandType]):
                 if rests is self._Rest.ON_GOAL:
                     self.command_target(reference, grip)
                     self.moves.errored = False
-                    self.publish(self.observations())
                     return reference
                 bound = tuning.max_correction_rad
                 corrected = np.clip(reference - (obs[_JOINT_POS] - goal), goal - bound, goal + bound)
@@ -379,12 +378,21 @@ class _Arm(DriverRun[command.CommandType]):
             )
             if reference is not None:
                 logger.info('Arm parked')
+                self._report_parked()
                 return reference, grip, self._Park.PARKED
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; it does not end the run
         except Exception as exc:
             self.moves.errored = True
             logger.error(f'The arm did not reach the parking pose: {exc}')
         return *self.hold_where_it_stopped(), self._Park.HELD_WHERE_IT_STOPPED
+
+    def _report_parked(self) -> None:
+        """Publish the parked state. The park is verified already, so a failed report cannot undo it."""
+        # rules-allow: swallowed-error — the verdict stands; the report's failure is logged
+        try:
+            self.publish(self.observations())
+        except Exception:
+            logger.exception('The arm is parked, but its state could not be published')
 
     def shutdown(self) -> Generator[pimm.Command, None, None]:
         hold_target = None
@@ -422,6 +430,7 @@ class _Arm(DriverRun[command.CommandType]):
                 target, grip, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
             )
             if reference is not None:
+                self.publish(self.observations())
                 call.set_result(None)
                 return reference, grip
         except Exception as exc:
