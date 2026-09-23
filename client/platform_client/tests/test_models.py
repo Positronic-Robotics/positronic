@@ -9,15 +9,18 @@ import pytest
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
+    CameraVantage,
+    EndpointKind,
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    Placement,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
@@ -51,6 +54,9 @@ from platform_client.responses import (
     RankingRow,
     RankingsResponse,
     RegisterResponse,
+    ResolvedEndpoint,
+    ResolvedPlan,
+    ResolvedTask,
     RunningSubmissionView,
     RunSummary,
     Scores,
@@ -135,6 +141,24 @@ PLAN_OF_AN_IMAGE = plan_of_image(
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 
+RESOLVED_TASK = ResolvedTask(
+    position=0,
+    task_id=TaskRef('stack-the-cubes'),
+    endpoints=[
+        ResolvedEndpoint(name='baseline', kind=EndpointKind.remote, url='wss://baseline.example/ws', episodes=2),
+        ResolvedEndpoint(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05', episodes=1),
+    ],
+    cap_per_episode_sec=90,
+    policy_preset='example_candidate',
+    tote_placement=Placement.left,
+    camera_vantage=CameraVantage.phail,
+    external_cameras={'side': Placement.right},
+    clutter=Clutter(count_min=2, count_max=6),
+    clutter_objects=['cup', 'sponge'],
+    episode_order=['pi05', 'baseline', 'baseline'],
+)
+RESOLVED = ResolvedPlan(episodes_total=3, tasks=[RESOLVED_TASK])
+
 MODELS: list[BaseModel] = [
     Scores(),
     SCORES,
@@ -165,6 +189,7 @@ MODELS: list[BaseModel] = [
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
     ),
+    SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, resolved=RESOLVED),
     SubmissionListResponse(),
     SubmissionListResponse(
         submissions=[
@@ -179,6 +204,7 @@ MODELS: list[BaseModel] = [
         ]
     ),
     PendingSubmissionView(id=SUB, alias='demo', received_at=AT, queued_at=AT, queue_position=1),
+    PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1, resolved=RESOLVED),
     RunningSubmissionView(id=SUB, running_since=AT, stage='evaluating', stage_detail='task 2/10'),
     ErroredSubmissionView(id=SUB, reason_code=ReasonCode.policy_oom, reason='policy ran out of memory'),
     ErroredSubmissionView(
@@ -721,3 +747,26 @@ def test_an_artifacts_query_refuses_a_field_it_does_not_declare():
     # A typo'd narrowing would otherwise be dropped and list the whole submission.
     with pytest.raises(ValidationError):
         SubmissionArtifactsQuery.model_validate({'id': '1f', 'prefixx': 'episodes/'})
+
+
+def test_a_resolved_side_is_never_a_draw():
+    with pytest.raises(ValidationError, match='names no side'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'tote_placement': 'random'})
+    with pytest.raises(ValidationError, match='names no side'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'external_cameras': {'side': 'random'}})
+
+
+def test_a_resolved_side_may_state_the_piece_is_absent():
+    task = ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'tote_placement': 'none'})
+    assert task.tote_placement is Placement.none
+
+
+def test_the_episode_order_serves_each_endpoint_its_count():
+    with pytest.raises(ValidationError, match='orders 2 episodes'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
+
+
+def test_the_resolved_total_is_the_sum_over_the_tasks():
+    assert RESOLVED.tasks[0].episodes == 3
+    with pytest.raises(ValidationError, match='episodes_total states 4'):
+        ResolvedPlan(episodes_total=4, tasks=[RESOLVED_TASK])
