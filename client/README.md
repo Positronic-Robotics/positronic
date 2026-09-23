@@ -145,8 +145,7 @@ A plan states its own tasks and endpoints. A policy image run names a catalog ev
 image, and how to build, test and submit it.
 
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
-`websocket` wire, which the platform opens every image session on, and `--eval` names the eval whose
-tasks it runs. `plan_of_image` builds that shape.
+`websocket` wire, and `--eval` names the eval whose tasks it runs. `plan_of_image` builds that shape.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
