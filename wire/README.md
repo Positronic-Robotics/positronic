@@ -36,7 +36,7 @@ serves it, and this package holds the client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `split_url(url)`, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises |
@@ -54,10 +54,6 @@ A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix
 leaves out on the members that carry one. `TAKES_EDGE_HEADERS` says whether a caller hands the wire the
 headers its own edge authenticates on: `roboarena` is `False`, because another party runs its server,
 and every other member is `True`.
-
-- `address_of(url)` — the address `url` names on this wire, read by the grammar in
-  [The URL grammar](#the-url-grammar). The caller selects the wire, and the wire ignores the scheme.
-  A URL no address fits raises `ValueError`.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
@@ -95,8 +91,7 @@ that wire's fields, never a URL, and no address carries a field a wire ignores.
 
 `uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
 the network. The address refuses a relative path when it is built, because a relative one names a
-different socket to each caller. It also refuses a path that holds `/api/v1/session`, because a URL
-ends the socket where that route starts, and a path that holds a NUL byte. It names no host and no port, because a socket has neither: the
+different socket to each caller. It names no host and no port, because a socket has neither: the
 handshake carries `localhost` as a stand-in the server never resolves. A socket is same-machine by
 construction, so no TLS member sits beside it. An absent path is `COLD`: the client cannot tell a
 misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A refusal
@@ -119,33 +114,6 @@ terms the websocket members already read.
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
 before it dials, and names both in the refusal.
-
-## The URL grammar
-
-`address_of(url)` reads a URL by this table, and `session_url(address)` writes one the same wire reads
-back to the same address. The table covers every component of a URL. The host-and-port members are
-`websocket`, `websocket_tls`, `grpc` and `grpc_tls`. A refusal raises `ValueError` with the words shown.
-
-| Component | Host-and-port members (`HostPortAddress`) | `websocket_unix` (`UnixSocketAddress`) | `roboarena` (`RoboarenaAddress`) |
-|---|---|---|---|
-| Whitespace around the URL | Stripped | Stripped | Stripped |
-| Scheme | A leading `<scheme>://` is ignored. With none, the URL starts at the host | Ignored | Ignored |
-| User (`user@`, `:secret@`) | Refused: `names a user` | Refused: `names a user` | Refused: `names a user` |
-| Host | `host`, as written; `urllib` lowercases it | Refused: `names no host` | `host`, as written; `urllib` lowercases it |
-| Empty host | Refused: `no host` | Required: `scheme:///<socket>` | Refused: `names no host and port` |
-| IPv6 literal (`[::1]`) | `host` without the brackets | Refused: `names no host` | `host` without the brackets |
-| Port | `port`; absent or empty is `DEFAULT_PORT`. Not a number, or out of range: refused by `urllib` (`Port could not be cast`, `Port out of range`) | Refused: `names no host` | `port`, required: `names no host and port`. Not a number, or out of range: refused by `urllib` |
-| Path | Empty or `/api/v1/session`: `SESSION_PATH`. `/api/v1/session/<model>`: `path`, as written. Anything else: refused, `unexpected path` | The socket runs to the first `/api/v1/session` that ends a segment, and the rest reads as the host-and-port path. A socket whose last segment is empty, `.` or `..` names no file: refused, `names none` | Empty or `/`. Anything else: refused, `a path` |
-| Trailing slash | `/api/v1/session/` is `SESSION_PATH`. After a model, kept in `path` | After the socket: refused, `names none`. After the route: as the host-and-port path | `/` is the root |
-| A path that repeats the session route | The second one is part of the model: `/api/v1/session/api/v1/session` is model `api/v1/session` | The first one ends the socket. A socket path that holds the route: refused when built, `holds the session route` | Refused: `a path` |
-| Params (`;`) | Part of the path: `/api/v1/session;x` is refused, `unexpected path`; `/api/v1/session/<model>;x` is kept | Part of the socket or the route | Refused: `a path` |
-| Query | `query`, as written | `query`, as written | A non-empty one: refused, `a query`. A bare `?` carries nothing |
-| Fragment (any `#`, even an empty one) | Refused: `names a fragment` | Refused: `names a fragment` | Refused: `names a fragment` |
-| Percent-encoding | Path and query kept as written; the server decodes them | Socket decoded, then checked: a socket that names no file, `names none`, and a NUL byte, `holds a NUL byte`; `session_url` encodes every other character than `/` and the unreserved ones. Route and query kept as written | Host as written |
-
-`address_of(session_url(address)) == address` holds for every address `address_of` returns, and for
-every address a caller builds with `session_path(model)` and a query `address_of` can return. An address
-from `at_root()` names no route, and no URL names it: a URL with no route reads as `SESSION_PATH`.
 
 ## What each consumer pays
 
@@ -209,9 +177,8 @@ A consumer moves onto the wire in this order, each step green on its own:
 1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
    local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
    names its wire, then that wire's address** — the fields `ClientWire.ADDRESS` declares, which differ
-   per wire. A record that still holds a URL has its wire read it with `address_of`, and a caller
-   reads `TAKES_EDGE_HEADERS` before it hands a wire its edge's headers. Report the registry's names
-   in the deploy handshake and retire any per-transport version floor.
+   per wire. Report the registry's names in the deploy handshake and retire any per-transport version
+   floor.
 2. Replace the transport-specific dial with `probe`, and the exception-name match with
    `isinstance(raised, (wire.ConnectRefused, wire.PeerDisconnected, TimeoutError))`.
 3. Move the consumer's own transports into their own `ClientWire` subclasses, each declaring the

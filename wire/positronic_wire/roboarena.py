@@ -21,29 +21,6 @@ class RoboarenaAddress(wire.SessionAddress):
     path = ''
     query = ''
 
-    @classmethod
-    def from_url(cls, url: str) -> 'RoboarenaAddress':
-        """The host and the port ``scheme://<host>:<port>`` names.
-
-        Raises ``ValueError`` where ``url`` names no port, because a server publishes no default one. Raises
-        where it names a path or a query too, because the wire dials the root alone.
-        """
-        split = wire.split_url(url)
-        port = split.port
-        if not split.hostname or port is None:
-            raise ValueError(f'roboarena address {url!r} names no host and port; write <scheme>://<host>:<port>')
-        dropped = [
-            name
-            for name, present in (('a path', split.path not in ('', '/')), ('a query', bool(split.query)))
-            if present
-        ]
-        if dropped:
-            raise ValueError(
-                f'roboarena address {url!r} names {", ".join(dropped)}, and this wire dials the root alone; '
-                'write <scheme>://<host>:<port>'
-            )
-        return cls(split.hostname, port)
-
     def at_root(self) -> Self:
         return self
 
@@ -83,9 +60,6 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     def session_url(self, address: RoboarenaAddress) -> str:
         """The root this wire dials; a roboarena session names no route under it."""
         return f'ws://{wire.bracket_ipv6(address.host)}:{address.port}'
-
-    def address_of(self, url: str) -> RoboarenaAddress:
-        return RoboarenaAddress.from_url(url)
 
     def list_models(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float

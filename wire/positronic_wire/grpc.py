@@ -245,9 +245,6 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def address_of(self, url: str) -> wire.HostPortAddress:
-        return wire.HostPortAddress.from_url(url, self.DEFAULT_PORT)
-
     def list_models(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> list[str]:

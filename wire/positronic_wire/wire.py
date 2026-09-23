@@ -1,13 +1,12 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries a protocol's frames as opaque bytes and reads none of them. A caller names the wire it
-wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and nothing here reads a wire off a URL scheme.
-The wire alone reads a URL into its address, and spells whatever its library takes.
+A wire carries a protocol's frames as opaque bytes and reads none of them. Nothing here reads a URL:
+a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
+spells whatever its library takes.
 """
 
 import abc
 import dataclasses
-import re
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
@@ -30,37 +29,6 @@ def session_path(model: str = '') -> str:
     slashes as separators and the server decodes the rest.
     """
     return f'{SESSION_PATH}/{urllib.parse.quote(model, safe="/")}' if model else SESSION_PATH
-
-
-# A scheme and its delimiter, which only the start of a URL carries. A query may hold another URL.
-_LEADING_SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://')
-# The session route in a socket URL's path. The socket path ends where it starts.
-_SESSION_ROUTE = re.compile(rf'{re.escape(SESSION_PATH)}(?=/|$)')
-
-
-def split_url(url: str) -> urllib.parse.SplitResult:
-    """``url`` in its parts. A URL with no leading ``<scheme>://`` is ``host[:port]...``, and its scheme is empty.
-
-    Raises ``ValueError`` where ``url`` names a user or holds a ``#``: no address carries either, and a ``#``
-    ends the path before the name it was part of.
-    """
-    stripped = url.strip()
-    split = urllib.parse.urlsplit(stripped if _LEADING_SCHEME.match(stripped) else f'//{stripped}')
-    # `:secret@host` carries a credential under an EMPTY username, so the `@` is what names a user.
-    if '@' in split.netloc:
-        raise ValueError(f'{url!r} names a user, which no wire address carries')
-    if '#' in stripped:
-        raise ValueError(f'{url!r} names a fragment, which no wire address carries')
-    return split
-
-
-def _session_route(path: str, url: str) -> str:
-    """The session route ``path`` names: ``SESSION_PATH`` where it names none."""
-    if path.rstrip('/') in ('', SESSION_PATH):
-        return SESSION_PATH
-    if not path.startswith(f'{SESSION_PATH}/'):
-        raise ValueError(f'unexpected path {path!r} in {url!r}; expected {SESSION_PATH}[/<model>]')
-    return path
 
 
 def bracket_ipv6(host: str) -> str:
@@ -93,19 +61,6 @@ class HostPortAddress(SessionAddress):
     path: str
     query: str
 
-    @classmethod
-    def from_url(cls, url: str, default_port: int) -> 'HostPortAddress':
-        """The session ``[scheme://]host[:port][/api/v1/session[/<model>]][?query]`` names.
-
-        The scheme is the caller's to read. Raises ``ValueError`` where ``url`` names no host, or a path that
-        is not a session route.
-        """
-        split = split_url(url)
-        if not split.hostname:
-            raise ValueError(f'no host in {url!r}')
-        port = default_port if split.port is None else split.port
-        return cls(split.hostname, port, _session_route(split.path, url), split.query)
-
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')
 
@@ -126,33 +81,6 @@ class UnixSocketAddress(SessionAddress):
         # different socket to each caller.
         if not self.uds.is_absolute():
             raise ValueError(f'{self.uds!r} is a relative socket path; name an absolute one')
-        if _SESSION_ROUTE.search(str(self.uds)):
-            raise ValueError(f'{self.uds!r} holds the session route {SESSION_PATH!r}, so no URL can name it')
-        if '\0' in str(self.uds):
-            raise ValueError(f'{self.uds!r} holds a NUL byte, which no socket path holds')
-
-    @classmethod
-    def from_url(cls, url: str) -> 'UnixSocketAddress':
-        """The socket and the session ``scheme:///<socket>[/api/v1/session[/<model>]][?query]`` names.
-
-        The socket path runs to the session route, and is percent-decoded before any check reads it;
-        ``socket_url_path`` encodes it. Raises ``ValueError`` where ``url`` names a host, which a socket cannot
-        reach, or a socket whose last segment is empty, ``.`` or ``..``, which names a directory.
-        """
-        split = split_url(url)
-        if split.netloc:
-            raise ValueError(f'a socket URL names no host, and this one names {split.netloc!r}: {url!r}')
-        route = _SESSION_ROUTE.search(split.path)
-        quoted, path = (split.path, '') if route is None else (split.path[: route.start()], split.path[route.start() :])
-        # `Path` drops a trailing `/` and a last `.`, so it cannot tell a directory from the socket in it.
-        socket = urllib.parse.unquote(quoted)
-        if socket.rpartition('/')[2] in ('', '.', '..'):
-            raise ValueError(f'a socket URL names a socket file, and this one names none: {url!r}')
-        return cls(Path(socket), _session_route(path, url), split.query)
-
-    def socket_url_path(self) -> str:
-        """``uds`` as a URL path: each character a URL reads as a delimiter or as an escape is percent-encoded."""
-        return urllib.parse.quote(str(self.uds), safe='/')
 
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')
@@ -205,13 +133,6 @@ class ClientWire(abc.ABC, Generic[AddressT]):
     # Whether a caller hands this wire the headers its own edge authenticates on. A server that another
     # party runs sits behind no edge of the caller's, and does not get them.
     TAKES_EDGE_HEADERS: ClassVar[bool]
-
-    @abc.abstractmethod
-    def address_of(self, url: str) -> AddressT:
-        """The address ``url`` names on this wire. Raises ``ValueError`` where this wire dials none.
-
-        The caller selects the wire; this reads the rest of ``url`` and ignores its scheme.
-        """
 
     @abc.abstractmethod
     def session_url(self, address: AddressT) -> str:
