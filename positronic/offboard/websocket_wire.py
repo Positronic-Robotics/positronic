@@ -210,6 +210,8 @@ class WebsocketWire(server_wire.Wire):
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
+            # Deflate stays off for a client that offers it too, for the reason in positronic_wire.websocket.
+            ws_per_message_deflate=False,
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
