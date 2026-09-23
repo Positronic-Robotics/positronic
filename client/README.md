@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.12.0"
+uv add "positronic-platform-client==0.14.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -68,10 +68,13 @@ tasks:
     cap_per_episode_sec: 120
     endpoints: [candidate]                    # a list replaces the plan's list for this task
 endpoints:
-  - name: baseline
-    url: wss://baseline.example/ws
-  - name: candidate
-    url: wss://candidate.example/ws
+  - name: baseline                        # remote: the caller's own server
+    wire: websocket_tls                   # names the wire, then that wire's address
+    address: {host: baseline.example, port: 443, path: /api/v1/session, query: mode=native}
+  - name: candidate                       # served: the platform brings it up and records the address
+    kind: served
+    spec: dreamzero
+    wire: grpc
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -81,18 +84,59 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `submissions.create`. `--from-file` takes the plan
-file, and an `--eval` value is a name. The same flags state a plan
-without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
-`--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
-catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
-policy, and each episode records which one served it. `eval status` and `eval list` read it back by
+An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
+Every kind names its wire. There is no default.
+
+`wire` is a name from `positronic_wire.registry`. Each wire dials its own address fields:
+
+| `wire` | Address fields |
+|---|---|
+| `websocket` | `host`, `port`, `path`, `query` |
+| `websocket_tls` | `host`, `port`, `path`, `query` |
+| `websocket_unix` | `uds`, `path`, `query` |
+| `grpc` | `host`, `port`, `path`, `query` |
+| `grpc_tls` | `host`, `port`, `path`, `query` |
+| `roboarena` | `host`, `port` |
+
+`path` is the session route: `/api/v1/session`, or `/api/v1/session/<model>`. `query` defaults to empty.
+
+Each kind carries its own locator:
+
+| `kind` | Carries |
+|---|---|
+| `remote` | `address`, the fields its `wire` dials |
+| `served` | `spec`; the platform brings it up and records the address |
+| `image` | `image`, the container; takes only the `websocket` wire, which the platform opens every image session over |
+
+- A record carries no URL. A `url` field is refused. A scheme in `host` is refused.
+- The kinds refuse each other's fields. An entry carries one answer to each question.
+
+Each address field holds one grammar. The wire writes each value into what it dials with no change,
+so the grammar admits only a value the wire can write as it is:
+
+| Field | Holds | Refused |
+|---|---|---|
+| `host` | A hostname: labels of letters, digits, `-` and `_`, joined by `.`, with an optional last `.`. Or an IPv4 address, or an IPv6 address with no brackets | A scheme, a port, a path, userinfo, brackets, an IPv6 zone index, any other character. The wire adds the brackets that an IPv6 address needs |
+| `port` | An integer from 1 to 65535 | Any other value |
+| `path` | The session route: `/` first, then visible ASCII characters (`!` to `~`) | No leading `/`, a `?`, a `#`, a space, any other character |
+| `query` | The session params with no leading `?`, in visible ASCII characters. Empty by default | A leading `?`, a `#`, a space, any other character |
+| `uds` | An absolute socket path | A relative path, a NUL byte |
+
+Percent-encode a character that `path` or `query` refuses: a space is `%20`, and `#` is `%23`.
+
+`positronic eval run --from-file` files that plan with `submissions.create`. The file is YAML or
+JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
+told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
 it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
 tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
 Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
-image runs the platform executes itself.
+image runs the platform executes itself. `users.me` names the grant's client in `client`.
+
+Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
+as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
+episodes, and `outcome`, the kept, judged and successful episodes per endpoint.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
@@ -115,8 +159,8 @@ A plan states its own tasks and endpoints. A policy image run names a catalog ev
 [Submit a policy image](../docs/submit-a-policy-image.md) says what the platform requires of the
 image, and how to build, test and submit it.
 
-A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
-the eval whose tasks it runs. `plan_of_image` builds that shape.
+A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
+`websocket` wire, and `--eval` names the eval whose tasks it runs. `plan_of_image` builds that shape.
 
 An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
 file names the registry user and the FILE the password is in. `positronic eval run --from-file`
@@ -128,6 +172,7 @@ builds that credential.
 endpoints:
   - name: policy
     kind: image
+    wire: websocket
     image: registry.example.com/you/policy@sha256:...
     image_credential:
       username: a-reader
@@ -147,7 +192,7 @@ definition.
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
 runs an eval here when given a policy, on the platform when given a policy image, and on the lab rig
-when given a policy URL. From zero, `platform-register` is the one path to a key: it runs GitHub's
+when given a plan file. From zero, `platform-register` is the one path to a key: it runs GitHub's
 device flow and prints the `export` line. In a checkout, run it through `uv run`. `account register`
 takes a GitHub token the platform's OAuth app minted, in `POSITRONIC_PLATFORM_CREDENTIAL`, and saves
 the key in the record the other commands read; a new user holds no such token.
@@ -157,7 +202,7 @@ platform-register --alias=<display name>            # in a checkout: uv run plat
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
+uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>

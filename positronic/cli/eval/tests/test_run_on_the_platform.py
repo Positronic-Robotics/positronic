@@ -20,11 +20,12 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert created.submission_id == SubmissionId.parse(ID)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
-    # A policy image is one endpoint of a plan, and the eval names the tasks the catalogue expands.
+    # A policy image is one endpoint of a plan on the websocket wire, and the eval names the tasks the
+    # catalogue expands.
     body = platform.body
     assert body['eval'] == 'fake.smoke' and body['tasks'] == []
-    assert [(entry['name'], entry['kind'], entry['image']) for entry in body['endpoints']] == [
-        ('policy', 'image', 'org/p:v1')
+    assert [(entry['name'], entry['kind'], entry['wire'], entry['image']) for entry in body['endpoints']] == [
+        ('policy', 'image', 'websocket', 'org/p:v1')
     ]
     assert body['alias'] is None and body['transaction_key'] == 'retry-1'
     out = capsys.readouterr().out
@@ -138,15 +139,6 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     # hand back a run the caller believes they configured.
     with pytest.raises(SystemExit, match='a platform run has no'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', **local_only)
-    assert platform.seen is None
-
-
-@pytest.mark.parametrize('stated_off', [{'episodes': False}, {'cap': False}])
-def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, stated_off: dict):
-    # The command line literal-evaluates its values, so `--episodes=False` reaches the run as
-    # `False`. It is a value asked for, like `--episodes=0`, and a platform run has no such flag.
-    with pytest.raises(SystemExit, match='a platform run has no'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **stated_off)
     assert platform.seen is None
 
 

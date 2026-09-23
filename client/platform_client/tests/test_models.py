@@ -19,9 +19,18 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    Clutter,
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    RoboarenaAddress,
+    TaskNode,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.model_config import INPUT_MODEL_CONFIG
@@ -47,15 +56,18 @@ from platform_client.responses import (
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    EndpointOutcome,
     EpisodeCounts,
     ErroredSubmissionView,
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
+    PlanOutcome,
     QuotaLimit,
     RankingRow,
     RankingsResponse,
     RegisterResponse,
+    ReplayLink,
     ResolvedEndpoint,
     ResolvedPlan,
     ResolvedTask,
@@ -121,12 +133,23 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
-            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+            'endpoints': [
+                'baseline',
+                {
+                    'name': 'ours',
+                    'wire': 'grpc_tls',
+                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session/org/ours'},
+                },
+            ],
         },
     ],
     'endpoints': [
-        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
-        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
+        {
+            'name': 'baseline',
+            'wire': 'websocket_tls',
+            'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': 'mode=native'},
+        },
+        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05', 'wire': 'websocket_unix'},
     ],
     'episodes_per_endpoint': 10,
     'cap_per_episode_sec': 180,
@@ -146,8 +169,21 @@ SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 RESOLVED_TASK = ResolvedTask(
     task_id=TaskRef('stack-the-cubes'),
     endpoints=[
-        ResolvedEndpoint(name='baseline', kind=EndpointKind.remote, url='wss://baseline.example/ws', episodes=2),
-        ResolvedEndpoint(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05', episodes=1),
+        ResolvedEndpoint(
+            name='baseline',
+            kind=EndpointKind.remote,
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session', query='mode=native'),
+            episodes=2,
+        ),
+        ResolvedEndpoint(
+            name='pi05',
+            kind=EndpointKind.served,
+            wire=Wire.websocket_unix,
+            provider='droid_cohost',
+            spec='pi05',
+            episodes=1,
+        ),
     ],
     cap_per_episode_sec=90,
     policy_preset='example_candidate',
@@ -186,6 +222,7 @@ MODELS: list[BaseModel] = [
     ),
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
+    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], client='acme'),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
@@ -215,6 +252,20 @@ MODELS: list[BaseModel] = [
         artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
+    FinishedSubmissionView(
+        id=SUB,
+        artifacts=ArtifactRefs(result='s3://b/episodes/'),
+        replay=ReplayLink(url='https://viewer.example/v/token/', expires_at=AT),
+        outcome=PlanOutcome(endpoints=[EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3)]),
+        runs=[
+            RunSummary(
+                run_tag='blind_20260904-160621',
+                started_at=AT,
+                ended_at=AT,
+                episodes=EpisodeCounts(total=10, done=9, outstanding=1),
+            )
+        ],
+    ),
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
     RankingsResponse(
@@ -241,7 +292,7 @@ MODELS: list[BaseModel] = [
     ASK,
     EvalPlan(
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,
     ),
     SubmissionListQuery(after=SUB, limit=50),
@@ -772,7 +823,31 @@ def test_the_episode_order_serves_each_endpoint_its_count():
         ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
 
 
+def test_a_resolved_endpoint_names_a_wire():
+    # A resolved endpoint is concrete: every kind names the wire its session runs over.
+    payload = RESOLVED_TASK.endpoints[0].model_dump(mode='json')
+    del payload['wire']
+    with pytest.raises(ValidationError):
+        ResolvedEndpoint.model_validate(payload)
+
+
 def test_the_resolved_total_is_the_sum_over_the_tasks():
     assert RESOLVED.tasks[0].episodes == 3
     with pytest.raises(ValidationError, match='episodes_total states 4'):
         ResolvedPlan(episodes_total=4, tasks=[RESOLVED_TASK])
+
+
+def test_a_plan_outcome_totals_its_endpoints():
+    outcome = PlanOutcome(
+        endpoints=[
+            EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3),
+            EndpointOutcome(endpoint='b', kept=10, judged=10, succeeded=6),
+        ]
+    )
+    assert (outcome.kept, outcome.judged, outcome.succeeded) == (19, 14, 9)
+
+
+def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
+    """The fields are additive: a payload that carries none of them still validates."""
+    view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
+    assert view.replay is None and view.outcome is None

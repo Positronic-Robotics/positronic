@@ -141,6 +141,19 @@ class EndpointKind(IntEnum):
 
 
 @unique
+class Wire(IntEnum):
+    """The transport a session with a policy runs over, by the name `positronic_wire.registry` gives it."""
+
+    INVALID = 0
+    websocket = 1
+    websocket_tls = 2
+    websocket_unix = 3
+    grpc = 4
+    grpc_tls = 5
+    roboarena = 6
+
+
+@unique
 class Placement(IntEnum):
     """Which side of the rig a piece of the scene sits on.
 

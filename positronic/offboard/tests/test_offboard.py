@@ -117,6 +117,12 @@ def test_jpeg_round_trips_single_image_and_stack():
     np.testing.assert_allclose(restored_stack, stack, atol=4)
 
 
+def test_a_lower_jpeg_quality_gives_smaller_frames():
+    image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    low, high = (len(serialise({keys.WRIST_IMAGE: encode_jpeg(image, quality)})) for quality in (30, 90))
+    assert low < high
+
+
 class TestCommandEnvelope:
     """A ``CommandType`` sitting anywhere in the payload crosses as the ``__cmd__`` envelope and comes back
     typed, without the receiver having to know which channel carries it."""

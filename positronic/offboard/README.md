@@ -175,7 +175,9 @@ This metadata tells the client:
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the rig JPEG-encodes frames before
-  sending, for an endpoint behind a proxy with a message-size cap
+  sending, for an endpoint behind a proxy with a message-size cap.
+  The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
+  records it in the policy metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation

@@ -21,8 +21,9 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
-from platform_client.eval_plan import Clutter
+from platform_client.eval_plan import Clutter, EndpointAddress
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
@@ -118,12 +119,53 @@ class EpisodeCounts(BaseModel):
 class RunSummary(BaseModel):
     """One launch that served the plan.
 
-    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
+    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs. `episodes`
+    counts what the launch took on: `done` moves as the rig records each episode, and once it ends it
+    is what the bucket holds.
     """
 
     run_tag: str
     started_at: AwareDatetime | None = None
     ended_at: AwareDatetime | None = None
+    episodes: EpisodeCounts | None = None
+
+
+class ReplayLink(BaseModel):
+    """A page that plays back a run's recorded episodes. `expires_at` is unset on a link that does not expire."""
+
+    url: str
+    expires_at: AwareDatetime | None = None
+
+
+class EndpointOutcome(BaseModel):
+    """One endpoint's recorded episodes.
+
+    `kept` leaves out an episode a reviewer ruled out. `judged` counts the kept episodes that have a
+    verdict, and `succeeded` the judged ones whose verdict is a success.
+    """
+
+    endpoint: str
+    kept: int = Field(ge=0)
+    judged: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+
+
+class PlanOutcome(BaseModel):
+    """What a rig plan recorded, per endpoint, in the order the plan names them."""
+
+    endpoints: list[EndpointOutcome] = Field(default_factory=list)
+
+    @property
+    def kept(self) -> int:
+        return sum(entry.kept for entry in self.endpoints)
+
+    @property
+    def judged(self) -> int:
+        return sum(entry.judged for entry in self.endpoints)
+
+    @property
+    def succeeded(self) -> int:
+        return sum(entry.succeeded for entry in self.endpoints)
 
 
 class ResolvedEndpoint(BaseModel):
@@ -131,8 +173,12 @@ class ResolvedEndpoint(BaseModel):
 
     name: str
     kind: Slugged[EndpointKind]
-    url: str | None = None
+    wire: Slugged[Wire]
+    # Set on a remote endpoint, which the caller dials; None on a served or image endpoint the platform serves itself.
+    address: EndpointAddress | None = None
+    # Set on a served endpoint, which names what starts it; None on a remote or image endpoint.
     provider: str | None = None
+    # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
     episodes: int = Field(ge=1)
 
@@ -230,13 +276,14 @@ class RegisterResponse(BaseModel):
 
 
 class MeResponse(BaseModel):
-    """`users.me`."""
+    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
 
     user_id: UserId
     alias: str | None = None
     tenant: str
     plan: str
     quota: list[QuotaLimit]
+    client: str | None = None
 
     def quota_for(self, key: str) -> QuotaLimit | None:
         """The limit under a rule key (`QUOTA_SUBMISSIONS_DAY` and friends), or None where the plan
@@ -359,11 +406,13 @@ class ErroredSubmissionView(_TaggedView):
 
 
 class FinishedSubmissionView(_TaggedView):
-    """Terminal success."""
+    """Terminal success. `replay` plays the recorded episodes back, and `outcome` counts them per endpoint."""
 
     id: SubmissionId
     scores: Scores = Field(default_factory=Scores)
     artifacts: ArtifactRefs
+    replay: ReplayLink | None = None
+    outcome: PlanOutcome | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
 
 
