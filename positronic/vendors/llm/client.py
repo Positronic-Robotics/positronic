@@ -10,6 +10,8 @@ from pydantic_ai.models import Model, ModelRequestParameters, infer_model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
+from positronic import telemetry, telemetry_keys
+
 
 class Endpoint:
     """A Pydantic AI model and its recorded generation settings."""
@@ -46,5 +48,6 @@ class Endpoint:
                 timeout=self.timeout,
             )
 
+    @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
     def request(self, messages: list[ModelMessage], tools: list[ToolDefinition]) -> ModelResponse:
         return asyncio.run(self._request(messages, tools))

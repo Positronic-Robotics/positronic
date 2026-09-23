@@ -10,14 +10,36 @@ from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.tests.test_golden_pipeline import FakeGripper, FakeRobot
+from positronic.policy.layers import PauseOnUnavailable
+from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import LLMPolicy
+from positronic.vendors.llm.policy import OBS_TIME_NS, LLMPolicy
+
+
+class Arm(pimm.ControlSystem):
+    def __init__(self):
+        self.commands = pimm.ControlSystemReceiver(self)
+        self.target_grip = pimm.ControlSystemReceiver(self)
+        self.state = pimm.ControlSystemEmitter(self)
+        self.grip = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop, clock):
+        position, grip = np.array([0.3, 0, 0.4]), 0.0
+        while not should_stop.value:
+            command = pimm.value_updated(self.commands)
+            if command is not None:
+                position = command.pose.translation
+            target = pimm.value_updated(self.target_grip)
+            if target is not None:
+                grip = target
+            self.state.emit(make_robot_state(position, np.zeros(7)))
+            self.grip.emit(grip)
+            yield pimm.Sleep(0.005)
 
 
 class Camera(pimm.ControlSystem):
@@ -75,27 +97,25 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         ])
 
     monkeypatch.setattr(Endpoint, 'request', request)
-    robot, gripper, camera = FakeRobot(), FakeGripper(), Camera()
+    robot, camera = Arm(), Camera()
     embodiment = Embodiment(
         descriptor='test arm',
         observations={
             keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
-            keys.GRIP: Observation(gripper.grip, None),
+            keys.GRIP: Observation(robot.grip, None),
             keys.WRIST_IMAGE: Observation(camera.frames, Serializers.camera_images),
         },
         commands={
             keys.ROBOT_COMMAND: Command(robot.commands, Serializers.robot_command),
-            keys.TARGET_GRIP: Command(gripper.target_grip, None),
+            keys.TARGET_GRIP: Command(robot.target_grip, None),
         },
         prepare_handlers={},
         static_meta=dict(ROBOT_STATIC_META),
-        meta_source=robot.robot_meta,
-        control_systems=(robot, gripper, camera),
+        meta_source=None,
+        control_systems=(robot, camera),
         simulated=True,
     )
-    policy = (StopOnFault() | ChunkedSchedule()).wrap(
-        LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
-    )
+    policy = Sequential(PauseOnUnavailable(), LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, tmp_path))
     dataset = LocalDataset(tmp_path)
@@ -119,7 +139,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         before, after = states[index * 2 : index * 2 + 2]
         assert [e['call'] for e in requests] == [1, 2]
         assert [e['call'] for e in responses] == [1, 2]
-        assert [e[keys.OBS_TIME_NS] for e in requests] == [before[keys.OBS_TIME_NS], after[keys.OBS_TIME_NS]]
+        assert [e[OBS_TIME_NS] for e in requests] == [before[OBS_TIME_NS], after[OBS_TIME_NS]]
         assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]

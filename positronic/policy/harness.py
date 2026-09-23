@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,7 @@ class Harness(pimm.ControlSystem):
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
-    def _build_episode_meta(self, rollout: Rollout) -> dict[str, Any]:
+    def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
@@ -136,7 +137,7 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        for k, v in flatten_dict(rollout.policy.meta()).items():
+        for k, v in deepcopy(flatten_dict(rollout.policy.meta()) | flatten_dict(runtime.metadata)).items():
             meta[f'{policy_keys.POLICY_META}.{k}'] = v
         meta.update(task.meta)
         meta[keys.TASK] = task.instruction
@@ -253,7 +254,9 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
-            self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(rollout), **(payload or {})}))
+            self.ds_command.emit(
+                DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
+            )
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.

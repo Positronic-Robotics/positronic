@@ -70,16 +70,12 @@ class Motion:
         angle = (end.rotation * start.rotation.inv).angle
         duration = max(distance / self.linear_speed, angle / self.angular_speed, 1 / self.fps)
         steps = math.ceil(duration * self.fps)
-        times = np.arange(1, steps + 1) / self.fps
-        fractions = times / times[-1]
+        fractions = np.arange(1, steps + 1) / steps
         trajectory = [
             {
                 keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
                 keys.TARGET_GRIP: target.gripper,
-                keys.ACTION_TIMESTAMP: float(timestamp),
             }
-            for fraction, timestamp in zip(fractions, times, strict=True)
+            for fraction in fractions
         ]
-        # A timestamp-only entry marks chunk expiry after the final command's sampling period.
-        trajectory.append({keys.ACTION_TIMESTAMP: float(times[-1] + 1 / self.fps)})
         return target, trajectory

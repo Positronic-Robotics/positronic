@@ -9,8 +9,8 @@ from pydantic_ai.usage import RequestUsage
 
 from positronic import keys
 from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.policy import llm
-from positronic.vendors.llm.tests.test_policy import complete, finish, observation, session
+from positronic.vendors.llm.policy import OBS_TIME_NS, llm
+from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
 
 
 def test_openai_compatible_endpoint_round_trip(monkeypatch):
@@ -38,8 +38,21 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
                                     'id': 'call_1',
                                     'type': 'function',
                                     'function': {
-                                        'name': 'done',
-                                        'arguments': json.dumps({'reason': 'finished', 'hindsight': 'check the image'}),
+                                        'name': 'move_to' if len(requests) == 1 else 'done',
+                                        'arguments': json.dumps(
+                                            {
+                                                'x': 0.01,
+                                                'y': 0,
+                                                'z': 0,
+                                                'roll': 0,
+                                                'pitch': 0,
+                                                'yaw': 0,
+                                                'gripper': 0,
+                                                'note': 'approach',
+                                            }
+                                            if len(requests) == 1
+                                            else {'reason': 'finished', 'hindsight': 'check the image'}
+                                        ),
                                     },
                                 }
                             ],
@@ -59,10 +72,12 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, '__init__', with_transport)
     monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
     monkeypatch.setenv('OPENAI_BASE_URL', 'https://test.invalid/v1')
-    with session(llm(model='openai-chat:test-model')) as (active, rt):
-        assert complete(active, rt, observation()) == []
-        meta = active.meta
-    assert len(requests) == 1
+    policy = llm(model='openai-chat:test-model')
+    with execution(policy) as (active, rt, clock):
+        assert not complete(active, rt, clock, observation()).commands
+        complete(active, rt, clock, observation())
+        meta = policy.meta() | rt.metadata
+    assert len(requests) == 2
     assert requests[0].url.host == 'test.invalid'
     assert requests[0].headers['authorization'] == 'Bearer test-secret-do-not-record'
     body = json.loads(requests[0].content)
@@ -73,23 +88,24 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert clients and all(client.is_closed for client in clients)
 
 
-def test_session_records_compact_reply_and_usage():
+def test_run_records_compact_reply_and_usage():
     def respond(messages, info):
         return ModelResponse(
             [ThinkingPart('private reasoning', signature='native-signature'), TextPart('Finished.'), *finish().parts],
             usage=RequestUsage(input_tokens=100, output_tokens=20),
         )
 
-    with session(llm(model=FunctionModel(respond))) as (active, rt):
-        complete(active, rt, observation(1000))
-        meta = active.meta
+    with execution(llm(model=FunctionModel(respond))) as (active, rt, clock):
+        clock.advance_to_ns(1000)
+        complete(active, rt, clock, observation())
+        meta = rt.metadata
     recorded = json.dumps(meta)
     assert 'private reasoning' not in recorded
     assert 'native-signature' not in recorded
     assert 'iVBOR' not in recorded
     events = meta['transcript']
     request = next(e for e in events if e['event'] == 'request')
-    assert request[keys.OBS_TIME_NS] == 1000
+    assert request[OBS_TIME_NS] == 1000
     assert request['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
     response = next(e for e in events if e['event'] == 'response')
     assert response['tools'][0]['name'] == 'done'
@@ -139,7 +155,7 @@ def test_config_accepts_a_configured_model_and_records_generation_settings():
 
     model = FunctionModel(respond, model_name='configured', settings={'temperature': 0.25})
     policy = llm(model=model, timeout=2, settings={'temperature': 0.5})
-    with session(policy) as (active, rt):
-        assert complete(active, rt, observation()) == []
-        assert active.meta['model'] == 'function:configured'
-        assert active.meta['settings'] == {'temperature': 0.5}
+    with execution(policy) as (active, rt, clock):
+        assert not complete(active, rt, clock, observation()).commands
+        assert policy.meta()['model'] == 'function:configured'
+        assert policy.meta()['settings.temperature'] == 0.5

@@ -3,7 +3,6 @@
 import io
 import json
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import Annotated, Any
@@ -27,13 +26,16 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
-from positronic import geom, keys, telemetry, telemetry_keys
+from positronic import geom, keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Policy, Runtime, Session
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.base import Policy, PolicyRun, Runtime, Step
+from positronic.policy.layers import PauseOnUnavailable
+from positronic.policy.sequential import Sequential
 
 from .client import Endpoint
 from .motion import Motion, MoveTo
+
+OBS_TIME_NS = 'obs_time_ns'
 
 
 class Images(StrEnum):
@@ -84,7 +86,7 @@ class _Observation:
         return geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT)
 
     @classmethod
-    def read(cls, obs: Mapping[str, Any], camera_keys: tuple[str, ...]) -> '_Observation':
+    def read(cls, obs: Mapping[str, Any], camera_keys: tuple[str, ...], time_ns: int) -> '_Observation':
         pose = cls.measured_pose(obs)
         grip = float(obs[keys.GRIP])
         if not np.isfinite(grip) or not 0 <= grip <= 1:
@@ -95,12 +97,12 @@ class _Observation:
             if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
                 raise ValueError(f'{name} must be an RGB uint8 image')
             images[name] = frame
-        return cls(pose, grip, str(obs[keys.TASK]), int(obs[keys.OBS_TIME_NS]), images)
+        return cls(pose, grip, str(obs[keys.TASK]), time_ns, images)
 
     def state(self, target: MoveTo | None) -> dict[str, Any]:
         state = {
             'task': self.task,
-            keys.OBS_TIME_NS: self.time_ns,
+            OBS_TIME_NS: self.time_ns,
             'position_m': self.pose.translation.tolist(),
             'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
             'gripper': self.grip,
@@ -124,7 +126,7 @@ class _Observation:
                 f'Camera {camera}, observation {self.time_ns} ns:',
                 BinaryContent(data.getvalue(), media_type='image/png'),
             ])
-        return ModelRequest([UserPromptPart(content)], metadata={keys.OBS_TIME_NS: self.time_ns})
+        return ModelRequest([UserPromptPart(content)], metadata={OBS_TIME_NS: self.time_ns})
 
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
@@ -138,12 +140,9 @@ _SCHEMAS: dict[Tool, type[BaseModel]] = {
 class LLMPolicy(Policy):
     """An API-backed, single-arm Cartesian policy with independent episode conversations."""
 
-    _REQUEST = 'llm.request'
-
-    class _Session(Session):
-        def __init__(self, policy: 'LLMPolicy', rt: Runtime):
+    class _Conversation:
+        def __init__(self, policy: 'LLMPolicy'):
             self._policy = policy
-            self._rt = rt
             self._transcript: list[dict[str, Any]] = []
             self._messages: list[ModelMessage] = []
             self._obs: _Observation | None = None
@@ -152,34 +151,6 @@ class LLMPolicy(Policy):
             self._failures = 0
             self._calls = 0
             self._target: MoveTo | None = None
-            self._answer: Answer | None = None
-            self._stop_reason: str | None = None
-            self._hindsight: str | None = None
-
-        @property
-        def meta(self) -> dict[str, Any]:
-            policy = self._policy
-            meta: dict[str, Any] = {
-                policy_keys.TYPE: 'llm',
-                'model': policy.endpoint.model.model_id,
-                'settings': dict(policy.endpoint.settings),
-                'motion': asdict(policy.motion),
-                'max_calls': policy.max_calls,
-                'max_invalid': policy.max_invalid,
-                'timeout': policy.endpoint.timeout,
-                'images': policy.images.value,
-                'camera_keys': list(policy.camera_keys),
-                'image_size': policy.image_size,
-                'image_horizon': policy.image_horizon,
-                'transcript': deepcopy(self._transcript),
-            }
-            if policy.endpoint.model.base_url is not None:
-                meta['base_url'] = policy.endpoint.model.base_url
-            if self._stop_reason is not None:
-                meta['stop_reason'] = self._stop_reason
-            if self._hindsight is not None:
-                meta['hindsight'] = self._hindsight
-            return meta
 
         def _initial(self) -> ModelRequest:
             prompt = (
@@ -208,8 +179,8 @@ class LLMPolicy(Policy):
             })
             return ModelRequest([SystemPromptPart(prompt)])
 
-        def _observe(self, raw: Mapping[str, Any]) -> None:
-            self._obs = _Observation.read(raw, self._policy.camera_keys)
+        def _observe(self, raw: Mapping[str, Any], time_ns: int) -> None:
+            self._obs = _Observation.read(raw, self._policy.camera_keys, time_ns)
             if not self._messages:
                 self._messages.append(self._initial())
             state = self._obs.state(self._target)
@@ -286,7 +257,7 @@ class LLMPolicy(Policy):
         def _prune_images(self) -> None:
             observations = list(
                 dict.fromkeys(
-                    message.metadata[keys.OBS_TIME_NS]
+                    message.metadata[OBS_TIME_NS]
                     for message in self._messages
                     if isinstance(message, ModelRequest) and message.metadata is not None
                 )
@@ -296,7 +267,7 @@ class LLMPolicy(Policy):
                 if (
                     not isinstance(message, ModelRequest)
                     or message.metadata is None
-                    or message.metadata[keys.OBS_TIME_NS] in retained
+                    or message.metadata[OBS_TIME_NS] in retained
                 ):
                     continue
                 (part,) = message.parts
@@ -306,21 +277,26 @@ class LLMPolicy(Policy):
                 ]
                 self._messages[index] = replace(message, parts=[replace(part, content=content)], metadata=None)
 
-        @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
-        def _request(self) -> ModelResponse:
+        def _request_messages(self) -> list[ModelMessage]:
             assert self._obs is not None
             if self._pictures:
                 self._messages.append(self._obs.frames(self._pictures, self._policy.image_size))
                 self._pictures = []
                 self._prune_images()
-            return self._policy.endpoint.request(list(self._messages), self._policy._tools)
+            self._calls += 1
+            self._transcript.append({
+                'event': 'request',
+                'call': self._calls,
+                'cameras': sorted(self._revealed),
+                OBS_TIME_NS: self._obs.time_ns,
+            })
+            return list(self._messages)
 
         def _accept(
             self, call: ToolCallPart, data: MoveTo | Finish, obs: Mapping[str, Any], time_ns: int
         ) -> list[dict]:
             self._obs = None
             if isinstance(data, Finish):
-                self._stop_reason, self._hindsight = call.tool_name, data.hindsight
                 self._messages.append(
                     ModelRequest([
                         ToolReturnPart(call.tool_name, 'No further actions.', tool_call_id=call.tool_call_id)
@@ -330,7 +306,7 @@ class LLMPolicy(Policy):
                     'event': 'accepted',
                     'call': self._calls,
                     'time_ns': time_ns,
-                    'stop_reason': self._stop_reason,
+                    'stop_reason': call.tool_name,
                 })
                 return []
             start = _Observation.measured_pose(obs)
@@ -338,7 +314,7 @@ class LLMPolicy(Policy):
             result = {
                 'target': self._target.model_dump(),
                 'clamped': self._target != data,
-                'duration_s': trajectory[-1][keys.ACTION_TIMESTAMP],
+                'duration_s': (len(trajectory) + 1) / self._policy.motion.fps,
                 'feedback': 'Target scheduled. Check the next measured observation for actual arrival.',
             }
             self._messages.append(
@@ -346,40 +322,6 @@ class LLMPolicy(Policy):
             )
             self._transcript.append({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
             return trajectory
-
-        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict] | None:
-            if self._stop_reason is not None:
-                return []
-            if self._answer is not None:
-                if not self._answer.done():
-                    return None
-                answer, self._answer = self._answer, None
-                decision = self._respond(answer.result())
-                if decision is not None:
-                    call, data = decision
-                    return self._accept(call, data, obs, time_ns)
-            if self._calls >= self._policy.max_calls:
-                self._stop_reason = 'call_budget'
-                self._transcript.append({'event': 'budget_exhausted', 'calls': self._calls})
-                self._transcript.append({
-                    'event': 'accepted',
-                    'call': self._calls,
-                    'time_ns': time_ns,
-                    'stop_reason': self._stop_reason,
-                })
-                return []
-            if self._obs is None:
-                self._observe(obs)
-            assert self._obs is not None
-            self._calls += 1
-            self._transcript.append({
-                'event': 'request',
-                'call': self._calls,
-                'cameras': sorted(self._revealed),
-                keys.OBS_TIME_NS: self._obs.time_ns,
-            })
-            self._answer = self._rt.fns[LLMPolicy._REQUEST](self)
-            return None
 
     def __init__(
         self,
@@ -408,14 +350,68 @@ class LLMPolicy(Policy):
             if tool is not Tool.TAKE_PIC or images is Images.ON_DEMAND
         ]
 
-    @property
-    def functions(self):
-        return {self._REQUEST: LLMPolicy._Session._request}
+    def meta(self) -> dict[str, Any]:
+        meta = {
+            policy_keys.TYPE: 'llm',
+            'model': self.endpoint.model.model_id,
+            'settings': dict(self.endpoint.settings),
+            'motion': asdict(self.motion),
+            'max_calls': self.max_calls,
+            'max_invalid': self.max_invalid,
+            'timeout': self.endpoint.timeout,
+            'images': self.images.value,
+            'camera_keys': list(self.camera_keys),
+            'image_size': self.image_size,
+            'image_horizon': self.image_horizon,
+        }
+        if self.endpoint.model.base_url is not None:
+            meta['base_url'] = self.endpoint.model.base_url
+        return meta
 
-    def new_session(self, context=None, rt=None):
-        if rt is None:
-            raise ValueError('An LLM session needs a runtime; pass rt to new_session')
-        return self._Session(self, rt)
+    def run(self, runtime: Runtime) -> PolicyRun:
+        conversation = self._Conversation(self)
+        runtime.metadata['transcript'] = conversation._transcript
+        obs = yield
+        while True:
+            if conversation._calls >= self.max_calls:
+                runtime.metadata['stop_reason'] = 'call_budget'
+                conversation._transcript.extend([
+                    {'event': 'budget_exhausted', 'calls': conversation._calls},
+                    {
+                        'event': 'accepted',
+                        'call': conversation._calls,
+                        'time_ns': runtime.time_ns,
+                        'stop_reason': 'call_budget',
+                    },
+                ])
+                break
+            if conversation._obs is None:
+                conversation._observe(obs, runtime.time_ns)
+            messages = conversation._request_messages()
+            answer = runtime.submit(self.endpoint.request, messages, self._tools)
+            obs = yield Step({}, runtime.time_ns)
+            while not answer.done():
+                obs = yield Step({}, runtime.time_ns)
+            decision = conversation._respond(answer.result())
+            if decision is None:
+                continue
+            call, data = decision
+            chunk = conversation._accept(call, data, obs, runtime.time_ns)
+            if isinstance(data, Finish):
+                runtime.metadata.update(stop_reason=call.tool_name, hindsight=data.hindsight)
+                break
+            started_ns, index = runtime.time_ns, 0
+            end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
+            while index < len(chunk) or runtime.time_ns < end_ns:
+                due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
+                commands = {}
+                while index < len(chunk) and runtime.time_ns >= due_ns:
+                    commands.update(chunk[index])
+                    index += 1
+                    due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
+                obs = yield Step(commands, due_ns)
+        while True:
+            yield Step({}, runtime.time_ns + 1_000_000_000)
 
 
 @cfn.config(
@@ -452,4 +448,4 @@ def llm(
         max_calls=max_calls,
         max_invalid=max_invalid,
     )
-    return (StopOnFault() | ChunkedSchedule()).wrap(policy)
+    return Sequential(PauseOnUnavailable(), policy)

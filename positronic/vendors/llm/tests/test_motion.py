@@ -18,19 +18,18 @@ def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
     bounded, trajectory = motion.trajectory(start, target)
     assert bounded == target
     previous, previous_time = start, 0
-    for action in trajectory[:-1]:
+    for index, action in enumerate(trajectory, 1):
         pose = action[keys.ROBOT_COMMAND].pose
-        dt = action[keys.ACTION_TIMESTAMP] - previous_time
+        dt = (index / motion.fps) - previous_time
         assert 0 < dt <= 1 / motion.fps + 1e-9
         assert np.linalg.norm(pose.translation - previous.translation) <= motion.linear_speed * dt + 1e-9
         rotation = Rotation.from_matrix(pose.rotation.as_rotation_matrix @ previous.rotation.as_rotation_matrix.T)
         assert rotation.magnitude() <= motion.angular_speed * dt + 1e-9
         assert action[keys.TARGET_GRIP] == 0.7
-        previous, previous_time = pose, action[keys.ACTION_TIMESTAMP]
+        previous, previous_time = pose, (index / motion.fps)
     np.testing.assert_allclose(previous.translation, target.pose.translation)
     np.testing.assert_allclose(previous.rotation.as_rotation_matrix, target.pose.rotation.as_rotation_matrix, atol=1e-8)
     assert previous_time == pytest.approx(1.0)
-    assert trajectory[-1] == {keys.ACTION_TIMESTAMP: pytest.approx(previous_time + 1 / motion.fps)}
 
 
 @pytest.mark.parametrize(
@@ -53,14 +52,14 @@ def test_translation_clamps_distance_preserving_direction(offset):
     if distance < motion.max_translation:
         assert bounded == target
     previous, previous_time = start, 0
-    for action in trajectory[:-1]:
+    for index, action in enumerate(trajectory, 1):
         pose = action[keys.ROBOT_COMMAND].pose
-        dt = action[keys.ACTION_TIMESTAMP] - previous_time
+        dt = (index / motion.fps) - previous_time
         assert np.linalg.norm(pose.translation - start.translation) <= motion.max_translation + 1e-9
         assert np.linalg.norm(pose.translation - previous.translation) <= motion.linear_speed * dt + 1e-9
         np.testing.assert_allclose(pose.rotation.as_rotation_matrix, start.rotation.as_rotation_matrix)
         assert action[keys.TARGET_GRIP] == target.gripper
-        previous, previous_time = pose, action[keys.ACTION_TIMESTAMP]
+        previous, previous_time = pose, (index / motion.fps)
     np.testing.assert_allclose(previous.translation, bounded.pose.translation)
 
 
@@ -81,12 +80,12 @@ def test_rotation_clamps_shortest_arc_independently_of_translation(quaternion_si
     np.testing.assert_allclose(bounded.pose.rotation.as_rotation_matrix, expected.as_matrix(), atol=1e-9)
     assert bounded.x == pytest.approx(motion.max_translation)
     previous, previous_time = initial, 0
-    for action in trajectory[:-1]:
+    for index, action in enumerate(trajectory, 1):
         rotation = Rotation.from_matrix(action[keys.ROBOT_COMMAND].pose.rotation.as_rotation_matrix)
-        dt = action[keys.ACTION_TIMESTAMP] - previous_time
+        dt = (index / motion.fps) - previous_time
         assert (initial.inv() * rotation).magnitude() <= motion.max_rotation + 1e-9
         assert (previous.inv() * rotation).magnitude() <= motion.angular_speed * dt + 1e-9
-        previous, previous_time = rotation, action[keys.ACTION_TIMESTAMP]
+        previous, previous_time = rotation, (index / motion.fps)
     np.testing.assert_allclose(previous.as_matrix(), expected.as_matrix(), atol=1e-9)
 
 
@@ -117,4 +116,4 @@ def test_motion_can_expire_at_duration_bound(fps, max_translation):
     start = geom.Transform3D([0, 0, 0])
     target = MoveTo(x=max_translation, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0, note='approach')
     _, trajectory = motion.trajectory(start, target)
-    assert trajectory[-1] == {keys.ACTION_TIMESTAMP: pytest.approx(10)}
+    assert (len(trajectory) + 1) / motion.fps == pytest.approx(10)
