@@ -5,7 +5,7 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.park import ParkTuning
+from positronic.drivers.roboarm.settle import SettleTuning
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -74,6 +74,10 @@ def yam(robot_arm, cameras):
         'left': positronic.cfg.hardware.roboarm.yam_park_tuning,
         'right': positronic.cfg.hardware.roboarm.yam_park_tuning,
     },
+    move_tuning={
+        'left': positronic.cfg.hardware.roboarm.yam_move_tuning,
+        'right': positronic.cfg.hardware.roboarm.yam_move_tuning,
+    },
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
@@ -89,7 +93,8 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     cameras,
     park_after_idle_s: float | None,
-    park_tuning: dict[str, ParkTuning],
+    park_tuning: dict[str, SettleTuning],
+    move_tuning: dict[str, SettleTuning],
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -108,6 +113,7 @@ def yam_bimanual(
             base_pose=geom.Transform3D(mounts[side]),
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
+            move_tuning=move_tuning[side],
         )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
