@@ -98,7 +98,7 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         run.close()
 
 
-def test_temporal_stack_builds_a_stack_only_for_a_sent_request(execution, monkeypatch):
+def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, monkeypatch):
     runtime, clock = execution
     requests = []
     monkeypatch.setattr(runtime, 'submit', lambda function, obs: requests.append(obs) or _UnchargedAnswer(Future()))
