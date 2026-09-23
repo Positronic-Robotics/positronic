@@ -25,9 +25,10 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Endpoint, EvalPlan, HostPortAddress, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
@@ -184,7 +185,9 @@ def test_create_submission_sends_the_run_defining_fields():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
     client = make_client(gateway)
 
-    response = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
+    response = client.create_submission(
+        plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke'), Wire.websocket)
+    )
 
     assert isinstance(response, SubmissionCreateResponse)
     assert response.submission_id == 0x1F
@@ -225,7 +228,9 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'errored', 'reason_code': 'image_unpullable'})
-    response = make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
+    response = make_client(gateway).create_submission(
+        plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke'), Wire.websocket)
+    )
     assert response.status is SubmissionStatus.errored
     assert response.reason_code is ReasonCode.image_unpullable
 
@@ -308,7 +313,9 @@ def test_a_numeric_id_is_refused_at_the_boundary():
     # The wire contract is hex text. Decoding the body first would have taken the number.
     gateway = Gateway(200, {'submission_id': 31, 'status': 'pending'})
     with pytest.raises(ValidationError):
-        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
+        make_client(gateway).create_submission(
+            plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke'), Wire.websocket)
+        )
 
 
 def test_cancel_submission_posts_the_id():
@@ -395,7 +402,9 @@ def test_an_error_envelope_becomes_the_typed_exception():
         },
     )
     with pytest.raises(PlatformError) as raised:
-        make_client(gateway).create_submission(plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke')))
+        make_client(gateway).create_submission(
+            plan_of_image(PolicyImage('nope'), EvalRef('fake.smoke'), Wire.websocket)
+        )
 
     assert raised.value.code is ErrorCode.bad_request
     assert raised.value.reason_code is ReasonCode.image_unpullable
@@ -523,7 +532,9 @@ def test_an_unknown_eval_comes_back_carrying_the_ones_on_offer():
         },
     )
     with pytest.raises(PlatformError) as caught:
-        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smokey')))
+        make_client(gateway).create_submission(
+            plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smokey'), Wire.websocket)
+        )
     assert caught.value.evals == ['fake.smoke', 'robolab.public_subset']
 
 
@@ -583,7 +594,13 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 
 PLAN = EvalPlan(
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
-    endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
+    endpoints=[
+        Endpoint(
+            name='baseline',
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session'),
+        )
+    ],
     episodes_per_endpoint=10,
 )
 
@@ -609,7 +626,8 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
     assert body['endpoints'][0] == {
         'name': 'baseline',
         'kind': 'remote',
-        'url': 'wss://baseline.example/ws',
+        'wire': 'websocket_tls',
+        'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': ''},
         'provider': None,
         'spec': None,
         'image': None,

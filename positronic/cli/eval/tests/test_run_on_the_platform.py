@@ -14,7 +14,9 @@ from positronic.cli.eval.run import run
 def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, capsys):
     platform.answer({'submission_id': ID, 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
 
-    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+    created = run_command(
+        run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket', transaction_key='retry-1'
+    )
 
     # Returned as well as printed, so a caller holding the function has the id without scraping stdout.
     assert created.submission_id == SubmissionId.parse(ID)
@@ -23,8 +25,8 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     # A policy image is one endpoint of a plan, and the eval names the tasks the catalogue expands.
     body = platform.body
     assert body['eval'] == 'fake.smoke' and body['tasks'] == []
-    assert [(entry['name'], entry['kind'], entry['image']) for entry in body['endpoints']] == [
-        ('policy', 'image', 'org/p:v1')
+    assert [(entry['name'], entry['kind'], entry['wire'], entry['image']) for entry in body['endpoints']] == [
+        ('policy', 'image', 'websocket', 'org/p:v1')
     ]
     assert body['alias'] is None and body['transaction_key'] == 'retry-1'
     out = capsys.readouterr().out
@@ -38,7 +40,7 @@ def test_an_eval_is_a_name_beside_a_file_of_that_name(platform, run_command, tmp
     (tmp_path / 'fake.smoke').write_text('tasks: []\n')
     monkeypatch.chdir(tmp_path)
 
-    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket')
 
     assert platform.body['eval'] == 'fake.smoke'
 
@@ -48,7 +50,7 @@ def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, 
     platform.answer({'submission_id': ID, 'status': 'errored', 'reason_code': 'image_unpullable'})
 
     with pytest.raises(SystemExit, match='rejected: image_unpullable'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket')
 
     assert f'submission {ID} (errored)' in capsys.readouterr().out
 
@@ -59,14 +61,14 @@ def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_comm
     platform.answer({'submission_id': ID, 'status': 'cancelled'})
 
     with pytest.raises(SystemExit, match='rejected: cancelled'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket', transaction_key='retry-1')
 
 
 def test_a_replay_of_a_finished_submission_succeeds(platform, run_command, capsys):
     # The boundary of the rule above: terminal is not the test, a missing result is.
     platform.answer({'submission_id': ID, 'status': 'finished'})
 
-    run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket', transaction_key='retry-1')
 
     assert f'submission {ID} (finished)' in capsys.readouterr().out
 
@@ -85,7 +87,7 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
     )
 
     with pytest.raises(SystemExit) as exit_info:
-        run_command(run, eval='fake.smokey', policy_image='org/p:v1')
+        run_command(run, eval='fake.smokey', policy_image='org/p:v1', policy_wire='websocket')
 
     assert 'evals on offer: fake.smoke, robolab.public_subset' in str(exit_info.value)
 
@@ -96,8 +98,9 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
         ({'policy_image': 'org/policy@'}, 'org/policy@'),
         ({'eval': 'fake smoke'}, 'fake smoke'),
         ({'transaction_key': ''}, 'transaction_key'),
+        ({'policy_wire': 'wss'}, "'websocket', 'websocket_tls'"),
     ],
-    ids=['image', 'eval', 'transaction-key'],
+    ids=['image', 'eval', 'transaction-key', 'wire'],
 )
 def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_traceback(
     platform, run_command, typo: dict, named: str
@@ -105,7 +108,7 @@ def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_trac
     # These are refused in the caller's own process, before anything is sent, so the user learns
     # which value they typed wrong instead of reading a stack trace out of a constructor.
     with pytest.raises(SystemExit) as exit_info:
-        run_command(run, **{'eval': 'fake.smoke', 'policy_image': 'org/p:v1', **typo})
+        run_command(run, **{'eval': 'fake.smoke', 'policy_image': 'org/p:v1', 'policy_wire': 'websocket', **typo})
     assert named in str(exit_info.value)
     assert platform.seen is None
 
@@ -137,16 +140,13 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     # The platform owns its own trial sweep, output and telemetry, so silently dropping these would
     # hand back a run the caller believes they configured.
     with pytest.raises(SystemExit, match='a platform run has no'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **local_only)
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket', **local_only)
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('stated_off', [{'episodes': False}, {'cap': False}])
-def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, stated_off: dict):
-    # The command line literal-evaluates its values, so `--episodes=False` reaches the run as
-    # `False`. It is a value asked for, like `--episodes=0`, and a platform run has no such flag.
-    with pytest.raises(SystemExit, match='a platform run has no'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **stated_off)
+def test_a_platform_run_names_the_wire_the_image_serves(platform, run_command):
+    with pytest.raises(SystemExit, match='names no wire: pass --policy-wire, one of websocket, websocket_tls'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1')
     assert platform.seen is None
 
 
@@ -156,14 +156,14 @@ def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(plat
     # for what the platform already does, so it refuses neither.
     platform.answer({'submission_id': ID, 'status': 'pending'})
 
-    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **already_so)
+    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_wire='websocket', **already_so)
 
     assert created.submission_id == SubmissionId.parse(ID)
 
 
 def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):
     platform.answer({'submission_id': ID, 'status': 'pending'})
-    argv = ['positronic', 'eval', 'run', '--eval=fake.smoke', '--policy-image=org/p:v1']
+    argv = ['positronic', 'eval', 'run', '--eval=fake.smoke', '--policy-image=org/p:v1', '--policy-wire=websocket']
     monkeypatch.setattr(sys, 'argv', argv)
 
     cfn.cli({'eval': {'run': run}})

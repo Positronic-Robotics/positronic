@@ -17,20 +17,21 @@ The same flow, with no Python of your own:
 platform-register --alias=<display name>            # in a checkout: uv run platform-register
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
-uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
+uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:… --policy-wire=websocket
 uv run positronic eval status --id=<hex id>
 ```
 
 `eval run` is the same command that runs an eval on the machine in front of you. A policy image in
-place of a policy sends it to the platform, and a policy URL files a plan for the lab rig:
+place of a policy sends it to the platform, and a plan file files a plan for the lab rig:
 
 ```bash
 uv run positronic eval catalog
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
+uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
 ```
 
-Two or more `--policy-url` make one blind sample: the operator is told no policy, and each episode
-records which one served it. `--from-file` takes the whole plan as a YAML or JSON file.
+Two or more endpoints in the plan make one blind sample: the operator is told no policy, and each
+episode records which one served it. The plan is a YAML or JSON file, and each endpoint in it names
+its wire and that wire's address, as the [client README](../../../client/README.md) sets out.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list. Read the names
@@ -46,12 +47,13 @@ a name the platform does not offer answers with every eval on offer, with a boar
 ## From Python
 
 ```bash
-uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
+uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference> --policy-wire=websocket
 ```
 
 `--eval` takes one of the evals `standings.py` prints; with no `--eval`, the walkthrough prints them
 and stops. `--policy-image` names an image the platform can pull; there is no public one to default
-to. [Submit a policy image](../../../docs/submit-a-policy-image.md) says what the platform requires
+to. `--policy-wire` names the wire the image serves, and an image built to the platform's contract
+serves `websocket`. [Submit a policy image](../../../docs/submit-a-policy-image.md) says what the platform requires
 of an image and how to build one from a `positro/<vendor>` base. The key comes from `POSITRONIC_PLATFORM_API_KEY`, which `platform-register` prints. A caller who
 holds a GitHub token the platform's OAuth app minted sets `POSITRONIC_PLATFORM_CREDENTIAL` instead,
 and the walkthrough registers with it. Every script talks to `https://platform.positronic.ro` unless

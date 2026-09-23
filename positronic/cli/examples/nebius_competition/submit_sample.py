@@ -1,7 +1,7 @@
 """Submit a sample policy to one eval and print what it scored.
 
     uv run positronic/cli/examples/nebius_competition/submit_sample.py \
-        --eval=<name> --policy-image=<registry>/<you>/policy@sha256:...
+        --eval=<name> --policy-image=<registry>/<you>/policy@sha256:... --policy-wire=websocket
 
 The platform owns the list of evals. `standings.py` prints the public leaderboards and the eval
 each one ranks; a submission with a name the platform does not offer is refused, and the refusal
@@ -14,7 +14,7 @@ history and in every process listing on the box.
 Assumes a key you already hold; `../walkthrough.py` covers registration. Re-running with the same
 `--transaction-key` returns the original submission rather than spending quota twice.
 
-The command-line equivalent is `positronic eval run --eval=<name> --policy-image=...`, then
+The command-line equivalent is `positronic eval run --eval=<name> --policy-image=... --policy-wire=...`, then
 `positronic eval status --id=...`.
 """
 
@@ -25,13 +25,14 @@ import os
 import time
 
 from platform_client.client import API_KEY_ENV, PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode, Wire
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import EvalPlan, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
+from platform_client.slug import members_by_slug
 
 
 def submit(client: PlatformClient, plan: EvalPlan) -> SubmissionCreateResponse:
@@ -60,6 +61,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
     parser.add_argument('--eval', required=True, help='the eval to run; `standings.py` lists the ones with a board')
     parser.add_argument('--policy-image', required=True, help='a digest-pinned reference the platform can pull')
+    parser.add_argument(
+        '--policy-wire', required=True, choices=list(members_by_slug(Wire)), help='the wire the image serves'
+    )
     parser.add_argument('--alias', default=None, help='a per-submission label; the board shows your user alias')
     parser.add_argument('--transaction-key', default=None, help='reuse it to retry without a second charge')
     parser.add_argument('--timeout', type=float, default=3600.0, help='seconds to wait for a terminal status')
@@ -75,7 +79,11 @@ def main(argv: list[str] | None = None) -> None:
         transaction_key = TransactionKey(args.transaction_key) if args.transaction_key is not None else None
         # The eval names the embodiment it runs on, so it is the whole of what a submission chooses.
         plan = plan_of_image(
-            PolicyImage(args.policy_image), EvalRef(args.eval), alias=args.alias, transaction_key=transaction_key
+            PolicyImage(args.policy_image),
+            EvalRef(args.eval),
+            members_by_slug(Wire)[args.policy_wire],
+            alias=args.alias,
+            transaction_key=transaction_key,
         )
         client = PlatformClient(args.platform_url, api_key=ApiKey(key))
     except ValueError as exc:

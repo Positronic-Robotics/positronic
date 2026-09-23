@@ -6,16 +6,16 @@ Unknown fields are rejected, so a misspelled field is a 422.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Self
+from pathlib import Path
+from typing import Annotated, Self
 
-import httpx
-from platform_client.enums import CameraVantage, EndpointKind, Placement
+from platform_client.enums import CameraVantage, EndpointKind, Placement, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.policy_images import PolicyImage
-from platform_client.slug import Slugged
+from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
 
@@ -68,35 +68,115 @@ class Cascade(BaseModel):
     clutter: Clutter | None = None
 
 
-def _absolute_url(url: str, whose: str) -> None:
-    """Refuse an address that is not absolute. `httpx.InvalidURL` is not a `ValueError`, so this
-    converts it to one for the model to report."""
-    try:
-        absolute = httpx.URL(url).is_absolute_url
-    except httpx.InvalidURL as e:
-        raise ValueError(f'endpoint {whose!r} names {url!r}, which is not a URL: {e}') from e
-    if not absolute:
-        # The platform judges the scheme; this refuses only an address with no host.
-        raise ValueError(f'endpoint {whose!r} names {url!r}, which has no host: give an absolute URL')
+def _a_bare_host(host: str) -> str:
+    if '/' in host:
+        raise ValueError(f'host {host!r} carries a scheme or a path: write the host alone, and name the wire in `wire`')
+    return host
+
+
+def _a_session_path(path: str) -> str:
+    if not path.startswith('/') or '?' in path or '#' in path:
+        raise ValueError(f'path {path!r} is no session route: write the route alone, from its leading `/`')
+    return path
+
+
+def _a_bare_query(query: str) -> str:
+    if query.startswith('?'):
+        raise ValueError(f'query {query!r} starts with `?`: write the params alone')
+    return query
+
+
+def _an_absolute_path(uds: Path) -> Path:
+    # A relative path is resolved against the directory each process was started from.
+    if not uds.is_absolute():
+        raise ValueError(f'uds {str(uds)!r} is a relative socket path; name an absolute one')
+    return uds
+
+
+Host = Annotated[str, Field(min_length=1), AfterValidator(_a_bare_host)]
+Port = Annotated[int, Field(ge=1, le=65535)]
+# `session_path(model)` in `positronic_wire.wire`: the route a session on one model opens on.
+SessionPath = Annotated[str, AfterValidator(_a_session_path)]
+# The session params as written: the server reads each value as a JSON literal.
+SessionQuery = Annotated[str, AfterValidator(_a_bare_query)]
+SocketPath = Annotated[Path, AfterValidator(_an_absolute_path)]
+
+
+class HostPortAddress(BaseModel):
+    """A session on a server reached over the network."""
+
+    model_config = _FORBID_EXTRA
+
+    host: Host
+    port: Port
+    path: SessionPath
+    query: SessionQuery = ''
+
+
+class UnixSocketAddress(BaseModel):
+    """A session on a server on the same machine, opened on the socket it bound."""
+
+    model_config = _FORBID_EXTRA
+
+    uds: SocketPath
+    path: SessionPath
+    query: SessionQuery = ''
+
+
+class RoboarenaAddress(BaseModel):
+    """A session on a roboarena server, at the root of the port the partner published."""
+
+    model_config = _FORBID_EXTRA
+
+    host: Host
+    port: Port
+
+
+EndpointAddress = HostPortAddress | UnixSocketAddress | RoboarenaAddress
+
+# The fields each wire dials: `ClientWire.ADDRESS` of the wire the registry names.
+ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
+    Wire.websocket: HostPortAddress,
+    Wire.websocket_tls: HostPortAddress,
+    Wire.websocket_unix: UnixSocketAddress,
+    Wire.grpc: HostPortAddress,
+    Wire.grpc_tls: HostPortAddress,
+    Wire.roboarena: RoboarenaAddress,
+}
+
+
+def _address_fields_of_every_wire() -> str:
+    return '; '.join(f'{slug_of(wire)}: {", ".join(address.model_fields)}' for wire, address in ADDRESS_OF_WIRE.items())
 
 
 # A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
-_ENDPOINT_MAY_STATE = frozenset({'name', 'kind', 'url', 'provider', 'spec', 'image', 'episodes_per_endpoint'})
+_ENDPOINT_MAY_STATE = frozenset({
+    'name',
+    'kind',
+    'wire',
+    'address',
+    'provider',
+    'spec',
+    'image',
+    'episodes_per_endpoint',
+})
 
 
 class Endpoint(Cascade):
-    """One policy to run, and where it comes from.
+    """One policy to run, where it comes from, and the wire a session with it runs over.
 
-    A `remote` endpoint is an address the caller provides. A `served` endpoint names the checkpoint
-    it serves (`spec`) and has no `url`: the platform starts it and records the address. `provider`
-    names what starts it, and the platform derives one from `spec` when the entry names none. An
-    `image` endpoint names the container image the platform runs the policy from. An entry on a task
-    carrying no locator at all names one of the plan's endpoints.
+    A `remote` endpoint is a server the caller provides: `address` carries the fields its `wire`
+    dials. A `served` endpoint names the checkpoint it serves (`spec`) and carries no address: the
+    platform starts it and records one. `provider` names what starts it, and the platform derives one
+    from `spec` when the entry names none. An `image` endpoint names the container image the platform
+    runs the policy from. Every kind names its wire. An entry on a task carrying no locator at all
+    names one of the plan's endpoints.
     """
 
     name: str = Field(min_length=1)
     kind: Slugged[EndpointKind] = EndpointKind.remote
-    url: str | None = Field(default=None, min_length=1)
+    wire: Slugged[Wire] | None = None
+    address: EndpointAddress | None = None
     provider: str | None = Field(default=None, min_length=1)
     spec: str | None = Field(default=None, min_length=1)
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
@@ -106,23 +186,40 @@ class Endpoint(Cascade):
     @model_validator(mode='before')
     @classmethod
     def _accept_bare_label(cls, value: object) -> object:
-        return {'name': value} if isinstance(value, str) else value
+        if isinstance(value, str):
+            return {'name': value}
+        if isinstance(value, dict) and 'url' in value:
+            raise ValueError(
+                f"endpoint {value.get('name')!r} names a url; an endpoint names its `wire` and that wire's "
+                f'`address` fields instead ({_address_fields_of_every_wire()})'
+            )
+        return value
 
     @model_validator(mode='after')
     def _the_kind_carries_its_own_locator(self) -> Self:
-        if self.url is not None:
-            _absolute_url(self.url, self.name)
-        if self.kind is EndpointKind.served:
-            if self.url is not None:
+        if self.wire is None and self.names_a_locator:
+            raise ValueError(f'endpoint {self.name!r} names no wire; name one of {", ".join(members_by_slug(Wire))}')
+        if self.wire is not None and not self.names_a_locator:
+            raise ValueError(f'endpoint {self.name!r} names a wire and nothing that runs on it')
+        if self.wire is not None and self.address is not None:
+            dialled = ADDRESS_OF_WIRE[self.wire]
+            if not isinstance(self.address, dialled):
+                carried = ', '.join(type(self.address).model_fields)
                 raise ValueError(
-                    f'served endpoint {self.name!r} names a url; the platform records the address it serves at'
+                    f'endpoint {self.name!r} names the {slug_of(self.wire)} wire, which dials '
+                    f'{", ".join(dialled.model_fields)}; the address carries {carried}'
+                )
+        if self.kind is EndpointKind.served:
+            if self.address is not None:
+                raise ValueError(
+                    f'served endpoint {self.name!r} names an address; the platform records the address it serves at'
                 )
             if self.image is not None:
                 raise ValueError(f'served endpoint {self.name!r} names an image, which only an image endpoint carries')
         elif self.kind is EndpointKind.image:
-            if self.url is not None or self.provider is not None or self.spec is not None:
+            if self.address is not None or self.provider is not None or self.spec is not None:
                 raise ValueError(
-                    f'image endpoint {self.name!r} names a url, a provider or a spec; the platform runs the image'
+                    f'image endpoint {self.name!r} names an address, a provider or a spec; the platform runs the image'
                 )
         elif self.provider is not None or self.spec is not None or self.image is not None:
             raise ValueError(
@@ -150,9 +247,9 @@ class Endpoint(Cascade):
 
     @property
     def names_a_locator(self) -> bool:
-        """Whether this entry says where its policy comes from: a `url`, the `spec` a served one
-        names, or the `image` the platform runs."""
-        return self.url is not None or self.spec is not None or self.image is not None
+        """Whether this entry says where its policy comes from: the `address` a remote one dials, the
+        `spec` a served one names, or the `image` the platform runs."""
+        return self.address is not None or self.spec is not None or self.image is not None
 
 
 class TaskNode(Cascade):
@@ -233,8 +330,8 @@ class EvalPlan(Cascade):
         bare = sorted(entry.name for entry in self.endpoints if not entry.names_a_locator)
         if bare:
             raise ValueError(
-                f'the plan defines {", ".join(bare)} with no url and no spec: an endpoint of the plan states '
-                'where its policy comes from, and a bare label on a task names one'
+                f'the plan defines {", ".join(bare)} with no address, no spec and no image: an endpoint of the plan '
+                'states where its policy comes from, and a bare label on a task names one'
             )
         defined = {entry.name for entry in self.endpoints}
         for task in self.tasks:
@@ -329,16 +426,21 @@ IMAGE_ENDPOINT_NAME = 'policy'
 
 
 def plan_of_image(
-    image: PolicyImage, eval_name: EvalRef, *, alias: str | None = None, transaction_key: TransactionKey | None = None
+    image: PolicyImage,
+    eval_name: EvalRef,
+    wire: Wire,
+    *,
+    alias: str | None = None,
+    transaction_key: TransactionKey | None = None,
 ) -> EvalPlan:
-    """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
+    """The plan a policy image runs as: one image endpoint on ``wire``, and the eval naming the tasks.
 
     The catalogue expands the name into tasks and the count each takes, so such a plan states
     neither.
     """
     return EvalPlan(
         eval=eval_name,
-        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, image=image)],
+        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, wire=wire, image=image)],
         alias=alias,
         transaction_key=transaction_key,
     )

@@ -2,18 +2,42 @@
 
 from __future__ import annotations
 
+import dataclasses
+from pathlib import Path
+
 import pytest
-from platform_client.enums import EndpointKind, Placement
-from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.enums import EndpointKind, Placement, Wire
+from platform_client.eval_plan import (
+    _ENDPOINT_MAY_STATE,
+    ADDRESS_OF_WIRE,
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    RoboarenaAddress,
+    TaskNode,
+    UnixSocketAddress,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
+from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
+from positronic_wire import registry
 from pydantic import ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
-BASELINE = {'name': 'baseline', 'url': 'wss://baseline.example/ws'}
-CANDIDATE = {'name': 'candidate', 'url': 'wss://candidate.example/ws'}
+SESSION = '/api/v1/session'
+
+
+def remote(name: str, **over) -> dict:
+    """A remote entry on the websocket wire, at ``name``'s own host."""
+    address = {'host': f'{name}.example', 'port': 8000, 'path': SESSION}
+    return {'name': name, 'wire': 'websocket', 'address': address, **over}
+
+
+BASELINE = remote('baseline')
+CANDIDATE = remote('candidate')
 
 
 def a_plan(**over) -> EvalPlan:
@@ -79,18 +103,12 @@ def test_an_endpoint_overrides_only_its_count():
         a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
 
 
-def test_a_served_endpoint_names_its_spec_and_no_url():
-    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid'})
-    assert served.names_a_locator and served.provider is None
+def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
+    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid', 'wire': 'grpc'})
+    assert served.names_a_locator and served.provider is None and served.wire is Wire.grpc
     assert Endpoint.model_validate({'name': 'pi05', 'kind': 'served'}).names_a_locator is False
-    with pytest.raises(ValidationError, match='names a url'):
-        Endpoint.model_validate({
-            'name': 'pi05',
-            'kind': 'served',
-            'provider': 'cohost',
-            'spec': 's',
-            'url': 'wss://x/ws',
-        })
+    with pytest.raises(ValidationError, match='the platform records the address it serves at'):
+        Endpoint.model_validate({**remote('pi05'), 'kind': 'served', 'provider': 'cohost', 'spec': 's'})
 
 
 def test_an_endpoint_states_only_a_locator_and_its_own_count():
@@ -157,17 +175,10 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
             {
                 'task_id': 'b',
                 'episodes_per_endpoint': 5,
-                'endpoints': [
-                    'bare',
-                    {'name': 'two', 'url': 'wss://two.example/ws', 'episodes_per_endpoint': 2},
-                    {'name': 'five', 'url': 'wss://five.example/ws'},
-                ],
+                'endpoints': ['bare', remote('two', episodes_per_endpoint=2), remote('five')],
             },
         ],
-        endpoints=[
-            {'name': 'own', 'url': 'wss://own.example/ws', 'episodes_per_endpoint': 3},
-            {'name': 'bare', 'url': 'wss://bare.example/ws'},
-        ],
+        endpoints=[remote('own', episodes_per_endpoint=3), remote('bare')],
     )
     first, second = plan.tasks
     assert [plan.episodes_on(first, entry) for entry in plan.task_endpoints(first)] == [3, 10]
@@ -182,24 +193,28 @@ def test_a_remote_endpoint_names_no_bring_up():
     with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
         Endpoint(name='baseline', provider='droid_cohost')
     with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
-        Endpoint(name='baseline', image=PolicyImage('org/policy:v1'))
+        Endpoint(name='baseline', wire=Wire.websocket, image=PolicyImage('org/policy:v1'))
 
 
-def test_an_image_endpoint_names_the_image_and_nothing_else():
-    entry = Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/policy@sha256:abc'))
-    assert entry.names_a_locator and entry.url is None
+def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
+    entry = Endpoint(
+        name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')
+    )
+    assert entry.names_a_locator and entry.address is None
     with pytest.raises(ValidationError, match='the platform runs the image'):
-        Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/p:v1'), url='wss://h/ws')
+        Endpoint.model_validate({**BASELINE, 'kind': 'image', 'image': 'org/p:v1'})
     with pytest.raises(ValidationError, match='only an image endpoint carries'):
-        Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', image=PolicyImage('org/p:v1'))
+        Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, image=PolicyImage('org/p:v1'))
 
 
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
     # The catalogue expands the name into the tasks and the count each takes, so the plan states
     # neither.
-    plan = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), alias='demo')
+    plan = plan_of_image(
+        PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), Wire.websocket, alias='demo'
+    )
     assert plan.names_an_eval and not plan.tasks and plan.episodes_per_endpoint is None
-    assert [entry.image for entry in plan.endpoints] == ['org/policy@sha256:abc']
+    assert [(entry.image, entry.wire) for entry in plan.endpoints] == [('org/policy@sha256:abc', Wire.websocket)]
     assert plan.alias == 'demo'
     assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
 
@@ -211,22 +226,73 @@ def test_a_plan_takes_its_tasks_from_itself_or_from_an_eval_and_not_from_both():
         EvalPlan.model_validate({'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
 
 
-def test_an_endpoint_url_names_a_host():
-    """An address with no host reaches nothing. Without this check it counts as a locator, and the
-    platform refuses the plan only after it is filed."""
-    with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='baseline', url='/ws')
-    with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='baseline', url='baseline.example/ws')
-
-
 @pytest.mark.parametrize(
-    'url', ['wss://baseline.example/ws', 'https://baseline.example/ws', 'http://localhost:8080/ws']
+    ('wire', 'address', 'dialled'),
+    [
+        ('websocket_tls', {'host': 'h.example', 'port': 443, 'path': SESSION, 'query': 'mode=native'}, HostPortAddress),
+        ('grpc', {'host': '::1', 'port': 50051, 'path': f'{SESSION}/org/model'}, HostPortAddress),
+        ('websocket_unix', {'uds': '/run/policy.sock', 'path': SESSION}, UnixSocketAddress),
+        ('roboarena', {'host': 'h.example', 'port': 8000}, RoboarenaAddress),
+    ],
 )
-def test_an_absolute_endpoint_url_is_left_alone(url: str):
-    """The platform judges the scheme, and it dials wss:// and https:// alike, so the client refuses
-    only an address with no host."""
-    assert Endpoint(name='baseline', url=url).url == url
+def test_a_remote_endpoint_names_its_wire_then_the_fields_that_wire_dials(wire: str, address: dict, dialled: type):
+    entry = Endpoint.model_validate({'name': 'baseline', 'wire': wire, 'address': address})
+    assert type(entry.address) is dialled
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+
+
+def test_a_url_is_refused_with_the_fields_to_write_instead():
+    with pytest.raises(
+        ValidationError, match=r'names a url.*websocket: host, port, path, query.*roboarena: host, port'
+    ):
+        Endpoint.model_validate({'name': 'baseline', 'url': 'wss://baseline.example/ws'})
+    with pytest.raises(ValidationError, match='carries a scheme or a path'):
+        Endpoint.model_validate(remote('baseline') | {'address': {**BASELINE['address'], 'host': 'wss://h.example'}})
+    with pytest.raises(ValidationError, match='is no session route'):
+        Endpoint.model_validate(remote('baseline') | {'address': {**BASELINE['address'], 'path': 'wss://h/ws'}})
+
+
+def test_an_address_carries_the_fields_its_wire_dials_and_no_other():
+    with pytest.raises(
+        ValidationError, match='roboarena wire, which dials host, port; the address carries host, port, path'
+    ):
+        Endpoint.model_validate(remote('baseline', wire='roboarena'))
+    with pytest.raises(
+        ValidationError, match='grpc wire, which dials host, port, path, query; the address carries host, port'
+    ):
+        Endpoint.model_validate({'name': 'baseline', 'wire': 'grpc', 'address': {'host': 'h', 'port': 1}})
+    with pytest.raises(ValidationError, match='which dials host, port, path, query; the address carries uds'):
+        Endpoint(name='baseline', wire=Wire.grpc, address=UnixSocketAddress(uds=Path('/run/p.sock'), path=SESSION))
+
+
+def test_an_endpoint_that_runs_a_policy_names_its_wire():
+    with pytest.raises(ValidationError, match='names no wire; name one of websocket, websocket_tls'):
+        Endpoint.model_validate({'name': 'baseline', 'address': BASELINE['address']})
+    with pytest.raises(ValidationError, match='names no wire'):
+        Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid'})
+    with pytest.raises(ValidationError, match='names no wire'):
+        Endpoint.model_validate(IMAGE_ENDPOINT[0] | {'wire': None})
+    with pytest.raises(ValidationError, match='names a wire and nothing that runs on it'):
+        Endpoint.model_validate({'name': 'baseline', 'wire': 'grpc'})
+
+
+def test_a_socket_path_is_absolute():
+    with pytest.raises(ValidationError, match='relative socket path'):
+        Endpoint.model_validate({
+            'name': 'baseline',
+            'wire': 'websocket_unix',
+            'address': {'uds': 'policy.sock', 'path': SESSION},
+        })
+
+
+def test_each_wire_dials_the_fields_its_registry_member_declares():
+    # A field the platform client carries and the wire does not is one a caller writes and no dial reads.
+    declared = {}
+    for name, member in registry.CLIENT_WIRES.items():
+        assert dataclasses.is_dataclass(member.ADDRESS)
+        declared[name] = [field.name for field in dataclasses.fields(member.ADDRESS)]
+    carried = {slug_of(wire): list(address.model_fields) for wire, address in ADDRESS_OF_WIRE.items()}
+    assert carried == declared
 
 
 @pytest.mark.parametrize('entry', [{'name': 'bare'}, {'name': 'bare', 'kind': 'served'}])
@@ -237,7 +303,7 @@ def test_a_plan_endpoint_states_where_its_policy_comes_from(entry: dict):
 
 def test_an_endpoint_says_whether_it_names_a_locator():
     assert Endpoint(name='baseline').names_a_locator is False
-    assert Endpoint(name='baseline', url='wss://x/ws').names_a_locator is True
+    assert Endpoint.model_validate(BASELINE).names_a_locator is True
 
 
 def test_a_plan_names_each_endpoint_once():
@@ -261,7 +327,7 @@ def test_a_task_endpoint_naming_no_locator_names_one_the_plan_defines():
     with pytest.raises(ValidationError, match='name no endpoint the plan defines'):
         a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['elsewhere']}])
     # An entry that carries its own address needs no definition.
-    a_plan(endpoints=[], tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'elsewhere', 'url': 'wss://x/ws'}]}])
+    a_plan(endpoints=[], tasks=[{'task_id': SPOONS, 'endpoints': [remote('elsewhere')]}])
 
 
 def test_every_task_runs_on_at_least_one_endpoint():
@@ -271,7 +337,7 @@ def test_every_task_runs_on_at_least_one_endpoint():
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': []})
 
 
-IMAGE_ENDPOINT = [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}]
+IMAGE_ENDPOINT = [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}]
 
 
 def test_a_plan_naming_an_eval_states_the_policy_that_runs_it():
@@ -314,8 +380,3 @@ def test_a_count_below_one_is_refused_at_every_level():
 def test_a_clutter_draw_needs_a_range():
     with pytest.raises(ValidationError, match='which is no range'):
         a_plan(clutter={'count_min': 8, 'count_max': 4})
-
-
-def test_a_malformed_url_is_a_validation_error():
-    with pytest.raises(ValidationError, match='is not a URL'):
-        Endpoint.model_validate({'name': 'bad', 'url': 'http://host:bad'})

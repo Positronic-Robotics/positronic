@@ -21,19 +21,29 @@ def submit_sample() -> dict[str, Any]:
 def test_an_empty_eval_name_is_a_cli_error_before_any_request(submit_sample: dict[str, Any], monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
     with pytest.raises(SystemExit) as exit_info:
-        submit_sample['main'](['--eval=', '--policy-image=org/policy@sha256:abc'])
+        submit_sample['main'](['--eval=', '--policy-image=org/policy@sha256:abc', '--policy-wire=websocket'])
     assert str(exit_info.value) == "not an eval name: ''"
 
 
 def test_an_empty_transaction_key_is_a_cli_error_before_any_request(submit_sample: dict[str, Any], monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
     with pytest.raises(SystemExit) as exit_info:
-        submit_sample['main'](['--eval=a.eval', '--policy-image=org/policy@sha256:abc', '--transaction-key='])
+        submit_sample['main']([
+            '--eval=a.eval',
+            '--policy-image=org/policy@sha256:abc',
+            '--policy-wire=websocket',
+            '--transaction-key=',
+        ])
     assert 'transaction_key' in str(exit_info.value)
 
 
 def test_an_empty_platform_url_is_a_cli_error_before_any_request(submit_sample: dict[str, Any], monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
     with pytest.raises(SystemExit) as exit_info:
-        submit_sample['main'](['--eval=a.eval', '--policy-image=org/policy@sha256:abc', '--platform-url='])
+        submit_sample['main']([
+            '--eval=a.eval',
+            '--policy-image=org/policy@sha256:abc',
+            '--policy-wire=websocket',
+            '--platform-url=',
+        ])
     assert 'base_url is empty' in str(exit_info.value)

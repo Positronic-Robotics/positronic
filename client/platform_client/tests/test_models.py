@@ -18,9 +18,10 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, RoboarenaAddress, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
@@ -122,12 +123,23 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
-            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+            'endpoints': [
+                'baseline',
+                {
+                    'name': 'ours',
+                    'wire': 'grpc_tls',
+                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session/org/ours'},
+                },
+            ],
         },
     ],
     'endpoints': [
-        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
-        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
+        {
+            'name': 'baseline',
+            'wire': 'websocket_tls',
+            'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': 'mode=native'},
+        },
+        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05', 'wire': 'websocket_unix'},
     ],
     'episodes_per_endpoint': 10,
     'cap_per_episode_sec': 180,
@@ -139,7 +151,11 @@ ASK = EvalPlan.model_validate({
 })
 
 PLAN_OF_AN_IMAGE = plan_of_image(
-    PolicyImage('org/policy@sha256:abc'), EvalRef('fake.smoke'), alias='demo', transaction_key=TransactionKey('key-1')
+    PolicyImage('org/policy@sha256:abc'),
+    EvalRef('fake.smoke'),
+    Wire.websocket,
+    alias='demo',
+    transaction_key=TransactionKey('key-1'),
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
@@ -257,7 +273,7 @@ MODELS: list[BaseModel] = [
     ASK,
     EvalPlan(
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,
     ),
     SubmissionListQuery(after=SUB, limit=50),

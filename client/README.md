@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.8.4"
+uv add "positronic-platform-client==0.9.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -68,10 +68,13 @@ tasks:
     cap_per_episode_sec: 120
     endpoints: [candidate]                    # a list replaces the plan's list for this task
 endpoints:
-  - name: baseline
-    url: wss://baseline.example/ws
-  - name: candidate
-    url: wss://candidate.example/ws
+  - name: baseline                        # remote: the caller's own server
+    wire: websocket_tls                   # names the wire, then that wire's address
+    address: {host: baseline.example, port: 443, path: /api/v1/session, query: mode=native}
+  - name: candidate                       # served: the platform brings it up and records the address
+    kind: served
+    spec: dreamzero
+    wire: grpc
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -81,12 +84,20 @@ tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 ```
 
-`positronic eval run` files that plan with `submissions.create`. `--from-file` takes the plan
-file, and an `--eval` value is a name. The same flags state a plan
-without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
-`--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
-catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
-policy, and each episode records which one served it. `eval status` and `eval list` read it back by
+An endpoint says where its policy comes from and the wire a session with it runs over. `wire` is a
+name from `positronic_wire.registry`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`,
+`grpc_tls` or `roboarena`. A `remote` endpoint then carries the `address` that wire dials, and each
+wire declares its own fields: `host`, `port`, `path` and `query` on the websocket and gRPC wires;
+`uds`, `path` and `query` on `websocket_unix`; `host` and `port` on `roboarena`. `path` is the
+session route (`/api/v1/session`, or `/api/v1/session/<model>`), and `query` defaults to empty. A
+`served` endpoint names the `spec` the platform brings up, and the platform records the address. An
+`image` endpoint names the container the platform runs. Every kind names its wire, and there is no
+default. A record carries no URL: a `url` field is refused, and so is a scheme in `host`. The kinds
+refuse each other's fields, so an entry cannot carry two answers to the same question.
+
+`positronic eval run --from-file` files that plan with `submissions.create`. The file is YAML or
+JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
+told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
 it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
 tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
@@ -119,8 +130,9 @@ A plan states its own tasks and endpoints. A policy image run names a catalog ev
 [Submit a policy image](../docs/submit-a-policy-image.md) says what the platform requires of the
 image, and how to build, test and submit it.
 
-A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint and names
-the eval whose tasks it runs. `plan_of_image` builds that shape.
+A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint,
+`--policy-wire` names the wire the image serves, and `--eval` names the eval whose tasks it runs.
+`plan_of_image` builds that shape.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
@@ -135,7 +147,7 @@ definition.
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
 runs an eval here when given a policy, on the platform when given a policy image, and on the lab rig
-when given a policy URL. From zero, `platform-register` is the one path to a key: it runs GitHub's
+when given a plan file. From zero, `platform-register` is the one path to a key: it runs GitHub's
 device flow and prints the `export` line. In a checkout, run it through `uv run`. `account register`
 takes a GitHub token the platform's OAuth app minted, in `POSITRONIC_PLATFORM_CREDENTIAL`, and saves
 the key in the record the other commands read; a new user holds no such token.
@@ -144,8 +156,8 @@ the key in the record the other commands read; a new user holds no such token.
 platform-register --alias=<display name>            # in a checkout: uv run platform-register
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
-uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
+uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:… --policy-wire=websocket
+uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>
