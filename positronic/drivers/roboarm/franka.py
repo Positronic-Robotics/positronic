@@ -169,12 +169,20 @@ class _SafeInputs:
         return reading.sampled and not reading.triggered
 
     @staticmethod
-    def _triggered(name: str, reading: object) -> bool:
-        """Whether the safe input ``name`` is in a state that holds the driver back.
+    def _level(reading: object) -> _SafeInputLevel | None:
+        """The level Desk sent, or None where Desk sent a value that names no level."""
+        try:
+            return _SafeInputLevel(reading)
+        except ValueError:
+            return None
 
-        An input or a state this does not recognise counts as triggered: the driver cannot read it as clear.
+    @staticmethod
+    def _triggered(name: str, level: _SafeInputLevel | None) -> bool:
+        """Whether the safe input ``name`` is at a level that holds the driver back.
+
+        An input or a level this does not recognise counts as triggered: the driver cannot read it as clear.
         """
-        return str(reading) not in _SafeInputs._CLEAR_STATES.get(name, frozenset())
+        return level not in _SafeInputs._CLEAR_STATES.get(name, frozenset())
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
@@ -202,7 +210,7 @@ class _SafeInputs:
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
-        triggered = frozenset(name for name, reading in state.items() if self._triggered(name, reading))
+        triggered = frozenset(name for name, reading in state.items() if self._triggered(name, self._level(reading)))
         if triggered != was_triggered:
             if triggered:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')

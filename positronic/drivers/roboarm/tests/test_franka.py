@@ -845,11 +845,12 @@ def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
 
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
-    """A state or an input the driver does not recognise reads as triggered, never as clear."""
-    assert not franka._SafeInputs._triggered('x31', CLEAR)
-    assert franka._SafeInputs._triggered('x31', STOPPED)
-    assert franka._SafeInputs._triggered('x31', 'a state this control box has never sent')
-    assert franka._SafeInputs._triggered('x5', 'Inactive')
+    """A level or an input the driver does not recognise reads as triggered, never as clear."""
+    level = franka._SafeInputs._level
+    assert not franka._SafeInputs._triggered('x31', level(CLEAR))
+    assert franka._SafeInputs._triggered('x31', level(STOPPED))
+    assert franka._SafeInputs._triggered('x31', level('a state this control box has never sent'))
+    assert franka._SafeInputs._triggered('x5', level('Inactive'))
 
 
 def test_the_safe_inputs_of_an_arm_moving_under_a_policy_read_as_clear(desk):
