@@ -139,7 +139,6 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 uv run positronic eval catalog                          # the evals your key may name
 uv run positronic eval run --eval=<eval> \
     --policy-image=docker.io/<you>/<image>@sha256:<digest> \
-    --policy-wire=websocket \
     --transaction-key=<a name for this attempt>
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list

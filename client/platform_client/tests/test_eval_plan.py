@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,13 @@ from platform_client.eval_plan import (
     ADDRESS_OF_WIRE,
     Endpoint,
     EvalPlan,
+    Host,
     HostPortAddress,
+    Port,
     RoboarenaAddress,
+    SessionPath,
+    SessionQuery,
+    SocketPath,
     TaskNode,
     UnixSocketAddress,
     plan_of_image,
@@ -23,7 +29,7 @@ from platform_client.policy_images import PolicyImage
 from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
 from positronic_wire import registry
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
@@ -210,9 +216,7 @@ def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
     # The catalogue expands the name into the tasks and the count each takes, so the plan states
     # neither.
-    plan = plan_of_image(
-        PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), Wire.websocket, alias='demo'
-    )
+    plan = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), alias='demo')
     assert plan.names_an_eval and not plan.tasks and plan.episodes_per_endpoint is None
     assert [(entry.image, entry.wire) for entry in plan.endpoints] == [('org/policy@sha256:abc', Wire.websocket)]
     assert plan.alias == 'demo'
@@ -246,10 +250,6 @@ def test_a_url_is_refused_with_the_fields_to_write_instead():
         ValidationError, match=r'names a url.*websocket: host, port, path, query.*roboarena: host, port'
     ):
         Endpoint.model_validate({'name': 'baseline', 'url': 'wss://baseline.example/ws'})
-    with pytest.raises(ValidationError, match='carries a scheme or a path'):
-        Endpoint.model_validate(remote('baseline') | {'address': {**BASELINE['address'], 'host': 'wss://h.example'}})
-    with pytest.raises(ValidationError, match='is no session route'):
-        Endpoint.model_validate(remote('baseline') | {'address': {**BASELINE['address'], 'path': 'wss://h/ws'}})
 
 
 def test_an_address_carries_the_fields_its_wire_dials_and_no_other():
@@ -276,13 +276,117 @@ def test_an_endpoint_that_runs_a_policy_names_its_wire():
         Endpoint.model_validate({'name': 'baseline', 'wire': 'grpc'})
 
 
-def test_a_socket_path_is_absolute():
-    with pytest.raises(ValidationError, match='relative socket path'):
-        Endpoint.model_validate({
-            'name': 'baseline',
-            'wire': 'websocket_unix',
-            'address': {'uds': 'policy.sock', 'path': SESSION},
-        })
+# The address field grammar in the client README, row by row. `None` marks an accepted value.
+NO_HOSTNAME = 'is no hostname and no IP address'
+FRAGMENT = 'carries `#`, which starts a URL fragment: write it as `%23`'
+NOT_VISIBLE = 'holds a space or a character outside visible ASCII: percent-encode it'
+
+
+def assert_field(field_type: object, value: object, refused: str | None) -> None:
+    adapter = TypeAdapter(field_type)
+    if refused is None:
+        assert adapter.validate_python(value) == value
+    else:
+        with pytest.raises(ValidationError, match=re.escape(refused)):
+            adapter.validate_python(value)
+
+
+@pytest.mark.parametrize(
+    ('host', 'refused'),
+    [
+        ('baseline.example', None),
+        ('baseline.example.', None),
+        ('localhost', None),
+        ('policy_server', None),
+        ('10.0.0.1', None),
+        ('::1', None),
+        ('2001:db8::1', None),
+        ('', NO_HOSTNAME),
+        ('wss://baseline.example', NO_HOSTNAME),
+        ('baseline.example/ws', NO_HOSTNAME),
+        ('baseline.example:443', NO_HOSTNAME),
+        ('[::1]', NO_HOSTNAME),
+        ('[::1]:443', NO_HOSTNAME),
+        ('user@baseline.example', NO_HOSTNAME),
+        ('baseline.example?x=1', NO_HOSTNAME),
+        ('baseline.example#x', NO_HOSTNAME),
+        ('baseline example', NO_HOSTNAME),
+        ('baseline..example', NO_HOSTNAME),
+        ('.baseline.example', NO_HOSTNAME),
+        ('bücher.example', NO_HOSTNAME),
+        ('fe80::1%eth0', 'carries an IPv6 zone index'),
+    ],
+)
+def test_a_host_is_a_hostname_or_an_ip_address_alone(host: str, refused: str | None):
+    assert_field(Host, host, refused)
+
+
+@pytest.mark.parametrize(
+    ('port', 'refused'),
+    [
+        (1, None),
+        (443, None),
+        (65535, None),
+        (0, 'greater than or equal to 1'),
+        (65536, 'less than or equal to 65535'),
+        ('https', 'valid integer'),
+    ],
+)
+def test_a_port_is_an_integer_from_1_to_65535(port: object, refused: str | None):
+    assert_field(Port, port, refused)
+
+
+@pytest.mark.parametrize(
+    ('path', 'refused'),
+    [
+        (SESSION, None),
+        (f'{SESSION}/org/model', None),
+        (f'{SESSION}/org%20model', None),
+        ('/', None),
+        ('', 'is no session route'),
+        ('api/v1/session', 'is no session route'),
+        ('wss://h/ws', 'is no session route'),
+        (f'{SESSION}?fps=10', 'carries `?`: write the params in `query`'),
+        (f'{SESSION}#frag', FRAGMENT),
+        (f'{SESSION}/org model', NOT_VISIBLE),
+        (f'{SESSION}/modèle', NOT_VISIBLE),
+    ],
+)
+def test_a_path_is_the_session_route_in_visible_ascii(path: str, refused: str | None):
+    assert_field(SessionPath, path, refused)
+
+
+@pytest.mark.parametrize(
+    ('query', 'refused'),
+    [
+        ('', None),
+        ('mode=native', None),
+        ('codec.fps=10&pad=false', None),
+        ('name="s3"', None),
+        ('offsets=[-0.5,0.0]', None),
+        ('mode=native%23debug', None),
+        ('?mode=native', 'starts with `?`: write the params alone'),
+        ('mode=native#debug', FRAGMENT),
+        ('offsets=[-0.5, 0.0]', NOT_VISIBLE),
+        ('name=é', NOT_VISIBLE),
+        ('a=1\nb=2', NOT_VISIBLE),
+    ],
+)
+def test_a_query_is_the_bare_params_in_visible_ascii(query: str, refused: str | None):
+    assert_field(SessionQuery, query, refused)
+
+
+@pytest.mark.parametrize(
+    ('uds', 'refused'),
+    [
+        (Path('/run/policy.sock'), None),
+        (Path('/tmp/a policy#1.sock'), None),
+        (Path('policy.sock'), 'relative socket path'),
+        (Path('/run/p\0.sock'), 'holds a NUL byte'),
+    ],
+)
+def test_a_socket_path_is_absolute_and_holds_no_nul(uds: Path, refused: str | None):
+    assert_field(SocketPath, uds, refused)
 
 
 def test_each_wire_dials_the_fields_its_registry_member_declares():

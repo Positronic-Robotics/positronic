@@ -139,18 +139,8 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
     assert platform.seen is None
 
 
-def test_a_local_run_refuses_a_policy_wire(platform, run_command):
-    with pytest.raises(SystemExit, match='a local run has no --policy-wire'):
-        run_command(run, eval='fake.smoke', policy='a policy', policy_wire='websocket')
-    assert platform.seen is None
-
-
-@pytest.mark.parametrize(
-    'elsewhere',
-    [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}, {'policy_wire': 'websocket'}],
-)
+@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, tmp_path: Path, elsewhere: dict):
-    # Each endpoint of a plan names its own wire, so a wire beside the file would be dropped.
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), **elsewhere)
     assert platform.seen is None

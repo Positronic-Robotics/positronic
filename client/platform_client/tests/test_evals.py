@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from platform_client.enums import Wire
 from platform_client.eval_plan import EvalPlan, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.policy_images import PolicyImage
@@ -25,7 +24,7 @@ def test_a_value_that_could_never_name_an_eval_is_refused_here(value: str):
 def test_a_name_this_client_has_never_heard_of_still_reaches_the_platform():
     # The set lives on the server; a client that curated its own copy would refuse a newly offered
     # eval until someone remembered to release it.
-    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('an.eval.shipped.this.morning'), Wire.websocket)
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('an.eval.shipped.this.morning'))
     assert plan.eval == 'an.eval.shipped.this.morning'
 
 

@@ -1,6 +1,6 @@
 """Drive one submission from registration to a board, against any platform.
 
-    uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference> --policy-wire=websocket
+    uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
 
 `uv run` builds the environment this needs from the checkout, so nothing has to be installed first.
 The credential is read from the environment rather than taken as an argument: a command line is
@@ -27,7 +27,7 @@ import time
 
 import httpx
 from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus, Wire
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
 from platform_client.evals import EvalRef
@@ -35,7 +35,6 @@ from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
-from platform_client.slug import members_by_slug
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
@@ -93,7 +92,6 @@ def walkthrough(
     alias: str,
     eval_ref: EvalRef,
     policy_image: PolicyImage,
-    wire: Wire,
     timeout_s: float,
 ) -> None:
     print('1. register')
@@ -107,7 +105,7 @@ def walkthrough(
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
     # one the platform does not offer comes back with the names it does, under `PlatformError.evals`.
-    submission = client.create_submission(plan_of_image(policy_image, eval_ref, wire))
+    submission = client.create_submission(plan_of_image(policy_image, eval_ref))
     print(f'   submission {submission.submission_id} ({submission.status.name})')
     if submission.status in NO_RESULT_STATUSES:
         reason = submission.reason_code.name if submission.reason_code else submission.status.name
@@ -147,13 +145,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         '--policy-image', default=None, help='the image the platform pulls and runs; needed with --eval'
     )
-    parser.add_argument(
-        '--policy-wire', default=None, choices=list(members_by_slug(Wire)), help='the wire the image serves'
-    )
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args(argv)
-    if not (args.eval is None) == (args.policy_image is None) == (args.policy_wire is None):
-        parser.error('--eval, --policy-image and --policy-wire go together: pass all three, or none to list the boards')
+    if (args.eval is None) != (args.policy_image is None):
+        parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
     # Every value the wire types refuse — a name, a reference, a platform URL — is refused here,
     # before any request.
     try:
@@ -178,7 +173,6 @@ def main(argv: list[str] | None = None) -> None:
                 alias=args.alias,
                 eval_ref=eval_ref,
                 policy_image=policy_image,
-                wire=members_by_slug(Wire)[args.policy_wire],
                 timeout_s=args.timeout,
             )
         except PlatformError as exc:

@@ -95,6 +95,19 @@ session route (`/api/v1/session`, or `/api/v1/session/<model>`), and `query` def
 default. A record carries no URL: a `url` field is refused, and so is a scheme in `host`. The kinds
 refuse each other's fields, so an entry cannot carry two answers to the same question.
 
+Each address field holds one grammar. The wire writes each value into what it dials with no change,
+so the grammar admits only values that the wire can write as they are:
+
+| Field | Holds | Refused |
+|---|---|---|
+| `host` | A hostname: labels of letters, digits, `-` and `_`, joined by `.`, with an optional last `.`. Or an IPv4 address, or an IPv6 address with no brackets | A scheme, a port, a path, userinfo, brackets, an IPv6 zone index, any other character. The wire adds the brackets that an IPv6 address needs |
+| `port` | An integer from 1 to 65535 | Any other value |
+| `path` | The session route: `/` first, then visible ASCII characters (`!` to `~`) | No leading `/`, a `?`, a `#`, a space, any other character |
+| `query` | The session params with no leading `?`, in visible ASCII characters. Empty by default | A leading `?`, a `#`, a space, any other character |
+| `uds` | An absolute socket path | A relative path, a NUL byte |
+
+Percent-encode a character that `path` or `query` refuses: a space is `%20`, and `#` is `%23`.
+
 `positronic eval run --from-file` files that plan with `submissions.create`. The file is YAML or
 JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
 told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
@@ -130,9 +143,9 @@ A plan states its own tasks and endpoints. A policy image run names a catalog ev
 [Submit a policy image](../docs/submit-a-policy-image.md) says what the platform requires of the
 image, and how to build, test and submit it.
 
-A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint,
-`--policy-wire` names the wire the image serves, and `--eval` names the eval whose tasks it runs.
-`plan_of_image` builds that shape.
+A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
+`websocket` wire, which the platform opens every image session on, and `--eval` names the eval whose
+tasks it runs. `plan_of_image` builds that shape.
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
@@ -156,7 +169,7 @@ the key in the record the other commands read; a new user holds no such token.
 platform-register --alias=<display name>            # in a checkout: uv run platform-register
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
-uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:… --policy-wire=websocket
+uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
 uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list

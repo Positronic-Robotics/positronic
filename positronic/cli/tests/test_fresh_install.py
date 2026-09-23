@@ -186,7 +186,6 @@ DOCUMENTED_COMMANDS = {
         'run',
         '--eval=fake.smoke',
         '--policy-image=org/policy:v1',
-        '--policy-wire=websocket',
     ],
     'eval-run-on-the-rig': [
         'uv',
@@ -206,7 +205,6 @@ DOCUMENTED_COMMANDS = {
         'positronic/cli/examples/walkthrough.py',
         '--eval=fake.smoke',
         '--policy-image=org/policy@sha256:abc',
-        '--policy-wire=websocket',
     ],
     'submit-sample': [
         'uv',
@@ -214,7 +212,6 @@ DOCUMENTED_COMMANDS = {
         'positronic/cli/examples/nebius_competition/submit_sample.py',
         '--eval=fake.smoke',
         '--policy-image=org/policy@sha256:abc',
-        '--policy-wire=websocket',
     ],
     'standings-list': ['uv', 'run', 'positronic/cli/examples/nebius_competition/standings.py'],
     'standings-board': ['uv', 'run', 'positronic/cli/examples/nebius_competition/standings.py', '--board=fake.smoke'],

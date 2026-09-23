@@ -151,11 +151,7 @@ ASK = EvalPlan.model_validate({
 })
 
 PLAN_OF_AN_IMAGE = plan_of_image(
-    PolicyImage('org/policy@sha256:abc'),
-    EvalRef('fake.smoke'),
-    Wire.websocket,
-    alias='demo',
-    transaction_key=TransactionKey('key-1'),
+    PolicyImage('org/policy@sha256:abc'), EvalRef('fake.smoke'), alias='demo', transaction_key=TransactionKey('key-1')
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)

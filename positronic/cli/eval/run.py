@@ -10,9 +10,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
-from platform_client.enums import Wire
 from platform_client.responses import SubmissionCreateResponse
-from platform_client.slug import members_by_slug
 
 import pimm
 import positronic.cfg.policy as policy_cfg
@@ -252,7 +250,6 @@ def run(
     charge_inference_time: bool = True,
     timing=False,
     policy_image: str | None = None,
-    policy_wire: str | None = None,
     alias: str | None = None,
     from_file: str | None = None,
     transaction_key: str | None = None,
@@ -261,12 +258,12 @@ def run(
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
-    ``--policy-image`` instead sends the run to the platform, which pulls that image, dials it on
-    ``--policy-wire`` and runs the eval of that NAME on the embodiment the eval names — a name the
-    platform offers, not a config, since the platform owns the evals it offers. ``--from-file`` files
-    an eval plan for the lab rig, as a YAML or JSON file. Two or more endpoints in it make one blind
-    sample. A filed run — the platform's and the rig's — answers a submission id, which
-    ``positronic eval status`` reads; a run here answers the dataset it wrote.
+    ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
+    eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
+    since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
+    as a YAML or JSON file. Two or more endpoints in it make one blind sample. A filed run — the
+    platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a run
+    here answers the dataset it wrote.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -292,7 +289,6 @@ def run(
                 '--transaction-key': transaction_key,
                 '--platform-url': platform_url,
                 '--from-file': from_file,
-                '--policy-wire': policy_wire,
             },
             'local',
         )
@@ -311,18 +307,12 @@ def run(
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
-        if policy_wire is None:
-            raise SystemExit(
-                f'--policy-image names no wire: pass --policy-wire, one of {", ".join(members_by_slug(Wire))}'
-            )
-        return submit(
-            eval, policy_image, policy_wire, alias=alias, transaction_key=transaction_key, platform_url=platform_url
-        )
+        return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
     if source is not None:
         # The rig records under the client's own prefix, so it has no output of its own to name.
         # Each endpoint in the plan names its own wire.
-        _refuse({**local_only, '--policy-wire': policy_wire}, 'rig')
+        _refuse(local_only, 'rig')
         return file_plan(read_plan(source, transaction_key, alias), platform_url)
 
     raise SystemExit(_NO_POLICY_NAMED)

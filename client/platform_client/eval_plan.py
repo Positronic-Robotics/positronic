@@ -5,6 +5,8 @@ Unknown fields are rejected, so a misspelled field is a 422.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Annotated, Self
@@ -68,32 +70,61 @@ class Cascade(BaseModel):
     clutter: Clutter | None = None
 
 
+# Each address field holds what the table in the client README states, and no other value.
+_HOSTNAME = re.compile(r'[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?')
+_VISIBLE_ASCII = re.compile(r'[!-~]*')
+
+
 def _a_bare_host(host: str) -> str:
-    if '/' in host:
-        raise ValueError(f'host {host!r} carries a scheme or a path: write the host alone, and name the wire in `wire`')
-    return host
+    if ':' in host:
+        try:
+            literal = ipaddress.IPv6Address(host)
+        except ValueError:
+            literal = None
+        if literal is not None:
+            if literal.scope_id is not None:
+                raise ValueError(f'host {host!r} carries an IPv6 zone index: write the address without one')
+            return host
+    elif _HOSTNAME.fullmatch(host):
+        return host
+    raise ValueError(
+        f'host {host!r} is no hostname and no IP address: write the host alone, with no scheme, port, path, '
+        'userinfo or brackets; name the wire in `wire` and the port in `port`'
+    )
+
+
+def _no_fragment_and_visible_ascii(field: str, value: str) -> str:
+    if '#' in value:
+        raise ValueError(f'{field} {value!r} carries `#`, which starts a URL fragment: write it as `%23`')
+    if not _VISIBLE_ASCII.fullmatch(value):
+        raise ValueError(f'{field} {value!r} holds a space or a character outside visible ASCII: percent-encode it')
+    return value
 
 
 def _a_session_path(path: str) -> str:
-    if not path.startswith('/') or '?' in path or '#' in path:
+    if not path.startswith('/'):
         raise ValueError(f'path {path!r} is no session route: write the route alone, from its leading `/`')
-    return path
+    if '?' in path:
+        raise ValueError(f'path {path!r} carries `?`: write the params in `query`')
+    return _no_fragment_and_visible_ascii('path', path)
 
 
 def _a_bare_query(query: str) -> str:
     if query.startswith('?'):
         raise ValueError(f'query {query!r} starts with `?`: write the params alone')
-    return query
+    return _no_fragment_and_visible_ascii('query', query)
 
 
 def _an_absolute_path(uds: Path) -> Path:
+    if '\0' in str(uds):
+        raise ValueError(f'uds {str(uds)!r} holds a NUL byte, which no socket path holds')
     # A relative path is resolved against the directory each process was started from.
     if not uds.is_absolute():
         raise ValueError(f'uds {str(uds)!r} is a relative socket path; name an absolute one')
     return uds
 
 
-Host = Annotated[str, Field(min_length=1), AfterValidator(_a_bare_host)]
+Host = Annotated[str, AfterValidator(_a_bare_host)]
 Port = Annotated[int, Field(ge=1, le=65535)]
 # `session_path(model)` in `positronic_wire.wire`: the route a session on one model opens on.
 SessionPath = Annotated[str, AfterValidator(_a_session_path)]
@@ -426,21 +457,17 @@ IMAGE_ENDPOINT_NAME = 'policy'
 
 
 def plan_of_image(
-    image: PolicyImage,
-    eval_name: EvalRef,
-    wire: Wire,
-    *,
-    alias: str | None = None,
-    transaction_key: TransactionKey | None = None,
+    image: PolicyImage, eval_name: EvalRef, *, alias: str | None = None, transaction_key: TransactionKey | None = None
 ) -> EvalPlan:
-    """The plan a policy image runs as: one image endpoint on ``wire``, and the eval naming the tasks.
+    """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
-    The catalogue expands the name into tasks and the count each takes, so such a plan states
+    The endpoint names the websocket wire, which is the one the platform opens every image session on.
+    The catalogue expands the eval name into tasks and the count each takes, so such a plan states
     neither.
     """
     return EvalPlan(
         eval=eval_name,
-        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, wire=wire, image=image)],
+        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, wire=Wire.websocket, image=image)],
         alias=alias,
         transaction_key=transaction_key,
     )
