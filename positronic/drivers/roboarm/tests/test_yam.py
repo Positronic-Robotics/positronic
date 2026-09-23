@@ -952,3 +952,22 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
     assert not rig.vendor.released_at
     assert not rig.vendor.closed
     rig.loop.close()
+
+
+class SettledStateFails(RecordingEmitter):
+    """Refuses every state that reports the arm settled; the reports while the arm moves still go out."""
+
+    def emit(self, data, ts=-1):
+        if data.status is not RobotStatus.BUSY:
+            raise OSError('state transport closed')
+        super().emit(data, ts)
+
+
+def test_a_verified_park_releases_even_when_its_report_fails(caplog):
+    rig = Rig()
+    rig.raise_arm()
+    rig.driver.state._internal[:] = [SettledStateFails()]
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    assert 'its state could not be published' in caplog.text
