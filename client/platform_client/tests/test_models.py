@@ -816,6 +816,14 @@ def test_the_episode_order_serves_each_endpoint_its_count():
         ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
 
 
+def test_a_resolved_endpoint_names_a_wire():
+    # A resolved endpoint is concrete: every kind names the wire its session runs over.
+    payload = RESOLVED_TASK.endpoints[0].model_dump(mode='json')
+    del payload['wire']
+    with pytest.raises(ValidationError):
+        ResolvedEndpoint.model_validate(payload)
+
+
 def test_the_resolved_total_is_the_sum_over_the_tasks():
     assert RESOLVED.tasks[0].episodes == 3
     with pytest.raises(ValidationError, match='episodes_total states 4'):

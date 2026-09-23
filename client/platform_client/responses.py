@@ -185,9 +185,12 @@ class ResolvedEndpoint(BaseModel):
 
     name: str
     kind: Slugged[EndpointKind]
-    wire: Slugged[Wire] | None = None
+    wire: Slugged[Wire]
+    # Set on a remote endpoint, which the caller dials; None on a served or image endpoint the platform serves itself.
     address: EndpointAddress | None = None
+    # Set on a served endpoint, which names what starts it; None on a remote or image endpoint.
     provider: str | None = None
+    # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
     episodes: int = Field(ge=1)
 
