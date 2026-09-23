@@ -272,10 +272,9 @@ Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
 Processors report metadata about their definitions. A composition combines its
-components' metadata. A run reports metadata about itself through the runtime:
-it gives the runtime a source, and the runtime reads the source once, when the
-episode ends. The chunk schedule reports the rows it planned, emitted and dropped
-this way.
+components' metadata. A run reports metadata about itself with
+`Runtime.report`. The chunk schedule reports the rows it planned, emitted and
+dropped this way.
 
 ### Remote policies
 
