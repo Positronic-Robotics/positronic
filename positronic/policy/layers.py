@@ -15,7 +15,7 @@ Describe a local stack without creating episode state::
 """
 
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -155,8 +155,9 @@ class _StackBuffer:
     ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new
     entry but skips one byte-identical to the previous — a source slower than the control loop repeats
     its value, and carry-over sampling reuses the stored one — then drops entries before the oldest
-    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a stack holding, for
-    each offset, the latest value at or before that time — carry-over, never the future. Offsets that
+    sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
+    with a stack holding, for each offset, the latest value at or before that time — carry-over, never
+    the future. Offsets that
     precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
     ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
     ``len(offsets_sec)`` as history accumulates).
@@ -178,18 +179,42 @@ class _StackBuffer:
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
 
-    def sample(self, now: float) -> dict[str, np.ndarray]:
+    def sample(self, now: float, obs: Obs) -> Obs:
         times = np.array([t for t, _ in self._entries])
         targets = [now + off for off in self._offsets_sec]
         if not self._pad_start:
             targets = [t for t in targets if t >= times[0]]
-        picked = [self._entries[self._at_or_before(times, t)][1] for t in targets]
-        return {k: np.stack([entry[k] for entry in picked]) for k in picked[0]}
+        return _StackedObs(obs, [self._entries[self._at_or_before(times, t)][1] for t in targets])
 
     @staticmethod
     def _at_or_before(times: np.ndarray, target: float) -> int:
         """Index of the latest entry at or before ``target``; clamps to the oldest when none precedes it."""
         return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
+
+
+class _StackedObs(Mapping[str, Any]):
+    """``obs`` with each buffered key replaced by its stack, built on the first read of that key.
+
+    Only a sent request reads the stacks, so a tick that sends nothing builds none.
+    """
+
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
+        self._obs = obs
+        self._picked = picked
+        self._stacks: dict[str, np.ndarray] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in self._picked[0]:
+            return self._obs[key]
+        if key not in self._stacks:
+            self._stacks[key] = np.stack([entry[key] for entry in self._picked])
+        return self._stacks[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._obs)
+
+    def __len__(self) -> int:
+        return len(self._obs)
 
 
 OutputT = TypeVar('OutputT')
@@ -224,7 +249,7 @@ class TemporalStack(Processor[Obs, OutputT]):
         while True:
             now_sec = runtime.time_ns / 1e9
             buffer.append(now_sec, {k: obs[k] for k in self._keys})
-            obs = yield inner.send({**obs, **buffer.sample(now_sec)})
+            obs = yield inner.send(buffer.sample(now_sec, obs))
 
     def to_spec(self) -> dict[str, Any]:
         return {
