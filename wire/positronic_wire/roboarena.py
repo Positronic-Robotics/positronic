@@ -51,6 +51,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
+    TAKES_EDGE_HEADERS = False
     # A server holds one connection open across a run and sends nothing between inferences, so a shorter
     # pong deadline drops a quiet connection.
     PING_INTERVAL_S = 60.0

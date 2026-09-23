@@ -8,7 +8,7 @@ installable on its own, with `grpcio` and `websockets` as its only dependencies.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.4.0"
+uv add "positronic-wire==0.5.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -51,7 +51,9 @@ needs.
 
 A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
 `roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
-leaves out on the members that carry one.
+leaves out on the members that carry one. `TAKES_EDGE_HEADERS` says whether a caller hands the wire the
+headers its own edge authenticates on: `roboarena` is `False`, because another party runs its server,
+and every other member is `True`.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
