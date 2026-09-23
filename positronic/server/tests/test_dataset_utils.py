@@ -5,20 +5,25 @@ from typing import Any
 
 import av
 import numpy as np
+import pyarrow as pa
 import pytest
+import rerun.blueprint as rrb
+import rerun.recording as rr_recording
 
 from positronic import keys
-from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
+    _build_blueprint,
     _collect_signal_groups,
     _decimation_indices,
     _mp4_reduced_to,
     _size_capped_to,
     _unplotted_notice,
     _write_urdf_to_dir,
+    stream_episode_rrd,
 )
 
 
@@ -44,7 +49,7 @@ def test_wide_signal_is_named_instead_of_plotted(tmp_path):
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'wide_signal': width}))
 
     assert signals.plotted == {keys.JOINTS: 7}
-    assert signals.unplotted == {'wide_signal': width}
+    assert signals.unplotted == {'wide_signal': f'{width} values'}
 
 
 def test_wide_signal_still_reaches_the_3d_view(tmp_path):
@@ -91,10 +96,200 @@ def test_urdf_link_and_joint_names_carry_the_namespace(tmp_path):
 
 
 def test_notice_names_every_unplotted_signal_and_its_width():
-    notice = _unplotted_notice({'wide_signal': 866, 'wider_signal': 120})
+    notice = _unplotted_notice({'wide_signal': '866 values', 'wider_signal': '120 values'})
 
     assert '`wide_signal` — 866 values' in notice
     assert '`wider_signal` — 120 values' in notice
+
+
+_STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
+
+
+def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
+    with DiskEpisodeWriter(ep_dir) as writer:
+        for name, values in texts.items():
+            for i, value in enumerate(values):
+                writer.append(name, value, 1_000_000_000 * (i + 1))
+    return DiskEpisode(ep_dir)
+
+
+def test_a_text_signal_is_plotted_by_its_values_in_order_of_first_appearance(tmp_path):
+    signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'progress.state': _STATES}))
+
+    assert signals.numerics == []
+    assert signals.plotted_texts == {'progress.state': ['floating', 'reaching', 'contact', 'at-target']}
+    assert signals.unplotted == {}
+
+
+def test_a_text_signal_with_too_many_values_is_named_instead_of_plotted(tmp_path):
+    count = _MAX_PLOTTED_WIDTH + 1
+    signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'prompt': [f'p{i}' for i in range(count)]}))
+
+    assert signals.plotted_texts == {}
+    assert list(signals.texts) == ['prompt']
+    assert signals.unplotted == {'prompt': f'{count} distinct text values'}
+
+
+def test_an_array_of_text_is_named_instead_of_plotted(tmp_path):
+    words = [np.array(['a', 'b']), np.array(['c', 'd'])]
+    signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'words': words}))
+
+    assert signals.numerics == []
+    assert signals.texts == {}
+    assert signals.unplotted == {'words': 'values that are not numbers or text'}
+
+
+def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode() as writer:
+        for i, state in enumerate(_STATES):
+            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
+    rrd = tmp_path / 'ep.rrd'
+    rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
+
+    columns = rr_recording.load_recording(str(rrd)).schema().component_columns()
+    archetypes = {(column.entity_path, column.archetype) for column in columns}
+    assert ('/signals/progress.state', 'rerun.archetypes.Scalars') in archetypes
+    assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
+
+
+def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
+    return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
+
+
+def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
+    sent: dict[str, tuple[list[int], list[Any]]] = {}
+    styles: dict[str, Any] = {}
+
+    def send_columns(path, indexes, columns):
+        times = indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
+        sent[path] = (times, [value for column in columns for value in column.as_arrow_array().to_pylist()])
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda path, value, static=False: styles.__setitem__(path, value))
+    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    second = 1_000_000_000
+    changes = [second, 3 * second, 4 * second, 5 * second, 7 * second]
+    texts = [['floating'], ['reaching'], ['contact'], ['reaching'], ['at-target']]
+    assert sent['/text/progress.state'] == (changes, texts)
+    assert sent['/signals/progress.state'] == (changes, [[0.0], [1.0], [2.0], [1.0], [3.0]])
+    names = styles['/signals/progress.state'].names.as_arrow_array().to_pylist()
+    assert names == ['0 floating, 1 reaching, 2 contact, 3 at-target']
+
+
+def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_path, monkeypatch):
+    sent: dict[str, dict[str, list[int]]] = {}
+
+    def send_columns(path, indexes, columns):
+        sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        writer.append('robot.q', np.zeros(2), machine_clock)
+        writer.append('progress.state', 'floating', machine_clock + 1_503_456_789)
+        writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000)
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_500_000_000, 62_250_000_000]
+
+
+def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp_path, monkeypatch):
+    sent: dict[str, dict[str, list[int]]] = {}
+
+    def send_columns(path, indexes, columns):
+        sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        writer.append('words', np.array(['a', 'b']), 1_000_000_000)
+        writer.append('robot.q', np.zeros(2), 3_000_000_000)
+        writer.append('progress.state', 'floating', 4_000_000_000)
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_000_000_000]
+
+
+def test_a_text_log_shows_its_time_from_the_start_and_not_the_clock_time():
+    columns = dataset_utils._text_log_view('progress.state').properties['TextLogColumns']
+    assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is not None
+    timelines = columns.timeline_columns.as_arrow_array().to_pylist()
+
+    shown = [column['timeline'] for column in timelines if column['visible']]
+    assert shown == [dataset_utils._TIME_FROM_START]
+
+
+def _signals_with_cameras(aspects: list[float], with_3d: bool) -> dataset_utils.EpisodeSignals:
+    cameras = {f'camera_{i}': aspect for i, aspect in enumerate(aspects)}
+    poses = ['pose'] if with_3d else []
+    return dataset_utils.EpisodeSignals(
+        videos=list(cameras), numerics=[], dims={}, poses=poses, joints=[], camera_aspects=cameras
+    )
+
+
+@pytest.mark.parametrize('aspects', [[16 / 9] * 3, [4 / 3] * 3, [16 / 9] * 4, [4 / 3, 16 / 9, 16 / 9]])
+@pytest.mark.parametrize('with_3d', [True, False])
+def test_the_camera_row_is_as_tall_as_its_frames(aspects, with_3d):
+    share = dataset_utils._camera_row_share(_signals_with_cameras(aspects, with_3d))
+
+    row_width = dataset_utils._VIEWER_ASPECT * (0.75 if with_3d else 1.0)
+    for aspect in aspects:
+        assert row_width * aspect / sum(aspects) / share == pytest.approx(aspect)
+
+
+def test_one_camera_leaves_the_signals_a_quarter_of_the_height():
+    assert dataset_utils._camera_row_share(_signals_with_cameras([16 / 9], with_3d=False)) == 0.75
+
+
+def test_eight_signal_cells_under_three_cameras_wrap_to_two_rows_of_four():
+    share = dataset_utils._camera_row_share(_signals_with_cameras([16 / 9] * 3, with_3d=True))
+
+    assert dataset_utils._series_columns(8, 1 - share) == 4
+
+
+def _tabs(container: Any) -> list[rrb.Tabs]:
+    if isinstance(container, rrb.Tabs):
+        return [container]
+    return [tabs for child in getattr(container, 'contents', None) or [] for tabs in _tabs(child)]
+
+
+def test_a_tab_group_opens_on_its_text_signal(tmp_path):
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        for i, state in enumerate(_STATES):
+            writer.append('progress.delivered', float(i), 1_000_000_000 * (i + 1))
+            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
+            writer.append('robot.q', np.zeros(2), 1_000_000_000 * (i + 1))
+            writer.append('robot.dq', np.zeros(2), 1_000_000_000 * (i + 1))
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    tabs = {tab.name: tab.active_tab for tab in _tabs(_build_blueprint(_collect_signal_groups(ep), ep).root_container)}
+
+    assert tabs == {'progress': 1, 'robot': None}
+
+
+def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
+    sent: dict[str, list[int]] = {}
+    monkeypatch.setattr(
+        dataset_utils.rr,
+        'send_columns',
+        lambda path, indexes, columns: sent.__setitem__(path, indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()),
+    )
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    ep = _text_episode(tmp_path / 'ep', {'progress.state': ['floating', 'reaching', 'reaching']})
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    assert sent['/text/progress.state'] == [1_000_000_000, 2_000_000_000]
+    assert sent['/signals/progress.state'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
 
 
 def _timestamps_ns(hz: float, seconds: float) -> np.ndarray:
