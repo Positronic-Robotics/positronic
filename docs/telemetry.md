@@ -85,9 +85,32 @@ The span names are the contract:
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
-| `policy.infer` | `episode` | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
+| `policy.infer` | a processor span | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
+
+### Reading harness steps
+
+A `harness.step` span holds the durations of one step in milliseconds:
+
+- `step.late_ms`: the time from the step's due time to its start. Other loops in the process and a late wake
+  from sleep add to it. An answer can start a step before its due time; that step has no value.
+- `step.observe_ms`: the time to read all observations. `step.read_ms.<signal>` is one receiver's read.
+  `step.convert_ms.<signal>` is the serializer and the copy of a new message, and is absent when no new
+  message arrived.
+- `step.policy_ms`: the policy call. Its processor spans are the children of the step.
+- `step.emit_ms`: the time to emit the commands.
+
+The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
+recorder and the producers run in other processes. Their cost reaches a step only as CPU contention.
+
+This prints the p10, p50 and p90 of each value over all steps in a spans file:
+
+```
+uv run python -c "import sys,numpy as np;from positronic import telemetry as t;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name=='harness.step'];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
+```
 
 ### Stats schema (`*.stats.jsonl`)
 
