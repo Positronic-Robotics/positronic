@@ -99,6 +99,29 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         run.close()
 
 
+def test_temporal_stack_builds_a_stack_only_for_a_sent_request(execution, monkeypatch):
+    runtime, clock = execution
+    requests = []
+    monkeypatch.setattr(runtime, 'submit', lambda function, obs: requests.append(obs) or _UnchargedAnswer(Future()))
+    stacks = []
+    stack = np.stack
+    monkeypatch.setattr(np, 'stack', lambda arrays: stacks.append(1) or stack(arrays))
+    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.1, 0.0)), ChunkedSchedule(fps=10)), Mock())
+    try:
+        obs = {}  # One dict for every tick, changed in place, so the request must not read it late.
+        for tick in range(4):
+            clock.advance_to_ns(tick * 5_000_000)
+            obs.update({POSITION: np.array([tick]), keys.TASK: f'tick {tick}'})
+            run.send(obs)
+        assert len(requests) == 1 and stacks == []
+        # Tick 0 sampled this window. Later ticks appended to the buffer and did not change it.
+        np.testing.assert_array_equal(requests[0][POSITION][:, 0], [0, 0])
+        assert len(stacks) == 1
+        assert dict(requests[0]).keys() == {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
+    finally:
+        run.close()
+
+
 @pytest.fixture
 def execution(monkeypatch):
     with pimm.World(virtual_time=True) as world:

@@ -95,7 +95,7 @@ class TemporalStackV1(_LayerV1):
         def send(obs: Obs) -> Trajectory:
             now = obs[OBS_TIME_NS] / 1e9
             buffer.append(now, {key: obs[key] for key in self._keys})
-            return inner.send({**obs, **buffer.sample(now)})
+            return inner.send(buffer.sample(now, obs))
 
         def cancel() -> None:
             buffer.reset()
