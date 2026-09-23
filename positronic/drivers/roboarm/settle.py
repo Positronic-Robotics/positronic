@@ -12,6 +12,7 @@ class SettleTuning:
     """
 
     tolerance_rad: float  # every joint must rest this close to the target
+    still_velocity_rad_s: float  # every joint reads slower than this when the chain counts as still
     max_speed_rad_s: float  # the ramp's pace on the joint that travels farthest
     settle_timeout_s: float  # time after the ramp for the chain to come to rest, per pass
     attempts: int  # correction passes before the move fails
@@ -20,8 +21,18 @@ class SettleTuning:
 
 # The defaults fit the arm the driver was brought up on. The park is slower and tighter: torque is cut there.
 PARK_SETTLE = SettleTuning(
-    tolerance_rad=0.005, max_speed_rad_s=0.5, settle_timeout_s=8.0, attempts=6, max_correction_rad=0.05
+    tolerance_rad=0.005,
+    still_velocity_rad_s=0.02,
+    max_speed_rad_s=0.5,
+    settle_timeout_s=8.0,
+    attempts=6,
+    max_correction_rad=0.05,
 )
 MOVE_SETTLE = SettleTuning(
-    tolerance_rad=0.02, max_speed_rad_s=0.35, settle_timeout_s=1.0, attempts=6, max_correction_rad=0.05
+    tolerance_rad=0.02,
+    still_velocity_rad_s=0.02,
+    max_speed_rad_s=0.35,
+    settle_timeout_s=1.0,
+    attempts=6,
+    max_correction_rad=0.05,
 )

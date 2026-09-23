@@ -255,6 +255,33 @@ def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
     assert rig.vendor.closed
 
 
+def _jitter_velocity_readings(rig, monkeypatch, noise_rad_s):
+    read = rig.vendor.get_observations
+
+    def noisy():
+        obs = read()
+        obs['joint_vel'] = obs['joint_vel'] + noise_rad_s
+        return obs
+
+    monkeypatch.setattr(rig.vendor, 'get_observations', noisy)
+
+
+@pytest.mark.parametrize(
+    ('still_velocity_rad_s', 'parks'), [(DEFAULT_TUNING.still_velocity_rad_s, False), (0.05, True)]
+)
+def test_an_arm_with_noisy_velocity_readings_is_tuned_not_edited(monkeypatch, still_velocity_rad_s, parks):
+    rig = Rig(dataclasses.replace(DEFAULT_TUNING, still_velocity_rad_s=still_velocity_rad_s))
+    rig.raise_arm()
+    _jitter_velocity_readings(rig, monkeypatch, 0.03)
+    if parks:
+        rig.finish()
+        np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    else:
+        rig.stop.stopped = True
+        rig.tick(30)
+        assert not rig.vendor.released_at
+
+
 def test_the_hardware_configs_give_each_arm_its_own_tuning():
     wide = dataclasses.replace(DEFAULT_TUNING, max_correction_rad=0.2)
     slow = dataclasses.replace(yam.MOVE_SETTLE, max_speed_rad_s=0.2)
