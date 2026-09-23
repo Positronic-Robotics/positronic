@@ -21,7 +21,10 @@ def _credential(username: str | None, password_file: str | None) -> RegistryCred
         raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
     if username is None or password_file is None:
         return None
-    return credential_from_file(username, Path(password_file))
+    try:
+        return credential_from_file(username, Path(password_file))
+    except ValueError as exc:
+        raise SystemExit(f'--registry-password-file names no readable password: {exc}') from exc
 
 
 def submit(

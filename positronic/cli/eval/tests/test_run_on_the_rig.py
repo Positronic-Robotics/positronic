@@ -7,7 +7,7 @@ import pytest
 from platform_client import routes
 from platform_client.ids import SubmissionId
 
-from positronic.cli.conftest import KEY
+from positronic.cli.conftest import KEY, runs_of_four
 from positronic.cli.eval.plan import endpoint_of, flag_entries, given
 from positronic.cli.eval.run import run
 
@@ -254,8 +254,20 @@ def test_a_malformed_plan_prints_no_part_of_its_registry_password(platform, run_
     with pytest.raises(SystemExit) as refusal:
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
     message = str(refusal.value)
-    runs = {REGISTRY_PASSWORD[at : at + 4] for at in range(len(REGISTRY_PASSWORD) - 3)}
-    assert not [run_of_the_password for run_of_the_password in runs if run_of_the_password in message]
+    assert not [
+        run_of_the_password for run_of_the_password in runs_of_four(REGISTRY_PASSWORD) if run_of_the_password in message
+    ]
+    assert platform.seen is None
+
+
+def test_a_password_pasted_as_its_file_is_not_printed(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(a_credential_naming(REGISTRY_PASSWORD))
+    with pytest.raises(SystemExit, match=r'image_credential\.password: .*names no file') as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    message = str(refusal.value)
+    assert not [
+        run_of_the_password for run_of_the_password in runs_of_four(REGISTRY_PASSWORD) if run_of_the_password in message
+    ]
     assert platform.seen is None
 
 
@@ -343,7 +355,7 @@ def test_a_password_file_that_is_not_there_is_refused_at_its_credential(platform
     on_plan.write_text(f'{REGISTRY_PASSWORD}\n')
     payload = a_plan_with_credentials(a_credential_naming(on_plan), a_credential_naming(tmp_path / 'never-written'))
     with pytest.raises(
-        SystemExit, match=r'tasks\.0\.endpoints\.0\.image_credential\.password: .*is not a file'
+        SystemExit, match=r'tasks\.0\.endpoints\.0\.image_credential\.password: .*names no file'
     ) as refusal:
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
     assert REGISTRY_PASSWORD not in str(refusal.value)

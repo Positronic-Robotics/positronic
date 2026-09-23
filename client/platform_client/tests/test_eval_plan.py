@@ -430,12 +430,12 @@ def test_an_empty_half_of_a_credential_is_refused(credential: dict):
 
 
 def test_a_password_file_naming_no_such_file_is_refused(tmp_path: Path):
-    with pytest.raises(ValueError, match='is not a file'):
+    with pytest.raises(ValueError, match='names no file'):
         password_from_file(tmp_path / 'never-written')
 
 
 def test_a_password_file_naming_a_directory_is_refused(tmp_path: Path):
-    with pytest.raises(ValueError, match='is not a file'):
+    with pytest.raises(ValueError, match='names no file'):
         password_from_file(tmp_path)
 
 

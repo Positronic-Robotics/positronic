@@ -7,7 +7,7 @@ import pytest
 from platform_client import routes
 from platform_client.ids import SubmissionId
 
-from positronic.cli.conftest import ID, KEY
+from positronic.cli.conftest import ID, KEY, runs_of_four
 from positronic.cli.eval.run import run
 
 
@@ -216,7 +216,9 @@ def test_half_a_credential_is_refused_before_the_submission(platform, run_comman
 
 
 def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platform, run_command, tmp_path):
-    with pytest.raises(SystemExit, match='is not a file'):
+    with pytest.raises(
+        SystemExit, match='--registry-password-file names no readable password: the password file path names no file'
+    ):
         run_command(
             run,
             eval='fake.smoke',
@@ -224,6 +226,17 @@ def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platf
             registry_username='a-reader',
             registry_password_file=str(tmp_path / 'never-written'),
         )
+    assert platform.seen is None
+
+
+def test_a_password_pasted_as_its_file_is_not_printed(platform, run_command):
+    pasted = 'Zx9QvT7Lm2Rk'
+    with pytest.raises(SystemExit, match='--registry-password-file names no readable password') as refusal:
+        run_command(
+            run, eval='fake.smoke', policy_image='org/p:v1', registry_username='a-reader', registry_password_file=pasted
+        )
+    message = str(refusal.value)
+    assert not [run_of_the_password for run_of_the_password in runs_of_four(pasted) if run_of_the_password in message]
     assert platform.seen is None
 
 
