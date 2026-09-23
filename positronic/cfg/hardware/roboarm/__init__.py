@@ -9,6 +9,10 @@ from positronic.drivers.roboarm.settle import MOVE_SETTLE, PARK_SETTLE, SettleTu
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
+# Where a YAM is left to be powered down. Joints 2 and 3 have zero for their lower limit, so this folds the
+# arm onto its own stops and nothing holds it up: the arm carries no brakes, and the driver gives the chain
+# up limp.
+YAM_STOW_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
