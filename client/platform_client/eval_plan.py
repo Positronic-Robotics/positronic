@@ -176,10 +176,6 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
 }
 
 
-def _address_fields_of_every_wire() -> str:
-    return '; '.join(f'{slug_of(wire)}: {", ".join(address.model_fields)}' for wire, address in ADDRESS_OF_WIRE.items())
-
-
 # A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
 _ENDPOINT_MAY_STATE = frozenset({
     'name',
@@ -214,6 +210,12 @@ class Endpoint(Cascade):
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
 
+    @staticmethod
+    def _address_fields_of_every_wire() -> str:
+        return '; '.join(
+            f'{slug_of(wire)}: {", ".join(address.model_fields)}' for wire, address in ADDRESS_OF_WIRE.items()
+        )
+
     @model_validator(mode='before')
     @classmethod
     def _accept_bare_label(cls, value: object) -> object:
@@ -222,7 +224,7 @@ class Endpoint(Cascade):
         if isinstance(value, dict) and 'url' in value:
             raise ValueError(
                 f"endpoint {value.get('name')!r} names a url; an endpoint names its `wire` and that wire's "
-                f'`address` fields instead ({_address_fields_of_every_wire()})'
+                f'`address` fields instead ({cls._address_fields_of_every_wire()})'
             )
         return value
 

@@ -311,7 +311,6 @@ def run(
 
     if source is not None:
         # The rig records under the client's own prefix, so it has no output of its own to name.
-        # Each endpoint in the plan names its own wire.
         _refuse(local_only, 'rig')
         return file_plan(read_plan(source, transaction_key, alias), platform_url)
 
