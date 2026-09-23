@@ -1,6 +1,7 @@
 """Implementation of multiprocessing channels."""
 
 import contextlib
+import ctypes
 import functools
 import heapq
 import logging
@@ -16,10 +17,10 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping
 from enum import IntEnum
 from multiprocessing import resource_tracker
-from multiprocessing.managers import ValueProxy
 from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
+from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Full
 from typing import TypeVar, overload
 
@@ -94,10 +95,10 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self,
         clock: Clock,
         queues: list[Queue],
-        mode_value: mp.Value,
-        lock: mp.Lock,
-        ts_value: mp.Value,
-        up_values: list[ValueProxy[bool]],
+        mode_value: ctypes.c_int,
+        lock: LockClass,
+        ts_value: ctypes.c_int64,
+        up_values: list[ctypes.c_bool],
         sm_queues: list[Queue],
         *,
         forced_mode: TransportMode | None = None,
@@ -235,10 +236,10 @@ class MultiprocessReceiver(SignalReceiver[T]):
     def __init__(
         self,
         queue: mp.Queue,
-        mode_value: mp.Value,
-        lock: mp.Lock,
-        ts_value: mp.Value,
-        up_value: mp.Value,
+        mode_value: ctypes.c_int,
+        lock: LockClass,
+        ts_value: ctypes.c_int64,
+        up_value: ctypes.c_bool,
         sm_queue: mp.Queue,
         *,
         forced_mode: TransportMode | None = None,
@@ -1129,12 +1130,14 @@ class World:
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
 
         message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
-        lock = self._manager.Lock()
-        ts_value = self._manager.Value('Q', -1)
-        up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
+        # Every shared-memory emit and read touches these, so they are not manager proxies: each proxy access is
+        # a round trip to the manager process. The lock guards the timestamp and the update flags.
+        lock = self._mp_ctx.Lock()
+        ts_value = self._mp_ctx.RawValue(ctypes.c_int64, -1)
+        up_values = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
         initial_mode = forced_mode or TransportMode.UNDECIDED
-        mode_value = self._manager.Value('i', int(initial_mode))
+        mode_value = self._mp_ctx.RawValue(ctypes.c_int, int(initial_mode))
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(

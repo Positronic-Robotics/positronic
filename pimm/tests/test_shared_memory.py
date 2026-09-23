@@ -1,11 +1,13 @@
+import time
 from collections.abc import Iterator
+from multiprocessing.managers import BaseProxy
 
 import numpy as np
 import pytest
 
-from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep
+from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep, Yield
 from pimm.shared_memory import NumpySMAdapter
-from pimm.world import TransportMode, World
+from pimm.world import MultiprocessReceiver, TransportMode, World
 
 
 class TestNumpySMAdapter:
@@ -322,6 +324,145 @@ class TestSharedMemoryMultiprocessing:
             assert len(data) == 2
             assert np.allclose(data[0], [1.0, 2.0, 3.0])
             assert np.allclose(data[1], [10.0, 2.0, 3.0])
+
+
+# Nanoseconds since the epoch. A double holds a value of this size only to 256 ns, so a float field loses digits.
+NS_TIMESTAMP = 1_758_650_000_123_456_789
+FRAMES_TO_CHECK_FOR_TEARING = 50
+
+
+class FrameStampEmitter:
+    """Emits frames whose every element equals the frame's timestamp, as fast as the pipe takes them."""
+
+    emitter: SignalEmitter = NoOpEmitter()
+
+    def run(self, should_stop: SignalReceiver, _clock: Clock) -> Iterator[Yield]:
+        data = NumpySMAdapter((256, 1024), np.dtype(np.int64))
+        ts = 0
+        while not should_stop.value:
+            data.array[:] = ts
+            self.emitter.emit(data, ts=ts)
+            ts += 1
+            yield Yield()
+
+
+class SingleFrameEmitter:
+    emitter: SignalEmitter = NoOpEmitter()
+
+    def run(self, should_stop: SignalReceiver, _clock: Clock) -> Iterator[Sleep]:
+        data = NumpySMAdapter((3,), np.dtype(np.float32))
+        data.array[:] = [1.0, 2.0, 3.0]
+        self.emitter.emit(data, ts=NS_TIMESTAMP)
+        while not should_stop.value:
+            yield Sleep(0.01)
+
+
+class TimestampEcho:
+    """Reads frames in its own process and sends the timestamp and data of each new frame back over a second pipe."""
+
+    frames: SignalReceiver | None = None
+    echo: SignalEmitter = NoOpEmitter()
+
+    def run(self, should_stop: SignalReceiver, _clock: Clock) -> Iterator[Sleep]:
+        assert self.frames is not None
+        while not should_stop.value:
+            msg = self.frames.read()
+            if msg is not None and msg.updated:
+                self.echo.emit((msg.ts, msg.data.array.tolist()))
+            yield Sleep(0.001)
+
+
+def _single_pipe(world: World, transport: TransportMode = TransportMode.UNDECIDED):
+    emitter, receiver = world.mp_pipes(transport=transport)
+    assert isinstance(receiver, MultiprocessReceiver)
+    return emitter, receiver
+
+
+def _wait_for(receiver: SignalReceiver, predicate, timeout: float = 20.0) -> Message:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        msg = receiver.read()
+        if msg is not None and predicate(msg):
+            return msg
+        time.sleep(0.001)
+    raise AssertionError('no matching message before the timeout')
+
+
+class TestSharedMemoryAcrossProcesses:
+    def test_a_read_never_returns_a_frame_torn_by_a_concurrent_emit(self):
+        emitter_loop = FrameStampEmitter()
+
+        with World() as world:
+            emitter_loop.emitter, reader = _single_pipe(world, TransportMode.SHARED_MEMORY)
+            world.start_in_subprocess(emitter_loop.run)
+
+            seen = set()
+            deadline = time.monotonic() + 20.0
+            while len(seen) < FRAMES_TO_CHECK_FOR_TEARING and time.monotonic() < deadline:
+                msg = reader.read()
+                if msg is not None:
+                    assert np.all(msg.data.array == msg.ts), f"frame {msg.ts} holds another frame's data"
+                    seen.add(msg.ts)
+
+        assert len(seen) >= FRAMES_TO_CHECK_FOR_TEARING
+
+    def test_an_undecided_pipe_takes_the_transport_its_subprocess_emitter_picks(self):
+        emitter_loop = SingleFrameEmitter()
+
+        with World() as world:
+            emitter_loop.emitter, reader = _single_pipe(world)
+            world.start_in_subprocess(emitter_loop.run)
+
+            msg = _wait_for(reader, lambda m: m.updated)
+
+            assert reader.uses_shared_memory
+            assert msg.ts == NS_TIMESTAMP
+            assert np.allclose(msg.data.array, [1.0, 2.0, 3.0])
+
+    def test_a_reader_in_a_subprocess_gets_each_frame_and_its_nanosecond_timestamp(self):
+        echo_loop = TimestampEcho()
+
+        with World() as world:
+            emitter, echo_loop.frames = _single_pipe(world, TransportMode.SHARED_MEMORY)
+            echo_loop.echo, echoes = _single_pipe(world, TransportMode.QUEUE)
+            world.start_in_subprocess(echo_loop.run)
+
+            data = NumpySMAdapter((2,), np.dtype(np.float32))
+            for step in range(3):
+                ts = NS_TIMESTAMP + step
+                data.array[:] = [step, -step]
+                emitter.emit(data, ts=ts)
+                msg = _wait_for(echoes, lambda m, ts=ts: m.data[0] == ts)
+                assert msg.data[1] == [step, -step]
+
+    def test_a_float_timestamp_is_refused(self):
+        with World() as world:
+            emitter, _ = _single_pipe(world, TransportMode.SHARED_MEMORY)
+
+            with pytest.raises(TypeError):
+                emitter.emit(NumpySMAdapter((2,), np.dtype(np.float32)), ts=1.5)  # pyright: ignore[reportArgumentType]
+
+    def test_emit_and_read_make_no_call_to_the_manager_process(self, monkeypatch):
+        with World() as world:
+            emitter, reader = _single_pipe(world, TransportMode.SHARED_MEMORY)
+            data = NumpySMAdapter((2,), np.dtype(np.float32))
+            emitter.emit(data, ts=1)
+            assert reader.read() is not None  # The first read takes the buffer's name from a manager queue.
+
+            calls = []
+            original = BaseProxy._callmethod
+
+            def counting_callmethod(self, *args, **kwargs):
+                calls.append(args)
+                return original(self, *args, **kwargs)
+
+            monkeypatch.setattr(BaseProxy, '_callmethod', counting_callmethod)
+            for ts in range(2, 12):
+                emitter.emit(data, ts=ts)
+                msg = reader.read()
+                assert msg is not None and msg.ts == ts
+
+            assert calls == []
 
 
 class TestBroadcastCommunication:
