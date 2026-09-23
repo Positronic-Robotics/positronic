@@ -29,7 +29,7 @@ from positronic.policy.base import Obs, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import Images, LLMPolicy, llm
+from positronic.vendors.llm.policy import Images, LLMPolicy, Tool, llm
 
 
 def observation(x=0.0):
@@ -144,14 +144,16 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
 
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
     requests, replies = model
-    picture = ModelResponse([ToolCallPart('take_pic', {'cameras': [keys.WRIST_IMAGE], 'note': 'Inspect wrist.'})])
+    picture = ModelResponse([
+        ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [keys.WRIST_IMAGE], 'note': 'Inspect wrist.'})
+    ])
     replies.extend([picture, picture, finish()])
     with execution(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)) as (run, runtime, clock):
         complete(run, runtime, clock, observation())
         events = runtime.metadata['transcript']
     assert [len(frames(messages)) for messages, _ in requests] == [0, 1, 1]
     assert 'already revealed' in str(requests[-1][0])
-    assert 'take_pic' in [tool.name for tool in requests[0][1]]
+    assert Tool.REVEAL_FRAMES.value in [tool.name for tool in requests[0][1]]
     assert [e['cameras'] for e in events if e['event'] == 'request'] == [[], [keys.WRIST_IMAGE], [keys.WRIST_IMAGE]]
     assert len([e for e in events if e['event'] == 'observation']) == 1
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
@@ -171,7 +173,9 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
                 pictured.append(time_ns)
             if images is Images.ON_DEMAND and second != 3:
                 replies.extend(
-                    ModelResponse([ToolCallPart('take_pic', {'cameras': [camera], 'note': 'Inspect camera.'})])
+                    ModelResponse([
+                        ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [camera], 'note': 'Inspect camera.'})
+                    ])
                     for camera in policy.camera_keys
                 )
             reply = move()
@@ -199,7 +203,7 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
     'reply',
     [
         ModelResponse([TextPart('I will move.')]),
-        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]),
+        ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})]),
     ],
 )
 def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, reply):
@@ -251,7 +255,7 @@ def test_invalid_reply_gets_correction_and_has_finite_retry_budget(model, bad):
 def test_finished_run_stays_idle_and_new_run_starts_fresh(model, ending):
     requests, replies = model
     replies.append(
-        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})])
+        ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})])
         if ending == 'call_budget'
         else finish(ending)
     )
@@ -320,7 +324,7 @@ def test_active_request_failure_propagates(model, error):
     [
         move(),
         ModelResponse([TextPart('I will move.')]),
-        ModelResponse([ToolCallPart('take_pic', {'cameras': [], 'note': 'Look.'})]),
+        ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})]),
     ],
 )
 def test_close_drains_request_without_processing_reply(model, late_response):

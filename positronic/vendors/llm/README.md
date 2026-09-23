@@ -66,7 +66,7 @@ Only the task instruction, measured hand pose/gripper, and selected labelled RGB
 | `move_to` | Absolute `x`, `y`, `z`, `roll`, `pitch`, `yaw`, `gripper`, and a short `note` |
 | `done` | `reason` and `hindsight`; stop issuing actions for this episode |
 | `give_up` | `reason` and `hindsight`; stop issuing actions for this episode |
-| `take_pic` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
+| `reveal_frames` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
 The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion stops further actions and model invocations.
 

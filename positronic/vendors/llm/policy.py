@@ -43,7 +43,7 @@ class Images(StrEnum):
 
 class Tool(StrEnum):
     MOVE_TO = 'move_to'
-    TAKE_PIC = 'take_pic'
+    REVEAL_FRAMES = 'reveal_frames'
     DONE = 'done'
     GIVE_UP = 'give_up'
 
@@ -56,7 +56,7 @@ class Finish(BaseModel):
     hindsight: Annotated[str, Field(min_length=1)]
 
 
-class TakePic(BaseModel):
+class RevealFrames(BaseModel):
     """Reveal selected camera frames from this observation. An empty camera list selects every camera."""
 
     model_config = ConfigDict(extra='forbid', strict=True)
@@ -129,7 +129,7 @@ class _Observation:
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
     Tool.MOVE_TO: MoveTo,
-    Tool.TAKE_PIC: TakePic,
+    Tool.REVEAL_FRAMES: RevealFrames,
     Tool.DONE: Finish,
     Tool.GIVE_UP: Finish,
 }
@@ -161,7 +161,7 @@ class LLMPolicy(Policy):
                 'rotation follows the shortest turn, each limited independently. '
                 'The tool result reports the clamped target; check it before planning the next move. '
                 'Camera frames remain fixed during a decision. '
-                'take_pic only reveals a frame; it does not move a camera. '
+                f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
                 'A note should briefly describe what you see and why you chose the motion. '
                 'Use done when you believe the task is complete, or give_up when you cannot continue. '
                 'Both stop further actions and model calls; '
@@ -202,9 +202,9 @@ class LLMPolicy(Policy):
             match data:
                 case MoveTo() | Finish():
                     return data
-                case TakePic():
+                case RevealFrames():
                     if self._policy.images is not Images.ON_DEMAND:
-                        raise ValueError('take_pic is available only with images=on_demand')
+                        raise ValueError(f'{tool.value} is available only with images=on_demand')
                     cameras = self._select_cameras(data.cameras)
                     self._revealed.update(cameras)
                     self._pictures = cameras
@@ -345,7 +345,7 @@ class LLMPolicy(Policy):
                 name=tool.value, description=schema.__doc__ or '', parameters_json_schema=schema.model_json_schema()
             )
             for tool, schema in _SCHEMAS.items()
-            if tool is not Tool.TAKE_PIC or images is Images.ON_DEMAND
+            if tool is not Tool.REVEAL_FRAMES or images is Images.ON_DEMAND
         ]
 
     def meta(self) -> dict[str, Any]:
