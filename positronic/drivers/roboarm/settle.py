@@ -20,7 +20,7 @@ class SettleTuning:
     max_correction_rad: float  # the most the reference may lie past the target, per joint
 
 
-# The defaults fit the arm the driver was brought up on. The park is slower and tighter: torque is cut there.
+# The defaults fit the arm the driver was brought up on. The park lands tighter, because torque is cut there.
 PARK_SETTLE = SettleTuning(
     tolerance_rad=0.005,
     still_velocity_rad_s=0.02,
