@@ -13,8 +13,10 @@ class SettleTuning:
 
     tolerance_rad: float  # every joint must rest this close to the target
     still_velocity_rad_s: float  # every joint reads slower than this when the chain counts as still
+    still_time_s: float  # how long every joint must stay still, and on target, without a break
     grip_tolerance: float  # normalized; the fingers must read this close to the asked grip
     max_speed_rad_s: float  # the ramp's pace on the joint that travels farthest
+    min_ramp_s: float  # the shortest ramp, however near the target
     settle_timeout_s: float  # time after the ramp for the chain to come to rest, per pass
     attempts: int  # correction passes before the move fails
     max_correction_rad: float  # the most the reference may lie past the target, per joint
@@ -24,8 +26,10 @@ class SettleTuning:
 PARK_SETTLE = SettleTuning(
     tolerance_rad=0.005,
     still_velocity_rad_s=0.02,
+    still_time_s=0.2,
     grip_tolerance=0.05,
     max_speed_rad_s=0.35,
+    min_ramp_s=2.0,
     settle_timeout_s=8.0,
     attempts=6,
     max_correction_rad=0.05,
@@ -33,8 +37,10 @@ PARK_SETTLE = SettleTuning(
 MOVE_SETTLE = SettleTuning(
     tolerance_rad=0.02,
     still_velocity_rad_s=0.02,
+    still_time_s=0.2,
     grip_tolerance=0.05,
     max_speed_rad_s=0.35,
+    min_ramp_s=2.0,
     settle_timeout_s=1.0,
     attempts=6,
     max_correction_rad=0.05,
