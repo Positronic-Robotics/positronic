@@ -18,9 +18,9 @@ from positronic.offboard import protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    ConnectRetries,
     InferenceClient,
     InferenceSession,
-    _ConnectRetries,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
@@ -197,7 +197,7 @@ class TestNewSessionRetriesRefusedConnects:
         assert session is mock_session_cls.return_value
 
     def test_a_forbidden_refusal_gives_up_once_its_attempts_are_spent(self):
-        fake = _FakeWire(*[_refused(wire.Refusal.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5))
+        fake = _FakeWire(*[_refused(wire.Refusal.FORBIDDEN)] * (ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5))
         with (
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
@@ -205,7 +205,7 @@ class TestNewSessionRetriesRefusedConnects:
         ):
             InferenceClient(fake, _ADDRESS).new_session()
 
-        assert len(fake.dials) == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
+        assert len(fake.dials) == ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
 
     def test_a_final_refusal_is_raised_at_once(self):
         fake = _FakeWire(_refused(wire.Refusal.FINAL))
@@ -232,7 +232,7 @@ class TestNewSessionRetriesRefusedConnects:
 
     def test_each_session_opens_on_a_full_budget(self):
         """A client that spent forbidden refusals opening one session still gets all of them for the next."""
-        one_session = [_refused(wire.Refusal.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        one_session = [_refused(wire.Refusal.FORBIDDEN)] * (ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
         fake = _FakeWire(*one_session * 2)
         with patch('positronic.offboard.client.InferenceSession'), patch('positronic.offboard.client.time.sleep'):
             client = InferenceClient(fake, _ADDRESS)

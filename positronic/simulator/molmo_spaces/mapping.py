@@ -1,5 +1,6 @@
 """Shared benchmark selection and wire conversions for the client and MolmoSpaces server."""
 
+import os
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -41,9 +42,31 @@ class BenchmarkPath(NamedTuple):
 
 
 def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
-    """Benchmarks with an episode manifest under the asset directory."""
+    """Benchmarks with an episode manifest under the asset directory.
+
+    The walk follows symlinked directories, and skips a link back into one of the directory's own ancestors.
+    """
     root = assets_dir / ASSETS_BENCHMARKS_DIR
-    return [BenchmarkPath.parse(str(p.parent.relative_to(root))) for p in sorted(root.rglob(MOLMO_BENCHMARK_MANIFEST))]
+    found = []
+    ancestors = {root: {root.resolve()}}
+
+    def unreadable(error: OSError) -> None:
+        raise error
+
+    # `os.walk` rather than `Path.walk`, which needs Python 3.12.
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unreadable, followlinks=True):
+        here = Path(dirpath)
+        above = ancestors.pop(here)
+        if MOLMO_BENCHMARK_MANIFEST in filenames:
+            found.append(BenchmarkPath.parse(str(here.relative_to(root))))
+        descend = []
+        for name in dirnames:
+            real = (here / name).resolve()
+            if real not in above:
+                descend.append(name)
+                ancestors[here / name] = above | {real}
+        dirnames[:] = descend
+    return sorted(found)
 
 
 def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[BenchmarkPath]:

@@ -26,7 +26,7 @@ from positronic_wire import wire
 
 from positronic.offboard import grpc_wire, protocol
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.client import InferenceClient, _ConnectRetries
+from positronic.offboard.client import ConnectRetries, InferenceClient
 from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served, StartServer
@@ -208,7 +208,7 @@ def test_the_grpc_wire_gates_on_the_bearer_token(authed_server):
 def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header, monkeypatch):
     # A refused credential answers like a cold backend, and the client retries it; one attempt shows the
     # refusal.
-    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
+    monkeypatch.setattr(ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     headers = None if header is None else {AUTH_HEADER: header}
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*authed_server.grpc(), headers=headers).new_session()
@@ -345,7 +345,7 @@ def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
 
 
 def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, monkeypatch):
-    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
+    monkeypatch.setattr(ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*edged(authed_server)).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
