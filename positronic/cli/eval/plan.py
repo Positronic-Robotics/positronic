@@ -1,13 +1,10 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
-from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import Endpoint, EvalPlan, PrivateEval, TaskNode
-from platform_client.ids import TransactionKey
+from platform_client.eval_plan import EvalPlan, PrivateEval
 from platform_client.responses import SubmissionCreateResponse
-from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
@@ -67,79 +64,6 @@ def given(value: object) -> bool:
     return value is not None
 
 
-def flag_entries(value: object, flag: str) -> list[str]:
-    """The entries of a repeatable flag, in both forms the command line produces.
-
-    The CLI reads a value with `ast.literal_eval`: `[a,b]` arrives as a list, and a value it cannot
-    read (a hyphen or a `=` inside the brackets) arrives as text. This splits the text on commas,
-    so `--tasks=[a,b]` and `--tasks=a-b,c-d` state one list.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list | tuple):
-        entries = [str(entry) for entry in value]
-    elif isinstance(value, str):
-        # Only a pair that brackets the WHOLE value is a list. A URL may end in `]`
-        # (`wss://[::1]`), and trimming that alone would hand on a malformed address.
-        bracketed = value.startswith('[') and value.endswith(']')
-        entries = (value[1:-1] if bracketed else value).split(',')
-    else:
-        raise SystemExit(f'{flag} takes text; quote a value that reads as a number: \'"{value}"\'')
-    stripped = [entry.strip() for entry in entries]
-    if not all(stripped):
-        raise SystemExit(f'{flag} carries an empty entry: {value!r}')
-    return stripped
-
-
-def endpoint_of(spec: str, position: int) -> Endpoint:
-    """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
-
-    A URL carries `=` in a query string, so the part before the first one is a label only where it
-    names no scheme and no path.
-    """
-    label, separator, address = spec.partition('=')
-    if separator and ':' not in label and '/' not in label:
-        return Endpoint(name=label, url=address)
-    return Endpoint(name=f'policy{position}', url=spec)
-
-
-def plan_from_flags(
-    *,
-    policy_url: object,
-    tasks: object,
-    episodes: int | None,
-    cap: int | None,
-    preset: str | None,
-    transaction_key: str | None,
-    alias: str | None = None,
-    org: str | None = None,
-) -> EvalPlan:
-    """The plan the rig flags state, as a private request for `org`."""
-    task_ids = flag_entries(tasks, '--tasks')
-    urls = flag_entries(policy_url, '--policy-url')
-    if not task_ids or not urls or episodes is None:
-        raise SystemExit('a rig run states --tasks, --policy-url and --episodes, or the whole plan in a file')
-    if org is None:
-        raise SystemExit('a rig run states --org, the organisation it runs for')
-    try:
-        return EvalPlan(
-            request_type=PrivateEval(org=org),
-            tasks=[TaskNode(task_id=TaskRef(task_id)) for task_id in task_ids],
-            endpoints=[endpoint_of(spec, position) for position, spec in enumerate(urls, start=1)],
-            episodes_per_endpoint=episodes,
-            cap_per_episode_sec=cap,
-            policy_preset=preset,
-            transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
-            alias=alias,
-        )
-    except ValidationError as exc:
-        raise SystemExit(one_line(exc)) from exc
-    except ValueError as exc:
-        # A field type refuses its own value before the model sees it: a task id that is no id,
-        # an endpoint URL with no host. The message already names what it refused.
-        raise SystemExit(str(exc)) from exc
-
-
 def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCreateResponse:
     """File one plan with `submissions.create`, print what came back, and return it.
 
@@ -162,10 +86,3 @@ def plan_source(eval: object, from_file: str | None) -> Path | None:
     if eval is not None:
         raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
     return Path(from_file)
-
-
-def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:
-    """Exit when a plan file and plan flags are both given: one source states the plan."""
-    twice = sorted(flag for flag, value in stated.items() if given(value))
-    if twice:
-        raise SystemExit(f'{source} carries the whole plan; drop {", ".join(twice)}')

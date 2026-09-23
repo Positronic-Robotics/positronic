@@ -667,6 +667,38 @@ def test_compression_follows_the_handshake(runtime, compressed):
     session.close.assert_called_once()
 
 
+def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
+    qualities = []
+    monkeypatch.setattr(
+        'positronic.policy.remote.encode_jpeg', lambda image, quality: qualities.append(quality) or {'jpeg': b''}
+    )
+    session = _mock_session({**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: True})
+    session.infer.return_value = [{'value': 42}]
+    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = session
+    run = runtime.start(policy)
+    try:
+        run.send({'image': _make_image(48, 64)})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        runtime.close()
+        run.close()
+    assert qualities == [75]
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
+    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = _mock_session({offboard_keys.COMPRESS_IMAGES: compressed})
+    meta = policy.meta()
+    if compressed:
+        assert meta[policy_keys.JPEG_QUALITY] == 75
+    else:
+        assert policy_keys.JPEG_QUALITY not in meta
+
+
 @pytest.mark.parametrize('fails', [False, True])
 def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp_path, monkeypatch, fails):
     session = _mock_session()
@@ -675,7 +707,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
         session.infer.side_effect = TimeoutError('server stalled')
     encoded_at = []
 
-    def encode(image):
+    def encode(image, quality):
         encoded_at.append(time.time_ns())
         return {'jpeg': b''}
 
