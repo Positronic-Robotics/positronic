@@ -7,6 +7,7 @@ import av
 import numpy as np
 import pyarrow as pa
 import pytest
+import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 
 from positronic import keys
@@ -15,6 +16,7 @@ from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
+    _build_blueprint,
     _collect_signal_groups,
     _decimation_indices,
     _mp4_reduced_to,
@@ -172,6 +174,46 @@ def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     assert sent['/signals/progress.state'] == (changes, [[0.0], [1.0], [2.0], [1.0], [3.0]])
     names = styles['/signals/progress.state'].names.as_arrow_array().to_pylist()
     assert names == ['0 floating, 1 reaching, 2 contact, 3 at-target']
+
+
+def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_path, monkeypatch):
+    sent: dict[str, dict[str, list[int]]] = {}
+
+    def send_columns(path, indexes, columns):
+        sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        writer.append('robot.q', np.zeros(2), machine_clock)
+        writer.append('progress.state', 'floating', machine_clock + 1_500_000_000)
+        writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000)
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_500_000_000, 62_250_000_000]
+
+
+def _tabs(container: Any) -> list[rrb.Tabs]:
+    if isinstance(container, rrb.Tabs):
+        return [container]
+    return [tabs for child in getattr(container, 'contents', None) or [] for tabs in _tabs(child)]
+
+
+def test_a_tab_group_opens_on_its_text_signal(tmp_path):
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        for i, state in enumerate(_STATES):
+            writer.append('progress.delivered', float(i), 1_000_000_000 * (i + 1))
+            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
+            writer.append('robot.q', np.zeros(2), 1_000_000_000 * (i + 1))
+            writer.append('robot.dq', np.zeros(2), 1_000_000_000 * (i + 1))
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    tabs = {tab.name: tab.active_tab for tab in _tabs(_build_blueprint(_collect_signal_groups(ep), ep).root_container)}
+
+    assert tabs == {'progress': 1, 'robot': None}
 
 
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):

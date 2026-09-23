@@ -18,7 +18,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 from av.video.stream import VideoStream
-from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
+from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind, TimelineColumn
 from rerun.urdf import UrdfTree
 
 from positronic.dataset.dataset import Dataset
@@ -238,15 +238,18 @@ def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[st
 
 
 _TEXT_LOG_ENTITY = '/text'
+# A text log's own timeline: the `time` timeline reads as a date even where the clock counts from boot.
+_TIME_FROM_START = 'from start'
 
 
 def _text_log_view(sig: str) -> rrb.TextLogView:
     hidden = [TextLogColumn(kind, visible=False) for kind in (TextLogColumnKind.EntityPath, TextLogColumnKind.LogLevel)]
-    return rrb.TextLogView(
-        name=sig,
-        origin=f'{_TEXT_LOG_ENTITY}/{sig}',
-        columns=rrb.TextLogColumns(text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)]),
+    # The time cursor draws its line in the `time` column only, so that column stays visible.
+    columns = rrb.TextLogColumns(
+        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn('time', visible=True)],
+        text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)],
     )
+    return rrb.TextLogView(name=sig, origin=f'{_TEXT_LOG_ENTITY}/{sig}', columns=columns)
 
 
 def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
@@ -267,18 +270,19 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
             plot_legend=rrb.PlotLegend(visible=True),
             axis_y=rrb.ScalarAxis(range=(-0.5, len(signals.texts[sig]) - 0.5), zoom_lock=True),
         )
-        return rrb.Horizontal(steps, _text_log_view(sig), column_shares=[2, 1], name=sig)
+        return rrb.Horizontal(steps, _text_log_view(sig), column_shares=[3, 2], name=sig)
 
     def _view(sig: str) -> rrb.View | rrb.Horizontal:
         return _text_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
 
-    # Group time series by prefix, each group becomes a Tabs container
+    # Group time series by prefix, each group becomes a Tabs container that opens on its first text signal
     series_views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
             view = _view(sigs[0])
         else:
-            view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name)
+            texts = [index for index, sig in enumerate(sigs) if sig in signals.plotted_texts]
+            view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         series_views.append(view)
     series_views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
     if signals.unplotted:
@@ -313,7 +317,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
-        rrb.TimePanel(state=rrb.PanelState.Collapsed),
+        rrb.TimePanel(state=rrb.PanelState.Collapsed, timeline='time'),
         rrb.Vertical(*rows, row_shares=row_shares),
     )
 
@@ -708,12 +712,17 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
     A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
     """
     plotted = signals.plotted_texts
+    starts = [sig.start_ts for sig in ep.signals.values() if len(sig)]
+    recording_start = np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
     for key in signals.texts:
         sig = ep.signals[key]
         ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
-        time_idx = [rr.TimeColumn('time', timestamp=ts_arr[changes])]
+        time_idx = [
+            rr.TimeColumn('time', timestamp=ts_arr[changes]),
+            rr.TimeColumn(_TIME_FROM_START, duration=ts_arr[changes] - recording_start),
+        ]
         rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
 
         if key in plotted:
