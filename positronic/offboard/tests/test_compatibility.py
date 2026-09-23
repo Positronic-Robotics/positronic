@@ -172,10 +172,11 @@ def test_v1_schedule_counts_are_reported_only_for_a_stack_that_schedules(control
     runtime, now, calls = controlled_runtime
     timing = {'name': 'action_timestamp', 'args': {'fps': 10}}
     stack = StackV1(spec.from_spec({'seq': [{'name': 'chunked_schedule'}, timing]} if scheduled else timing))
-    run = runtime.start(stack, MagicMock())
+    run = runtime.start(stack, MagicMock(return_value=[{'value': i} for i in range(2)]))
     try:
         run.send({})
-        calls[0][0].set_result([{'value': i} for i in range(2)])
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
         run.send({})
         meta = runtime.episode_meta()
     finally:
