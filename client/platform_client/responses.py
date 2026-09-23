@@ -161,8 +161,9 @@ def _require_a_side(side: Placement, what: str) -> None:
 class ResolvedTask(BaseModel):
     """One task of a plan as the rig runs it: every property with its final value.
 
-    Each value is the one the nearest level states, else the task's catalogue default, else the
-    platform's draw (`README.md` §Eval plans). `ResolvedPlan.tasks` lists them in the plan's order.
+    The nearest level that states a value gives it; where none does, the task's catalogue entry gives
+    it, and where that gives none, the platform draws it (`README.md` §Eval plans).
+    `ResolvedPlan.tasks` lists the tasks in the plan's order.
     """
 
     task_id: TaskRef

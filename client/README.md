@@ -96,8 +96,8 @@ image runs the platform executes itself.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
-vantage, the clutter objects and the episode order. Each value is the one a level states, else the
-task's catalogue default, else a draw. The platform makes each draw once per plan, so every run of
+vantage, the clutter objects and the episode order. A level states a value, else the task's
+catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
 the plan lays out that scene and that table, and runs the episodes in that order.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
