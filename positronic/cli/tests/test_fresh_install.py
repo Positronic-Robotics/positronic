@@ -197,6 +197,7 @@ DOCUMENTED_COMMANDS = {
         f'--tasks={TASK}',
         '--episodes=10',
         '--cap=180',
+        '--org=acme',
     ],
     'eval-status': ['uv', 'run', 'positronic', 'eval', 'status', f'--id={SUBMISSION}'],
     'eval-list': ['uv', 'run', 'positronic', 'eval', 'list'],

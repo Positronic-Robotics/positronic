@@ -20,6 +20,7 @@ def submit(
     alias: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    org: str | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -27,7 +28,8 @@ def submit(
     that runs them, and the catalogue expands that name. Naming one the platform does not offer
     answers with the ones it does. An image pinned by digest runs the bytes you tested, while a
     mutable tag is resolved at submission time. Repeating a submission under one `transaction_key`
-    returns the original instead of spending another day's quota.
+    returns the original instead of spending another day's quota. `org` runs it as a private
+    request for that organisation instead of a `nebius_competition` one.
     """
     with refusing_bad_input():
         plan = plan_of_image(
@@ -35,6 +37,7 @@ def submit(
             EvalRef(eval_name),
             alias=alias,
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
+            org=org,
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)

@@ -60,7 +60,13 @@ plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras` and `
 endpoint states only its count. `episodes_total` is a checksum a caller may state.
 `max_cap_per_episode_sec` is the upper bound on every task's cap.
 
+`request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
+it names, and the caller must be a member of that org. The org's approvals decide the evals, the
+tasks and the endpoint kinds it may use. `nebius_competition` names one eval and one image
+endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
+
 ```yaml
+request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
@@ -83,7 +89,7 @@ external_cameras: {side: random}         # per mount, by the task's name for it
 
 `positronic eval run` files that plan with `submissions.create`. `--from-file` takes the plan
 file, and an `--eval` value is a name. The same flags state a plan
-without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap` and
+without a file — `--policy-url` (repeatable, `NAME=URL`), `--tasks`, `--episodes`, `--cap`, `--org` and
 `--preset`. The scene fields come from a plan file; a run stated in flags takes what each task's
 catalogue entry gives it. Two or more endpoints make one blind sample: the operator is told no
 policy, and each episode records which one served it. `eval status` and `eval list` read it back by
@@ -145,7 +151,7 @@ platform-register --alias=<display name>            # in a checkout: uv run plat
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180
+uv run positronic eval run --policy-url=baseline=wss://baseline.example/ws,candidate=wss://candidate.example/ws --tasks=<task id> --episodes=10 --cap=180 --org=<org>
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>

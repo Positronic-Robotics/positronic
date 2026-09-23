@@ -23,6 +23,7 @@ FLAGS = {
     'episodes': 10,
     'cap': 180,
     'preset': 'example_candidate',
+    'org': 'acme',
 }
 
 
@@ -33,6 +34,9 @@ def a_plan_file(directory: Path, name: str, payload: str) -> str:
 
 
 PLAN_YAML = f"""
+request_type:
+  type: private_eval
+  org: acme
 tasks:
   - {SPOONS}
 endpoints:
@@ -81,7 +85,7 @@ def test_a_bracketed_list_states_the_same_plan_as_the_comma_form(platform, run_c
 def test_a_bare_policy_url_is_named_for_its_place_in_the_list(platform, run_command):
     platform.answer(FILED)
 
-    run_command(run, policy_url=f'{BASELINE},{CANDIDATE}', tasks=SPOONS, episodes=2)
+    run_command(run, policy_url=f'{BASELINE},{CANDIDATE}', tasks=SPOONS, episodes=2, org='acme')
 
     assert [(entry['name'], entry['url']) for entry in platform.body['endpoints']] == [
         ('policy1', BASELINE),
@@ -94,7 +98,7 @@ def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
     # it names no scheme and no path.
     platform.answer(FILED)
 
-    run_command(run, policy_url='wss://h/ws?mode=native', tasks=SPOONS, episodes=1)
+    run_command(run, policy_url='wss://h/ws?mode=native', tasks=SPOONS, episodes=1, org='acme')
 
     assert platform.body['endpoints'][0] == {
         'name': 'policy1',
@@ -114,6 +118,7 @@ def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
 
 
 PLAN_JSON = json.dumps({
+    'request_type': {'type': 'private_eval', 'org': 'acme'},
     'tasks': [SPOONS],
     'endpoints': [{'name': 'baseline', 'url': BASELINE}],
     'episodes_per_endpoint': 4,
@@ -202,7 +207,7 @@ def test_an_eval_beside_a_plan_file_is_refused(platform, run_command, tmp_path: 
 
 def test_a_file_that_is_not_a_plan_names_the_field(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='episodes_per_endpoint'):
-        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'))
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'), org='acme')
     assert platform.seen is None
 
 
@@ -260,7 +265,7 @@ def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_c
     # takes it.
     platform.answer(FILED)
 
-    run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)
+    run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, org='acme', **switch)
 
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
 
@@ -281,7 +286,7 @@ def test_a_transaction_key_makes_a_retry_return_the_first_plan(platform, run_com
 
 def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(platform, run_command):
     with pytest.raises(SystemExit, match='not a task id'):
-        run_command(run, policy_url=BASELINE, tasks='Eight Spoons', episodes=1)
+        run_command(run, policy_url=BASELINE, tasks='Eight Spoons', episodes=1, org='acme')
     assert platform.seen is None
 
 
@@ -331,3 +336,14 @@ def test_a_labelled_url_takes_its_label():
         BASELINE,
     )
     assert (endpoint_of(BASELINE, 3).name, endpoint_of(BASELINE, 3).url) == ('policy3', BASELINE)
+
+
+def test_a_rig_run_states_the_org_it_runs_for(platform, run_command, tmp_path: Path):
+    with pytest.raises(SystemExit, match='--org'):
+        run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1)
+    platform.answer(FILED)
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='other')
+    assert platform.body['request_type'] == {'type': 'private_eval', 'org': 'other'}
+    with pytest.raises(SystemExit, match='drop --org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), org='other')

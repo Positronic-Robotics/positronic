@@ -244,11 +244,12 @@ def _file_for_the_rig(
     preset: str | None,
     transaction_key: str | None,
     alias: str | None,
+    org: str | None,
 ) -> SubmissionCreateResponse:
     """File the plan a file states, else the plan the flags state."""
     if source is not None:
         refusing_a_second_source(source, rig_only)
-        return file_plan(read_plan(source, transaction_key, alias), platform_url)
+        return file_plan(read_plan(source, transaction_key, alias, org), platform_url)
     if eval is not None:
         raise SystemExit(f'--eval={eval!r} names an eval: the rig runs a plan, from --from-file or from the flags')
     plan = plan_from_flags(
@@ -259,6 +260,7 @@ def _file_for_the_rig(
         preset=preset,
         transaction_key=transaction_key,
         alias=alias,
+        org=org,
     )
     return file_plan(plan, platform_url)
 
@@ -291,6 +293,7 @@ def run(
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    org: str | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -299,7 +302,9 @@ def run(
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a
     config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
     lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
-    in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
+    in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. ``--org`` names
+    the organisation a private run is for: a rig run needs it, and with ``--policy-image`` it makes a
+    private run instead of a `nebius_competition` one. A filed run —
     the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads;
     a run here answers the dataset it wrote.
 
@@ -328,6 +333,7 @@ def run(
                 '--transaction-key': transaction_key,
                 '--platform-url': platform_url,
                 '--from-file': from_file,
+                '--org': org,
                 **rig_only,
             },
             'local',
@@ -347,7 +353,9 @@ def run(
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
-        return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
+        return submit(
+            eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url, org=org
+        )
 
     if source is not None or any(given(value) for value in rig_only.values()):
         # The rig records under the client's own prefix, so it has no output of its own to name.
@@ -364,6 +372,7 @@ def run(
             preset=preset,
             transaction_key=transaction_key,
             alias=alias,
+            org=org,
         )
 
     raise SystemExit(_NO_POLICY_NAMED)

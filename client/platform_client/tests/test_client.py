@@ -27,7 +27,7 @@ from platform_client.enums import (
     SubmissionStatus,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Endpoint, EvalPlan, PrivateEval, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
@@ -211,6 +211,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     }
     gateway = Gateway(200, resolved)
     plan = EvalPlan(
+        request_type=PrivateEval(org='acme'),
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
         endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
         episodes_per_endpoint=2,
@@ -582,6 +583,7 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 # --- eval plans ---------------------------------------------------------------------------------
 
 PLAN = EvalPlan(
+    request_type=PrivateEval(org='acme'),
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
     endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
     episodes_per_endpoint=10,
