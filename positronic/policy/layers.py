@@ -93,7 +93,6 @@ class ScheduleAccount:
 
     def __init__(self) -> None:
         self._planned: Counter[str] = Counter()
-        self._emitted: Counter[str] = Counter()
         self._skipped: Counter[str] = Counter()
         self._late_ns: defaultdict[str, list[int]] = defaultdict(list)
         self._gap_max_ns: Counter[str] = Counter()
@@ -118,7 +117,6 @@ class ScheduleAccount:
             due_ns_by_name.update(dict.fromkeys(row, due_ns))
             commands.update(row)
         for name, due_ns in due_ns_by_name.items():
-            self._emitted[name] += 1
             self._late_ns[name].append(now_ns - due_ns)
             if name in self._chunk_emit_ns:
                 self._gap_max_ns[name] = max(self._gap_max_ns[name], now_ns - self._chunk_emit_ns[name])
@@ -130,7 +128,7 @@ class ScheduleAccount:
         for name, planned in self._planned.items():
             prefix = f'{eval_keys.SCHEDULE}.{name}'
             meta[f'{prefix}.{eval_keys.SCHEDULED}'] = planned
-            meta[f'{prefix}.{eval_keys.EMITTED}'] = self._emitted[name]
+            meta[f'{prefix}.{eval_keys.EMITTED}'] = len(self._late_ns[name])
             meta[f'{prefix}.{eval_keys.DROPPED}'] = self._skipped[name]
             if late_ns := self._late_ns[name]:
                 p50, p90 = np.percentile(late_ns, (50, 90))
