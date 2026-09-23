@@ -72,8 +72,6 @@ class Runtime(ABC):
     """What the framework offers one episode. Every episode gets its own.
 
     At episode shutdown, drain submitted work before closing live generators whose resources it may use.
-
-    TODO: Define how generators report episode metadata.
     """
 
     @property
@@ -127,6 +125,10 @@ class Runtime(ABC):
         timed = self._timed_run(run, telemetry.component_name(processor))
         next(timed)
         return timed
+
+    @abstractmethod
+    def report(self, source: Callable[[], Mapping[str, Any]]) -> None:
+        """Add ``source()`` to the episode's metadata. The runtime calls it once, when the episode ends."""
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
