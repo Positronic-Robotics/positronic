@@ -153,6 +153,10 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
 
 
+def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
+    return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
+
+
 def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     sent: dict[str, tuple[list[int], list[Any]]] = {}
     styles: dict[str, Any] = {}
@@ -285,10 +289,6 @@ def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeyp
 
     assert sent['/text/progress.state'] == [1_000_000_000, 2_000_000_000]
     assert sent['/signals/progress.state'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
-
-
-def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
-    return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
 
 
 def _timestamps_ns(hz: float, seconds: float) -> np.ndarray:

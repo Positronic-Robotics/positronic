@@ -63,6 +63,9 @@ def _pose_color(name: str) -> list[int]:
 # TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
 _MAX_PLOTTED_WIDTH = 32
 
+# The timeline every entity is logged on. The viewer page seeks on it by this name too.
+_TIMELINE = 'time'
+
 
 @dataclass
 class EpisodeSignals:
@@ -250,7 +253,7 @@ def _text_log_view(sig: str) -> rrb.TextLogView:
     hidden = [TextLogColumn(kind, visible=False) for kind in (TextLogColumnKind.EntityPath, TextLogColumnKind.LogLevel)]
     # FOOTGUN: rerun draws the time cursor line in the `time` column only, so this view shows no cursor line.
     columns = rrb.TextLogColumns(
-        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn('time', visible=False)],
+        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn(_TIMELINE, visible=False)],
         text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)],
     )
     return rrb.TextLogView(name=sig, origin=f'{_TEXT_LOG_ENTITY}/{sig}', columns=columns)
@@ -350,7 +353,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
-        rrb.TimePanel(state=rrb.PanelState.Collapsed, timeline='time'),
+        rrb.TimePanel(state=rrb.PanelState.Collapsed, timeline=_TIMELINE),
         rrb.Vertical(*rows, row_shares=row_shares),
     )
 
@@ -425,7 +428,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
         for packet in packets:
             assert packet.pts is not None
-            set_timeline_time('time', times_by_pts[packet.pts])
+            set_timeline_time(_TIMELINE, times_by_pts[packet.pts])
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
     first_frame = np.asarray(sig[0][0])
@@ -504,7 +507,7 @@ def _log_video_signals(
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
                 name,
-                indexes=[rr.TimeColumn('time', timestamp=our_ts[kept])],
+                indexes=[rr.TimeColumn(_TIMELINE, timestamp=our_ts[kept])],
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
@@ -513,7 +516,7 @@ def _log_video_signals(
 
 
 def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None:
-    time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
+    time_idx = [rr.TimeColumn(_TIMELINE, timestamp=ts_arr)]
     if vals.shape[1] == 1:
         rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
         return
@@ -629,7 +632,7 @@ def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, entity_path:
         quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
     rr.send_columns(
         entity_path,
-        indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+        indexes=[rr.TimeColumn(_TIMELINE, timestamp=ts_arr)],
         columns=rr.Transform3D.columns(
             translation=translations,
             quaternion=quaternions,
@@ -724,7 +727,7 @@ def _log_pose_signals(
 
         rr.send_columns(
             f'/3d/{key}',
-            indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+            indexes=[rr.TimeColumn(_TIMELINE, timestamp=ts_arr)],
             columns=[
                 *rr.Points3D.columns(positions=positions).partition([1] * len(ts_arr)),
                 *rr.Points3D.columns(colors=np.tile(color, (len(ts_arr), 1))).partition([1] * len(ts_arr)),
@@ -765,7 +768,7 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = [
-            rr.TimeColumn('time', timestamp=ts_arr[changes]),
+            rr.TimeColumn(_TIMELINE, timestamp=ts_arr[changes]),
             rr.TimeColumn(_TIME_FROM_START, duration=_to_centiseconds(ts_arr[changes] - recording_start)),
         ]
         rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
