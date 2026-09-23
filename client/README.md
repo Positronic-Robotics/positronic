@@ -92,7 +92,11 @@ it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan 
 tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
 Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
-image runs the platform executes itself.
+image runs the platform executes itself. `users.me` names the grant's client in `client`.
+
+Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
+as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
+episodes, and `outcome`, the kept, judged and successful episodes per endpoint.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the

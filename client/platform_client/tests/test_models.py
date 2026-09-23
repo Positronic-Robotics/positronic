@@ -45,15 +45,18 @@ from platform_client.responses import (
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    EndpointOutcome,
     EpisodeCounts,
     ErroredSubmissionView,
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
+    PlanOutcome,
     QuotaLimit,
     RankingRow,
     RankingsResponse,
     RegisterResponse,
+    ReplayLink,
     ResolvedEndpoint,
     ResolvedPlan,
     ResolvedTask,
@@ -184,6 +187,7 @@ MODELS: list[BaseModel] = [
     ),
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
+    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], client='acme'),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
@@ -213,6 +217,20 @@ MODELS: list[BaseModel] = [
         artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
+    FinishedSubmissionView(
+        id=SUB,
+        artifacts=ArtifactRefs(result='s3://b/episodes/'),
+        replay=ReplayLink(url='https://viewer.example/v/token/', expires_at=AT),
+        outcome=PlanOutcome(endpoints=[EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3)]),
+        runs=[
+            RunSummary(
+                run_tag='blind_20260904-160621',
+                started_at=AT,
+                ended_at=AT,
+                episodes=EpisodeCounts(total=10, done=9, outstanding=1),
+            )
+        ],
+    ),
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
     RankingsResponse(
@@ -769,3 +787,19 @@ def test_the_resolved_total_is_the_sum_over_the_tasks():
     assert RESOLVED.tasks[0].episodes == 3
     with pytest.raises(ValidationError, match='episodes_total states 4'):
         ResolvedPlan(episodes_total=4, tasks=[RESOLVED_TASK])
+
+
+def test_a_plan_outcome_totals_its_endpoints():
+    outcome = PlanOutcome(
+        endpoints=[
+            EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3),
+            EndpointOutcome(endpoint='b', kept=10, judged=10, succeeded=6),
+        ]
+    )
+    assert (outcome.kept, outcome.judged, outcome.succeeded) == (19, 14, 9)
+
+
+def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
+    """The fields are additive: a payload that carries none of them still validates."""
+    view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
+    assert view.replay is None and view.outcome is None
