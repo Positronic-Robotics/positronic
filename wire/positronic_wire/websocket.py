@@ -231,7 +231,7 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     def session_url(self, address: wire.UnixSocketAddress) -> str:
         """The socket and the route on it, as this wire names one session."""
         query = f'?{address.query}' if address.query else ''
-        return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
+        return f'{self.SCHEME}+unix://{address.socket_url_path()}{address.path}{query}'
 
     def address_of(self, url: str) -> wire.UnixSocketAddress:
         return wire.UnixSocketAddress.from_url(url)

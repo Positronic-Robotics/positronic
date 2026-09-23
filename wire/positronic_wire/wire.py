@@ -39,9 +39,19 @@ _SESSION_ROUTE = re.compile(rf'{re.escape(SESSION_PATH)}(?=/|$)')
 
 
 def split_url(url: str) -> urllib.parse.SplitResult:
-    """``url`` in its parts. A URL with no leading ``<scheme>://`` is ``host[:port]...``, and its scheme is empty."""
+    """``url`` in its parts. A URL with no leading ``<scheme>://`` is ``host[:port]...``, and its scheme is empty.
+
+    Raises ``ValueError`` where ``url`` names a user or holds a ``#``: no address carries either, and a ``#``
+    ends the path before the name it was part of.
+    """
     stripped = url.strip()
-    return urllib.parse.urlsplit(stripped if _LEADING_SCHEME.match(stripped) else f'//{stripped}')
+    split = urllib.parse.urlsplit(stripped if _LEADING_SCHEME.match(stripped) else f'//{stripped}')
+    # `:secret@host` carries a credential under an EMPTY username, so the `@` is what names a user.
+    if '@' in split.netloc:
+        raise ValueError(f'{url!r} names a user, which no wire address carries')
+    if '#' in stripped:
+        raise ValueError(f'{url!r} names a fragment, which no wire address carries')
+    return split
 
 
 def _session_route(path: str, url: str) -> str:
@@ -118,13 +128,16 @@ class UnixSocketAddress(SessionAddress):
             raise ValueError(f'{self.uds!r} is a relative socket path; name an absolute one')
         if _SESSION_ROUTE.search(str(self.uds)):
             raise ValueError(f'{self.uds!r} holds the session route {SESSION_PATH!r}, so no URL can name it')
+        if '\0' in str(self.uds):
+            raise ValueError(f'{self.uds!r} holds a NUL byte, which no socket path holds')
 
     @classmethod
     def from_url(cls, url: str) -> 'UnixSocketAddress':
         """The socket and the session ``scheme:///<socket>[/api/v1/session[/<model>]][?query]`` names.
 
-        The socket path runs to the session route. Raises ``ValueError`` where ``url`` names a host, which a
-        socket cannot reach, or a path that ends in a slash, which names a directory.
+        The socket path runs to the session route, and is percent-decoded; ``socket_url_path`` encodes it.
+        Raises ``ValueError`` where ``url`` names a host, which a socket cannot reach, or a path that ends in
+        a slash, which names a directory.
         """
         split = split_url(url)
         if split.netloc:
@@ -134,6 +147,10 @@ class UnixSocketAddress(SessionAddress):
         if not PurePosixPath(socket).name or socket.endswith('/'):
             raise ValueError(f'a socket URL names a socket file, and this one names none: {url!r}')
         return cls(Path(urllib.parse.unquote(socket)), _session_route(path, url), split.query)
+
+    def socket_url_path(self) -> str:
+        """``uds`` as a URL path: each character a URL reads as a delimiter or as an escape is percent-encoded."""
+        return urllib.parse.quote(str(self.uds), safe='/')
 
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')

@@ -288,32 +288,3 @@ def test_a_send_after_a_failed_send_raises_at_once():
     with pytest.raises(wire.PeerDisconnected):
         conn.send(b'again')
     assert time.monotonic() - refused < 1.0, 'the second send waited instead of raising'
-
-
-@pytest.mark.parametrize(
-    ('client_wire', 'url', 'address'),
-    [
-        (
-            client_grpc.GrpcClientWire(),
-            'grpc://localhost:9000',
-            wire.HostPortAddress('localhost', 9000, wire.SESSION_PATH, ''),
-        ),
-        (
-            client_grpc.GrpcClientWire(),
-            'grpc://localhost',
-            wire.HostPortAddress('localhost', 80, wire.SESSION_PATH, ''),
-        ),
-        (
-            client_grpc.GrpcClientWire(),
-            'grpc://localhost:9000/api/v1/session/10000?fps=10',
-            wire.HostPortAddress('localhost', 9000, '/api/v1/session/10000', 'fps=10'),
-        ),
-        (
-            client_grpc.GrpcTlsClientWire(),
-            'grpcs://localhost',
-            wire.HostPortAddress('localhost', 443, wire.SESSION_PATH, ''),
-        ),
-    ],
-)
-def test_a_grpc_member_reads_a_url_into_its_address_on_its_own_default_port(client_wire, url, address):
-    assert client_wire.address_of(url) == address

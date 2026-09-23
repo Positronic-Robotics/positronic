@@ -26,21 +26,15 @@ class RoboarenaAddress(wire.SessionAddress):
         """The host and the port ``scheme://<host>:<port>`` names.
 
         Raises ``ValueError`` where ``url`` names no port, because a server publishes no default one. Raises
-        where it names a path, a query, a fragment or a user too, because the wire dials the root alone.
+        where it names a path or a query too, because the wire dials the root alone.
         """
         split = wire.split_url(url)
         port = split.port
         if not split.hostname or port is None:
             raise ValueError(f'roboarena address {url!r} names no host and port; write <scheme>://<host>:<port>')
-        # FOOTGUN: `scheme://:secret@host:8000` carries a credential under an EMPTY username.
         dropped = [
             name
-            for name, present in (
-                ('a path', split.path not in ('', '/')),
-                ('a query', bool(split.query)),
-                ('a fragment', bool(split.fragment)),
-                ('a user', '@' in split.netloc),
-            )
+            for name, present in (('a path', split.path not in ('', '/')), ('a query', bool(split.query)))
             if present
         ]
         if dropped:

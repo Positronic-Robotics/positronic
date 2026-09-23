@@ -100,3 +100,30 @@ def test_the_readme_package_table_lists_every_public_name():
         ]
         unlisted = [name for name in names if not name.startswith('_') and not re.search(rf'`{name}\b', rows[module])]
         assert unlisted == [], module
+
+
+# Addresses a caller builds with ``session_path``, whose names hold what a URL reads as a delimiter.
+_BUILT_ADDRESSES: dict[type[wire.SessionAddress], list[wire.SessionAddress]] = {
+    wire.HostPortAddress: [
+        wire.HostPortAddress('gpu-box', 9000, wire.session_path('org/a b?#%;@'), 'fps=10'),
+        wire.HostPortAddress('::1', 8000, wire.session_path(), ''),
+    ],
+    wire.UnixSocketAddress: [
+        wire.UnixSocketAddress(Path('/run/a b?#%;@\u00fc.sock '), wire.session_path('org/model'), 'fps=10'),
+        wire.UnixSocketAddress(Path('/run/api/v1/sessions/policy.sock'), wire.session_path(), ''),
+    ],
+    roboarena.RoboarenaAddress: [roboarena.RoboarenaAddress('::1', 8000)],
+}
+
+
+@pytest.mark.parametrize(
+    ('name', 'address'),
+    [
+        (name, address)
+        for name, client_wire in registry.CLIENT_WIRES.items()
+        for address in _BUILT_ADDRESSES[client_wire.ADDRESS]
+    ],
+)
+def test_every_wire_reads_back_the_session_url_it_writes(name, address):
+    client_wire = registry.client_wire(name)
+    assert client_wire.address_of(client_wire.session_url(address)) == address

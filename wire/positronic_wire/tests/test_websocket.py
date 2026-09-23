@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from positronic_wire import grpc as client_grpc
 from positronic_wire import websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidStatus
@@ -205,85 +206,135 @@ def test_a_socket_address_refuses_a_relative_path():
         wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')
 
 
-def test_a_socket_address_refuses_a_path_that_holds_the_session_route():
-    """A URL ends the socket where the route starts, so no URL names a socket under the route."""
-    with pytest.raises(ValueError, match='holds the session route'):
-        wire.UnixSocketAddress(Path('/run/api/v1/session/policy.sock'), wire.session_path(), '')
+_SESSION = wire.SESSION_PATH
+# One row per URL component. A tuple is the address the URL names, and a port of ``None`` is the member's own
+# ``DEFAULT_PORT``. A string is the refusal.
+_HOST_PORT_GRAMMAR = [
+    # Whitespace around the URL
+    ('  ws://localhost:8000  ', ('localhost', 8000, _SESSION, '')),
+    # Scheme
+    ('grpcs://localhost:8000', ('localhost', 8000, _SESSION, '')),
+    ('localhost:8000', ('localhost', 8000, _SESSION, '')),
+    ('localhost:8000/api/v1/session?next=http://peer', ('localhost', 8000, _SESSION, 'next=http://peer')),
+    # User
+    ('ws://user:pass@localhost:8000/api/v1/session', 'names a user'),
+    ('ws://:secret@localhost:8000', 'names a user'),
+    ('user@localhost:8000', 'names a user'),
+    # Host
+    ('ws://GPU-Box:9000', ('gpu-box', 9000, _SESSION, '')),
+    # Empty host
+    ('ws://:8000', 'no host'),
+    ('ws:///api/v1/session', 'no host'),
+    # IPv6 literal
+    ('ws://[::1]:8000', ('::1', 8000, _SESSION, '')),
+    ('[::1]', ('::1', None, _SESSION, '')),
+    # Port
+    ('ws://localhost', ('localhost', None, _SESSION, '')),
+    ('ws://localhost:', ('localhost', None, _SESSION, '')),
+    ('ws://localhost:port', 'Port could not be cast'),
+    ('ws://localhost:70000', 'Port out of range'),
+    # Path
+    ('ws://localhost:8000/api/v1/session/org/model', ('localhost', 8000, '/api/v1/session/org/model', '')),
+    ('ws://localhost:8000/healthz', 'unexpected path'),
+    ('ws://localhost:8000/api/v1/sessions', 'unexpected path'),
+    # Trailing slash
+    ('ws://localhost:8000/', ('localhost', 8000, _SESSION, '')),
+    ('ws://localhost:8000/api/v1/session/', ('localhost', 8000, _SESSION, '')),
+    ('ws://localhost:8000/api/v1/session/model/', ('localhost', 8000, '/api/v1/session/model/', '')),
+    # A path that repeats the session route
+    ('ws://localhost:8000/api/v1/session/api/v1/session', ('localhost', 8000, '/api/v1/session/api/v1/session', '')),
+    # Params
+    ('ws://localhost:8000/api/v1/session;x', 'unexpected path'),
+    ('ws://localhost:8000/api/v1/session/model;v=1', ('localhost', 8000, '/api/v1/session/model;v=1', '')),
+    # Query
+    (
+        'ws://localhost:8000/api/v1/session?codec.fps=10&pad=false',
+        ('localhost', 8000, _SESSION, 'codec.fps=10&pad=false'),
+    ),
+    # Fragment
+    ('ws://localhost:8000/api/v1/session/model#revision', 'names a fragment'),
+    ('ws://localhost:8000#', 'names a fragment'),
+    # Percent-encoding
+    (
+        'ws://gpu%2dbox:8000/api/v1/session/org%2Fmodel?x=a%20b',
+        ('gpu%2dbox', 8000, '/api/v1/session/org%2Fmodel', 'x=a%20b'),
+    ),
+]
 
 
-@pytest.mark.parametrize('uds', [Path('/run/api/v1/session.sock'), Path('/run/api/v1/sessions/policy.sock')])
-def test_a_socket_beside_the_session_route_reads_back_from_its_own_url(uds):
-    client_wire = websocket.WebsocketUnixClientWire()
-    address = wire.UnixSocketAddress(uds, wire.session_path('10000'), 'fps=10')
+@pytest.mark.parametrize(
+    'client_wire',
+    [
+        websocket.WebsocketClientWire(),
+        websocket.WebsocketTlsClientWire(),
+        client_grpc.GrpcClientWire(),
+        client_grpc.GrpcTlsClientWire(),
+    ],
+    ids=lambda client_wire: client_wire.NAME,
+)
+@pytest.mark.parametrize(('url', 'named'), _HOST_PORT_GRAMMAR)
+def test_a_host_port_member_reads_a_url_by_the_grammar(client_wire, url, named):
+    if isinstance(named, str):
+        with pytest.raises(ValueError, match=named):
+            client_wire.address_of(url)
+        return
+    host, port, path, query = named
+    address = wire.HostPortAddress(host, client_wire.DEFAULT_PORT if port is None else port, path, query)
+    assert client_wire.address_of(url) == address
     assert client_wire.address_of(client_wire.session_url(address)) == address
 
 
-@pytest.mark.parametrize(
-    ('client_wire', 'url', 'address'),
-    [
-        (websocket.WebsocketClientWire(), 'ws://localhost:8000', _ADDRESS),
-        (websocket.WebsocketClientWire(), 'localhost:8000/api/v1/session/', _ADDRESS),
-        (websocket.WebsocketClientWire(), 'http://localhost', dataclasses.replace(_ADDRESS, port=80)),
-        (websocket.WebsocketClientWire(), 'ws://[::1]:8000', dataclasses.replace(_ADDRESS, host='::1')),
-        (
-            websocket.WebsocketClientWire(),
-            'localhost:8000/api/v1/session?next=http://peer',
-            dataclasses.replace(_ADDRESS, query='next=http://peer'),
-        ),
-        (
-            websocket.WebsocketClientWire(),
-            'ws://gpu-box:9000/api/v1/session?next=http://peer',
-            wire.HostPortAddress('gpu-box', 9000, wire.SESSION_PATH, 'next=http://peer'),
-        ),
-        (
-            websocket.WebsocketClientWire(),
-            'ws://localhost:8000/api/v1/session/org/model?codec.fps=10&pad=false',
-            dataclasses.replace(_ADDRESS, path='/api/v1/session/org/model', query='codec.fps=10&pad=false'),
-        ),
-        (websocket.WebsocketTlsClientWire(), 'wss://localhost', dataclasses.replace(_ADDRESS, port=443)),
-        (websocket.WebsocketTlsClientWire(), 'https://localhost:8443', dataclasses.replace(_ADDRESS, port=8443)),
-    ],
-)
-def test_a_host_port_member_reads_a_url_into_its_address_on_its_own_default_port(client_wire, url, address):
+# One row per URL component. A tuple is the socket, the route and the query the URL names. A string is the
+# refusal.
+_SOCKET_GRAMMAR = [
+    # Whitespace around the URL
+    ('  unix:///run/policy.sock  ', ('/run/policy.sock', _SESSION, '')),
+    # Scheme
+    ('ws+unix:///run/policy.sock', ('/run/policy.sock', _SESSION, '')),
+    ('/run/policy.sock', ('/run/policy.sock', _SESSION, '')),
+    # User
+    ('unix://user@/run/policy.sock', 'names a user'),
+    # Host, IPv6 literal, port
+    ('unix://localhost/run/policy.sock', 'names no host'),
+    ('unix://[::1]/run/policy.sock', 'names no host'),
+    ('unix://:8000/run/policy.sock', 'names no host'),
+    # Path
+    ('unix:///run/policy.sock/api/v1/session/10000', ('/run/policy.sock', '/api/v1/session/10000', '')),
+    ('unix:///run/api/v1/session.sock', ('/run/api/v1/session.sock', _SESSION, '')),
+    ('unix:///run/api/v1/sessions/policy.sock', ('/run/api/v1/sessions/policy.sock', _SESSION, '')),
+    ('unix:///', 'names none'),
+    ('unix:///run/', 'names none'),
+    ('unix:///api/v1/session', 'names none'),
+    # Trailing slash
+    ('unix:///run/policy.sock/', 'names none'),
+    ('unix:///run/policy.sock/api/v1/session/', ('/run/policy.sock', _SESSION, '')),
+    ('unix:///run/policy.sock/api/v1/session/model/', ('/run/policy.sock', '/api/v1/session/model/', '')),
+    # A path that repeats the session route
+    (
+        'unix:///run/policy.sock/api/v1/session/api/v1/session',
+        ('/run/policy.sock', '/api/v1/session/api/v1/session', ''),
+    ),
+    ('unix:///run%2Fapi%2Fv1%2Fsession%2Fpolicy.sock', 'holds the session route'),
+    # Params
+    ('unix:///run/policy;v=1.sock/api/v1/session/model;v=1', ('/run/policy;v=1.sock', '/api/v1/session/model;v=1', '')),
+    # Query
+    ('unix:///run/policy.sock?fps=10', ('/run/policy.sock', _SESSION, 'fps=10')),
+    # Fragment
+    ('unix:///run/policy#1.sock', 'names a fragment'),
+    # Percent-encoding
+    ('unix:///run/my%20policy%3F%231.sock?x=a%20b', ('/run/my policy?#1.sock', _SESSION, 'x=a%20b')),
+    ('unix:///run/policy%00.sock', 'holds a NUL byte'),
+]
+
+
+@pytest.mark.parametrize(('url', 'named'), _SOCKET_GRAMMAR)
+def test_the_socket_member_reads_a_url_by_the_grammar(url, named):
+    client_wire = websocket.WebsocketUnixClientWire()
+    if isinstance(named, str):
+        with pytest.raises(ValueError, match=named):
+            client_wire.address_of(url)
+        return
+    uds, path, query = named
+    address = wire.UnixSocketAddress(Path(uds), path, query)
     assert client_wire.address_of(url) == address
-
-
-@pytest.mark.parametrize(
-    ('url', 'refused'),
-    [
-        ('ws://:8000', 'no host'),
-        ('ws://localhost:8000/healthz', 'unexpected path'),
-        ('ws://localhost:port', 'Port could not be cast'),
-    ],
-)
-def test_a_host_port_member_refuses_a_url_that_names_no_session(url, refused):
-    with pytest.raises(ValueError, match=refused):
-        websocket.WebsocketClientWire().address_of(url)
-
-
-@pytest.mark.parametrize(
-    ('url', 'address'),
-    [
-        ('unix:///run/policy.sock', wire.UnixSocketAddress(Path('/run/policy.sock'), wire.SESSION_PATH, '')),
-        (
-            'unix:///run/policy.sock/api/v1/session/10000?fps=10',
-            wire.UnixSocketAddress(Path('/run/policy.sock'), '/api/v1/session/10000', 'fps=10'),
-        ),
-        ('unix:///run/my%20policy.sock', wire.UnixSocketAddress(Path('/run/my policy.sock'), wire.SESSION_PATH, '')),
-    ],
-)
-def test_the_socket_member_reads_the_socket_up_to_the_session_route(url, address):
-    assert websocket.WebsocketUnixClientWire().address_of(url) == address
-
-
-@pytest.mark.parametrize(
-    ('url', 'refused'),
-    [
-        ('unix://localhost/run/policy.sock', 'names no host'),
-        ('unix:///run/', 'names none'),
-        ('unix:///api/v1/session', 'names none'),
-    ],
-)
-def test_the_socket_member_refuses_a_host_and_a_directory(url, refused):
-    with pytest.raises(ValueError, match=refused):
-        websocket.WebsocketUnixClientWire().address_of(url)
+    assert client_wire.address_of(client_wire.session_url(address)) == address
