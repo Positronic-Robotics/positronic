@@ -18,7 +18,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 from av.video.stream import VideoStream
-from rerun.blueprint.datatypes import TextLogColumn
+from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
 
 from positronic.dataset.dataset import Dataset
@@ -176,9 +176,6 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
 _UNPLOTTED_ENTITY = '/unplotted'
 
 
-_TEXT_LOG_ENTITY = '/text'
-
-
 def _unplotted_notice(unplotted: dict[str, str]) -> str:
     lines = '\n'.join(f'- `{name}` — {holds}' for name, holds in sorted(unplotted.items()))
     return (
@@ -240,12 +237,15 @@ def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[st
     return list(groups.items())
 
 
+_TEXT_LOG_ENTITY = '/text'
+
+
 def _text_log_view(sig: str) -> rrb.TextLogView:
-    hidden = [TextLogColumn(kind, visible=False) for kind in ('EntityPath', 'LogLevel')]
+    hidden = [TextLogColumn(kind, visible=False) for kind in (TextLogColumnKind.EntityPath, TextLogColumnKind.LogLevel)]
     return rrb.TextLogView(
         name=sig,
         origin=f'{_TEXT_LOG_ENTITY}/{sig}',
-        columns=rrb.TextLogColumns(text_log_columns=[*hidden, TextLogColumn('Body')]),
+        columns=rrb.TextLogColumns(text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)]),
     )
 
 
@@ -503,38 +503,6 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
     return np.asarray(kept, dtype=np.intp)
 
 
-def _changes(values: np.ndarray) -> np.ndarray:
-    """Indices where ``values`` differ from the sample before, the first sample included."""
-    return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
-
-
-def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
-    """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
-
-    A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
-    """
-    plotted = signals.plotted_texts
-    for key in signals.texts:
-        sig = ep.signals[key]
-        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
-        texts = np.asarray([str(value) for value in sig.values()], dtype=object)
-        changes = _changes(texts)
-        time_idx = [rr.TimeColumn('time', timestamp=ts_arr[changes])]
-        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
-
-        if key in plotted:
-            values = plotted[key]
-            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
-            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
-            rr.log(f'/signals/{key}', style, static=True)
-            # The last sample holds the final value to the end of the episode.
-            shown = np.union1d(changes, [len(texts) - 1])
-            index_of = {value: index for index, value in enumerate(values)}
-            indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
-            _send_scalar_columns(key, ts_arr[shown], indices.reshape(-1, 1))
-        yield from drainer.drain()
-
-
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
@@ -726,6 +694,38 @@ def _log_pose_signals(
                 *rr.Points3D.columns(radii=np.full(len(ts_arr), 0.01)),
             ],
         )
+        yield from drainer.drain()
+
+
+def _changes(values: np.ndarray) -> np.ndarray:
+    """Indices where ``values`` differ from the sample before, the first sample included."""
+    return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
+
+
+def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+    """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
+
+    A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
+    """
+    plotted = signals.plotted_texts
+    for key in signals.texts:
+        sig = ep.signals[key]
+        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        texts = np.asarray([str(value) for value in sig.values()], dtype=object)
+        changes = _changes(texts)
+        time_idx = [rr.TimeColumn('time', timestamp=ts_arr[changes])]
+        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
+
+        if key in plotted:
+            values = plotted[key]
+            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
+            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
+            rr.log(f'/signals/{key}', style, static=True)
+            # The last sample holds the final value to the end of the episode.
+            shown = np.union1d(changes, [len(texts) - 1])
+            index_of = {value: index for index, value in enumerate(values)}
+            indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
+            _send_scalar_columns(key, ts_arr[shown], indices.reshape(-1, 1))
         yield from drainer.drain()
 
 
