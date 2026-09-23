@@ -213,6 +213,16 @@ def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
         Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, image=PolicyImage('org/p:v1'))
 
 
+def test_an_image_endpoint_refuses_any_wire_but_the_websocket():
+    with pytest.raises(ValidationError, match='an image endpoint takes the websocket wire'):
+        Endpoint.model_validate({'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'grpc'})
+
+
+def test_an_image_endpoint_on_the_websocket_wire_is_accepted():
+    entry = Endpoint.model_validate({'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'})
+    assert entry.wire is Wire.websocket
+
+
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
     # The catalogue expands the name into the tasks and the count each takes, so the plan states
     # neither.

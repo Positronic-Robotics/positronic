@@ -254,6 +254,11 @@ class Endpoint(Cascade):
                 raise ValueError(
                     f'image endpoint {self.name!r} names an address, a provider or a spec; the platform runs the image'
                 )
+            if self.wire is not None and self.wire is not Wire.websocket:
+                raise ValueError(
+                    f'image endpoint {self.name!r} names the {slug_of(self.wire)} wire; an image endpoint takes the '
+                    f'{slug_of(Wire.websocket)} wire, which the platform opens every image session on'
+                )
         elif self.provider is not None or self.spec is not None or self.image is not None:
             raise ValueError(
                 f'remote endpoint {self.name!r} names a provider, a spec or an image, which only a served or an '
@@ -463,7 +468,7 @@ def plan_of_image(
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
-    The endpoint names the websocket wire, which is the one the platform opens every image session on.
+    The endpoint names the websocket wire: the platform opens every image session over the websocket.
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
     neither.
     """

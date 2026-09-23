@@ -91,7 +91,8 @@ wire declares its own fields: `host`, `port`, `path` and `query` on the websocke
 `uds`, `path` and `query` on `websocket_unix`; `host` and `port` on `roboarena`. `path` is the
 session route (`/api/v1/session`, or `/api/v1/session/<model>`), and `query` defaults to empty. A
 `served` endpoint names the `spec` the platform brings up, and the platform records the address. An
-`image` endpoint names the container the platform runs. Every kind names its wire, and there is no
+`image` endpoint names the container the platform runs, and it takes only the `websocket` wire: the
+platform opens every image session over the websocket. Every kind names its wire, and there is no
 default. A record carries no URL: a `url` field is refused, and so is a scheme in `host`. The kinds
 refuse each other's fields, so an entry cannot carry two answers to the same question.
 
