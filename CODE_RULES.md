@@ -418,6 +418,6 @@ _PARK_MAX_CORRECTION_RAD = 0.05
 
 # Good — the default is the bench we measured; another instantiator passes its own
 @dataclass(frozen=True)
-class ParkTuning:
+class SettleTuning:
     max_correction_rad: float = 0.05
 ```

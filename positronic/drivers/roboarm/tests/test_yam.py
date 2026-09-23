@@ -1,4 +1,6 @@
+import dataclasses
 import logging
+import types
 
 import numpy as np
 import pytest
@@ -13,7 +15,7 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
-DEFAULT_TUNING = yam.ParkTuning()
+DEFAULT_TUNING = yam.PARK_SETTLE
 
 
 class FakeYam(yam._FakeYam):
@@ -245,7 +247,7 @@ def test_a_gap_wider_than_the_correction_bound_keeps_the_arm_powered(rig, caplog
 
 
 def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
-    rig = Rig(yam.ParkTuning(max_correction_rad=0.2))
+    rig = Rig(dataclasses.replace(DEFAULT_TUNING, max_correction_rad=0.2))
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.0, 0.12, 0.0, 0.0, 0.0])
     rig.finish()
@@ -253,13 +255,19 @@ def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
     assert rig.vendor.closed
 
 
-def test_the_hardware_configs_give_each_arm_its_own_park_tuning():
-    wide = yam.ParkTuning(max_correction_rad=0.2)
-    arm = roboarm_cfg.yam.override(**{'park_tuning.max_correction_rad': 0.2}).instantiate()
-    assert arm._park_tuning == wide
-    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, **{'park_tuning.left.max_correction_rad': 0.2})
+def test_the_hardware_configs_give_each_arm_its_own_tuning():
+    wide = dataclasses.replace(DEFAULT_TUNING, max_correction_rad=0.2)
+    slow = dataclasses.replace(yam.MOVE_SETTLE, max_speed_rad_s=0.2)
+    arm = roboarm_cfg.yam.override(**{
+        'park_tuning.max_correction_rad': 0.2,
+        'move_tuning.max_speed_rad_s': 0.2,
+    }).instantiate()
+    assert (arm._park_tuning, arm._move_tuning) == (wide, slow)
+    bimanual = embodiment_cfg.yam_bimanual.override(
+        cameras={}, **{'park_tuning.left.max_correction_rad': 0.2, 'move_tuning.right.max_speed_rad_s': 0.2}
+    )
     arms = [system for system in bimanual.instantiate().control_systems if isinstance(system, yam.Robot)]
-    assert [arm._park_tuning for arm in arms] == [wide, DEFAULT_TUNING]
+    assert [(arm._park_tuning, arm._move_tuning) for arm in arms] == [(wide, yam.MOVE_SETTLE), (DEFAULT_TUNING, slow)]
 
 
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
@@ -306,13 +314,72 @@ def test_ordinary_move_can_arrive_with_an_error_that_parking_closes(world, rig):
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
     wire_call(world, caller, rig.driver.sync_move)
     answer = caller(command.JointPosition(RAISED))
-    rig.tick(2.5)
+    rig.tick(3.5)
     assert answer.done()
     answer.result()
     assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
     np.testing.assert_array_equal(rig.vendor.targets[-1][:6], RAISED)
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
+def _sync_caller(world, rig):
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
+    wire_call(world, caller, rig.driver.sync_move)
+    return caller
+
+
+def _until_answered(rig, answer, within_s=60.0):
+    deadline = rig.clock.now() + within_s
+    while not answer.done():
+        assert rig.clock.now() < deadline, 'the move was never answered'
+        rig.tick()
+
+
+def test_a_move_the_servo_holds_short_of_its_tolerance_settles_onto_its_target(world, rig):
+    """A servo that holds joint 3 short by 28.5 mrad, past the 20 mrad arrival tolerance, fails one ramp."""
+    rig.tick(4)
+    rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+@pytest.mark.parametrize('distance', [0.5, 1.047, 2.0])
+def test_a_blocking_move_is_paced_by_the_distance_it_travels(world, rig, monkeypatch, distance):
+    rig.tick(4)
+    target = np.array([0.0, distance, distance, 0.0, 0.0, 0.0])
+    commands = []
+    send = rig.vendor.command_joint_pos
+
+    def record(joint_pos):
+        commands.append((rig.clock.now(), joint_pos[:6].copy()))
+        send(joint_pos)
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', record)
+    started = rig.clock.now()
+    answer = _sync_caller(world, rig)(command.JointPosition(target))
+    _until_answered(rig, answer)
+    answer.result()
+    times = np.array([time for time, _ in commands])
+    targets = np.array([target for _, target in commands])
+    speed = yam.MOVE_SETTLE.max_speed_rad_s
+    assert np.all(np.abs(np.diff(targets, axis=0)) <= speed * np.diff(times)[:, None] + 1e-10)
+    assert rig.clock.now() - started >= distance / speed
+
+
+def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
+    """A policy's per-step command is its own: it goes to the chain as sent, whatever the servo holds."""
+    rig.tick(4)
+    rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
+    rig.commands.push(command.JointPosition(RAISED))
+    rig.tick()
+    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], RAISED)
+    sent = len(rig.vendor.targets)
+    rig.tick(0.5)  # inside the rig's one-second idle limit, so no park takes over
+    assert all(np.array_equal(target[:6], RAISED) for target in rig.vendor.targets[sent:])
 
 
 def test_parking_accepts_error_within_its_tolerance(rig):
@@ -342,16 +409,16 @@ def test_parking_finishes_after_measured_arrival_and_stopping(rig):
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
 
 
-def test_ordinary_move_keeps_its_shorter_timeout(world, rig):
+def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
     rig.tick(4)
     rig.vendor.stuck = True
-    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
-    wire_call(world, caller, rig.driver.sync_move)
-    answer = caller(command.JointPosition(RAISED))
-    rig.tick(4)
-    assert answer.done()
-    with pytest.raises(TimeoutError, match='after 3s'):
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    tuning = yam.MOVE_SETTLE
+    pass_s = float(np.max(RAISED)) / tuning.max_speed_rad_s + tuning.settle_timeout_s
+    _until_answered(rig, answer, within_s=tuning.attempts * pass_s)
+    with pytest.raises(TimeoutError, match='rests'):
         answer.result()
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
 
 
 def test_world_exit_parks_a_foreground_yam_before_closing():
@@ -493,6 +560,82 @@ def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
     assert 'before verified parking' in caplog.text
     assert not rig.vendor.closed
     assert not rig.vendor.released_at
+
+
+class FakeMotorInterface:
+    """Stands for i2rt's single-motor CAN interface, the only thing that can disable a motor."""
+
+    def __init__(self, vendor, refuses, **opened_with):
+        self.vendor = vendor
+        self.refuses = refuses
+        self.opened_with = opened_with
+        self.off = []
+        self.closed = False
+
+    def motor_off(self, motor_id):
+        assert self.vendor.closed, 'a motor was disabled before close() joined the control thread'
+        if motor_id in self.refuses:
+            raise OSError(f'motor {motor_id} did not answer')
+        self.off.append(motor_id)
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def motors(rig, monkeypatch):
+    """Give the rig's chain seven CAN motors, and collect every interface the driver opens to disable them."""
+    rig.vendor.motor_chain = types.SimpleNamespace(
+        channel='can_arm',
+        motor_list=[(motor_id, 'DM4310') for motor_id in range(1, 8)],
+        motor_interface=types.SimpleNamespace(control_mode='mit'),
+    )
+    opened = []
+    refuses = set()
+
+    def open_interface(**kwargs):
+        opened.append(FakeMotorInterface(rig.vendor, refuses, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', open_interface)
+    return opened, refuses
+
+
+def test_a_parked_shutdown_disables_the_motors_after_it_closes_the_chain(rig, motors):
+    opened, _ = motors
+    rig.raise_arm()
+    rig.finish()
+    assert [interface.off for interface in opened] == [[1, 2, 3, 4, 5, 6, 7]]
+    assert opened[0].closed
+    assert opened[0].opened_with == {'channel': 'can_arm', 'control_mode': 'mit', 'name': 'power-off'}
+
+
+def test_a_motor_that_will_not_answer_leaves_the_others_disabled(rig, motors, caplog):
+    opened, refuses = motors
+    refuses.add(3)
+    rig.raise_arm()
+    rig.finish()
+    assert opened[0].off == [1, 2, 4, 5, 6, 7]
+    assert '[3]' in caplog.text
+    assert opened[0].closed
+
+
+def test_a_blocked_shutdown_leaves_the_motors_enabled(rig, motors):
+    opened, _ = motors
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.stop.stopped = True
+    rig.tick(30)
+    assert not opened
+
+
+def test_a_chain_with_no_motors_opens_no_interface(rig, monkeypatch):
+    opened = []
+    monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', lambda **kwargs: opened.append(kwargs))
+    rig.raise_arm()
+    rig.finish()
+    assert not opened
+    assert rig.vendor.closed
 
 
 @pytest.fixture
