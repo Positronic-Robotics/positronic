@@ -88,7 +88,6 @@ yam_bimanual = pipeline.override(
     ),
     fps=30.0,
     horizon_sec=25 / 30,
-    # Three raw frames are ~2.3 MB a request, which a lab uplink sends in most of a second.
     compress_images=True,
 )
 
