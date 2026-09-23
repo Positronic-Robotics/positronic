@@ -17,7 +17,6 @@ import contextlib
 import logging
 import math
 from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import mujoco as mj
@@ -33,6 +32,7 @@ from positronic.utils import package_assets_path
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
 from .models import DEFAULT_FRAME
+from .park import ParkTuning
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
 with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
@@ -51,20 +51,6 @@ _IK_ROT_TOL = 1e-2  # radians
 _PARK_JOINTS = np.zeros(6)
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
-
-
-@dataclass(frozen=True)
-class ParkTuning:
-    """How close the park must land, and what it may spend to get there.
-
-    A position servo holds its chain a steady distance short of the reference, and that distance differs
-    between two arms. The park measures it and asks for a reference past the parking pose, by up to
-    ``max_correction_rad``. The defaults fit the arm the driver was brought up on.
-    """
-
-    tolerance_rad: float = 0.005  # every joint must rest this close to the parking pose
-    attempts: int = 6  # correction passes before the park fails
-    max_correction_rad: float = 0.05  # the most the reference may lie past the parking pose, per joint
 
 
 def _connect(channel: str, sim: bool):
