@@ -38,6 +38,7 @@ from platform_client.responses import (
     MeResponse,
     RankingsResponse,
     RegisterResponse,
+    ResolvedPlan,
     SubmissionCreateResponse,
     SubmissionListResponse,
     SubmissionView,
@@ -166,6 +167,10 @@ class PlatformClient:
         """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
         is refused `forbidden`."""
         return self._post(routes.SUBMISSIONS_CREATE, plan, SubmissionCreateResponse)
+
+    def resolve_plan(self, plan: EvalPlan) -> ResolvedPlan:
+        """The plan as it would run, with nothing filed."""
+        return self._post(routes.SUBMISSIONS_RESOLVE, plan, ResolvedPlan)
 
     def list_submissions(
         self, *, after: SubmissionId | None = None, limit: int | None = None
