@@ -254,7 +254,7 @@ def test_the_server_negotiates_no_deflate_with_a_client_that_offers_it(stub_serv
     host, port, *_ = stub_server
     with connect(f'ws://{host}:{port}{wire.SESSION_PATH}') as ws:
         assert ws.protocol.extensions == []
-        assert deserialise(ws.recv(timeout=10))[protocol.STATUS] == 'ready'
+        assert deserialise(ws.recv(timeout=10))[protocol.STATUS] == protocol.ServerStatus.READY
 
 
 def test_no_codec(stub_server):
