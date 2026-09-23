@@ -5,6 +5,7 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic import keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.settle import SettleTuning
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -68,6 +69,15 @@ def yam(robot_arm, cameras):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
+    park_tuning={
+        'left': positronic.cfg.hardware.roboarm.yam_park_tuning,
+        'right': positronic.cfg.hardware.roboarm.yam_park_tuning,
+    },
+    move_tuning={
+        'left': positronic.cfg.hardware.roboarm.yam_move_tuning,
+        'right': positronic.cfg.hardware.roboarm.yam_move_tuning,
+    },
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
@@ -77,7 +87,15 @@ def yam(robot_arm, cameras):
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+def yam_bimanual(
+    left_channel: str,
+    right_channel: str,
+    mounts: dict[str, list[float]],
+    cameras,
+    park_after_idle_s: float | None,
+    park_tuning: dict[str, SettleTuning],
+    move_tuning: dict[str, SettleTuning],
+):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
@@ -90,7 +108,13 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     from positronic.drivers.roboarm import yam as yam_driver
 
     arms = {
-        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
+        side: yam_driver.Robot(
+            channel,
+            base_pose=geom.Transform3D(mounts[side]),
+            park_after_idle_s=park_after_idle_s,
+            park_tuning=park_tuning[side],
+            move_tuning=move_tuning[side],
+        )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {
