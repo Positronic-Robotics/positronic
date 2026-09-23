@@ -595,9 +595,10 @@ class World:
             raise BaseExceptionGroup('Background shutdown interrupted', errors)
 
     @contextlib.contextmanager
-    def _defer_sigint(self, errors: list[BaseException]) -> Iterator[None]:
+    def _defer_sigint(self, errors: list[BaseException], *, registering_protected: bool = False) -> Iterator[None]:
         has_protected_systems = (
-            bool(self._protected_foreground_loops)
+            registering_protected
+            or bool(self._protected_foreground_loops)
             or ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
         )
         if not has_protected_systems or threading.current_thread() is not threading.main_thread():
@@ -1014,22 +1015,34 @@ class World:
                 daemon=True,
                 name=name,
             )
-            try:
-                p.start()
-            except Exception as e:
-                # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
-                # to be picklable. Provide a clearer error than "can't pickle local object".
-                raise RuntimeError(
-                    f'Failed to spawn background process for {name!r}. '
-                    f'Current pid={os.getpid()}. '
-                    'Background control systems must be picklable under spawn. '
-                    'If you captured closures, lambdas, bound methods with non-picklable state, '
-                    'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
-                    'inside the background process or run them in the main process.'
-                ) from e
-            self.background_processes.append(p)
-            self._shutdown_policies[p] = shutdown_policy
-            logger.info(f'Started background process {name} (pid {p.pid})')
+            # A Ctrl-C between the spawn and the registration would leave a protected child unjoined.
+            errors: list[BaseException] = []
+            with self._defer_sigint(
+                errors, registering_protected=shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION
+            ):
+                self._spawn_and_register(p, name, shutdown_policy)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup('Background start interrupted', errors)
+
+    def _spawn_and_register(self, p: BaseProcess, name: str, shutdown_policy: ShutdownPolicy) -> None:
+        try:
+            p.start()
+        except Exception as e:
+            # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
+            # to be picklable. Provide a clearer error than "can't pickle local object".
+            raise RuntimeError(
+                f'Failed to spawn background process for {name!r}. '
+                f'Current pid={os.getpid()}. '
+                'Background control systems must be picklable under spawn. '
+                'If you captured closures, lambdas, bound methods with non-picklable state, '
+                'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
+                'inside the background process or run them in the main process.'
+            ) from e
+        self._shutdown_policies[p] = shutdown_policy
+        self.background_processes.append(p)
+        logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
