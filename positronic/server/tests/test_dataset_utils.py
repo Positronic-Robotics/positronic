@@ -196,6 +196,25 @@ def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_p
     assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_500_000_000, 62_250_000_000]
 
 
+def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp_path, monkeypatch):
+    sent: dict[str, dict[str, list[int]]] = {}
+
+    def send_columns(path, indexes, columns):
+        sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        writer.append('words', np.array(['a', 'b']), 1_000_000_000)
+        writer.append('robot.q', np.zeros(2), 3_000_000_000)
+        writer.append('progress.state', 'floating', 4_000_000_000)
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+
+    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_000_000_000]
+
+
 def _tabs(container: Any) -> list[rrb.Tabs]:
     if isinstance(container, rrb.Tabs):
         return [container]

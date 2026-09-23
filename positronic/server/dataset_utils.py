@@ -713,14 +713,20 @@ def _to_centiseconds(durations: np.ndarray) -> np.ndarray:
     return np.round(durations / step).astype(np.int64) * step
 
 
+def _recording_start(ep: Episode, signals: EpisodeSignals) -> np.datetime64:
+    """The first time the recording logs, which the viewer's time and its `?t=` link count from."""
+    logged = {*signals.videos, *signals.plotted, *signals.texts, *signals.poses, *signals.joints}
+    starts = [ep.signals[name].start_ts for name in logged if len(ep.signals[name])]
+    return np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
+
+
 def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
     A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
     """
     plotted = signals.plotted_texts
-    starts = [sig.start_ts for sig in ep.signals.values() if len(sig)]
-    recording_start = np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
+    recording_start = _recording_start(ep, signals)
     for key in signals.texts:
         sig = ep.signals[key]
         ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
