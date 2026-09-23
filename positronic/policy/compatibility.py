@@ -146,8 +146,13 @@ class StackV1(Sequential):
 
     def run(self, runtime: Runtime, *dependencies: Any) -> PolicyRun:
         (infer,) = dependencies
+        components = list(self._components)
+        # Codecs under the innermost layer run in the submitted work, so a tick that sends nothing encodes nothing.
+        while components and isinstance(tail := components[-1], Codec):
+            components.pop()
+            infer = tail.wrap(infer)
         call = self._inference(runtime, infer)
-        for component in reversed(self._components):
+        for component in reversed(components):
             if isinstance(component, _LayerV1):
                 call = component.bind(runtime, call)
             else:
