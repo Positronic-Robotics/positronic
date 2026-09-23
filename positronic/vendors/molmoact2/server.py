@@ -35,16 +35,24 @@ def molmoact2_model(hf_repo: str, device_map: str, norm_tag: str, num_steps: int
 
 
 @cfn.config(codec=molmoact2_codecs.droid)
-def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None):
+def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None, compress_images: bool = False):
     return PolicyDeployment(
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()),
+        codec,
+        compress_images=compress_images,
     )
 
 
 droid = pipeline
 droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
 # The checkpoint predicts 30 steps at 30 Hz; the upstream YAM example executes the first 25 of them.
-yam_bimanual = pipeline.override(codec=molmoact2_codecs.yam_bimanual, fps=30.0, horizon_sec=25 / 30)
+yam_bimanual = pipeline.override(
+    codec=molmoact2_codecs.yam_bimanual,
+    fps=30.0,
+    horizon_sec=25 / 30,
+    # Three raw frames are ~2.3 MB a request, which a lab uplink sends in most of a second.
+    compress_images=True,
+)
 yam_bimanual_model = molmoact2_model.override(
     hf_repo=BIMANUAL_YAM_HF_REPO, norm_tag='yam_dual_molmoact2', state_dim=BIMANUAL_YAM_STATE_DIM
 )
