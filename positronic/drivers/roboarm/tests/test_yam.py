@@ -122,7 +122,7 @@ class Rig:
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
-            connect=lambda channel, sim: ports['vendor'],
+            connect=lambda channel, sim, gravity_comp_factor: ports['vendor'],
             park_after_idle_s=1.0,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
@@ -598,7 +598,7 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
 
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     with pimm.World(virtual_time=True) as world:
         loop = world.start(driver)
         for _ in range(150):
@@ -610,7 +610,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     read = vendor.get_observations
     armed = []
 
@@ -904,7 +904,7 @@ def test_commands_do_not_interrupt_shutdown_parking(world, rig):
 def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
     connections = []
 
-    def connect(channel, sim):
+    def connect(channel, sim, gravity_comp_factor):
         vendor = FakeYam()
         connections.append(vendor)
         return vendor
@@ -1051,3 +1051,32 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
     assert 'Publishing the arm state failed during shutdown' in caplog.text
+
+
+STATION_GRAVITY_COMP = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]
+
+
+def _connected_with(**kwargs) -> dict:
+    """Start a ``Robot`` built with ``kwargs`` and return what it asked its vendor factory for."""
+    seen = {}
+
+    def connect(channel, sim, gravity_comp_factor):
+        seen.update(channel=channel, sim=sim, gravity_comp_factor=gravity_comp_factor)
+        return FakeYam()
+
+    loop = yam.Robot('can0', connect=connect, **kwargs).run(StopFlag(), MockClock())
+    next(loop)  # the chain is opened before the driver yields for the first time
+    loop.close()
+    return seen
+
+
+def test_a_station_hands_its_gravity_compensation_to_the_chain():
+    """i2rt holds a joint against a gravity model of its own, and a joint that model reads short settles below
+    where it is sent. The factors a station measured are no use to it unless the driver passes them on."""
+    passed = _connected_with(gravity_comp_factor=STATION_GRAVITY_COMP)['gravity_comp_factor']
+    np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_a_station_that_measured_none_leaves_the_vendor_its_own():
+    """A station that names no factors keeps i2rt's own. A vector of ones would switch the compensation off."""
+    assert _connected_with()['gravity_comp_factor'] is None
