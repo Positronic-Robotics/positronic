@@ -193,6 +193,22 @@ def test_an_overrun_skips_all_but_the_last_due_row_and_counts_the_skip(execution
     }
 
 
+def test_a_new_chunk_counts_the_due_rows_it_replaces_as_dropped(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 600_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    meta = runtime.episode_meta()
+    run.close()
+    assert emitted == [0, 0]
+    prefix = f'{eval_keys.SCHEDULE}.{MOTOR}'
+    assert meta[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
+    assert meta[f'{prefix}.{eval_keys.EMITTED}'] == 2
+    assert meta[f'{prefix}.{eval_keys.DROPPED}'] == 4
+
+
 def test_horizon_cuts_commands_but_preserves_boundary(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10, horizon_sec=0.15), lambda obs: [{MOTOR: i} for i in range(5)])
