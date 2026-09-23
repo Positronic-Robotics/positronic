@@ -167,3 +167,31 @@ def test_the_address_carries_the_host_and_the_port_alone():
     assert (address.path, address.query) == ('', '')
     assert address.at_root() is address
     assert roboarena.RoboarenaClientWire().ADDRESS is roboarena.RoboarenaAddress
+
+
+@pytest.mark.parametrize(
+    ('url', 'address'),
+    [
+        ('roboarena://a-partner-host:8000', _ADDRESS),
+        ('roboarena://a-partner-host:8000/', _ADDRESS),
+        ('roboarena://[::1]:8000', roboarena.RoboarenaAddress('::1', 8000)),
+    ],
+)
+def test_a_url_names_the_host_and_the_port_the_wire_dials(url, address):
+    assert roboarena.RoboarenaClientWire().address_of(url) == address
+
+
+@pytest.mark.parametrize(
+    ('url', 'refused'),
+    [
+        ('roboarena://a-partner-host', 'names no host and port'),
+        ('roboarena://:8000', 'names no host and port'),
+        ('roboarena://a-partner-host:8000/api/v1/session', 'a path'),
+        ('roboarena://a-partner-host:8000?fps=10', 'a query'),
+        ('roboarena://a-partner-host:8000#x', 'a fragment'),
+        ('roboarena://:secret@a-partner-host:8000', 'a user'),
+    ],
+)
+def test_a_url_that_names_no_port_or_more_than_the_root_is_refused(url, refused):
+    with pytest.raises(ValueError, match=refused):
+        roboarena.RoboarenaClientWire().address_of(url)

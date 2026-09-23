@@ -8,7 +8,7 @@ installable on its own, with `grpcio` and `websockets` as its only dependencies.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.4.0"
+uv add "positronic-wire==0.5.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -36,7 +36,7 @@ serves it, and this package holds the client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `split_url(url)`, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises |
@@ -51,7 +51,17 @@ needs.
 
 A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
 `roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
-leaves out on the members that carry one.
+leaves out on the members that carry one. `TAKES_EDGE_HEADERS` says whether a caller hands the wire the
+headers its own edge authenticates on: `roboarena` is `False`, because another party runs its server,
+and every other member is `True`.
+
+- `address_of(url)` — the address `url` names on this wire. The caller selects the wire, and the wire
+  reads the rest of the URL and ignores its scheme. The host-and-port members read
+  `host[:port][/api/v1/session[/<model>]][?query]`, with the port defaulting to `DEFAULT_PORT` and the
+  route to the pinned model's. `websocket_unix` reads `scheme:///<socket>[<route>][?query]`, where the
+  socket path runs to the session route. `roboarena` reads `scheme://<host>:<port>` and refuses a URL
+  without a port, or with a path, a query, a fragment or a user. A URL no address fits raises
+  `ValueError`.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
@@ -175,8 +185,9 @@ A consumer moves onto the wire in this order, each step green on its own:
 1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
    local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
    names its wire, then that wire's address** — the fields `ClientWire.ADDRESS` declares, which differ
-   per wire. Report the registry's names in the deploy handshake and retire any per-transport version
-   floor.
+   per wire. A record that still holds a URL has its wire read it with `address_of`, and a caller
+   reads `TAKES_EDGE_HEADERS` before it hands a wire its edge's headers. Report the registry's names
+   in the deploy handshake and retire any per-transport version floor.
 2. Replace the transport-specific dial with `probe`, and the exception-name match with
    `isinstance(raised, (wire.ConnectRefused, wire.PeerDisconnected, TimeoutError))`.
 3. Move the consumer's own transports into their own `ClientWire` subclasses, each declaring the

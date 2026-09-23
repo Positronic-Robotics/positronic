@@ -203,3 +203,64 @@ def test_a_socket_address_refuses_a_relative_path():
     """`--policy.address.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
     with pytest.raises(ValueError, match='relative socket path'):
         wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')
+
+
+@pytest.mark.parametrize(
+    ('client_wire', 'url', 'address'),
+    [
+        (websocket.WebsocketClientWire(), 'ws://localhost:8000', _ADDRESS),
+        (websocket.WebsocketClientWire(), 'localhost:8000/api/v1/session/', _ADDRESS),
+        (websocket.WebsocketClientWire(), 'http://localhost', dataclasses.replace(_ADDRESS, port=80)),
+        (websocket.WebsocketClientWire(), 'ws://[::1]:8000', dataclasses.replace(_ADDRESS, host='::1')),
+        (
+            websocket.WebsocketClientWire(),
+            'ws://localhost:8000/api/v1/session/org/model?codec.fps=10&pad=false',
+            dataclasses.replace(_ADDRESS, path='/api/v1/session/org/model', query='codec.fps=10&pad=false'),
+        ),
+        (websocket.WebsocketTlsClientWire(), 'wss://localhost', dataclasses.replace(_ADDRESS, port=443)),
+        (websocket.WebsocketTlsClientWire(), 'https://localhost:8443', dataclasses.replace(_ADDRESS, port=8443)),
+    ],
+)
+def test_a_host_port_member_reads_a_url_into_its_address_on_its_own_default_port(client_wire, url, address):
+    assert client_wire.address_of(url) == address
+
+
+@pytest.mark.parametrize(
+    ('url', 'refused'),
+    [
+        ('ws://:8000', 'no host'),
+        ('ws://localhost:8000/healthz', 'unexpected path'),
+        ('ws://localhost:port', 'Port could not be cast'),
+    ],
+)
+def test_a_host_port_member_refuses_a_url_that_names_no_session(url, refused):
+    with pytest.raises(ValueError, match=refused):
+        websocket.WebsocketClientWire().address_of(url)
+
+
+@pytest.mark.parametrize(
+    ('url', 'address'),
+    [
+        ('unix:///run/policy.sock', wire.UnixSocketAddress(Path('/run/policy.sock'), wire.SESSION_PATH, '')),
+        (
+            'unix:///run/policy.sock/api/v1/session/10000?fps=10',
+            wire.UnixSocketAddress(Path('/run/policy.sock'), '/api/v1/session/10000', 'fps=10'),
+        ),
+        ('unix:///run/my%20policy.sock', wire.UnixSocketAddress(Path('/run/my policy.sock'), wire.SESSION_PATH, '')),
+    ],
+)
+def test_the_socket_member_reads_the_socket_up_to_the_session_route(url, address):
+    assert websocket.WebsocketUnixClientWire().address_of(url) == address
+
+
+@pytest.mark.parametrize(
+    ('url', 'refused'),
+    [
+        ('unix://localhost/run/policy.sock', 'names no host'),
+        ('unix:///run/', 'names none'),
+        ('unix:///api/v1/session', 'names none'),
+    ],
+)
+def test_the_socket_member_refuses_a_host_and_a_directory(url, refused):
+    with pytest.raises(ValueError, match=refused):
+        websocket.WebsocketUnixClientWire().address_of(url)

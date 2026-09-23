@@ -1,16 +1,17 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries a protocol's frames as opaque bytes and reads none of them. Nothing here reads a URL:
-a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
-spells whatever its library takes.
+A wire carries a protocol's frames as opaque bytes and reads none of them. A caller names the wire it
+wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and nothing here reads a wire off a URL scheme.
+The wire alone reads a URL into its address, and spells whatever its library takes.
 """
 
 import abc
 import dataclasses
+import re
 import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import ClassVar, Generic, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
@@ -29,6 +30,21 @@ def session_path(model: str = '') -> str:
     slashes as separators and the server decodes the rest.
     """
     return f'{SESSION_PATH}/{urllib.parse.quote(model, safe="/")}' if model else SESSION_PATH
+
+
+def split_url(url: str) -> urllib.parse.SplitResult:
+    """``url`` in its parts. A URL with no ``://`` is ``host[:port]...``, and its scheme is empty."""
+    stripped = url.strip()
+    return urllib.parse.urlsplit(stripped if '://' in stripped else f'//{stripped}')
+
+
+def _session_route(path: str, url: str) -> str:
+    """The session route ``path`` names: ``SESSION_PATH`` where it names none."""
+    if path.rstrip('/') in ('', SESSION_PATH):
+        return SESSION_PATH
+    if not path.startswith(f'{SESSION_PATH}/'):
+        raise ValueError(f'unexpected path {path!r} in {url!r}; expected {SESSION_PATH}[/<model>]')
+    return path
 
 
 def bracket_ipv6(host: str) -> str:
@@ -61,6 +77,19 @@ class HostPortAddress(SessionAddress):
     path: str
     query: str
 
+    @classmethod
+    def from_url(cls, url: str, default_port: int) -> 'HostPortAddress':
+        """The session ``[scheme://]host[:port][/api/v1/session[/<model>]][?query]`` names.
+
+        The scheme is the caller's to read. Raises ``ValueError`` where ``url`` names no host, or a path that
+        is not a session route.
+        """
+        split = split_url(url)
+        if not split.hostname:
+            raise ValueError(f'no host in {url!r}')
+        port = default_port if split.port is None else split.port
+        return cls(split.hostname, port, _session_route(split.path, url), split.query)
+
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')
 
@@ -81,6 +110,22 @@ class UnixSocketAddress(SessionAddress):
         # different socket to each caller.
         if not self.uds.is_absolute():
             raise ValueError(f'{self.uds!r} is a relative socket path; name an absolute one')
+
+    @classmethod
+    def from_url(cls, url: str) -> 'UnixSocketAddress':
+        """The socket and the session ``scheme:///<socket>[/api/v1/session[/<model>]][?query]`` names.
+
+        The socket path runs to the session route. Raises ``ValueError`` where ``url`` names a host, which a
+        socket cannot reach, or a path that ends in a slash, which names a directory.
+        """
+        split = split_url(url)
+        if split.netloc:
+            raise ValueError(f'a socket URL names no host, and this one names {split.netloc!r}: {url!r}')
+        route = re.search(rf'{re.escape(SESSION_PATH)}(?=/|$)', split.path)
+        socket, path = (split.path, '') if route is None else (split.path[: route.start()], split.path[route.start() :])
+        if not PurePosixPath(socket).name or socket.endswith('/'):
+            raise ValueError(f'a socket URL names a socket file, and this one names none: {url!r}')
+        return cls(Path(urllib.parse.unquote(socket)), _session_route(path, url), split.query)
 
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')
@@ -130,6 +175,16 @@ class ClientWire(abc.ABC, Generic[AddressT]):
     NAME: ClassVar[str]
     # The address this wire dials. A caller that built another wire's address is refused by it.
     ADDRESS: ClassVar[type[SessionAddress]]
+    # Whether a caller hands this wire the headers its own edge authenticates on. A server that another
+    # party runs sits behind no edge of the caller's, and does not get them.
+    TAKES_EDGE_HEADERS: ClassVar[bool]
+
+    @abc.abstractmethod
+    def address_of(self, url: str) -> AddressT:
+        """The address ``url`` names on this wire. Raises ``ValueError`` where this wire dials none.
+
+        The caller selects the wire; this reads the rest of ``url`` and ignores its scheme.
+        """
 
     @abc.abstractmethod
     def session_url(self, address: AddressT) -> str:

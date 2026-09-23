@@ -43,6 +43,22 @@ def test_a_name_selects_its_member(name, kind):
     assert type(registry.client_wire(name)) is kind
 
 
+# rules-allow: hardcoded-keys — the names are spelled as a caller types them, as in the table test above.
+@pytest.mark.parametrize(
+    ('name', 'takes_edge_headers'),
+    [
+        ('websocket', True),
+        ('websocket_tls', True),
+        ('websocket_unix', True),
+        ('grpc', True),
+        ('grpc_tls', True),
+        ('roboarena', False),
+    ],
+)
+def test_a_server_another_party_runs_does_not_get_the_edge_headers(name, takes_edge_headers):
+    assert registry.client_wire(name).TAKES_EDGE_HEADERS is takes_edge_headers
+
+
 def test_a_name_no_wire_carries_is_refused_naming_every_wire():
     with pytest.raises(ValueError, match='websocket, websocket_tls, websocket_unix, grpc, grpc_tls, roboarena'):
         registry.client_wire('ws')

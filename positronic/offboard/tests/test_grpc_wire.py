@@ -427,6 +427,9 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
         def session_url(self, address):
             return client_wire.session_url(address)
 
+        def address_of(self, url):
+            return client_wire.address_of(url)
+
         def list_models(self, address, headers, open_timeout):
             return client_wire.list_models(address, headers, open_timeout)
 

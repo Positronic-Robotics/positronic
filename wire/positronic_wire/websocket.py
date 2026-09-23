@@ -77,6 +77,7 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
 
     # The URL scheme this wire writes for a session.
     SCHEME: ClassVar[str]
+    TAKES_EDGE_HEADERS = True
 
     def _refusal(self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.AddressT) -> wire.Refusal:
         """What a handshake that did not open says about the server, in this wire's terms."""
@@ -165,6 +166,9 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     def session_url(self, address: wire.HostPortAddress) -> str:
         return self.handshake_url(address)
 
+    def address_of(self, url: str) -> wire.HostPortAddress:
+        return wire.HostPortAddress.from_url(url, self.DEFAULT_PORT)
+
     def _connect(self, address: wire.HostPortAddress, **settings) -> Connection:
         return connect(self.handshake_url(address), **settings)
 
@@ -228,6 +232,9 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
         """The socket and the route on it, as this wire names one session."""
         query = f'?{address.query}' if address.query else ''
         return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
+
+    def address_of(self, url: str) -> wire.UnixSocketAddress:
+        return wire.UnixSocketAddress.from_url(url)
 
     def _api_connection(self, address: wire.UnixSocketAddress, open_timeout: float) -> HTTPConnection:
         """The catalogue answers on the session's own socket, beside the sessions."""

@@ -52,6 +52,9 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
 
+    def address_of(self, url: str) -> wire.HostPortAddress:
+        return wire.HostPortAddress.from_url(url, 0)
+
     def list_models(self, address: wire.HostPortAddress, headers, open_timeout: float) -> list[str]:
         self.catalogue_reads.append((address, headers, open_timeout))
         return self.models
