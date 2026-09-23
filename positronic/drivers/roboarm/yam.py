@@ -16,6 +16,7 @@ on close (``zero_torque_mode``).
 import contextlib
 import logging
 import math
+from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -52,6 +53,7 @@ _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limi
 _IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
 _PARK_JOINTS = np.zeros(6)
+_OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -268,10 +270,6 @@ class _Arm(DriverRun[command.CommandType]):
             return False
         return abs(self._grip(obs) - grip) < tuning.grip_tolerance
 
-    @staticmethod
-    def _still(obs: dict[str, np.ndarray], tuning: SettleTuning) -> bool:
-        return bool(np.all(np.abs(obs[_JOINT_VEL]) < tuning.still_velocity_rad_s))
-
     def _move_timeout(
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
     ) -> TimeoutError:
@@ -302,13 +300,15 @@ class _Arm(DriverRun[command.CommandType]):
     ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], _Rest] | None]:
         """Ramp to ``reference`` at the tuning's pace, then wait until every joint holds still.
 
-        Return the reading and where the chain rests. ``ON_GOAL`` needs every joint within tolerance and still
-        for ``tuning.still_time_s`` with no break. Return None when a stop abandons the move.
+        The chain is still when each joint's measured position spans at most ``tuning.still_position_rad`` over
+        the last ``tuning.still_time_s``. The velocity readings play no part: a real chain reports speed spikes
+        at rest. Return the reading and where the chain rests. ``ON_GOAL`` needs every reading in that window
+        within tolerance. Return None when a stop abandons the move.
         """
         start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         travel_s = max(tuning.min_ramp_s, float(np.max(np.abs(reference - start))) / tuning.max_speed_rad_s)
         timeout_s = travel_s + tuning.settle_timeout_s
-        still_since = arrived_since = None
+        window: deque[tuple[float, np.ndarray, bool]] = deque()  # (elapsed, joints, on goal) since the ramp ended
         started = self.clock.now()
         while True:
             if self.should_stop.value and interrupt_on_stop:
@@ -318,17 +318,30 @@ class _Arm(DriverRun[command.CommandType]):
             if elapsed > timeout_s:
                 raise self._move_timeout(obs, goal, grip, timeout_s, tuning.tolerance_rad)
 
-            still = elapsed >= travel_s and self._still(obs, tuning)
-            arrived = still and self._arrived(obs, goal, grip, tuning)
-            still_since = (elapsed if still_since is None else still_since) if still else None
-            arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
-            if arrived_since is not None and elapsed - arrived_since >= tuning.still_time_s:
-                return obs, self._Rest.ON_GOAL
-            if arrived_since is None and still_since is not None and elapsed - still_since >= tuning.still_time_s:
-                return obs, self._Rest.SHORT_OF_GOAL
+            if elapsed >= travel_s:
+                window.append((
+                    elapsed,
+                    np.asarray(obs[_JOINT_POS], dtype=np.float64),
+                    self._arrived(obs, goal, grip, tuning),
+                ))
+                while len(window) > 1 and window[1][0] <= elapsed - tuning.still_time_s:
+                    window.popleft()
+                if self._still(window, elapsed, tuning):
+                    if all(on_goal for _, _, on_goal in window):
+                        return obs, self._Rest.ON_GOAL
+                    if not window[-1][2]:
+                        return obs, self._Rest.SHORT_OF_GOAL
 
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
             yield self.limiter.wait()
+
+    @staticmethod
+    def _still(window: deque[tuple[float, np.ndarray, bool]], elapsed: float, tuning: SettleTuning) -> bool:
+        """Whether the window spans ``still_time_s`` and every joint's position spread stays within bounds."""
+        if window[0][0] > elapsed - tuning.still_time_s:
+            return False
+        joints = np.stack([q for _, q, _ in window])
+        return bool(np.all(np.ptp(joints, axis=0) <= tuning.still_position_rad))
 
     def _settle_onto(
         self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool, within_joint_limits: bool
@@ -431,19 +444,19 @@ class _Arm(DriverRun[command.CommandType]):
             yield self.limiter.wait()
 
     def sync_move(
-        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
+        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Settle onto the move's target and answer its caller; hold the measured position if the move fails or
-        stops."""
+        """Settle onto the move's target with the gripper open, and answer its caller; hold the measured position
+        if the move fails or stops. A blocking move is the framework's reset, so an episode starts open-handed."""
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
-                target, grip, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
             )
             if reference is not None:
                 self.publish(self.observations())
                 call.set_result(None)
-                return reference, grip
+                return reference, _OPEN_GRIP
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
@@ -680,7 +693,7 @@ class Robot(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, None]:
         """Run a blocking move, take a streamed target, or start an idle park."""
         if isinstance(asked, pimm.calls.Call):
-            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q, serving.grip_target)
+            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q)
             serving.idle_since = clock.now()
         elif asked is not None:
             with log_failure(asked):

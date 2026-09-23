@@ -321,15 +321,36 @@ def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
     assert rig.vendor.closed
 
 
-def _jitter_velocity_readings(rig, monkeypatch, noise_rad_s):
-    read = rig.vendor.get_observations
+class NoisyReadings:
+    """Adds noise to the chain's readings: a velocity spike on every other read, and a joint 1 position that
+    alternates by ``wobble_rad``. The chain itself does not move."""
 
-    def noisy():
-        obs = read()
-        obs[yam._JOINT_VEL] = obs[yam._JOINT_VEL] + noise_rad_s
+    def __init__(self, rig, monkeypatch, *, spike_rad_s=0.0, wobble_rad=0.0):
+        self.read, self.spike_rad_s, self.wobble_rad, self.reads = (
+            rig.vendor.get_observations,
+            spike_rad_s,
+            wobble_rad,
+            0,
+        )
+        monkeypatch.setattr(rig.vendor, 'get_observations', self)
+
+    def __call__(self):
+        obs = self.read()
+        self.reads += 1
+        sign = 1.0 if self.reads % 2 else -1.0
+        obs[yam._JOINT_VEL] = obs[yam._JOINT_VEL] + (self.spike_rad_s if sign > 0 else 0.0)
+        obs[yam._JOINT_POS][0] += sign * self.wobble_rad / 2
         return obs
 
-    monkeypatch.setattr(rig.vendor, 'get_observations', noisy)
+
+def test_velocity_spikes_at_rest_do_not_stop_a_park(monkeypatch):
+    """A real chain reports speed spikes of 0.1-0.3 rad/s while it holds its position; only position counts."""
+    rig = Rig()
+    rig.raise_arm()
+    NoisyReadings(rig, monkeypatch, spike_rad_s=0.3)
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
 
 
 @pytest.mark.parametrize(
@@ -346,13 +367,11 @@ def test_the_shortest_ramp_and_the_still_window_are_tuned_per_arm(min_ramp_s, st
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
-@pytest.mark.parametrize(
-    ('still_velocity_rad_s', 'parks'), [(DEFAULT_TUNING.still_velocity_rad_s, False), (0.05, True)]
-)
-def test_an_arm_with_noisy_velocity_readings_is_tuned_not_edited(monkeypatch, still_velocity_rad_s, parks):
-    rig = Rig(dataclasses.replace(DEFAULT_TUNING, still_velocity_rad_s=still_velocity_rad_s))
+@pytest.mark.parametrize(('still_position_rad', 'parks'), [(DEFAULT_TUNING.still_position_rad, False), (0.005, True)])
+def test_an_arm_with_noisy_position_readings_is_tuned_not_edited(monkeypatch, still_position_rad, parks):
+    rig = Rig(dataclasses.replace(DEFAULT_TUNING, still_position_rad=still_position_rad))
     rig.raise_arm()
-    _jitter_velocity_readings(rig, monkeypatch, 0.03)
+    NoisyReadings(rig, monkeypatch, wobble_rad=0.003)
     if parks:
         rig.finish()
         np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
@@ -463,6 +482,20 @@ def _until_answered(rig, answer, within_s=60.0):
     while not answer.done():
         assert rig.clock.now() < deadline, 'the move was never answered'
         rig.tick()
+
+
+def test_a_blocking_move_opens_the_gripper_and_keeps_it_open(world, rig):
+    """A blocking move is the episode reset, so the next episode starts with the fingers open."""
+    rig.raise_arm()
+    rig.grip.push(0.8)
+    rig.tick(0.5)
+    assert rig.vendor._pos[6] == pytest.approx(0.2, abs=0.005)
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, answer)
+    answer.result()
+    rig.tick(0.5)
+    assert rig.vendor._pos[6] == pytest.approx(1.0, abs=0.005)  # the chain's 1 is open
+    assert rig.vendor.targets[-1][6] == pytest.approx(1.0)
 
 
 def test_a_move_the_servo_holds_short_of_its_tolerance_settles_onto_its_target(world, rig):
@@ -627,12 +660,12 @@ def test_parking_command_speed_is_bounded_for_different_distances(rig, monkeypat
     assert rig.vendor.closed
 
 
-@pytest.mark.parametrize('speed', [0.03, -0.03, float('nan'), float('inf')])
-def test_parking_does_not_release_at_target_with_moving_or_invalid_velocity(rig, caplog, speed):
+@pytest.mark.parametrize('wobble_rad', [0.003, float('nan')])
+def test_parking_does_not_release_at_target_while_a_joint_moves_or_reads_invalid(rig, monkeypatch, caplog, wobble_rad):
     rig.tick(3)
     rig.vendor._pos[:6] = PARK
     rig.vendor.stuck = True
-    rig.vendor._vel[0] = speed
+    NoisyReadings(rig, monkeypatch, wobble_rad=wobble_rad)
     rig.stop.stopped = True
     rig.tick(12)
     assert 'Parking failed; arm still powered' in caplog.text
@@ -641,24 +674,18 @@ def test_parking_does_not_release_at_target_with_moving_or_invalid_velocity(rig,
     assert not rig.vendor.closed
 
 
-@pytest.mark.parametrize(('position_offset', 'velocity'), [(0.01, 0.0), (0.0, 0.03)])
-def test_parking_requires_continuously_still_arrival_before_release(rig, position_offset, velocity):
+def test_parking_requires_continuously_still_arrival_before_release(rig, monkeypatch):
     rig.tick(3)
     rig.vendor._pos[:6] = PARK
     rig.vendor.stuck = True
-    rig.vendor._vel[0] = 0.03
+    noise = NoisyReadings(rig, monkeypatch, wobble_rad=0.003)
     rig.stop.stopped = True
-    rig.tick(3)
+    rig.tick(3)  # past the ramp; joint 1 wobbles, so the chain is not still
     assert not rig.vendor.released_at
-
-    rig.vendor._vel[:] = 0.0
-    rig.tick(0.1)
-    assert not rig.vendor.released_at
-    rig.vendor._pos[0] = position_offset
-    rig.vendor._vel[0] = velocity
+    noise.wobble_rad = 0.0
+    rig.vendor._pos[0] = 0.01
     rig.tick(0.1)
     rig.vendor._pos[:6] = PARK
-    rig.vendor._vel[:] = 0.0
     still_since = rig.clock.now()
     rig.tick(0.15)
     assert not rig.vendor.released_at
