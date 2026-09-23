@@ -130,9 +130,6 @@ class ClientWire(abc.ABC, Generic[AddressT]):
     NAME: ClassVar[str]
     # The address this wire dials. A caller that built another wire's address is refused by it.
     ADDRESS: ClassVar[type[SessionAddress]]
-    # Whether a caller hands this wire the headers its own edge authenticates on. A server that another
-    # party runs sits behind no edge of the caller's, and does not get them.
-    TAKES_EDGE_HEADERS: ClassVar[bool]
 
     @abc.abstractmethod
     def session_url(self, address: AddressT) -> str:

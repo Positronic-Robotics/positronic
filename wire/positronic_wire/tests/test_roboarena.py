@@ -64,10 +64,9 @@ def test_a_dial_opens_the_bare_root_and_leaves_the_first_frame_unread():
     """The server announces its configuration on connect, and ``dial`` leaves it for ``recv``."""
     with patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = _ANNOUNCEMENT
-        connection = roboarena.RoboarenaClientWire().dial(_ADDRESS, {'Modal-Key': 'k'}, 3.0)
+        connection = roboarena.RoboarenaClientWire().dial(_ADDRESS, None, 3.0)
 
     assert connect.call_args.args == ('ws://a-partner-host:8000',)
-    assert connect.call_args.kwargs['additional_headers'] == {'Modal-Key': 'k'}
     assert connect.call_args.kwargs['open_timeout'] == 3.0
     assert connect.call_args.kwargs['compression'] is None
     assert connect.call_args.kwargs['max_size'] == wire.MAX_MESSAGE_BYTES
@@ -77,11 +76,19 @@ def test_a_dial_opens_the_bare_root_and_leaves_the_first_frame_unread():
 def test_a_probe_reads_the_announcement_and_closes():
     with patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = _ANNOUNCEMENT
-        assert roboarena.RoboarenaClientWire().probe(_ADDRESS, {'Modal-Key': 'k'}, 3.0) is None
+        assert roboarena.RoboarenaClientWire().probe(_ADDRESS, None, 3.0) is None
 
     assert connect.call_args.args == ('ws://a-partner-host:8000',)
-    assert connect.call_args.kwargs['additional_headers'] == {'Modal-Key': 'k'}
     connect.return_value.close.assert_called_once()
+
+
+@pytest.mark.parametrize('verb', [roboarena.RoboarenaClientWire.dial, roboarena.RoboarenaClientWire.probe])
+def test_a_server_another_party_runs_gets_no_headers_from_the_caller(verb):
+    """A caller hands every wire its edge headers, and this wire opens its handshake without them."""
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.return_value = _ANNOUNCEMENT
+        verb(roboarena.RoboarenaClientWire(), _ADDRESS, {'Modal-Key': 'k'}, 3.0)
+    assert connect.call_args.kwargs.get('additional_headers') is None
 
 
 def test_a_port_that_accepts_and_announces_nothing_is_cold():

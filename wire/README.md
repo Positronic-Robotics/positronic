@@ -39,7 +39,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
-| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The wire sends no headers, because another party runs its server |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
@@ -51,9 +51,7 @@ needs.
 
 A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
 `roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
-leaves out on the members that carry one. `TAKES_EDGE_HEADERS` says whether a caller hands the wire the
-headers its own edge authenticates on: `roboarena` is `False`, because another party runs its server,
-and every other member is `True`.
+leaves out on the members that carry one.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
   websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC

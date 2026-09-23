@@ -77,7 +77,6 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
 
     # The URL scheme this wire writes for a session.
     SCHEME: ClassVar[str]
-    TAKES_EDGE_HEADERS = True
 
     def _refusal(self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.AddressT) -> wire.Refusal:
         """What a handshake that did not open says about the server, in this wire's terms."""

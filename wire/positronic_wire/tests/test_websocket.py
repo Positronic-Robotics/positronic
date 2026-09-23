@@ -66,6 +66,12 @@ def test_a_handshake_that_does_not_open_is_a_refusal_naming_the_url(raised, refu
     assert refused.value.__cause__ is raised
 
 
+def test_a_dial_carries_the_headers_on_the_handshake():
+    with patch('positronic_wire.websocket.connect') as connect:
+        websocket.WebsocketClientWire().dial(_ADDRESS, {'Modal-Key': 'k'}, 3.0)
+    assert connect.call_args.kwargs['additional_headers'] == {'Modal-Key': 'k'}
+
+
 def test_a_probe_asks_the_host_root_with_the_headers():
     with patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(HTTPStatus.FORBIDDEN)) as connect:
         probed = websocket.WebsocketClientWire().probe(

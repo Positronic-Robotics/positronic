@@ -238,7 +238,6 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
     NAME = 'grpc'
     ADDRESS = wire.HostPortAddress
     DEFAULT_PORT = 80
-    TAKES_EDGE_HEADERS = True
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         """gRPC dials a target, not a URL: ``host:port`` and the session route, for the log."""
