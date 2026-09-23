@@ -149,6 +149,25 @@ def yam_bimanual(
     )
 
 
+# The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
+# there are the onboard controllers and reach no arm.
+# TODO: `mounts` still holds the sim-scene values the default carries. Survey where this station's arm bases
+# sit and put the measured pose here, or `ee_pose` reaches the world frame wrong.
+yam_bimanual_yambox = yam_bimanual.override(
+    left_channel='can_follower_l',
+    right_channel='can_follower_r',
+    # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
+    # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
+    # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    gravity_comp_factor=[1.0, 1.1, 1.4, 1.4, 1.0, 1.0],
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
+        'image.wrist_left': positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
+        'image.wrist_right': positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(resolution='svga', fps=30),
+    },
+)
+
+
 def mujoco_franka(sim, camera_dict):
     """Mujoco single-arm Franka + gripper over a given sim.
 
