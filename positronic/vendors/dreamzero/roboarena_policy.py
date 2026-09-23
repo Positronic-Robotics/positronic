@@ -19,34 +19,13 @@ from positronic_wire import roboarena as roboarena_wire
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy import keys as policy_keys
+from positronic.policy.codec import ACTION
 from positronic.policy.layers import ChunkedSchedule
 from positronic.vendors.dreamzero import codecs, roboarena
-
-# Announced config fields that DreamZero's own server does not send, so the key module does not name them.
-# `NEEDS_SESSION_ID` decides whether the observation carries a session id at all.
-NEEDS_SESSION_ID = 'needs_session_id'
-ACTION_SPACE = 'action_space'
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing
 # another one answers a chunk the codec would read as joints and the arm would execute.
 JOINT_POSITION_SPACE = 'joint_position'
-
-# The key the chunk arrives under in the server's reply, which is a mapping rather than a bare array.
-ACTIONS_FIELD = 'actions'
-
-# How many values one action in `JOINT_POSITION_SPACE` carries: seven joints and a gripper. A row of another
-# width is read by the codec as joints anyway, and the arm executes it.
-JOINT_POSITION_WIDTH = 8
-
-# The key one decoded action reaches `DreamZeroActionCodec` under.
-ACTION_FIELD = 'action'
-
-# The configuronic path of the codec setting that the announced resolution reaches.
-IMAGE_SIZE_OVERRIDE = 'obs.image_size'
-
-# `droid` repeats the first exterior view in the second slot, and a server reading two different
-# over-shoulder views is sent two.
-CODEC = codecs.droid_3cam
 
 # How many exterior images `CODEC` writes. A server asking for more names a key the codec cannot fill, so the
 # handshake refuses the count rather than building a key set no observation satisfies.
@@ -57,9 +36,9 @@ def wanted_keys(config: Mapping[str, Any]) -> frozenset[str]:
     """Exactly the observation keys the announced `config` asks for."""
     if config[roboarena.NEEDS_STEREO_CAMERA]:
         raise ValueError('the roboarena server asks for stereo cameras, which this policy does not send')
-    if config[ACTION_SPACE] != JOINT_POSITION_SPACE:
+    if config[roboarena.ACTION_SPACE] != JOINT_POSITION_SPACE:
         raise ValueError(
-            f'the roboarena server answers {config[ACTION_SPACE]!r} actions, and this codec decodes '
+            f'the roboarena server answers {config[roboarena.ACTION_SPACE]!r} actions, and this codec decodes '
             f'{JOINT_POSITION_SPACE!r}; a chunk read in the wrong space moves the arm wrongly'
         )
     keys = {roboarena.JOINT_POSITION, roboarena.GRIPPER_POSITION, roboarena.PROMPT}
@@ -72,7 +51,7 @@ def wanted_keys(config: Mapping[str, Any]) -> frozenset[str]:
             f'{EXTERIOR_IMAGES}; every observation would miss a key that server requires'
         )
     keys.update(exterior_camera(i) for i in range(exteriors))
-    if config[NEEDS_SESSION_ID]:
+    if config[roboarena.NEEDS_SESSION_ID]:
         keys.add(roboarena.SESSION_ID)
     return frozenset(keys)
 
@@ -109,6 +88,14 @@ def image_size(config: Mapping[str, Any]) -> tuple[int, int]:
     return int(width), int(height)
 
 
+# `droid` repeats the first exterior view in the second slot, and a server reading two different
+# over-shoulder views is sent two.
+CODEC = codecs.droid_3cam
+
+# The configuronic path of the codec setting that the announced resolution reaches.
+IMAGE_SIZE_OVERRIDE = 'obs.image_size'
+
+
 def local_stack(config: Mapping[str, Any]) -> Sequential:
     """The stack in front of a server announcing `config`: the codec, and a schedule at its training cadence.
 
@@ -116,6 +103,14 @@ def local_stack(config: Mapping[str, Any]) -> Sequential:
     """
     codec = CODEC.override(**{IMAGE_SIZE_OVERRIDE: image_size(config)}).instantiate()
     return Sequential(ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
+
+
+# The key the chunk arrives under in the server's reply, which is a mapping rather than a bare array.
+ACTIONS_FIELD = 'actions'
+
+# How many values one action in `JOINT_POSITION_SPACE` carries: seven joints and a gripper. A row of another
+# width is read by the codec as joints anyway, and the arm executes it.
+JOINT_POSITION_WIDTH = 8
 
 
 class RoboarenaEndpoint:
@@ -126,7 +121,7 @@ class RoboarenaEndpoint:
         self._keys = wanted_keys(config)
         self._renames = renaming()
         # A stateful server tells episodes apart by this id, so each episode gets its own.
-        self._session_id = str(uuid.uuid4()) if config[NEEDS_SESSION_ID] else ''
+        self._session_id = str(uuid.uuid4()) if config[roboarena.NEEDS_SESSION_ID] else ''
 
     def _message(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         """`obs` in the wire's own names, holding the announced keys and no others."""
@@ -162,7 +157,7 @@ class RoboarenaEndpoint:
                 'the roboarena server answered an action that is not a finite number, and the codec decodes '
                 'such a value into a joint position the arm then holds'
             )
-        return [{ACTION_FIELD: row} for row in rows]
+        return [{ACTION: row} for row in rows]
 
 
 class RoboarenaPolicy(Policy):

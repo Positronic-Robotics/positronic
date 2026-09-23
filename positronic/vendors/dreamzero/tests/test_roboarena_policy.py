@@ -8,6 +8,7 @@ from positronic_wire.roboarena import RoboarenaAddress
 
 from positronic import keys as rig
 from positronic.offboard.roboarena import RoboarenaClient
+from positronic.policy.codec import ACTION
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils.serialization import serialize
 from positronic.vendors.dreamzero import roboarena as wire
@@ -18,8 +19,8 @@ ANNOUNCED = {
     wire.NEEDS_WRIST_CAMERA: True,
     wire.NUM_EXTERIOR_CAMERAS: 2,
     wire.NEEDS_STEREO_CAMERA: False,
-    roboarena_policy.NEEDS_SESSION_ID: False,
-    roboarena_policy.ACTION_SPACE: roboarena_policy.JOINT_POSITION_SPACE,
+    wire.NEEDS_SESSION_ID: False,
+    wire.ACTION_SPACE: roboarena_policy.JOINT_POSITION_SPACE,
 }
 
 # rules-allow: hardcoded-keys — a roboarena server's own spelling, held independent of the code under test:
@@ -177,7 +178,7 @@ class TestWhatTheServerAsksFor:
         assert wire.SESSION_ID not in roboarena_policy.wanted_keys(ANNOUNCED)
 
     def test_a_server_tracking_sessions_is_sent_one(self):
-        stateful = announced(**{roboarena_policy.NEEDS_SESSION_ID: True})
+        stateful = announced(**{wire.NEEDS_SESSION_ID: True})
         assert wire.SESSION_ID in roboarena_policy.wanted_keys(stateful)
 
     def test_a_server_wanting_one_exterior_camera_gets_the_first(self):
@@ -200,9 +201,10 @@ class TestWhatTheServerAsksFor:
 
     def test_another_action_space_is_refused_rather_than_decoded_as_joints(self):
         with pytest.raises(ValueError, match='moves the arm wrongly'):
-            roboarena_policy.wanted_keys(announced(**{roboarena_policy.ACTION_SPACE: 'cartesian_position'}))
+            roboarena_policy.wanted_keys(announced(**{wire.ACTION_SPACE: 'cartesian_position'}))
 
     def test_the_wire_counts_exterior_cameras_from_one(self):
+        # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
         assert roboarena_policy.renaming() == {
             wire.exterior_image(0): 'observation/exterior_image_1_left',
             wire.exterior_image(1): 'observation/exterior_image_2_left',
@@ -240,7 +242,7 @@ class TestOneInference:
         assert 'observation/exterior_image_2_left' not in sent
 
     def test_a_server_tracking_sessions_is_sent_a_new_id_each_episode(self):
-        stateful = announced(**{roboarena_policy.NEEDS_SESSION_ID: True})
+        stateful = announced(**{wire.NEEDS_SESSION_ID: True})
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
 
         for _ in range(2):
@@ -274,12 +276,12 @@ class TestOneInference:
     def test_the_chunk_decodes_into_one_entry_per_row_in_order(self):
         chunk = np.arange(32 * 8, dtype=np.float32).reshape(32, 8)
         answered = endpoint_over(FakeClient(chunk))(encoded())
-        assert [entry[roboarena_policy.ACTION_FIELD].tolist() for entry in answered] == chunk.tolist()
+        assert [entry[ACTION].tolist() for entry in answered] == chunk.tolist()
 
     def test_a_single_action_is_one_entry(self):
         one = np.arange(8, dtype=np.float32)
         answered = endpoint_over(FakeClient(one))(encoded())
-        assert [entry[roboarena_policy.ACTION_FIELD].tolist() for entry in answered] == [one.tolist()]
+        assert [entry[ACTION].tolist() for entry in answered] == [one.tolist()]
 
 
 class TestTheWire:
