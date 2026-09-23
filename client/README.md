@@ -103,6 +103,11 @@ the plan lays out that scene and that table, and runs the episodes in that order
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
 names each task and what it lacks.
 
+`submissions.resolve` takes the same plan and answers with `resolved` alone. It files nothing,
+spends no quota and returns no submission id. A plan with a `transaction_key` draws from that key,
+so a dry run shows the draws a submission under the same key then makes. Without a key, the draws
+are an example. From Python, `PlatformClient.resolve_plan` makes the call.
+
 `EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
 reaches the platform.
 
