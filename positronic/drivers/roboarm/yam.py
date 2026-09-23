@@ -468,9 +468,11 @@ def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Ite
         try:
             vendor.zero_torque_mode()
         finally:
-            vendor.close()
-            # Only after `close()`: it joins i2rt's control thread, which fails on a motor disabled under it.
-            _power_off(vendor)
+            try:
+                vendor.close()
+            finally:
+                # Only after `close()`: it joins i2rt's control thread, which fails on a motor disabled under it.
+                _power_off(vendor)
 
 
 _POWER_OFF_ATTEMPTS = 3  # per motor; a motor can miss the first disable it is sent
