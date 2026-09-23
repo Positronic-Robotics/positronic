@@ -50,14 +50,17 @@ class BenchmarkPath(NamedTuple):
 def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
     """Benchmarks with an episode manifest under the asset directory.
 
-    The walk follows symlinked directories, since MolmoSpaces links each suite to a version in its cache. It skips
-    a link back into the directory's own ancestors, which would never end.
+    The walk follows symlinked directories, and skips a link back into one of the directory's own ancestors.
     """
     root = assets_dir / ASSETS_BENCHMARKS_DIR
     found = []
     ancestors = {root: {root.resolve()}}
+
+    def unreadable(error: OSError) -> None:
+        raise error
+
     # `os.walk` rather than `Path.walk`, which needs Python 3.12.
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unreadable, followlinks=True):
         here = Path(dirpath)
         above = ancestors.pop(here)
         if MOLMO_BENCHMARK_MANIFEST in filenames:

@@ -194,6 +194,22 @@ def test_discovery_does_not_walk_a_symlink_back_into_its_own_ancestor(tmp_path: 
     ]
 
 
+def test_discovery_raises_on_a_directory_it_cannot_read(tmp_path: Path):
+    _lay_out(tmp_path, 'v1/procthor-10k/Pick/pick_20251231')
+    unreadable = tmp_path / mapping.ASSETS_BENCHMARKS_DIR / 'v1' / 'procthor-10k'
+    unreadable.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            mapping.discover_benchmarks(tmp_path)
+    finally:
+        unreadable.chmod(0o755)
+
+
+def test_discovery_raises_when_the_asset_directory_holds_no_benchmarks_root(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        mapping.discover_benchmarks(tmp_path)
+
+
 def test_selection_pins_any_dimension_by_a_name_or_a_list_and_leaves_the_rest_open():
     pick_v1 = mapping.BenchmarkPath('v1', 'procthor-10k', 'Pick', 'pick_20251231')
     pick_v2 = mapping.BenchmarkPath('v2', 'procthor-10k', 'Pick', 'pick_20251231')
