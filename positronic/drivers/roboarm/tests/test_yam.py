@@ -798,6 +798,21 @@ def test_a_blocked_shutdown_leaves_the_motors_enabled(rig, motors):
     assert not opened
 
 
+def test_the_motors_are_disabled_even_when_closing_the_chain_raises(rig, motors, monkeypatch):
+    opened, _ = motors
+    close = rig.vendor.close
+
+    def close_then_fail():
+        close()
+        raise OSError('bus close failed')
+
+    monkeypatch.setattr(rig.vendor, 'close', close_then_fail)
+    rig.raise_arm()
+    with pytest.raises(OSError, match='bus close failed'):
+        rig.finish()
+    assert [interface.off for interface in opened] == [[1, 2, 3, 4, 5, 6, 7]]
+
+
 def test_a_chain_with_no_motors_opens_no_interface(rig, monkeypatch):
     opened = []
     monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', lambda **kwargs: opened.append(kwargs))
