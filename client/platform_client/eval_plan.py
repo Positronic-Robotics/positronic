@@ -210,21 +210,18 @@ class Endpoint(Cascade):
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
 
-    @staticmethod
-    def _address_fields_of_every_wire() -> str:
-        return '; '.join(
-            f'{slug_of(wire)}: {", ".join(address.model_fields)}' for wire, address in ADDRESS_OF_WIRE.items()
-        )
-
     @model_validator(mode='before')
     @classmethod
     def _accept_bare_label(cls, value: object) -> object:
         if isinstance(value, str):
             return {'name': value}
         if isinstance(value, dict) and 'url' in value:
+            fields = '; '.join(
+                f'{slug_of(wire)}: {", ".join(address.model_fields)}' for wire, address in ADDRESS_OF_WIRE.items()
+            )
             raise ValueError(
                 f"endpoint {value.get('name')!r} names a url; an endpoint names its `wire` and that wire's "
-                f'`address` fields instead ({cls._address_fields_of_every_wire()})'
+                f'`address` fields instead ({fields})'
             )
         return value
 
