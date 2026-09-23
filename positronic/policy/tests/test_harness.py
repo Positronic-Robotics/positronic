@@ -667,6 +667,26 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
+def test_a_reported_source_is_read_into_the_episode_metadata_when_the_episode_ends(episode_harness):
+    h = episode_harness
+    rounds = [0]
+
+    class Reports(Policy):
+        def run(self, runtime):
+            runtime.report(lambda: {'probe.rounds': rounds[0]})
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    h.caller(Rollout(Task('move', None), Reports(), None))
+    next(h.loop)
+    rounds[0] = 3
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    next(h.loop)
+    assert h.records.values[-1][1].static_data['probe.rounds'] == 3
+
+
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     h = episode_harness
     task = Task('move', 0.01, prepare_args={RESET: 'home', eval_keys.SCENE: 42})

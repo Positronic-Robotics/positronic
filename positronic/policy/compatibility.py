@@ -165,7 +165,9 @@ class StackV1(Sequential):
                 call = _Call(cast(Codec, component).wrap(call.send), call.cancel)
         trajectory: deque[tuple[dict[str, Any], int]] = deque()
         account = ScheduleAccount()
-        runtime.report(account.meta)
+        # Only ChunkedScheduleV1 anchors rows to the runtime clock. Without it, a due time has no lateness.
+        if any(isinstance(component, ChunkedScheduleV1) for component in self._components):
+            runtime.report(account.meta)
         obs = yield
         while True:
             now_ns = runtime.time_ns
