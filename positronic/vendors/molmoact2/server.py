@@ -63,9 +63,18 @@ molmoact2_source = cfn.Config(MolmoAct2Source)
 
 
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
-def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = None):
+def pipeline(
+    codec: Codec,
+    source: ModelSource,
+    fps: float = 15.0,
+    horizon_sec: float | None = None,
+    compress_images: bool = False,
+):
     return PolicyDeployment(
-        source, Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
+        source,
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()),
+        codec,
+        compress_images=compress_images,
     )
 
 
@@ -79,6 +88,8 @@ yam_bimanual = pipeline.override(
     ),
     fps=30.0,
     horizon_sec=25 / 30,
+    # Three raw frames are ~2.3 MB a request, which a lab uplink sends in most of a second.
+    compress_images=True,
 )
 
 
