@@ -144,7 +144,7 @@ class EndpointKind(IntEnum):
 class Placement(IntEnum):
     """Which side of the rig a piece of the scene sits on.
 
-    `random` draws a side per run; `none` states the piece is absent.
+    `random` draws a side once per plan; `none` states the piece is absent.
     """
 
     INVALID = 0

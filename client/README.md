@@ -12,7 +12,7 @@ The library depends on `pydantic` and `httpx` and nothing else, so a service tha
 platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.9.0"
+uv add "positronic-platform-client==0.11.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -93,6 +93,15 @@ tasks needs a customer grant; a key without one is refused `forbidden`, and so i
 Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
 image runs the platform executes itself.
+
+The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
+`episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
+vantage, the clutter objects and the episode order. A level states a value, else the task's
+catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
+the plan lays out that scene and that table, and runs the episodes in that order.
+`submissions.get` carries the same `resolved`. A rig plan whose task resolves no
+`cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
+names each task and what it lacks.
 
 `EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
 reaches the platform.

@@ -47,7 +47,10 @@ class RoboarenaClientConnection(WebsocketClientConnection):
 
 
 class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
-    """The client side of the roboarena wire, whose root carries frames alone."""
+    """The client side of the roboarena wire, whose root carries frames alone.
+
+    It sends no headers: another party runs the server, and a caller's edge headers are not for it.
+    """
 
     NAME = 'roboarena'
     ADDRESS = RoboarenaAddress
@@ -69,16 +72,13 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
             f'itself, and the server announces its configuration on connect'
         )
 
-    def _open(
-        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
-    ) -> RoboarenaClientConnection:
+    def _open(self, address: RoboarenaAddress, open_timeout: float) -> RoboarenaClientConnection:
         """One opened connection on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         url = self.session_url(address)
         try:
             connection = connect(
                 url,
                 open_timeout=open_timeout,
-                additional_headers=headers,
                 compression=None,
                 ping_interval=self.PING_INTERVAL_S,
                 ping_timeout=self.PING_TIMEOUT_S,
@@ -95,14 +95,14 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
         The server announces its configuration as the first frame, and ``dial`` leaves it unread.
         """
-        return self._open(address, headers, open_timeout)
+        return self._open(address, open_timeout)
 
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         """Whether a server announces itself at ``address``. Raises ``TextAnswer`` when it answers in text."""
         try:
-            connection = self._open(address, headers, open_timeout)
+            connection = self._open(address, open_timeout)
         except wire.ConnectRefused as e:
             return e.refusal
         try:

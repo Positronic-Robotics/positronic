@@ -7,13 +7,26 @@ discriminated on the status slug.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import (
+    BoardVisibility,
+    CameraVantage,
+    EndpointKind,
+    KeyStatus,
+    OnExhausted,
+    Placement,
+    QuotaSubject,
+    ReasonCode,
+    SubmissionStatus,
+)
+from platform_client.eval_plan import Clutter
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
+from platform_client.tasks import TaskRef
 from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
 
@@ -113,6 +126,84 @@ class RunSummary(BaseModel):
     ended_at: AwareDatetime | None = None
 
 
+class ResolvedEndpoint(BaseModel):
+    """One endpoint of a resolved task: where its policy comes from, and the episodes it takes there."""
+
+    name: str
+    kind: Slugged[EndpointKind]
+    url: str | None = None
+    provider: str | None = None
+    spec: str | None = None
+    episodes: int = Field(ge=1)
+
+
+# The sides a resolution may not carry: a draw is made before the plan is answered.
+_UNRESOLVED_SIDES = frozenset({Placement.random, Placement.INVALID})
+
+
+def _require_a_side(side: Placement, what: str) -> None:
+    if side in _UNRESOLVED_SIDES:
+        raise ValueError(f'{what} resolves to {slug_of(side)}, which names no side')
+
+
+class ResolvedTask(BaseModel):
+    """One task of a plan as the rig runs it: every property with its final value.
+
+    The nearest level that states a value gives it; where none does, the task's catalogue entry gives
+    it, and where that gives none, the platform draws it (`README.md` §Eval plans).
+    `ResolvedPlan.tasks` lists the tasks in the plan's order.
+    """
+
+    task_id: TaskRef
+    endpoints: list[ResolvedEndpoint] = Field(min_length=1)
+    cap_per_episode_sec: int = Field(ge=1)
+    policy_preset: str = Field(min_length=1)
+    # `none` where the task has no tote.
+    tote_placement: Slugged[Placement]
+    # None where no external camera watches the task.
+    camera_vantage: Slugged[CameraVantage] | None = None
+    # Per external camera, keyed by its mount name.
+    external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
+    # The bounds of the clutter draw, or None where the task is laid out with nothing else.
+    clutter: Clutter | None = None
+    # The kit objects the draw puts on the table beside the task's own.
+    clutter_objects: list[str] = Field(default_factory=list)
+    # The endpoint name each episode runs against, in the order the episodes run.
+    episode_order: list[str] = Field(default_factory=list)
+
+    @property
+    def episodes(self) -> int:
+        """Every episode this task takes, over all of its endpoints."""
+        return sum(endpoint.episodes for endpoint in self.endpoints)
+
+    @model_validator(mode='after')
+    def _every_side_is_drawn(self) -> Self:
+        _require_a_side(self.tote_placement, f'task {self.task_id!r} tote_placement')
+        for mount, side in self.external_cameras.items():
+            _require_a_side(side, f'task {self.task_id!r} external camera {mount!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _the_order_serves_each_count(self) -> Self:
+        declared = {endpoint.name: endpoint.episodes for endpoint in self.endpoints}
+        if Counter(self.episode_order) != Counter(declared):
+            raise ValueError(f'task {self.task_id!r} orders {len(self.episode_order)} episodes against {declared}')
+        return self
+
+
+class ResolvedPlan(BaseModel):
+    """A rig plan as it runs: the episode total, and each task with every value resolved."""
+
+    episodes_total: int = Field(ge=1)
+    tasks: list[ResolvedTask] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _the_total_is_the_sum(self) -> Self:
+        if self.episodes_total != sum(task.episodes for task in self.tasks):
+            raise ValueError(f'episodes_total states {self.episodes_total}, and the tasks sum to another count')
+        return self
+
+
 # The outcomes that mint a key. `existing` is the one that does not.
 _MINTING_OUTCOMES = frozenset({KeyStatus.created, KeyStatus.rotated})
 
@@ -175,6 +266,8 @@ class SubmissionCreateResponse(_ReasonBearing):
 
     submission_id: SubmissionId
     policy_image_digest: str | None = None
+    # A rig plan as it will run. None on a plan the simulator runs, which names an eval.
+    resolved: ResolvedPlan | None = None
 
 
 class SubmissionListRow(_ReasonBearing):
@@ -220,6 +313,8 @@ class _TaggedView(BaseModel):
     # platform executes itself reports one launch; a plan the lab rig serves reports one per start.
     episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     runs: list[RunSummary] = Field(default_factory=list)
+    # A rig plan as it runs; `submissions.create` answered with the same. None on a simulator run.
+    resolved: ResolvedPlan | None = None
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
