@@ -97,13 +97,13 @@ class RegistryCredential(BaseModel):
     username: str = Field(min_length=1)
     password: SecretStr = Field(min_length=1)
 
-    def secret(self) -> str:
+    def plaintext_password(self) -> str:
         return self.password.get_secret_value()
 
     @model_serializer(mode='plain', when_used='json')
     def _dump(self, info: SerializationInfo) -> dict[str, str]:
         reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
-        return {'username': self.username, 'password': self.secret() if reveal else str(self.password)}
+        return {'username': self.username, 'password': self.plaintext_password() if reveal else str(self.password)}
 
 
 class RegistryCredentialFile(BaseModel):

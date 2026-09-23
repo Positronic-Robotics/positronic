@@ -392,7 +392,7 @@ def test_an_image_endpoint_carries_a_credential_for_a_private_registry(credentia
     endpoint = Endpoint.model_validate(an_image_endpoint(image_credential=credential))
     assert endpoint.image_credential is not None
     assert endpoint.image_credential.username == 'a-reader'
-    assert endpoint.image_credential.secret() == A_PASSWORD
+    assert endpoint.image_credential.plaintext_password() == A_PASSWORD
 
 
 def test_an_entry_that_names_no_image_may_state_no_credential(credential: dict):
@@ -534,7 +534,10 @@ def test_each_password_file_of_a_plan_is_read_into_its_credential(tmp_path: Path
     assert task_endpoints is not None
     read = [plan.endpoints[0].image_credential, task_endpoints[0].image_credential]
     assert all(isinstance(credential, RegistryCredential) for credential in read)
-    assert [credential.secret() for credential in read if credential is not None] == [A_PASSWORD, 'the-task-password']
+    assert [credential.plaintext_password() for credential in read if credential is not None] == [
+        A_PASSWORD,
+        'the-task-password',
+    ]
     assert plan.model_fields_set == stated.model_fields_set
 
 
@@ -556,7 +559,7 @@ def test_plan_of_image_carries_the_credential_onto_its_one_endpoint(password_fil
     )
     read = plan.endpoints[0].image_credential
     assert read is not None
-    assert read.secret() == A_PASSWORD
+    assert read.plaintext_password() == A_PASSWORD
 
 
 def test_a_refused_endpoint_reports_no_password(credential: dict):
@@ -595,7 +598,7 @@ def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
 
     read = received.endpoints[0].image_credential
     assert read is not None
-    assert read.secret() == A_PASSWORD
+    assert read.plaintext_password() == A_PASSWORD
 
 
 def test_only_the_send_path_serialises_the_password_as_itself(credential: dict):
