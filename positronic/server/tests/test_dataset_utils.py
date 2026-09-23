@@ -236,13 +236,14 @@ def _signals_with_cameras(aspects: list[float], with_3d: bool) -> dataset_utils.
     )
 
 
-@pytest.mark.parametrize('aspects', [[16 / 9] * 3, [4 / 3] * 3, [16 / 9] * 4])
+@pytest.mark.parametrize('aspects', [[16 / 9] * 3, [4 / 3] * 3, [16 / 9] * 4, [4 / 3, 16 / 9, 16 / 9]])
 @pytest.mark.parametrize('with_3d', [True, False])
 def test_the_camera_row_is_as_tall_as_its_frames(aspects, with_3d):
     share = dataset_utils._camera_row_share(_signals_with_cameras(aspects, with_3d))
 
-    camera_width = dataset_utils._VIEWER_ASPECT * (0.75 if with_3d else 1.0) / len(aspects)
-    assert camera_width / share == pytest.approx(aspects[0])
+    row_width = dataset_utils._VIEWER_ASPECT * (0.75 if with_3d else 1.0)
+    for aspect in aspects:
+        assert row_width * aspect / sum(aspects) / share == pytest.approx(aspect)
 
 
 def test_one_camera_leaves_the_signals_a_quarter_of_the_height():

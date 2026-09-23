@@ -212,7 +212,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
                 signals.videos.append(name)
                 signals.camera_aspects[name] = width / height
             except Exception:
-                pass
+                logging.exception(f'Image signal {name!r} has no readable first frame: it is absent from the recording')
             continue
 
         first = sig[0][0] if len(sig) else 0.0
@@ -271,8 +271,7 @@ _NO_CAMERA_TOP_SHARE = 0.75
 def _camera_row_share(signals: EpisodeSignals) -> float:
     """The share of the viewer's height that shows every camera, side by side, without black bands."""
     width = _TOP_ROW_SHARES[0] / sum(_TOP_ROW_SHARES) if signals.poses else 1.0
-    aspect = float(np.mean(list(signals.camera_aspects.values())))
-    return float(np.clip(width / (len(signals.camera_aspects) * aspect) * _VIEWER_ASPECT, 0.2, 0.75))
+    return float(np.clip(width / sum(signals.camera_aspects.values()) * _VIEWER_ASPECT, 0.2, 0.75))
 
 
 def _series_columns(cells: int, height_share: float) -> int:
@@ -325,7 +324,9 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
     if image_views:
-        top_items.append(rrb.Grid(*image_views, grid_columns=len(image_views)))
+        # Widths in proportion to the aspect ratios give every camera one height.
+        aspects = [signals.camera_aspects[k] for k in signals.videos]
+        top_items.append(rrb.Horizontal(*image_views, column_shares=aspects))
     if signals.poses:
         eye = _compute_eye_controls(signals, ep)
         top_items.append(
