@@ -197,6 +197,8 @@ V1 stack support includes timestamped chunks, timing codecs, and cancellation of
 on robot faults. Its adapter emits ordinary policy steps, subject to the harness's polling bounds
 and immediate command delivery. V1 trajectory processors and v2 Step processors have different
 output contracts and cannot share a sequence; unchanged v1 codecs compose with v2 processors.
+In a V1 stack, the codecs below the innermost layer run with submitted inference, once per request.
+A codec above a layer runs on every policy call.
 
 Published versions have three states in the protocol and component registries:
 
