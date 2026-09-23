@@ -93,7 +93,10 @@ class RemotePolicy(Policy):
                 self._server_meta = dict(session.metadata)
             finally:
                 session.close()
-        return flatten_dict({policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta})
+        meta: dict[str, Any] = {policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
+        if self._server_meta.get(offboard_keys.COMPRESS_IMAGES):
+            meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+        return flatten_dict(meta)
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
