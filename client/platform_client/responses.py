@@ -21,8 +21,9 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
-from platform_client.eval_plan import Clutter
+from platform_client.eval_plan import Clutter, EndpointAddress
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
@@ -184,8 +185,12 @@ class ResolvedEndpoint(BaseModel):
 
     name: str
     kind: Slugged[EndpointKind]
-    url: str | None = None
+    wire: Slugged[Wire]
+    # Set on a remote endpoint, which the caller dials; None on a served or image endpoint the platform serves itself.
+    address: EndpointAddress | None = None
+    # Set on a served endpoint, which names what starts it; None on a remote or image endpoint.
     provider: str | None = None
+    # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
     episodes: int = Field(ge=1)
 

@@ -16,7 +16,7 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
-from positronic.cli.eval.plan import file_plan, given, plan_from_flags, plan_source, read_plan, refusing_a_second_source
+from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.eval import Embodiment, Eval, Observation, Task
@@ -223,7 +223,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """Stop on an argument the chosen place of `run` cannot honour.
 
-    Dropping one silently hands back a run the caller believes they shaped. `--episodes=0` is asked
+    Dropping one silently hands back a run the caller believes they shaped. `--alias=''` is asked
     for, and this run has no such flag to refuse it as a value.
     """
     asked = sorted(flag for flag, value in inapplicable.items() if given(value))
@@ -231,41 +231,9 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
 
 
-def _file_for_the_rig(
-    eval: object,
-    source: Path | None,
-    rig_only: dict[str, object],
-    platform_url: str | None,
-    *,
-    policy_url: object,
-    tasks: object,
-    episodes: int | None,
-    cap: int | None,
-    preset: str | None,
-    transaction_key: str | None,
-    alias: str | None,
-) -> SubmissionCreateResponse:
-    """File the plan a file states, else the plan the flags state."""
-    if source is not None:
-        refusing_a_second_source(source, rig_only)
-        return file_plan(read_plan(source, transaction_key, alias), platform_url)
-    if eval is not None:
-        raise SystemExit(f'--eval={eval!r} names an eval: the rig runs a plan, from --from-file or from the flags')
-    plan = plan_from_flags(
-        policy_url=policy_url,
-        tasks=tasks,
-        episodes=episodes,
-        cap=cap,
-        preset=preset,
-        transaction_key=transaction_key,
-        alias=alias,
-    )
-    return file_plan(plan, platform_url)
-
-
 # The policy flag chooses where the eval runs.
 _NO_POLICY_NAMED = (
-    '--policy is required to run here; --policy-image runs it on the platform, and --policy-url on the rig'
+    '--policy is required to run here; --policy-image runs it on the platform, and --from-file on the rig'
 )
 
 
@@ -283,11 +251,6 @@ def run(
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
-    policy_url: str | list[str] | None = None,
-    tasks: str | list[str] | None = None,
-    episodes: int | None = None,
-    cap: int | None = None,
-    preset: str | None = None,
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
@@ -296,12 +259,11 @@ def run(
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
-    eval of that NAME on the embodiment the eval names — a name the platform offers, not a
-    config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
-    lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
-    in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
-    the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads;
-    a run here answers the dataset it wrote.
+    eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
+    since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
+    as a YAML or JSON file. Two or more endpoints in it make one blind sample. A filed run — the
+    platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a run
+    here answers the dataset it wrote.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -312,13 +274,12 @@ def run(
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
-    # Only a switch does: `--episodes=False` stays a value, and is refused like `--episodes=0`.
+    # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
         '--output-dir': output_dir,
         '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
     }
-    rig_only = {'--policy-url': policy_url, '--tasks': tasks, '--episodes': episodes, '--cap': cap, '--preset': preset}
     source = plan_source(eval, from_file)
 
     if isinstance(eval, Eval) or policy is not None:
@@ -328,7 +289,6 @@ def run(
                 '--transaction-key': transaction_key,
                 '--platform-url': platform_url,
                 '--from-file': from_file,
-                **rig_only,
             },
             'local',
         )
@@ -342,28 +302,16 @@ def run(
 
     if policy_image is not None:
         # The platform owns its own trial sweep, its own output and its own telemetry.
-        _refuse({**local_only, '--from-file': from_file, **rig_only}, 'platform')
+        _refuse({**local_only, '--from-file': from_file}, 'platform')
         if not isinstance(eval, str):
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
         return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
 
-    if source is not None or any(given(value) for value in rig_only.values()):
+    if source is not None:
         # The rig records under the client's own prefix, so it has no output of its own to name.
         _refuse(local_only, 'rig')
-        return _file_for_the_rig(
-            eval,
-            source,
-            rig_only,
-            platform_url,
-            policy_url=policy_url,
-            tasks=tasks,
-            episodes=episodes,
-            cap=cap,
-            preset=preset,
-            transaction_key=transaction_key,
-            alias=alias,
-        )
+        return file_plan(read_plan(source, transaction_key, alias), platform_url)
 
     raise SystemExit(_NO_POLICY_NAMED)

@@ -23,7 +23,10 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
+from platform_client.slug import members_by_slug
+from positronic_wire import registry
 
 ERROR_CODE_VALUES = {
     'INVALID': 0,
@@ -76,6 +79,16 @@ BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
 ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2, 'image': 3}
 
+WIRE_VALUES = {
+    'INVALID': 0,
+    'websocket': 1,
+    'websocket_tls': 2,
+    'websocket_unix': 3,
+    'grpc': 4,
+    'grpc_tls': 5,
+    'roboarena': 6,
+}
+
 PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
 
 CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
@@ -89,6 +102,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
     (EndpointKind, ENDPOINT_KIND_VALUES),
+    (Wire, WIRE_VALUES),
     (Placement, PLACEMENT_VALUES),
     (CameraVantage, CAMERA_VANTAGE_VALUES),
 ]
@@ -117,3 +131,9 @@ def test_the_status_sets_partition_the_decided_from_the_undecided():
     assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
         SubmissionStatus.INVALID
     }
+
+
+def test_the_wires_a_record_names_are_the_wires_the_registry_dials():
+    # A name the client takes and the registry lacks is a record no dial can open, and a registry wire
+    # the client lacks is one no record can name.
+    assert set(members_by_slug(Wire)) == set(registry.CLIENT_WIRES)

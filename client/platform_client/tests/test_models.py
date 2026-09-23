@@ -18,9 +18,18 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Clutter, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    Clutter,
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    RoboarenaAddress,
+    TaskNode,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
@@ -122,12 +131,23 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
-            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+            'endpoints': [
+                'baseline',
+                {
+                    'name': 'ours',
+                    'wire': 'grpc_tls',
+                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session/org/ours'},
+                },
+            ],
         },
     ],
     'endpoints': [
-        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
-        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
+        {
+            'name': 'baseline',
+            'wire': 'websocket_tls',
+            'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': 'mode=native'},
+        },
+        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05', 'wire': 'websocket_unix'},
     ],
     'episodes_per_endpoint': 10,
     'cap_per_episode_sec': 180,
@@ -147,8 +167,21 @@ SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
 RESOLVED_TASK = ResolvedTask(
     task_id=TaskRef('stack-the-cubes'),
     endpoints=[
-        ResolvedEndpoint(name='baseline', kind=EndpointKind.remote, url='wss://baseline.example/ws', episodes=2),
-        ResolvedEndpoint(name='pi05', kind=EndpointKind.served, provider='droid_cohost', spec='pi05', episodes=1),
+        ResolvedEndpoint(
+            name='baseline',
+            kind=EndpointKind.remote,
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session', query='mode=native'),
+            episodes=2,
+        ),
+        ResolvedEndpoint(
+            name='pi05',
+            kind=EndpointKind.served,
+            wire=Wire.websocket_unix,
+            provider='droid_cohost',
+            spec='pi05',
+            episodes=1,
+        ),
     ],
     cap_per_episode_sec=90,
     policy_preset='example_candidate',
@@ -257,7 +290,7 @@ MODELS: list[BaseModel] = [
     ASK,
     EvalPlan(
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,
     ),
     SubmissionListQuery(after=SUB, limit=50),
@@ -781,6 +814,14 @@ def test_a_resolved_side_may_state_the_piece_is_absent():
 def test_the_episode_order_serves_each_endpoint_its_count():
     with pytest.raises(ValidationError, match='orders 2 episodes'):
         ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
+
+
+def test_a_resolved_endpoint_names_a_wire():
+    # A resolved endpoint is concrete: every kind names the wire its session runs over.
+    payload = RESOLVED_TASK.endpoints[0].model_dump(mode='json')
+    del payload['wire']
+    with pytest.raises(ValidationError):
+        ResolvedEndpoint.model_validate(payload)
 
 
 def test_the_resolved_total_is_the_sum_over_the_tasks():

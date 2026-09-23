@@ -25,9 +25,10 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import Endpoint, EvalPlan, HostPortAddress, TaskNode, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.policy_images import PolicyImage
@@ -201,7 +202,15 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
         'tasks': [
             {
                 'task_id': 'stack-the-cubes',
-                'endpoints': [{'name': 'a', 'kind': 'remote', 'url': 'wss://a.example/ws', 'episodes': 2}],
+                'endpoints': [
+                    {
+                        'name': 'a',
+                        'kind': 'remote',
+                        'wire': 'websocket_tls',
+                        'address': {'host': 'a.example', 'port': 443, 'path': '/api/v1/session'},
+                        'episodes': 2,
+                    }
+                ],
                 'cap_per_episode_sec': 90,
                 'policy_preset': 'example_preset',
                 'tote_placement': 'none',
@@ -212,7 +221,13 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     gateway = Gateway(200, resolved)
     plan = EvalPlan(
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[
+            Endpoint(
+                name='a',
+                wire=Wire.websocket_tls,
+                address=HostPortAddress(host='a.example', port=443, path='/api/v1/session'),
+            )
+        ],
         episodes_per_endpoint=2,
     )
 
@@ -583,7 +598,13 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 
 PLAN = EvalPlan(
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
-    endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
+    endpoints=[
+        Endpoint(
+            name='baseline',
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session'),
+        )
+    ],
     episodes_per_endpoint=10,
 )
 
@@ -609,7 +630,8 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
     assert body['endpoints'][0] == {
         'name': 'baseline',
         'kind': 'remote',
-        'url': 'wss://baseline.example/ws',
+        'wire': 'websocket_tls',
+        'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': ''},
         'provider': None,
         'spec': None,
         'image': None,
