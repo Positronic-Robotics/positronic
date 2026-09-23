@@ -50,7 +50,6 @@ yam_bimanual = pipeline.override(
     codec=molmoact2_codecs.yam_bimanual,
     fps=30.0,
     horizon_sec=25 / 30,
-    # Three raw frames are ~2.3 MB a request, which a lab uplink sends in most of a second.
     compress_images=True,
 )
 yam_bimanual_model = molmoact2_model.override(
