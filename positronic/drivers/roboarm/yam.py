@@ -172,7 +172,6 @@ class _Arm(DriverRun[command.CommandType]):
     """Control and report one YAM arm and its gripper for a driver run."""
 
     _MIN_RAMP_S = 2.0  # minimum duration of a commanded joint-position ramp
-    _STILL_VELOCITY_RAD_S = 0.02
     _STILL_TIME_S = 0.2
     _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
 
@@ -257,8 +256,9 @@ class _Arm(DriverRun[command.CommandType]):
             return False
         return abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
 
-    def _still(self, obs: dict[str, np.ndarray]) -> bool:
-        return bool(np.all(np.abs(obs[_JOINT_VEL]) < self._STILL_VELOCITY_RAD_S))
+    @staticmethod
+    def _still(obs: dict[str, np.ndarray], tuning: SettleTuning) -> bool:
+        return bool(np.all(np.abs(obs[_JOINT_VEL]) < tuning.still_velocity_rad_s))
 
     def _move_timeout(
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
@@ -306,7 +306,7 @@ class _Arm(DriverRun[command.CommandType]):
             if elapsed > timeout_s:
                 raise self._move_timeout(obs, goal, grip, timeout_s, tuning.tolerance_rad)
 
-            still = elapsed >= travel_s and self._still(obs)
+            still = elapsed >= travel_s and self._still(obs, tuning)
             arrived = still and self._arrived(obs, goal, grip, tuning.tolerance_rad)
             still_since = (elapsed if still_since is None else still_since) if still else None
             arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
