@@ -19,6 +19,7 @@ from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
 from positronic.policy import spec
 from positronic.policy.base import Step
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.compatibility import ChunkedScheduleV1, StackV1
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.layers import ChunkedSchedule
@@ -34,7 +35,7 @@ def controlled_runtime(monkeypatch):
 
     def submit(function, obs):
         future = Future()
-        calls.append((future, obs))
+        calls.append((future, obs, function))
         return _UnchargedAnswer(future)
 
     monkeypatch.setattr(runtime, 'submit', submit)
@@ -56,10 +57,11 @@ def test_v1_local_timing_codecs_preserve_horizon_and_chunk_boundary(controlled_r
             },
         ]
     })
-    run = runtime.start(stack, MagicMock())
+    run = runtime.start(stack, MagicMock(return_value=[{'value': i} for i in range(4)]))
     try:
         assert run.send({}).commands == {}
-        calls[0][0].set_result([{'value': i} for i in range(4)])
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
         assert run.send({}) == Step({'value': 0}, 1_100_000_000)
         now[0] = 1_100_000_000
         assert run.send({}) == Step({'value': 1}, 1_150_000_000)
@@ -120,6 +122,70 @@ def test_v1_schedule_counts_are_reported_only_for_a_stack_that_schedules(control
         assert meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] == 0.0
     else:
         assert meta == {}
+
+
+def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypatch):
+    runtime, now, calls = controlled_runtime
+    encoded = []
+    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    stack = spec.from_spec({
+        'seq': [
+            {'name': 'chunked_schedule'},
+            {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+            {'name': 'action_timestamp', 'args': {'fps': 10}},
+        ]
+    })
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
+    try:
+        for _ in range(3):
+            now[0] += 5_000_000
+            assert run.send({'image': np.zeros((4, 4, 3), np.uint8)}).commands == {}
+        assert len(calls) == 1 and encoded == []
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert len(encoded) == 1
+    finally:
+        run.close()
+
+
+def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, monkeypatch):
+    runtime, now, calls = controlled_runtime
+    encoded = []
+    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    stack = spec.from_spec({
+        'seq': [
+            {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+            {'name': 'chunked_schedule'},
+            {'name': 'action_timestamp', 'args': {'fps': 10}},
+        ]
+    })
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
+    try:
+        for _ in range(3):
+            now[0] += 5_000_000
+            run.send({'image': np.zeros((4, 4, 3), np.uint8)})
+        assert len(calls) == 1 and len(encoded) == 3
+    finally:
+        run.close()
+
+
+def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
+    runtime, now, calls = controlled_runtime
+    stack = spec.from_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]})
+    run = runtime.start(stack, MagicMock(return_value={'value': 1}))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert run.send({}) == Step({'value': 1}, 1_100_000_000)
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 1
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 2
+    finally:
+        run.close()
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
