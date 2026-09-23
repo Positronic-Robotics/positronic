@@ -110,14 +110,6 @@ class TemporalStackV1(_LayerV1):
         }
 
 
-def _returning_a_trajectory(infer: Callable[[Obs], Any]) -> Callable[[Obs], Any]:
-    def infer_trajectory(obs: Obs) -> Any:
-        result = infer(obs)
-        return [dict(result)] if isinstance(result, Mapping) else result
-
-    return infer_trajectory
-
-
 class StackV1(Sequential):
     def __init__(self, first, *rest):
         components = tuple(
@@ -153,8 +145,13 @@ class StackV1(Sequential):
         return _Call(send, cancel)
 
     def run(self, runtime: Runtime, *dependencies: Any) -> PolicyRun:
-        (infer,) = dependencies
-        infer = _returning_a_trajectory(infer)
+        (infer_one_or_many,) = dependencies
+
+        def infer_trajectory(obs: Obs) -> Any:
+            result = infer_one_or_many(obs)
+            return [dict(result)] if isinstance(result, Mapping) else result
+
+        infer: Callable[[Obs], Any] = infer_trajectory
         components = list(self._components)
         # Codecs under the innermost layer run in the submitted work, so a tick that sends nothing encodes nothing.
         while components and isinstance(tail := components[-1], Codec):
