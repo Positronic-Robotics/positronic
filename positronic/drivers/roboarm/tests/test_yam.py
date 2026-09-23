@@ -55,10 +55,13 @@ class FakeYam(yam._FakeYam):
 
 
 class Rig:
-    def __init__(self, park_tuning=DEFAULT_TUNING):
+    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE):
         self.vendor = FakeYam()
         self.driver = yam.Robot(
-            connect=lambda channel, sim: self.vendor, park_after_idle_s=1.0, park_tuning=park_tuning
+            connect=lambda channel, sim: self.vendor,
+            park_after_idle_s=1.0,
+            park_tuning=park_tuning,
+            move_tuning=move_tuning,
         )
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
@@ -280,6 +283,28 @@ def test_an_arm_with_noisy_velocity_readings_is_tuned_not_edited(monkeypatch, st
         rig.stop.stopped = True
         rig.tick(30)
         assert not rig.vendor.released_at
+
+
+@pytest.mark.parametrize(('grip_tolerance', 'arrives'), [(yam.MOVE_SETTLE.grip_tolerance, False), (0.1, True)])
+def test_an_arm_whose_fingers_read_off_is_tuned_not_edited(world, monkeypatch, grip_tolerance, arrives):
+    rig = Rig(move_tuning=dataclasses.replace(yam.MOVE_SETTLE, grip_tolerance=grip_tolerance))
+    rig.tick(4)
+    read = rig.vendor.get_observations
+
+    def fingers_read_off():
+        obs = read()
+        obs[yam._GRIPPER_POS] = obs[yam._GRIPPER_POS] - 0.08
+        return obs
+
+    monkeypatch.setattr(rig.vendor, 'get_observations', fingers_read_off)
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, answer)
+    if arrives:
+        answer.result()
+    else:
+        with pytest.raises(TimeoutError):
+            answer.result()
+    rig.loop.close()
 
 
 def test_the_hardware_configs_give_each_arm_its_own_tuning():

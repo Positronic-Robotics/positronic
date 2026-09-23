@@ -173,7 +173,6 @@ class _Arm(DriverRun[command.CommandType]):
 
     _MIN_RAMP_S = 2.0  # minimum duration of a commanded joint-position ramp
     _STILL_TIME_S = 0.2
-    _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
 
     def __init__(
         self,
@@ -251,10 +250,10 @@ class _Arm(DriverRun[command.CommandType]):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tolerance_rad: float) -> bool:
-        if not np.all(np.abs(obs[_JOINT_POS] - target) < tolerance_rad):
+    def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tuning: SettleTuning) -> bool:
+        if not np.all(np.abs(obs[_JOINT_POS] - target) < tuning.tolerance_rad):
             return False
-        return abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
+        return abs(self._grip(obs) - grip) < tuning.grip_tolerance
 
     @staticmethod
     def _still(obs: dict[str, np.ndarray], tuning: SettleTuning) -> bool:
@@ -307,7 +306,7 @@ class _Arm(DriverRun[command.CommandType]):
                 raise self._move_timeout(obs, goal, grip, timeout_s, tuning.tolerance_rad)
 
             still = elapsed >= travel_s and self._still(obs, tuning)
-            arrived = still and self._arrived(obs, goal, grip, tuning.tolerance_rad)
+            arrived = still and self._arrived(obs, goal, grip, tuning)
             still_since = (elapsed if still_since is None else still_since) if still else None
             arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
             if arrived_since is not None and elapsed - arrived_since >= self._STILL_TIME_S:
