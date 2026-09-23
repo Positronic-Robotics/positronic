@@ -51,17 +51,13 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
-# One harness step: it reads the observations, calls the policy and emits the commands. The policy's spans are
-# its children. The step's attributes hold its durations in milliseconds, so one span carries the breakdown.
+# One harness step and its durations in milliseconds. docs/telemetry.md defines each value.
 SPAN_HARNESS_STEP = 'harness.step'
-# The time from the step's due time to its start: other loops in the process, and a late wake from sleep.
-# A step has no value when an answer started it before its due time, and the first step has no due time.
 ATTR_STEP_LATE_MS = 'step.late_ms'
 ATTR_STEP_OBSERVE_MS = 'step.observe_ms'
 ATTR_STEP_POLICY_MS = 'step.policy_ms'
 ATTR_STEP_EMIT_MS = 'step.emit_ms'
-# One attribute for each observation signal, with the signal's name after the prefix. A read is the receiver's
-# read. A conversion is the serializer and the copy of a new message, so a signal with no new message has none.
+# The signal's name follows each prefix.
 ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
 ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
 
