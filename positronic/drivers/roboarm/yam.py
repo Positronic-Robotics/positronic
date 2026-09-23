@@ -55,13 +55,6 @@ _PARK_JOINTS = np.zeros(6)
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
 
-class _Rest(Enum):
-    """Where a settle pass left the chain once every joint held still."""
-
-    ON_GOAL = auto()
-    SHORT_OF_GOAL = auto()
-
-
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
@@ -278,6 +271,12 @@ class _Arm(DriverRun[command.CommandType]):
         self.command_target((1 - fraction) * start + fraction * target, grip)
         self.publish(obs, RobotStatus.BUSY)
 
+    class _Rest(Enum):
+        """Where a settle pass left the chain once every joint held still."""
+
+        ON_GOAL = auto()
+        SHORT_OF_GOAL = auto()
+
     def _come_to_rest(
         self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
     ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], _Rest] | None]:
@@ -304,9 +303,9 @@ class _Arm(DriverRun[command.CommandType]):
             still_since = (elapsed if still_since is None else still_since) if still else None
             arrived_since = (elapsed if arrived_since is None else arrived_since) if arrived else None
             if arrived_since is not None and elapsed - arrived_since >= self._STILL_TIME_S:
-                return obs, _Rest.ON_GOAL
+                return obs, self._Rest.ON_GOAL
             if arrived_since is None and still_since is not None and elapsed - still_since >= self._STILL_TIME_S:
-                return obs, _Rest.SHORT_OF_GOAL
+                return obs, self._Rest.SHORT_OF_GOAL
 
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
             yield self.limiter.wait()
@@ -329,7 +328,7 @@ class _Arm(DriverRun[command.CommandType]):
                 if rest is None:
                     return None
                 obs, rests = rest
-                if rests is _Rest.ON_GOAL:
+                if rests is self._Rest.ON_GOAL:
                     self.command_target(reference, grip)
                     self.moves.errored = False
                     self.publish(self.observations())
