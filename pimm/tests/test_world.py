@@ -7,6 +7,7 @@ import struct
 import threading
 import time
 from functools import partial
+from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
@@ -1448,6 +1449,29 @@ def test_world_waits_for_device_shutdown_and_ctrl_c_does_not_interrupt_it(monkey
         assert process.is_alive()
         assert not world.should_stop
     assert closed.is_set()
+
+
+def test_ctrl_c_while_a_protected_child_spawns_still_registers_and_joins_it(monkeypatch):
+    ctx = mp.get_context('spawn')
+    ready, holding, release, closed = (ctx.Event() for _ in range(4))
+    release.set()
+    start = SpawnProcess.start
+
+    def interrupted_start(process):
+        start(process)
+        signal.raise_signal(signal.SIGINT)
+
+    monkeypatch.setattr(SpawnProcess, 'start', interrupted_start)
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    world = World()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with world:
+                world.start([], ShutdownWaiter(ready, holding, release, closed))
+        assert len(world.background_processes) == 1
+        assert closed.is_set()
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def test_world_keeps_the_timeout_for_ordinary_control_systems(monkeypatch):
