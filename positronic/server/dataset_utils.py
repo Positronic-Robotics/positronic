@@ -2,6 +2,7 @@
 
 import io
 import logging
+import math
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
@@ -72,6 +73,8 @@ class EpisodeSignals:
     joints: list[str]
     # Each text signal's distinct values, in the order they first appear.
     texts: dict[str, list[str]] = field(default_factory=dict)
+    # Width over height of each camera's frames.
+    camera_aspects: dict[str, float] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
 
     @property
@@ -202,8 +205,9 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
-                sig[0]
+                height, width = np.asarray(sig[0][0]).shape[:2]
                 signals.videos.append(name)
+                signals.camera_aspects[name] = width / height
             except Exception:
                 pass
             continue
@@ -244,12 +248,38 @@ _TIME_FROM_START = 'from start'
 
 def _text_log_view(sig: str) -> rrb.TextLogView:
     hidden = [TextLogColumn(kind, visible=False) for kind in (TextLogColumnKind.EntityPath, TextLogColumnKind.LogLevel)]
-    # The time cursor draws its line in the `time` column only, so that column stays visible.
+    # FOOTGUN: rerun draws the time cursor line in the `time` column only, so this view shows no cursor line.
     columns = rrb.TextLogColumns(
-        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn('time', visible=True)],
+        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn('time', visible=False)],
         text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)],
     )
     return rrb.TextLogView(name=sig, origin=f'{_TEXT_LOG_ENTITY}/{sig}', columns=columns)
+
+
+# The layout is sized for a viewer this many times wider than tall: a wide browser window under the page header.
+_VIEWER_ASPECT = 2.4
+# Width over height a signal plot reads best at.
+_PLOT_CELL_ASPECT = 2.0
+# The cameras' share of the top row, and the 3D view's.
+_TOP_ROW_SHARES = [3, 1]
+_NO_CAMERA_TOP_SHARE = 0.75
+
+
+def _camera_row_share(signals: EpisodeSignals) -> float:
+    """The share of the viewer's height that shows every camera, side by side, without black bands."""
+    width = _TOP_ROW_SHARES[0] / sum(_TOP_ROW_SHARES) if signals.poses else 1.0
+    aspect = float(np.mean(list(signals.camera_aspects.values())))
+    return float(np.clip(width / (len(signals.camera_aspects) * aspect) * _VIEWER_ASPECT, 0.2, 0.75))
+
+
+def _series_columns(cells: int, height_share: float) -> int:
+    """The column count that brings a grid of ``cells`` closest to plot-shaped cells."""
+    area_aspect = _VIEWER_ASPECT / height_share
+
+    def miss(columns: int) -> float:
+        return abs(math.log(area_aspect * math.ceil(cells / columns) / columns / _PLOT_CELL_ASPECT))
+
+    return min(range(1, cells + 1), key=miss)
 
 
 def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
@@ -292,7 +322,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
     if image_views:
-        top_items.append(rrb.Grid(*image_views))
+        top_items.append(rrb.Grid(*image_views, grid_columns=len(image_views)))
     if signals.poses:
         eye = _compute_eye_controls(signals, ep)
         top_items.append(
@@ -307,12 +337,14 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 
     rows = []
     row_shares = []
+    top_share = _camera_row_share(signals) if image_views else _NO_CAMERA_TOP_SHARE
     if top_items:
-        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=[3, 1]))
-        row_shares.append(3)
+        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
+        row_shares.append(top_share)
     if series_views:
-        rows.append(rrb.Grid(*series_views))
-        row_shares.append(1)
+        series_share = 1 - top_share if top_items else 1.0
+        rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
+        row_shares.append(series_share)
 
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),

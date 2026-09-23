@@ -215,6 +215,42 @@ def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp
     assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_000_000_000]
 
 
+def test_a_text_log_shows_its_time_from_the_start_and_not_the_clock_time():
+    columns = dataset_utils._text_log_view('progress.state').properties['TextLogColumns']
+    assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is not None
+    timelines = columns.timeline_columns.as_arrow_array().to_pylist()
+
+    shown = [column['timeline'] for column in timelines if column['visible']]
+    assert shown == [dataset_utils._TIME_FROM_START]
+
+
+def _signals_with_cameras(aspects: list[float], with_3d: bool) -> dataset_utils.EpisodeSignals:
+    cameras = {f'camera_{i}': aspect for i, aspect in enumerate(aspects)}
+    poses = ['pose'] if with_3d else []
+    return dataset_utils.EpisodeSignals(
+        videos=list(cameras), numerics=[], dims={}, poses=poses, joints=[], camera_aspects=cameras
+    )
+
+
+@pytest.mark.parametrize('aspects', [[16 / 9] * 3, [4 / 3] * 3, [16 / 9] * 4])
+@pytest.mark.parametrize('with_3d', [True, False])
+def test_the_camera_row_is_as_tall_as_its_frames(aspects, with_3d):
+    share = dataset_utils._camera_row_share(_signals_with_cameras(aspects, with_3d))
+
+    camera_width = dataset_utils._VIEWER_ASPECT * (0.75 if with_3d else 1.0) / len(aspects)
+    assert camera_width / share == pytest.approx(aspects[0])
+
+
+def test_one_camera_leaves_the_signals_a_quarter_of_the_height():
+    assert dataset_utils._camera_row_share(_signals_with_cameras([16 / 9], with_3d=False)) == 0.75
+
+
+def test_eight_signal_cells_under_three_cameras_wrap_to_two_rows_of_four():
+    share = dataset_utils._camera_row_share(_signals_with_cameras([16 / 9] * 3, with_3d=True))
+
+    assert dataset_utils._series_columns(8, 1 - share) == 4
+
+
 def _tabs(container: Any) -> list[rrb.Tabs]:
     if isinstance(container, rrb.Tabs):
         return [container]
