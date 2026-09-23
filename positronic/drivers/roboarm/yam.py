@@ -17,6 +17,7 @@ import contextlib
 import logging
 import math
 from collections.abc import Callable, Generator, Iterator
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
 
@@ -361,10 +362,16 @@ class _Arm(DriverRun[command.CommandType]):
             self.moves.errored = True
             raise
 
+    class _Park(Enum):
+        """How a park ended: on the parking pose, or holding wherever the arm stopped."""
+
+        PARKED = auto()
+        HELD_WHERE_IT_STOPPED = auto()
+
     def park(
         self, grip: float, *, interrupt_on_stop: bool = True
-    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Settle onto the parking pose at bounded speed, and return the joints and grip to hold."""
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, _Park]]:
+        """Settle onto the parking pose at bounded speed; return the joints and grip to hold, and how it ended."""
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
@@ -372,19 +379,20 @@ class _Arm(DriverRun[command.CommandType]):
             )
             if reference is not None:
                 logger.info('Arm parked')
-                return reference, grip
+                return reference, grip, self._Park.PARKED
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; it does not end the run
         except Exception as exc:
             self.moves.errored = True
             logger.error(f'The arm did not reach the parking pose: {exc}')
-        return self.hold_where_it_stopped()
+        return *self.hold_where_it_stopped(), self._Park.HELD_WHERE_IT_STOPPED
 
     def shutdown(self) -> Generator[pimm.Command, None, None]:
         hold_target = None
         try:
-            hold_target = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
-            if not self.moves.errored:
+            joints, grip, ended = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
+            if ended is self._Park.PARKED:
                 return
+            hold_target = joints, grip
         # rules-allow: swallowed-error — any failure before verified parking must block torque release
         except Exception:
             self.moves.errored = True
@@ -488,6 +496,16 @@ def _power_off(vendor: Any) -> None:
             logger.warning(f'Motors {refused} stayed enabled, so they will latch their own command timeout')
     except Exception as exc:
         logger.warning(f'The chain kept its motors enabled: {exc}')
+
+
+@dataclass
+class _Serving:
+    """What the command loop carries from one tick to the next."""
+
+    q_target: np.ndarray
+    grip_target: float
+    idle_since: float | None = None
+    parking: Generator[pimm.Command, None, tuple[np.ndarray, float, _Arm._Park]] | None = None
 
 
 class Robot(pimm.ControlSystem):
@@ -597,49 +615,70 @@ class Robot(pimm.ControlSystem):
         self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
         """Park on startup, then answer commands and park when idle until ``should_stop``."""
-        q_target, grip_target = yield from arm.park(arm._grip(arm.observations()))
-        idle_since = None
-        parking = None
+        joints, grip, _ = yield from arm.park(arm._grip(arm.observations()))
+        serving = _Serving(joints, grip)
         try:
             while not should_stop.value:
-                grip = pimm.value_updated(self.target_grip)
-                asked = arm.moves.next_request()
-                with self._answer_failed_setup(asked):
-                    if parking is not None and (grip is not None or asked is not None):
-                        parking.close()
-                        parking = None
-                        q_target, grip_target = arm.hold_where_it_stopped()
-                    if grip is not None:
-                        grip_target = float(grip)
-                        idle_since = clock.now()
-
-                    q = arm.observations()[_JOINT_POS]
-                if isinstance(asked, pimm.calls.Call):
-                    q_target, grip_target = yield from arm.sync_move(asked, q, grip_target)
-                    idle_since = clock.now()
-                elif asked is not None:
-                    with log_failure(asked):
-                        q_target = arm.to_joints(asked, q)
-                    idle_since = clock.now()
-                elif self._should_park(idle_since, clock.now()):
-                    parking = arm.park(arm._grip(arm.observations()))
-                    idle_since = None
-
-                if parking is not None:
-                    try:
-                        yield next(parking)
-                        continue
-                    except StopIteration as done:
-                        q_target, grip_target = done.value
-                        parking = None
-
-                arm.command_target(q_target, grip_target)
+                asked, q = self._take_request(arm, serving, clock)
+                yield from self._dispatch(arm, serving, asked, q, clock)
+                if (step := self._advance_parking(serving)) is not None:
+                    yield step
+                    continue
+                arm.command_target(serving.q_target, serving.grip_target)
                 # Synchronous moves can take seconds; publish a fresh observation.
                 arm.publish(arm.observations())
                 yield arm.limiter.wait()
         finally:
-            if parking is not None:
-                parking.close()
+            if serving.parking is not None:
+                serving.parking.close()
+
+    def _take_request(
+        self, arm: _Arm, serving: _Serving, clock: pimm.Clock
+    ) -> tuple[pimm.calls.Call | command.CommandType | None, np.ndarray]:
+        """Read the grip and the next request; a new one interrupts an idle park. Return it with the joints."""
+        grip = pimm.value_updated(self.target_grip)
+        asked = arm.moves.next_request()
+        with self._answer_failed_setup(asked):
+            if serving.parking is not None and (grip is not None or asked is not None):
+                serving.parking.close()
+                serving.parking = None
+                serving.q_target, serving.grip_target = arm.hold_where_it_stopped()
+            if grip is not None:
+                serving.grip_target = float(grip)
+                serving.idle_since = clock.now()
+            return asked, arm.observations()[_JOINT_POS]
+
+    def _dispatch(
+        self,
+        arm: _Arm,
+        serving: _Serving,
+        asked: pimm.calls.Call | command.CommandType | None,
+        q: np.ndarray,
+        clock: pimm.Clock,
+    ) -> Generator[pimm.Command, None, None]:
+        """Run a blocking move, take a streamed target, or start an idle park."""
+        if isinstance(asked, pimm.calls.Call):
+            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q, serving.grip_target)
+            serving.idle_since = clock.now()
+        elif asked is not None:
+            with log_failure(asked):
+                serving.q_target = arm.to_joints(asked, q)
+            serving.idle_since = clock.now()
+        elif self._should_park(serving.idle_since, clock.now()):
+            serving.parking = arm.park(arm._grip(arm.observations()))
+            serving.idle_since = None
+
+    @staticmethod
+    def _advance_parking(serving: _Serving) -> pimm.Command | None:
+        """Step an idle park; return its command, or None once it has ended or when none is running."""
+        if serving.parking is None:
+            return None
+        try:
+            return next(serving.parking)
+        except StopIteration as done:
+            serving.q_target, serving.grip_target, _ = done.value
+            serving.parking = None
+            return None
 
 
 class _FakeYam:
