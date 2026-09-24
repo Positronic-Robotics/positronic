@@ -5506,17 +5506,19 @@ sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d826
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.13.0"
+version = "0.15.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.11" },
+    { name = "typing-extensions", specifier = ">=4.12.2" },
 ]
 
 [[package]]

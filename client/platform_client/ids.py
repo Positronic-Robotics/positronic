@@ -82,5 +82,9 @@ class SubmissionId(Id64):
 # Two submissions under one key are one transaction — the second returns the first, and is not charged.
 TransactionKey = NewType('TransactionKey', str)
 
+# An organisation's slug, as the platform names it. The platform resolves it against the caller's
+# memberships and refuses one it does not know.
+OrgSlug = NewType('OrgSlug', str)
+
 # The plaintext API key, returned by `users.register` exactly once and stored only as a hash.
 ApiKey = NewType('ApiKey', str)

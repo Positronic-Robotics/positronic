@@ -1,7 +1,7 @@
 """The closed sets a caller sees: error codes, terminal reason codes, submission and key status.
 
-The values are stored durably, so members are append-only forever: add, never renumber or reuse.
-`INVALID = 0` is the unset/parse-failure sentinel; the wire form is the slug (`platform_client.slug`).
+`INVALID = 0` is the unset/parse-failure sentinel. The wire form is the slug
+(`platform_client.slug`).
 """
 
 from __future__ import annotations
@@ -61,22 +61,19 @@ class ReasonCode(IntEnum):
 
 @unique
 class SubmissionStatus(IntEnum):
-    """The lifecycle: pending -> submitting -> running -> finished|errored|cancelled.
+    """The lifecycle a caller sees: pending -> running -> finished|errored|cancelled.
 
     `blocked` interrupts it at any point before an end state, and a later report moves it on.
-    `submitting` is the internal claim state; the gateway reports it as `pending`, so it never
-    reaches a caller.
     """
 
     INVALID = 0
     pending = 1
-    submitting = 2
-    running = 3
-    finished = 4
-    errored = 5
-    cancelled = 6
+    running = 2
+    finished = 3
+    errored = 4
+    cancelled = 5
     # It waits on what `reason` names, and a later report moves it on.
-    blocked = 7
+    blocked = 6
 
 
 @unique
@@ -120,14 +117,6 @@ class BoardVisibility(IntEnum):
     tenant = 2
 
 
-# Charged, undecided, still holding a concurrency slot. `blocked` is charged and undecided too, and
-# holds no slot, so it is in neither this set nor the terminal one.
-ACTIVE_STATUSES: frozenset[SubmissionStatus] = frozenset({
-    SubmissionStatus.pending,
-    SubmissionStatus.submitting,
-    SubmissionStatus.running,
-})
-
 # Decided and immutable.
 TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.finished,
@@ -138,6 +127,15 @@ TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
 # Decided, and there will never be a result to read. Derived, so a fourth terminal status joins it
 # by being terminal rather than by every caller remembering to name it.
 NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {SubmissionStatus.finished}
+
+
+@unique
+class RequestType(IntEnum):
+    """Which rules, approvals and board a plan runs under. The executor follows from the plan content."""
+
+    INVALID = 0
+    nebius_competition = 1
+    private_eval = 2
 
 
 @unique

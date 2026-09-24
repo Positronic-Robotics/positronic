@@ -8,11 +8,11 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic` and `httpx` and nothing else, so a service that only speaks to the
-platform installs it on its own, at the exact version it was written against:
+The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing else, so a service that
+only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.13.0"
+uv add "positronic-platform-client==0.15.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -60,7 +60,13 @@ plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras` and `
 endpoint states only its count. `episodes_total` is a checksum a caller may state.
 `max_cap_per_episode_sec` is the upper bound on every task's cap.
 
+`request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
+it names, and the caller must be a member of that org. The org's approvals decide the evals, the
+tasks and the endpoint kinds it may use. `nebius_competition` names one eval and one image
+endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
+
 ```yaml
+request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
@@ -162,6 +168,23 @@ image, and how to build, test and submit it.
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
 `websocket` wire, and `--eval` names the eval whose tasks it runs. `plan_of_image` builds that shape.
 
+An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
+file names the registry user and the FILE the password is in. `positronic eval run --from-file`
+reads it as `EvalPlan[RegistryCredentialFile]`, then `plan_with_passwords_read` gives the `EvalPlan`
+a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
+builds that credential.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: registry.example.com/you/policy@sha256:...
+    image_credential:
+      username: a-reader
+      password_file: ~/.config/positronic/registry-password
+```
+
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the
 evals a submission can name. A customer grant adds the rig's evals and tasks, filtered to the entries
@@ -185,7 +208,7 @@ platform-register --alias=<display name>            # in a checkout: uv run plat
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 uv run positronic eval run --eval=<name> --policy-image=org/policy@sha256:…
-uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
+uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --org=<org>
 uv run positronic eval status --id=<hex id>
 uv run positronic eval list
 uv run positronic eval cancel --id=<hex id>

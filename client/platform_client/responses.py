@@ -28,19 +28,7 @@ from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
-
-
-def _public(status: SubmissionStatus) -> SubmissionStatus:
-    """A status as a CALLER may see it: `submitting` is an internal claim state, reported as `pending`."""
-    if status is SubmissionStatus.submitting:
-        raise ValueError(f'{status.name} is an internal state and never reaches a caller')
-    return status
-
-
-# Every status a caller-facing model may carry. The `submissions.get` variants pin their own tag
-# instead (`_TaggedView`), which is the same rule stated per variant.
-PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
+from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
 
 class Scores(BaseModel):
@@ -306,7 +294,7 @@ class MeResponse(BaseModel):
 class _ReasonBearing(BaseModel):
     """A flat submission row whose `reason_code` is absent unless `status` is `errored`."""
 
-    status: PublicStatus
+    status: Slugged[SubmissionStatus]
     reason_code: Slugged[ReasonCode] | None = None
 
     @model_validator(mode='after')
@@ -362,10 +350,9 @@ ID_FIELD = 'id'
 
 
 class _TaggedView(BaseModel):
-    """One `submissions.get` variant. Its `status` default IS the tag the union selects it by, so a
-    payload carrying any other status belongs to a different variant and is refused rather than
-    validated into this one — which is what stops an internal state the union has no variant for,
-    `submitting`, from arriving dressed as a pending view.
+    """One `submissions.get` variant. The union selects it by its `status` default, so a payload
+    carrying any other status belongs to a different variant and is refused rather than validated
+    into this one.
     """
 
     status: Slugged[SubmissionStatus]
@@ -473,7 +460,7 @@ SubmissionView = Annotated[
 class CancelResponse(BaseModel):
     """`submissions.cancel`. `refunded` is false once the run started — started work is charged."""
 
-    status: PublicStatus
+    status: Slugged[SubmissionStatus]
     refunded: bool
 
 
