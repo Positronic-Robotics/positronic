@@ -1,5 +1,6 @@
 """Unversioned server contracts, exact component selection, and deprecation at connection time."""
 
+import logging
 import threading
 from concurrent.futures import Future
 from datetime import date
@@ -16,12 +17,15 @@ from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
-from positronic.policy.compatibility import ChunkedScheduleV1
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
+from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
 
 
@@ -33,7 +37,7 @@ def controlled_runtime(monkeypatch):
 
     def submit(function, obs):
         future = Future()
-        calls.append((future, obs))
+        calls.append((future, obs, function))
         return _UnchargedAnswer(future)
 
     monkeypatch.setattr(runtime, 'submit', submit)
@@ -41,24 +45,47 @@ def controlled_runtime(monkeypatch):
     runtime.close()
 
 
-def test_v1_local_timing_codecs_preserve_horizon_and_chunk_boundary(controlled_runtime):
-    runtime, now, calls = controlled_runtime
-    stack = spec.from_spec({
-        'seq': [
-            {'name': 'stop_on_fault'},
+@pytest.mark.parametrize(
+    'declared, handshake, answer',
+    [
+        pytest.param(
             {
                 'seq': [
-                    {'name': 'chunked_schedule'},
-                    {'name': 'action_horizon', 'args': {'horizon_sec': 0.15}},
-                    {'name': 'action_timestamp', 'args': {'fps': 10}},
+                    {'name': 'stop_on_fault'},
+                    {
+                        'seq': [
+                            {'name': 'chunked_schedule'},
+                            {'name': 'action_horizon', 'args': {'horizon_sec': 0.15}},
+                            {'name': 'action_timestamp', 'args': {'fps': 10}},
+                        ]
+                    },
                 ]
             },
-        ]
-    })
-    run = runtime.start(stack, MagicMock())
+            {},
+            [{'value': i} for i in range(4)],
+            id='declared-timing',
+        ),
+        pytest.param(
+            {
+                'seq': [
+                    {'name': 'stop_on_fault'},
+                    {'name': 'chunked_schedule'},
+                    {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+                ]
+            },
+            {'action_fps': 10, 'action_horizon_sec': 0.15},
+            [{'value': 0, 'timestamp': 0.0}, {'value': 1, 'timestamp': 0.1}, {'timestamp': 0.15}],
+            id='server-stamped',
+        ),
+    ],
+)
+def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, declared, handshake, answer):
+    runtime, now, calls = controlled_runtime
+    run = runtime.start(from_v1_spec(declared, handshake), MagicMock(return_value=answer))
     try:
         assert run.send({}).commands == {}
-        calls[0][0].set_result([{'value': i} for i in range(4)])
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
         assert run.send({}) == Step({'value': 0}, 1_100_000_000)
         now[0] = 1_100_000_000
         assert run.send({}) == Step({'value': 1}, 1_150_000_000)
@@ -72,30 +99,127 @@ def test_v1_local_timing_codecs_preserve_horizon_and_chunk_boundary(controlled_r
         run.close()
 
 
-def test_v1_fault_discards_pending_actions_and_clears_history(controlled_runtime):
+def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.compatibility'):
+        stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
+    assert flatten_dict(stack.meta())[policy_keys.ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
+    assert 'Rebuild the server on current positronic' in caplog.text
+
+
+def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_runtime):
     runtime, now, calls = controlled_runtime
-    stack = spec.from_spec({
-        'seq': [
-            {'name': 'stop_on_fault'},
-            {'name': 'temporal_stack', 'args': {'keys': ['image'], 'offsets_sec': [-0.1, 0], 'pad_start': False}},
-            {'name': 'chunked_schedule'},
-        ]
-    })
-    run = runtime.start(stack, MagicMock())
+    stack = from_v1_spec(
+        {
+            'seq': [
+                {'name': 'stop_on_fault'},
+                {'name': 'temporal_stack', 'args': {'keys': ['image'], 'offsets_sec': [-0.3, 0], 'pad_start': False}},
+                {'name': 'chunked_schedule'},
+            ]
+        },
+        {'action_fps': 10},
+    )
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 'kept', 'timestamp': 0}, {'timestamp': 0.1}]))
     try:
         run.send({'image': np.array([1])})
         assert len(calls) == 1
         now[0] += 100_000_000
         assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR, 'image': np.array([2])}).commands == {}
-        calls[0][0].set_result([{'value': 'discard', 'timestamp': 0}])
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
         now[0] += 100_000_000
-        assert run.send({'image': np.array([3])}).commands == {}
+        assert run.send({'image': np.array([3])}).commands == {'value': 'kept'}
         assert len(calls) == 1
-        run.send({'image': np.array([3])})
+        now[0] += 100_000_000
+        run.send({'image': np.array([4])})
         assert len(calls) == 2
-        np.testing.assert_array_equal(calls[1][1]['image'], [[3]])
-        calls[1][0].set_result([{'value': 'fresh', 'timestamp': 0}])
-        assert run.send({'image': np.array([3])}).commands == {'value': 'fresh'}
+        np.testing.assert_array_equal(calls[1][1]['image'], [[1], [4]])
+    finally:
+        run.close()
+
+
+def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypatch):
+    runtime, now, calls = controlled_runtime
+    encoded = []
+    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    stack = from_v1_spec(
+        {
+            'seq': [
+                {'name': 'chunked_schedule'},
+                {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+                {'name': 'action_timestamp', 'args': {'fps': 10}},
+            ]
+        },
+        {},
+    )
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
+    try:
+        for _ in range(3):
+            now[0] += 5_000_000
+            assert run.send({'image': np.zeros((4, 4, 3), np.uint8)}).commands == {}
+        assert len(calls) == 1 and encoded == []
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert len(encoded) == 1
+    finally:
+        run.close()
+
+
+def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, monkeypatch):
+    runtime, now, calls = controlled_runtime
+    encoded = []
+    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    stack = from_v1_spec(
+        {
+            'seq': [
+                {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 32}},
+                {'name': 'chunked_schedule'},
+                {'name': 'action_timestamp', 'args': {'fps': 10}},
+            ]
+        },
+        {},
+    )
+    run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
+    try:
+        for _ in range(3):
+            now[0] += 5_000_000
+            run.send({'image': np.zeros((4, 4, 3), np.uint8)})
+        assert len(calls) == 1 and len(encoded) == 3
+    finally:
+        run.close()
+
+
+def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
+    runtime, now, calls = controlled_runtime
+    stack = from_v1_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {})
+    run = runtime.start(stack, MagicMock(return_value={'value': 1}))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert run.send({}) == Step({'value': 1}, 1_100_000_000)
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 1
+        now[0] += 50_000_000
+        run.send({})
+        assert len(calls) == 2
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('answer', [None, []], ids=['absent', 'no-rows'])
+def test_v1_answer_without_rows_sends_no_commands_and_asks_again(controlled_runtime, answer):
+    runtime, now, calls = controlled_runtime
+    stack = from_v1_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {})
+    run = runtime.start(stack, MagicMock(return_value=answer))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert run.send({}).commands == {}
+        now[0] += 1
+        run.send({})
+        assert len(calls) == 2
     finally:
         run.close()
 
@@ -117,7 +241,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     )
 
     async def v1_session(server, conn, model_id):
-        await conn.send(protocol.serialise({'status': 'ready', 'meta': {'local_stack': declared}}))
+        await conn.send(protocol.serialise({'status': 'ready', 'meta': {'local_stack': declared, 'action_fps': 10}}))
         try:
             while True:
                 observation = protocol.deserialise(await conn.receive())
@@ -140,7 +264,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
         first = run.send({'image': np.array([1, 2])})
         assert isinstance(first, Step) and first.commands == {}
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
-        assert run.send({'image': np.array([1, 2])}) == Step({'value': 10}, 1_100_000_000 if scheduled else now[0])
+        assert run.send({'image': np.array([1, 2])}) == Step({'value': 10}, 1_100_000_000)
         if scheduled:
             now[0] = 1_100_000_000
             assert run.send({}) == Step({'value': 20}, 1_200_000_000)
@@ -164,7 +288,6 @@ def test_unknown_protocol_closes_before_any_request(start_server, make_mock_mode
 
 
 def test_component_versions_are_independent_and_exact():
-    assert isinstance(spec.from_spec({'name': 'chunked_schedule'}), ChunkedScheduleV1)
     stack = spec.from_spec({
         'seq': [
             {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}},
@@ -172,14 +295,9 @@ def test_component_versions_are_independent_and_exact():
         ]
     })
     assert [part['version'] for part in stack.to_spec()['seq']] == [2, 1]
-    with pytest.raises(ValueError, match='Unsupported.*version 99'):
-        spec.from_spec({'name': 'chunked_schedule', 'version': 99})
-    with pytest.raises(TypeError):
-        spec.from_spec({'name': 'chunked_schedule', 'args': {'fps': 10}})
-    with pytest.raises(ValueError, match='cannot be mixed'):
-        spec.from_spec({
-            'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}]
-        })
+    for version in (1, 99):
+        with pytest.raises(ValueError, match=f'Unsupported.*version {version}'):
+            spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})
 
 
 @pytest.mark.parametrize(
@@ -187,9 +305,9 @@ def test_component_versions_are_independent_and_exact():
     [{'name': 'action_timestamp', 'args': {'fps': 10}}, {'name': 'action_horizon', 'args': {'horizon_sec': 0.1}}],
 )
 @pytest.mark.parametrize('group', [None, 'seq', 'par'])
-def test_v2_processors_reject_legacy_timing_codecs(timing, group):
+def test_v2_stack_rejects_v1_timing_codecs(timing, group):
     codec = {group: [timing, {'name': 'flip_grip'}]} if group else timing
-    with pytest.raises(ValueError, match='V1 timing codecs cannot be mixed with Step processors'):
+    with pytest.raises(ValueError, match=f"Unknown local-stack entry '{timing['name']}'"):
         spec.from_spec({'seq': [{'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}, codec]})
 
 

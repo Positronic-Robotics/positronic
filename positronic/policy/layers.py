@@ -94,6 +94,8 @@ class ChunkedSchedule(Policy):
 
     WIRE_NAME = 'chunked_schedule'
     WIRE_VERSION = 2
+    FPS_ARG = 'fps'
+    HORIZON_SEC_ARG = 'horizon_sec'
 
     def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
         if not isfinite(fps) or fps <= 0:
@@ -143,9 +145,9 @@ class ChunkedSchedule(Policy):
         return meta
 
     def to_spec(self) -> dict[str, Any]:
-        args = {'fps': self._fps}
+        args = {self.FPS_ARG: self._fps}
         if self._horizon_sec is not None:
-            args['horizon_sec'] = self._horizon_sec
+            args[self.HORIZON_SEC_ARG] = self._horizon_sec
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
