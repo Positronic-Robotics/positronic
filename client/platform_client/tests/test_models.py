@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import get_args
 
 import pytest
+from platform_client import config, eval_plan, requests
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
@@ -33,6 +34,7 @@ from platform_client.eval_plan import (
 )
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
+from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -338,6 +340,19 @@ def test_ids_and_statuses_leave_as_wire_values():
     assert row['received_at'].startswith('2026-03-04T05:06:07')
 
 
+def test_every_model_built_from_input_declares_its_fields_and_hides_them_from_its_errors():
+    """A model added to one of these modules is held to `INPUT_MODEL_CONFIG` without an edit here."""
+    for module in (eval_plan, requests, config):
+        declared = [
+            member
+            for member in vars(module).values()
+            if isinstance(member, type) and issubclass(member, BaseModel) and member.__module__ == module.__name__
+        ]
+        assert declared, module.__name__
+        for model in declared:
+            assert model.model_config == INPUT_MODEL_CONFIG, f'{module.__name__}.{model.__name__}'
+
+
 def test_a_request_rejects_an_unknown_field():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({
@@ -478,12 +493,8 @@ def test_the_published_field_names_are_ones_every_variant_declares(variant: type
 
 
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():
-    # `submitting` is an internal state the union has no variant for; a gateway building a pending
-    # view from such a record must fail here rather than emit a tag no caller can route.
     with pytest.raises(ValidationError):
-        PendingSubmissionView(
-            id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.submitting
-        )
+        PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.running)
 
 
 def test_a_view_keeps_its_own_tag():
@@ -499,11 +510,10 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
-    # Every status a caller can see carries a variant. This catches one added without one;
-    # `submitting` is internal and INVALID is the unset sentinel.
-    internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
+    # Every status carries a variant. This catches one added without one; INVALID is the unset
+    # sentinel and has no wire form.
     assert {get_args(variant)[1].tag for variant in variants} == {
-        slug_of(status) for status in SubmissionStatus if status not in internal
+        slug_of(status) for status in SubmissionStatus if status is not SubmissionStatus.INVALID
     }
 
 
@@ -729,18 +739,15 @@ def test_a_scale_of_zero_is_refused_at_the_boundary():
         QuotaLimit.model_validate(payload)
 
 
+@pytest.mark.parametrize('status', ['mirroring', 'submitting'])
 @pytest.mark.parametrize(
-    'model, payload',
-    [
-        (SubmissionCreateResponse, {'submission_id': 'ff', 'status': 'submitting'}),
-        (CancelResponse, {'status': 'submitting', 'refunded': False}),
-    ],
+    'model, field', [(SubmissionCreateResponse, {'submission_id': 'ff'}), (CancelResponse, {'refunded': False})]
 )
-def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel], payload: dict):
-    # The enum says the gateway reports `submitting` as `pending`; a payload carrying it is a
-    # gateway that forgot, refused here rather than left for every consumer to normalise.
+def test_a_platform_only_status_is_refused(model: type[BaseModel], field: dict, status: str):
+    # These are the platform's own states, spelled here because `SubmissionStatus` carries neither.
+    # `Slugged` reads its vocabulary off the members, so neither slug names a wire value.
     with pytest.raises(ValidationError):
-        model.model_validate(payload)
+        model.model_validate(field | {'status': status})
 
 
 @pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])

@@ -9,17 +9,17 @@ import ipaddress
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Generic, Literal, Self
 
 from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
+from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
-
-_FORBID_EXTRA = ConfigDict(extra='forbid')
+from pydantic import AfterValidator, BaseModel, Field, SecretStr, SerializationInfo, model_serializer, model_validator
+from typing_extensions import TypeVar
 
 
 def _require_unique_names(names: list[str], whose: str) -> None:
@@ -35,7 +35,7 @@ class Clutter(BaseModel):
     the same table: at most `large_cap` large objects and `medium_cap` medium ones, and the rest small.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     count_min: int = Field(default=4, ge=0)
     count_max: int = Field(default=8, ge=0)
@@ -57,7 +57,7 @@ class Cascade(BaseModel):
     level under it. `random` draws a side at this level even when a level above states one.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     # Episodes each endpoint of each task under this level takes.
     episodes_per_endpoint: int | None = Field(default=None, ge=1)
@@ -136,7 +136,7 @@ SocketPath = Annotated[Path, AfterValidator(_an_absolute_path)]
 class HostPortAddress(BaseModel):
     """A session on a server reached over the network."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     host: Host
     port: Port
@@ -147,7 +147,7 @@ class HostPortAddress(BaseModel):
 class UnixSocketAddress(BaseModel):
     """A session on a server on the same machine, opened on the socket it bound."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     uds: SocketPath
     path: SessionPath
@@ -157,7 +157,7 @@ class UnixSocketAddress(BaseModel):
 class RoboarenaAddress(BaseModel):
     """A session on a roboarena server, at the root of the port the partner published."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     host: Host
     port: Port
@@ -176,28 +176,98 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
 }
 
 
-# A field added to `Cascade` later is refused on an endpoint rather than silently accepted there.
-_ENDPOINT_MAY_STATE = frozenset({
-    'name',
-    'kind',
-    'wire',
-    'address',
-    'provider',
-    'spec',
-    'image',
-    'episodes_per_endpoint',
-})
+# The serialisation context key under which a registry password dumps as plaintext.
+REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
 
-class Endpoint(Cascade):
+class RegistryCredential(BaseModel):
+    """The username and password that open the registry one image endpoint names.
+
+    A request carries this model. It holds the password as a value, and no field of it names a path.
+    """
+
+    model_config = INPUT_MODEL_CONFIG
+
+    username: str = Field(min_length=1)
+    password: SecretStr = Field(min_length=1)
+
+    def plaintext_password(self) -> str:
+        return self.password.get_secret_value()
+
+    @model_serializer(mode='plain', when_used='json')
+    def _dump(self, info: SerializationInfo) -> dict[str, str]:
+        reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
+        return {'username': self.username, 'password': self.plaintext_password() if reveal else str(self.password)}
+
+
+class RegistryCredentialFile(BaseModel):
+    """A registry credential as a plan file states it: the username, and the file the password is in.
+
+    A request carries no such model. `plan_with_passwords_read` turns a plan of it into the plan a
+    request carries.
+    """
+
+    model_config = INPUT_MODEL_CONFIG
+
+    username: str = Field(min_length=1)
+    password_file: Path
+
+    @property
+    def password(self) -> SecretStr:
+        """The password the file holds, read on each access."""
+        return SecretStr(password_from_file(self.password_file))
+
+
+def password_from_file(password_file: Path) -> str:
+    """The registry password a caller states as a path, read from the file it names.
+
+    The file's last line ending comes off. A path that is mistyped, names a directory, cannot be
+    read, or holds only whitespace raises `ValueError`.
+    """
+    # No message names the path: a caller who pastes the password in its place would see it printed.
+    try:
+        path = password_file.expanduser()
+    except RuntimeError as exc:  # `~name` for a user this machine does not have
+        raise ValueError('the password file path names no home directory') from exc
+    try:
+        if not path.is_file():
+            raise ValueError('the password file path names no file')
+        held = path.read_text()
+    except OSError as exc:
+        raise ValueError(f'the password file cannot be read: {exc.strerror}') from exc
+    password = held.removesuffix('\n').removesuffix('\r')
+    if not password.strip():
+        raise ValueError('the password file holds no password')
+    return password
+
+
+def credential_from_file(username: str, password_file: Path) -> RegistryCredential:
+    """The credential a caller states as a username and the path of the file its password is in."""
+    return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
+
+
+# The credential an image endpoint carries. A request carries a `RegistryCredential`, and so does a
+# plan with no parameter. A plan file carries a `RegistryCredentialFile`.
+Credential = TypeVar('Credential', RegistryCredential, RegistryCredentialFile, default=RegistryCredential)
+
+
+# An endpoint overrides one cascading property; every other property of `Cascade` is per task.
+_ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
+_PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
+
+
+class Endpoint(Cascade, Generic[Credential]):
     """One policy to run, where it comes from, and the wire a session with it runs over.
 
-    A `remote` endpoint is a server the caller provides: `address` carries the fields its `wire`
-    dials. A `served` endpoint names the checkpoint it serves (`spec`) and carries no address: the
-    platform starts it and records one. `provider` names what starts it, and the platform derives one
-    from `spec` when the entry names none. An `image` endpoint names the container image the platform
-    runs the policy from. Every kind names its wire. An entry on a task carrying no locator at all
-    names one of the plan's endpoints.
+    * `remote` — the caller provides the server, and `address` carries the fields its `wire` dials.
+    * `served` — `spec` names the checkpoint, and the platform starts it and records the address.
+      `provider` names what starts it, and the platform derives one from `spec` when the entry
+      names none.
+    * `image` — `image` names the container the platform runs the policy from, and
+      `image_credential` opens the registry that serves it to no anonymous caller.
+    * no locator at all — the entry sits on a task and names one of the plan's endpoints.
+
+    Every kind that names a locator names its wire.
     """
 
     name: str = Field(min_length=1)
@@ -209,6 +279,7 @@ class Endpoint(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
+    image_credential: Credential | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -264,19 +335,30 @@ class Endpoint(Cascade):
         return self
 
     @model_validator(mode='after')
+    def _a_credential_opens_the_image_this_entry_names(self) -> Self:
+        """Refuse a credential on an entry that names no image. A bare label runs a plan endpoint,
+        which carries its own credential."""
+        if self.image_credential is not None and self.image is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
+                'image the entry that states it names'
+            )
+        return self
+
+    @model_validator(mode='after')
     def _overrides_only_the_count(self) -> Self:
         # A dump carries every field, and a plan read back from its own JSON therefore sets them
         # all, so what is refused is a per-task field carrying a value rather than one a dump names.
         fields = type(self).model_fields
         stated = sorted(
             name
-            for name in self.model_fields_set - _ENDPOINT_MAY_STATE
+            for name in self.model_fields_set & _PER_TASK_ONLY
             if getattr(self, name) != fields[name].get_default(call_default_factory=True)
         )
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '
-                'an endpoint overrides only episodes_per_endpoint'
+                f'an endpoint overrides only {_ENDPOINT_OVERRIDES}'
             )
         return self
 
@@ -290,7 +372,7 @@ class Endpoint(Cascade):
 class NebiusCompetition(BaseModel):
     """A public run: one of the named public evals, one image, the daily quota, and a board."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     type: Literal['nebius_competition'] = 'nebius_competition'
 
@@ -302,7 +384,7 @@ class NebiusCompetition(BaseModel):
 class PrivateEval(BaseModel):
     """A run for one organisation: its approved evals, tasks and endpoint kinds, and no board."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     type: Literal['private_eval'] = 'private_eval'
     # The caller must be a member of this org.
@@ -317,7 +399,7 @@ class PrivateEval(BaseModel):
 PlanRequestType = Annotated[NebiusCompetition | PrivateEval, Field(discriminator='type')]
 
 
-class TaskNode(Cascade):
+class TaskNode(Cascade, Generic[Credential]):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
     `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
@@ -326,7 +408,7 @@ class TaskNode(Cascade):
     """
 
     task_id: TaskRef
-    endpoints: list[Endpoint] | None = Field(default=None, min_length=1)
+    endpoints: list[Endpoint[Credential]] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -339,7 +421,7 @@ class TaskNode(Cascade):
         return self
 
 
-class EvalPlan(Cascade):
+class EvalPlan(Cascade, Generic[Credential]):
     """`submissions.create` — one eval to run: the tasks, the endpoints each task runs, and the
     count per endpoint.
 
@@ -351,11 +433,11 @@ class EvalPlan(Cascade):
 
     # The rules, the approvals and the board this plan runs under.
     request_type: PlanRequestType
-    tasks: list[TaskNode] = Field(default_factory=list)
+    tasks: list[TaskNode[Credential]] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
     eval: EvalRef | None = None
-    endpoints: list[Endpoint] = Field(default_factory=list)
+    endpoints: list[Endpoint[Credential]] = Field(default_factory=list)
     # What a reader calls this run. It names nothing and identifies nothing.
     alias: str | None = None
     # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
@@ -465,11 +547,11 @@ class EvalPlan(Cascade):
             )
         return self
 
-    def task_endpoints(self, task: TaskNode) -> list[Endpoint]:
+    def task_endpoints(self, task: TaskNode[Credential]) -> list[Endpoint[Credential]]:
         """The endpoints `task` runs on: its own list, else the plan's."""
         return self.endpoints if task.endpoints is None else task.endpoints
 
-    def episodes_on(self, task: TaskNode, entry: Endpoint) -> int:
+    def episodes_on(self, task: TaskNode[Credential], entry: Endpoint[Credential]) -> int:
         """The episodes `entry` takes for `task`.
 
         The count comes from `entry`, then from its definition, then from `task`, then from the plan.
@@ -493,6 +575,14 @@ class EvalPlan(Cascade):
         return sum(self.episodes_on(task, entry) for task in self.tasks for entry in self.task_endpoints(task))
 
 
+def plan_with_passwords_read(plan: EvalPlan[RegistryCredentialFile]) -> EvalPlan:
+    """The plan a request carries: `plan`, with the password of each credential read from its file.
+
+    A file that gives no password raises `ValidationError` at the place of its credential in the plan.
+    """
+    return EvalPlan[RegistryCredential].model_validate(plan, from_attributes=True)
+
+
 # The name the one endpoint of an image run carries. Such a run serves one policy, so nothing picks
 # it out by name, and the model asks every endpoint for one.
 IMAGE_ENDPOINT_NAME = 'policy'
@@ -504,18 +594,28 @@ def plan_of_image(
     *,
     alias: str | None = None,
     transaction_key: TransactionKey | None = None,
+    credential: RegistryCredential | None = None,
     org: OrgSlug | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The endpoint names the websocket wire: the platform opens every image session over the websocket.
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
-    neither. The plan is a `nebius_competition` run, or a private run for `org` where one is given.
+    neither. `credential` opens the registry when `image` is not public. The plan is a
+    `nebius_competition` run, or a private run for `org` where one is given.
     """
     return EvalPlan(
         request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
         eval=eval_name,
-        endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, wire=Wire.websocket, image=image)],
+        endpoints=[
+            Endpoint(
+                name=IMAGE_ENDPOINT_NAME,
+                kind=EndpointKind.image,
+                wire=Wire.websocket,
+                image=image,
+                image_credential=credential,
+            )
+        ],
         alias=alias,
         transaction_key=transaction_key,
     )

@@ -8,11 +8,11 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic` and `httpx` and nothing else, so a service that only speaks to the
-platform installs it on its own, at the exact version it was written against:
+The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing else, so a service that
+only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.14.0"
+uv add "positronic-platform-client==0.15.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -167,6 +167,23 @@ image, and how to build, test and submit it.
 
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
 `websocket` wire, and `--eval` names the eval whose tasks it runs. `plan_of_image` builds that shape.
+
+An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
+file names the registry user and the FILE the password is in. `positronic eval run --from-file`
+reads it as `EvalPlan[RegistryCredentialFile]`, then `plan_with_passwords_read` gives the `EvalPlan`
+a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
+builds that credential.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: registry.example.com/you/policy@sha256:...
+    image_credential:
+      username: a-reader
+      password_file: ~/.config/positronic/registry-password
+```
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose. Every registered user sees the

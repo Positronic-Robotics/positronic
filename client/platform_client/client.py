@@ -22,7 +22,7 @@ from platform_client import routes
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
-from platform_client.eval_plan import EvalPlan
+from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.requests import (
     CancelRequest,
@@ -233,7 +233,8 @@ class PlatformClient:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
     def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
-        body = request.model_dump(mode='json')
+        # This dump reveals the registry password. Every other dump masks it.
+        body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
         return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
 
     def _send(
