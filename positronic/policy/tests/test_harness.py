@@ -149,7 +149,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock))
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), runtime, policy_run)
+        step = partial(harness._step, Task('test', None), runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -785,6 +785,43 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
         assert flush.parent_id == episode.span_id
 
 
+def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-steps'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(13_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+    read_key = telemetry_keys.ATTR_STEP_READ_MS_PREFIX + POSITION
+    convert_key = telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + POSITION
+    durations = (
+        telemetry_keys.ATTR_STEP_OBSERVE_MS,
+        telemetry_keys.ATTR_STEP_POLICY_MS,
+        telemetry_keys.ATTR_STEP_EMIT_MS,
+    )
+    for step in (first, second):
+        assert step.parent_id == episode.span_id
+        assert all(step.attrs[key] >= 0 for key in (*durations, read_key))
+    assert telemetry_keys.ATTR_STEP_LATE_MS not in first.attrs
+    assert second.attrs[telemetry_keys.ATTR_STEP_LATE_MS] == pytest.approx(3.0)
+    assert convert_key in first.attrs and convert_key not in second.attrs
+    policy_spans = [s for s in spans if s.name == telemetry.component_name(EveryTenMs())]
+    assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
+
+
 def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
     h = episode_harness
     started, release = threading.Event(), threading.Event()
@@ -946,7 +983,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), runtime, run) == expected_ns
+        assert h.harness._step(Task('test', None), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
@@ -979,7 +1016,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), runtime, run)
+            harness._step(Task('move', None), runtime, run, None)
         finally:
             runtime.close()
             run.close()
