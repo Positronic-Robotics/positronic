@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 from platform_client.eval_plan import EvalPlan, PrivateEval
+from platform_client.ids import OrgSlug
 from platform_client.responses import SubmissionCreateResponse
 from pydantic import ValidationError
 
@@ -44,7 +45,8 @@ def read_plan(
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
         raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
-    request_type = PrivateEval(org=org).model_dump() if org is not None else None
+    # Unvalidated here: `EvalPlan` validates it with the rest of the plan, inside the refusal below.
+    request_type = PrivateEval.model_construct(org=OrgSlug(org)).model_dump() if org is not None else None
     stated_fields = ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias), (REQUEST_TYPE_FIELD, request_type))
     for field, stated in stated_fields:
         if stated is None or not isinstance(payload, dict):

@@ -27,6 +27,7 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
+from platform_client.ids import OrgSlug
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
@@ -525,5 +526,5 @@ def test_a_competition_plan_names_an_eval_and_states_no_tasks():
 def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
     image = PolicyImage('org/policy:v1')
     assert isinstance(plan_of_image(image, EvalRef('molmo.x')).request_type, NebiusCompetition)
-    private = plan_of_image(image, EvalRef('molmo.x'), org='acme').request_type
+    private = plan_of_image(image, EvalRef('molmo.x'), org=OrgSlug('acme')).request_type
     assert isinstance(private, PrivateEval) and private.org == 'acme'

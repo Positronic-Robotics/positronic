@@ -6,7 +6,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import TransactionKey
+from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
 
@@ -37,7 +37,7 @@ def submit(
             EvalRef(eval_name),
             alias=alias,
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
-            org=org,
+            org=OrgSlug(org) if org is not None else None,
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)

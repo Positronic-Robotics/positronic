@@ -13,7 +13,7 @@ from typing import Annotated, Literal, Self
 
 from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, Wire
 from platform_client.evals import EvalRef
-from platform_client.ids import TransactionKey
+from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
@@ -305,8 +305,8 @@ class PrivateEval(BaseModel):
     model_config = _FORBID_EXTRA
 
     type: Literal['private_eval'] = 'private_eval'
-    # The organisation's slug. The caller must be a member of it.
-    org: str = Field(min_length=1)
+    # The caller must be a member of this org.
+    org: OrgSlug = Field(min_length=1)
 
     @property
     def kind(self) -> RequestType:
@@ -504,7 +504,7 @@ def plan_of_image(
     *,
     alias: str | None = None,
     transaction_key: TransactionKey | None = None,
-    org: str | None = None,
+    org: OrgSlug | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 

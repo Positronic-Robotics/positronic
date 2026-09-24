@@ -32,7 +32,7 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -291,7 +291,7 @@ MODELS: list[BaseModel] = [
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
     ASK,
     EvalPlan(
-        request_type=PrivateEval(org='acme'),
+        request_type=PrivateEval(org=OrgSlug('acme')),
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
         endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,

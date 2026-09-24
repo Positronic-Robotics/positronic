@@ -179,3 +179,10 @@ def test_a_rig_run_states_the_org_it_runs_for(platform, run_command, tmp_path: P
     assert platform.body['request_type'] == {'type': 'private_eval', 'org': 'other'}
     with pytest.raises(SystemExit, match='drop --org'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), org='other')
+
+
+def test_an_empty_org_is_refused_in_one_line(platform, run_command, tmp_path: Path):
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    with pytest.raises(SystemExit, match=r'plan\.yaml: .*org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='')
+    assert platform.seen is None
