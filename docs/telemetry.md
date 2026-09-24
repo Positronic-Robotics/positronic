@@ -112,7 +112,7 @@ recorder and the producers run in other processes. Their cost reaches a step onl
 This prints the p10, p50 and p90 of each value over all steps that called the policy in a spans file:
 
 ```
-uv run python -c "import sys,numpy as np;from positronic import telemetry as t;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name=='harness.step' and 'step.policy_ms' in s.attrs];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
+uv run python -c "import sys,numpy as np;from positronic import telemetry as t, telemetry_keys as k;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name==k.SPAN_HARNESS_STEP and k.ATTR_STEP_POLICY_MS in s.attrs];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
 ```
 
 ### Stats schema (`*.stats.jsonl`)
