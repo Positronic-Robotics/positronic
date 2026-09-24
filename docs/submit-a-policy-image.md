@@ -166,8 +166,8 @@ docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'                             # the compressed size
 ```
 
-A `401` or a `404` here is one the platform also sees: the credential does not read the image, or
-the name is wrong.
+The platform sees the same `401` or `404`: the credential does not read the image, or the name is
+wrong.
 
 ## Submit
 
