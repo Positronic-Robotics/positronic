@@ -92,6 +92,20 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/lerobot/tests
 
+  llm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        extra: [llm, llm-openai]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.11
+      - run: uv sync --locked --extra ${{ matrix.extra }}
+      - run: uv run --no-sync pytest positronic/vendors/llm/tests
+
   lockfile-portability:
     strategy:
       fail-fast: false

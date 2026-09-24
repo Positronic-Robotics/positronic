@@ -667,6 +667,38 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
+def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
+    class Record(Policy):
+        def meta(self):
+            return {'config.name': 'record', 'config.status': 'initial'}
+
+        def run(self, runtime):
+            events = runtime.metadata.setdefault('events', [])
+            runtime.metadata['config'] = {'status': 'active'}
+            try:
+                yield
+                events.append('started')
+                while True:
+                    yield Step({}, runtime.time_ns + 100_000_000)
+            finally:
+                events.append('closed')
+
+    h = episode_harness
+    policy = Record()
+    h.observation.emit(0)
+    for _ in range(2):
+        answer = h.caller(Rollout(Task('move', None), policy, tmp_path))
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        next(h.loop)
+        assert answer.done()
+        meta = h.records.values[-1][1].static_data
+        assert meta['inference.policy.config.name'] == 'record'
+        assert meta['inference.policy.config.status'] == 'active'
+        assert meta['inference.policy.events'] == ['started']
+
+
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     h = episode_harness
     task = Task('move', 0.01, prepare_args={RESET: 'home', eval_keys.SCENE: 42})

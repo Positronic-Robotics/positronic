@@ -19,7 +19,6 @@ from positronic.policy.layers import _arms_available, _StackBuffer
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
-OBS_TIME_NS = 'obs_time_ns'
 WALL_TIME_NS = 'wall_time_ns'
 
 Trajectory = list[dict[str, Any]] | None
@@ -64,7 +63,7 @@ class ChunkedScheduleV1(_LayerV1):
 
         def send(obs: Obs) -> Trajectory:
             nonlocal end_ns
-            if end_ns is not None and obs[OBS_TIME_NS] < end_ns:
+            if end_ns is not None and obs[policy_keys.OBS_TIME_NS] < end_ns:
                 return None
             result = inner.send(obs)
             if result is not None:
@@ -93,7 +92,7 @@ class TemporalStackV1(_LayerV1):
         buffer = _StackBuffer(self._offsets_sec, self._pad_start)
 
         def send(obs: Obs) -> Trajectory:
-            now = obs[OBS_TIME_NS] / 1e9
+            now = obs[policy_keys.OBS_TIME_NS] / 1e9
             buffer.append(now, {key: obs[key] for key in self._keys})
             return inner.send(buffer.sample(now, obs))
 
@@ -156,7 +155,7 @@ class StackV1(Sequential):
         obs = yield
         while True:
             now_ns = runtime.time_ns
-            result = call.send({**obs, OBS_TIME_NS: now_ns, WALL_TIME_NS: time.time_ns()})
+            result = call.send({**obs, policy_keys.OBS_TIME_NS: now_ns, WALL_TIME_NS: time.time_ns()})
             if result is not None:
                 trajectory = deque(result)
             commands = {}

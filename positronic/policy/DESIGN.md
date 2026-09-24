@@ -272,7 +272,10 @@ Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
 Processors report metadata about their definitions. A composition combines its
-components' metadata. Metadata specific to a run is deferred.
+components' metadata. Processors write episode values into `runtime.metadata` on
+the control thread. The harness snapshots these values when the episode ends,
+before closing the runs. Episode values override definition values with the
+same flattened keys. Each episode gets a separate metadata mapping.
 
 ### Remote policies
 
@@ -316,8 +319,8 @@ what each part saw, what it returned, and when. That includes inference inputs
 and outputs on other machines, and values a run chooses to record itself.
 
 The framework records sensor and executed-command signals as an episode dataset.
-Inference input/output recording, custom run recording, and per-run metadata
-are deferred.
+The recorder stores `runtime.metadata` with the policy definition metadata.
+Inference input/output recording and custom signal recording are deferred.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,
 and submitted jobs, with parent-child links. The outermost processor span times
@@ -375,6 +378,9 @@ class Answer(ABC, Generic[T]):
 ```python
 # One runtime shared by the runs in an episode.
 class Runtime(ABC):
+    @cached_property
+    def metadata(self) -> dict[str, Any]: ...
+
     @property
     def time_ns(self) -> int: ...
 
@@ -452,7 +458,7 @@ their caller. `Codec.wrap` does not take ownership of the child it wraps.
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
 - TODO: Record dropped and late waypoints in the scheduling processor.
 - The shape of the robot description, and a server's ability to refuse one.
-- Inference input/output recording, custom run recording, and per-run metadata.
+- Inference input/output recording and custom signal recording.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the run. The pimm signals
   already carry these timestamps.
