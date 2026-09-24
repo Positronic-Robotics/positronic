@@ -31,6 +31,7 @@ from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import Harness, Rollout
@@ -933,7 +934,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
     assert 2 in np.diff(list(positions.values()))
-    schedule = f'inference.policy.{eval_keys.SCHEDULE}.{MOTOR}'
+    schedule = f'{policy_keys.POLICY_META}.{eval_keys.SCHEDULE}.{MOTOR}'
     assert episode.static[f'{schedule}.{eval_keys.SCHEDULED}'] == 4
     assert episode.static[f'{schedule}.{eval_keys.EMITTED}'] == 3
     assert episode.static[f'{schedule}.{eval_keys.DROPPED}'] == 0

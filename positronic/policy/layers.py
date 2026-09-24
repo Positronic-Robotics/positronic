@@ -143,18 +143,18 @@ class _ScheduleAccount:
             self._metadata[f'{prefix}.{eval_keys.EMITTED}'] = len(late_ns)
             self._metadata[f'{prefix}.{eval_keys.DROPPED}'] = self._dropped[name]
             if late_ns:
-                self._metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] = _percentile_of_sorted(late_ns, 0.5) / 1e6
-                self._metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] = _percentile_of_sorted(late_ns, 0.9) / 1e6
+                self._metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
+                self._metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
                 self._metadata[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._late_max_ns[name] / 1e6
                 self._metadata[f'{prefix}.{eval_keys.GAP_MAX_MS}'] = self._gap_max_ns[name] / 1e6
 
-
-def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
-    """``np.percentile``'s linear interpolation, in constant time, because the control thread calls it per emit."""
-    position = fraction * (len(values) - 1)
-    low = int(position)
-    high = min(low + 1, len(values) - 1)
-    return values[low] + (values[high] - values[low]) * (position - low)
+    @staticmethod
+    def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
+        """``np.percentile``'s linear interpolation, in constant time, because the control thread calls it per emit."""
+        position = fraction * (len(values) - 1)
+        low = int(position)
+        high = min(low + 1, len(values) - 1)
+        return values[low] + (values[high] - values[low]) * (position - low)
 
 
 class ChunkedSchedule(Policy):
