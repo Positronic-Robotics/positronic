@@ -103,13 +103,16 @@ A `harness.step` span holds the durations of one step in milliseconds:
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
 
+A step can find a required observation missing, for example while a camera starts. That step calls no policy,
+so its span has only `step.late_ms` and the observe values.
+
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
 recorder and the producers run in other processes. Their cost reaches a step only as CPU contention.
 
-This prints the p10, p50 and p90 of each value over all steps in a spans file:
+This prints the p10, p50 and p90 of each value over all steps that called the policy in a spans file:
 
 ```
-uv run python -c "import sys,numpy as np;from positronic import telemetry as t;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name=='harness.step'];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
+uv run python -c "import sys,numpy as np;from positronic import telemetry as t;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name=='harness.step' and 'step.policy_ms' in s.attrs];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
 ```
 
 ### Stats schema (`*.stats.jsonl`)
