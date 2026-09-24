@@ -122,7 +122,7 @@ def test_a_camera_that_is_not_listed_after_the_reboot_raises(zed_module):
     sdk = FakeSdk(opens=[NOT_DETECTED] * 3, listed=[False])
     with pytest.raises(RuntimeError, match='still not listed after its reboot'):
         _open(zed_module, sdk)
-    assert sdk.list_calls == zed_module.REBOOTED_CAMERA_MAX_POLLS
+    assert sdk.list_calls == zed_module.SLCamera.REBOOTED_CAMERA_MAX_POLLS
     assert sdk.reboots == [SERIAL]
     assert sdk.open_calls == 3
 
