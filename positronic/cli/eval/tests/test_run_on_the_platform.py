@@ -221,6 +221,19 @@ def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platf
     assert platform.seen is None
 
 
+@pytest.mark.parametrize('not_a_path', [1, []])
+def test_a_password_file_flag_that_is_no_text_is_refused_before_the_submission(platform, run_command, not_a_path):
+    with pytest.raises(SystemExit, match='--registry-password-file=.* names no file: pass its path'):
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file=not_a_path,
+        )
+    assert platform.seen is None
+
+
 def test_an_empty_username_is_refused_as_the_username(platform, run_command, tmp_path):
     with pytest.raises(SystemExit, match='username') as refusal:
         run_command(

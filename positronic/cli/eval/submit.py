@@ -22,6 +22,9 @@ def _credential(username: str | None, password_file: str | None) -> RegistryCred
         raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
     if username is None or password_file is None:
         return None
+    # configuronic hands `1` or `[]` through as an int or a list, and `Path` raises on either.
+    if not isinstance(password_file, str):
+        raise SystemExit(f'--registry-password-file={password_file!r} names no file: pass its path')
     try:
         password = password_from_file(Path(password_file))
     except ValueError as exc:

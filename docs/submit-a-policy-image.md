@@ -143,7 +143,8 @@ docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; 
 
 The route answers `{"models": [...]}` with the token and `401` without it.
 
-After the push, read the digest and the compressed size the way the platform does, anonymously:
+After the push of a public image, read the digest and the compressed size the way the platform
+does, anonymously:
 
 ```bash
 docker/read_image_digest.sh <you>/<image>:v1
@@ -154,6 +155,19 @@ header, which names the manifest the registry served. Pin that digest. The `conf
 the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
 the 30 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
+
+The script reads a public image only. For a private image, log in with the credential you give
+the platform, and read the same two values with it:
+
+```bash
+docker login <registry> --username=<user> --password-stdin < ~/.config/positronic/registry-password
+docker buildx imagetools inspect <registry>/<you>/<image>:v1                  # the digest
+docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
+  | jq '([.layers[].size] | add) + .config.size'                             # the compressed size
+```
+
+A `401` or a `404` here is one the platform also sees: the credential does not read the image, or
+the name is wrong.
 
 ## Submit
 
@@ -263,7 +277,7 @@ fault is not.
 
 | reason_code | fault | first thing to check |
 |---|---|---|
-| `image_unpullable` | caller | is the image public, and is the digest right? |
+| `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
 | `image_too_large` | caller | the compressed size, against 30 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or served without the token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
