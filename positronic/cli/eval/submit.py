@@ -16,15 +16,15 @@ from pydantic import SecretStr
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
 
-def _credential(username: str | None, password_file: str | None) -> RegistryCredential | None:
+def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
     """The credential that opens a private registry, from the two flags that state it."""
     if (username is None) != (password_file is None):
         raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
     if username is None or password_file is None:
         return None
-    # configuronic hands `1` or `[]` through as an int or a list, and `Path` raises on either.
+    # configuronic hands `1` or `[]` through as an int or a list. Either may be a pasted password.
     if not isinstance(password_file, str):
-        raise SystemExit(f'--registry-password-file={password_file!r} names no file: pass its path')
+        raise SystemExit('--registry-password-file names no file: pass its path')
     try:
         password = password_from_file(Path(password_file))
     except ValueError as exc:

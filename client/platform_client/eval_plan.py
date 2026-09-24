@@ -176,8 +176,7 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
 }
 
 
-# The serialisation context key under which a registry password dumps as plaintext. The client's
-# send path alone sets it.
+# The serialisation context key under which a registry password dumps as plaintext.
 REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
 
 
