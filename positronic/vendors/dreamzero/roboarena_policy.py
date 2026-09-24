@@ -105,8 +105,9 @@ def local_stack(config: Mapping[str, Any]) -> Sequential:
     return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
 
 
-# The key the chunk arrives under in the server's reply, which is a mapping rather than a bare array.
-ACTIONS_FIELD = 'actions'
+# The keys the chunk can arrive under in the server's reply, which is a mapping rather than a bare array. Servers
+# differ on the key, so the first of these keys that the reply carries is read.
+ACTIONS_FIELDS = ('actions', 'action')
 
 # How many values one action in `JOINT_POSITION_SPACE` carries: seven joints and a gripper. A row of another
 # width is read by the codec as joints anyway, and the arm executes it.
@@ -140,7 +141,13 @@ class RoboarenaEndpoint:
             raise RuntimeError(
                 f'the roboarena server at {self._client.url} answered an error instead of an action chunk: {e.text}'
             ) from e
-        return np.asarray(reply[ACTIONS_FIELD])
+        field = next((field for field in ACTIONS_FIELDS if field in reply), None)
+        if field is None:
+            raise ValueError(
+                f'the roboarena server at {self._client.url} answered {sorted(reply)} and no action chunk under '
+                f'any of {list(ACTIONS_FIELDS)}'
+            )
+        return np.asarray(reply[field])
 
     def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]]:
         chunk = self._answer(obs)
