@@ -36,6 +36,38 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest
 
+  gstreamer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The GStreamer tests skip on a host without the software chain; this step fails instead.
+      - name: Check the software H.264 chain
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run python -c 'from positronic.dataset.tests.test_gst_video import SOFTWARE_H264; SOFTWARE_H264.ensure_available()'
+
+      - name: Run GStreamer encoder tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/dataset/tests/test_gst_video.py
+
   packaging:
     runs-on: ubuntu-latest
     strategy:
