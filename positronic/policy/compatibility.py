@@ -5,11 +5,11 @@ The offboard README states the translation and what the client refuses.
 
 import logging
 import time
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Generator, Mapping
+from typing import Any, overload
 
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import ARGS, NAME, SEQ, VERSION, Obs, Policy, PolicyRun, Processor, Runtime
+from positronic.policy.base import ARGS, NAME, SEQ, VERSION, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codec import Codec
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
@@ -38,7 +38,29 @@ class StampObservationTimes(Policy):
 
 
 class ChunkFromV1Answer(Codec):
-    """Turn a v1 answer into a chunk: a single row becomes one row, and timestamps and the end row go."""
+    """Turn a v1 answer into a chunk: ``None`` becomes no rows, a single row one row, and timestamps and the end row go.
+
+    It wraps the call itself, because ``Codec.wrap`` does not decode ``None``.
+    """
+
+    @overload
+    def wrap(self, function: Callable[[dict], Any]) -> Callable[[Obs], Any]: ...
+
+    @overload
+    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+
+    def wrap(
+        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any]
+    ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        if isinstance(function, Generator):
+            return super().wrap(function)
+        infer = function
+
+        def answer_or_empty_chunk(obs: dict) -> Any:
+            answer = infer(obs)
+            return [] if answer is None else answer
+
+        return super().wrap(answer_or_empty_chunk)
 
     def encode(self, data: dict) -> dict:
         return data

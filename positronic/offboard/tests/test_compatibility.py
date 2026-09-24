@@ -207,6 +207,23 @@ def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
         run.close()
 
 
+@pytest.mark.parametrize('answer', [None, []], ids=['absent', 'no-rows'])
+def test_v1_answer_without_rows_sends_no_commands_and_asks_again(controlled_runtime, answer):
+    runtime, now, calls = controlled_runtime
+    stack = from_v1_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {})
+    run = runtime.start(stack, MagicMock(return_value=answer))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        assert run.send({}).commands == {}
+        now[0] += 1
+        run.send({})
+        assert len(calls) == 2
+    finally:
+        run.close()
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('scheduled', [True, False], ids=['scheduled-chunk', 'codec-only'])
 def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, monkeypatch, transport, scheduled):
