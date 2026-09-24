@@ -30,7 +30,7 @@ Or from a checkout:
 uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.server
 ```
 
-The server serves a named policy pipeline — the codec plus the HuggingFace model source. MolmoAct2 ships one
+The server serves the HuggingFace model through a named policy pipeline, the codec. MolmoAct2 ships one
 pipeline, `droid`, which is the default subcommand. The codec lives server-side, so clients send raw
 observations and receive decoded joint commands. `--websocket`, `--grpc` and
 `--idle_timeout_min` are the server's flags: each wire carries the address it binds, so
@@ -38,7 +38,7 @@ observations and receive decoded joint commands. `--websocket`, `--grpc` and
 `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it to a
 Unix socket instead, which names no host and no port. `--grpc=@positronic.offboard.server.grpc` serves the gRPC wire beside it; the model
 is reached through the pipeline
-(`--pipeline.source.hf_repo`, `.device_map`, `.norm_tag`, `.num_steps`), with defaults in
+(`--model.hf_repo`, `.device_map`, `.norm_tag`, `.num_steps`), with defaults in
 [`server.py`](./server.py). Sanity-check once warm:
 
 ```bash
@@ -61,8 +61,8 @@ backwards** until the convention is unified ([#456](https://github.com/Positroni
 See the [Inference Guide](../../../docs/inference.md) for the remote-policy protocol and options.
 
 Codec arguments are tunable per session without restarting the server — the client passes them as query params
-as `--policy.address.query` (e.g. `--policy.address.query='fps=10&codec.flip_grip=true'`). The model source
-(`hf_repo`, `device_map`, …) is fixed at launch and cannot be changed this way.
+as `--policy.address.query` (e.g. `--policy.address.query='fps=10&codec.flip_grip=true'`). The model
+(`--model.hf_repo`, `--model.device_map`, …) is fixed at launch and cannot be changed this way.
 See the [offboard README](../../offboard/README.md) for the session-param rules.
 
 ## Codec

@@ -105,12 +105,12 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 ```bash
 # Default pipeline (ee codec). `--pipeline.ee_frame=None` says the checkpoint speaks the rig's `default`
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
 # Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
@@ -133,17 +133,17 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - subcommand: Named policy pipeline (`serve` is `ee`). Picks the server-side codec and, for `droid` /
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
-- `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
+- `--model.checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
   (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
   `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
-- `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
+- `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
+- `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--websocket.served_address.port`: (Optional) WebSocket wire port (default: 8000)
 - `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=<path>`: (Optional) bind the
   WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
 - `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
-- `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--model.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
 ### API Endpoints
@@ -155,13 +155,13 @@ The server exposes the following endpoints:
 - Response: `{"models": ["2000"]}`
 
 **WebSocket `/api/v1/session`**
-- Session with the checkpoint the server serves: `--pipeline.source.checkpoint`, else the latest
+- Session with the checkpoint the server serves: `--model.checkpoint`, else the latest
 - Sends metadata on connection, then enters inference loop
 - Client sends serialized observations, server responds with serialized actions
 
 **Session parameters:** query params on the session URL tune the serving pipeline per session — each key
 is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
-be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
+be JSON literals; the model is fixed at launch, and a session param cannot reach it. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
@@ -215,16 +215,16 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 **Problem:** Server fails at startup: it finds no checkpoint, or cannot download the one it names
 
 **Solutions:**
-1. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
+1. Verify the `--model.checkpoints_dir` path is correct (should end with experiment directory)
 2. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
-3. If using `--pipeline.source.checkpoint`, verify the checkpoint ID exists
+3. If using `--model.checkpoint`, verify the checkpoint ID exists
 
 ### Checkpoint directory one level too deep
 
 **Problem:** Server exits with "No checkpoint found in `<dir>`: it is a single checkpoint, not a checkpoints directory"
 
 **Solutions:**
-1. `--pipeline.source.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
+1. `--model.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
    subdirectories — drop the trailing checkpoint number from the path
 2. A directory holding `_CHECKPOINT_METADATA`, `assets`, `params` and `train_state` is one checkpoint; its
    parent is the experiment directory

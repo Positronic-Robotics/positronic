@@ -23,7 +23,6 @@ from positronic.offboard.client import (
     InferenceSession,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.offboard.tests.conftest import ReadySource
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
@@ -258,11 +257,10 @@ def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
-            ReadySource(model, checkpoint_id='050000'),
             local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
-        server = start_server(pipeline, grpc=transport == 'grpc')
+        server = start_server(model, pipeline, grpc=transport == 'grpc')
         address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
         return address, model, pipeline
 
@@ -579,7 +577,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 def test_pipeline_rejects_frame_conversion_on_both_sides():
     local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(ReadySource(FixedModel()), local, codec=ChangeEEFrame(Transform3D.identity))
+        PolicyDeployment(local, codec=ChangeEEFrame(Transform3D.identity))
 
 
 @pytest.fixture
@@ -710,7 +708,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(PolicyDeployment(ReadySource(model), ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
         run = runtime.start(RemotePolicy(transport, address))

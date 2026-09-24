@@ -6,29 +6,29 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified session protocol connects any hardware to any model (LeRobot, GR00T, OpenPI); the same frames cross either wire, a websocket or gRPC. A heavy model (OpenPI needs ~62GB, GR00T ~8GB) runs on GPU hardware separate from the robot/simulator machine.
 
-Each server carries a `PolicyDeployment`: a model source, a client processor stack,
-and an optional server codec. The handshake declares the client stack, which
-`RemotePolicy` builds automatically. Each vendor supplies named deployment configs
-as server subcommands, such as `groot-server droid`.
+Each server loads one model at launch and serves it through a `PolicyDeployment`: a
+client processor stack and an optional server codec. The handshake declares the
+client stack, which `RemotePolicy` builds automatically. Each vendor supplies named
+deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
 # The subcommand names the pipeline; everything the model is lives inside it
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
-  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
+  --model.model_source=/data/checkpoints/experiment_v1/
 
 # OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
+  --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
   --pipeline.ee_frame=None
 ```
 
@@ -78,7 +78,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **Session parameters** are `--policy.address.query`, a query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
-The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
+Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
 `RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.

@@ -14,7 +14,7 @@ autoregressive video context). Two backbones are wired up here:
 | `wan2.1` | 14B | 320×180 | Public pretrained `GEAR-Dreams/DreamZero-DROID` checkpoint (the `droid` server preset); DiT caching supported |
 | `wan2.2` | 5B | 320×160 | Causal chunked inference; what the Positronic fine-tunes below use |
 
-Pick the backbone with `--backbone` at train time and `--pipeline.source.backbone` at serve time; **it must
+Pick the backbone with `--backbone` at train time and `--model.backbone` at serve time; **it must
 match between the two**.
 
 ## Hardware Requirements
@@ -131,15 +131,15 @@ Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on
 
 ### 3. Serve a checkpoint
 
-`dreamzero-server <pipeline>` downloads `--pipeline.source.model_path` (an `s3://` checkpoint or HF repo) and
-**needs `--pipeline.source.backbone` to match training** (see [Codecs](#codecs); config + defaults:
+`dreamzero-server <pipeline>` downloads `--model.model_path` (an `s3://` checkpoint or HF repo) and
+**needs `--model.backbone` to match training** (see [Codecs](#codecs); config + defaults:
 [`server.py`](./server.py)). `--service-ports` publishes the WebSocket API on `8000`:
 
 ```bash
 cd docker
 CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server joints \
-  --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --pipeline.source.backbone=wan2.2
+  --model.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
+  --model.backbone=wan2.2
 ```
 
 Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<step>"]}`.
@@ -244,8 +244,8 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
 
 # Serve (H100 endpoint, reachable at the managed https:// URL the banner prints)
 bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
-  --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --pipeline.source.backbone=wan2.2
+  --model.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
+  --model.backbone=wan2.2
 # ... infer with --policy=.authed_remote --policy.wire=websocket_tls --policy.address.host=<managed-host> --policy.address.port=443 (export AUTH_TOKEN first,
 # see workflows/nebius/README.md), then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>

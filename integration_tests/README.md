@@ -31,7 +31,7 @@ Use the predefined Docker Compose service from the checkout whose server code yo
 ```bash
 CACHE_ROOT=/home/vertix docker --context notebook compose -f docker/docker-compose.yml \
   run --rm --no-deps --name act-integration-server -p 127.0.0.1:18024:8000 \
-  lerobot-0_3_3-server demo --pipeline.source.checkpoint=050000
+  lerobot-0_3_3-server demo --model.checkpoint=050000
 ```
 
 `CACHE_ROOT` is the remote user's home directory. `IMAGE_TAG` selects a built image; use a matching

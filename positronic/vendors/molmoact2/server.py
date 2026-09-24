@@ -1,12 +1,11 @@
 import logging
-from collections.abc import Callable
 
 import configuronic as cfn
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
@@ -18,44 +17,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_HF_REPO = 'allenai/MolmoAct2-DROID'
 
 
-class MolmoAct2Source(ModelSource):
-    """Loads one pretrained MolmoAct2 checkpoint from HuggingFace into an in-process policy."""
-
-    def __init__(
-        self,
-        hf_repo: str = DEFAULT_HF_REPO,
-        *,
-        device_map: str = 'auto',
-        norm_tag: str = 'franka_droid',
-        num_steps: int = 10,
-    ):
-        self._hf_repo = hf_repo
-        self._device_map = device_map
-        self._norm_tag = norm_tag
-        self._num_steps = num_steps
-
-    def checkpoint_id(self) -> str:
-        return self._hf_repo.split('/')[-1]
-
-    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        message = f'Loading MolmoAct2 model {self._hf_repo} (device_map={self._device_map})'
-        logger.info(message)
-        if on_progress is not None:
-            on_progress(message)
-        policy = MolmoAct2Model(
-            self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
-        )
-        warmup(policy, warm_observation(), on_progress)
-        return policy
+@cfn.config(hf_repo=DEFAULT_HF_REPO, device_map='auto', norm_tag='franka_droid', num_steps=10)
+def molmoact2_model(hf_repo: str, device_map: str, norm_tag: str, num_steps: int) -> Model:
+    """One pretrained MolmoAct2 checkpoint from HuggingFace, in process."""
+    logger.info(f'Loading MolmoAct2 model {hf_repo} (device_map={device_map})')
+    policy = MolmoAct2Model(hf_repo, device_map=device_map, norm_tag=norm_tag, num_steps=num_steps)
+    warmup(policy, warm_observation())
+    return policy
 
 
-molmoact2_source = cfn.Config(MolmoAct2Source)
-
-
-@cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
-def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = None):
+@cfn.config(codec=molmoact2_codecs.droid)
+def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None):
     return PolicyDeployment(
-        source, Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec
     )
 
 
@@ -66,8 +40,8 @@ droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
 # Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
 COMMANDS = {
-    **{k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')},
-    'droid_3cam': serve.override(pipeline=droid_3cam),
+    **{k: serve.override(model=molmoact2_model, pipeline=droid) for k in ('', 'serve', 'droid')},
+    'droid_3cam': serve.override(model=molmoact2_model, pipeline=droid_3cam),
 }
 
 

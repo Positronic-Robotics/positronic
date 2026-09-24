@@ -7,21 +7,31 @@ pytest.importorskip('lerobot', minversion='0.4')
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 
+from positronic.offboard import keys as offboard_keys
 from positronic.policy.observation import TASK_FIELD
+from positronic.vendors.lerobot import server
 from positronic.vendors.lerobot.policy import LerobotModel, warm_observation
-from positronic.vendors.lerobot.server import LerobotSource
+
+
+@pytest.fixture
+def unloaded(monkeypatch):
+    """Checkpoints ``41`` and ``42``, and a model built without downloading or warming either."""
+    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['41', '42'])
+    monkeypatch.setattr(server.pos3, 'download', lambda path: path)
+    monkeypatch.setattr(server, 'LerobotModel', lambda _path, _device, extra_meta: Mock(meta=lambda: extra_meta))
+    monkeypatch.setattr(server, 'warm_observation', Mock())
+    monkeypatch.setattr(server, 'warmup', Mock())
 
 
 @pytest.mark.parametrize('configured, expected', [(None, '42'), ('41', '41')])
-def test_the_configured_checkpoint_is_served_else_the_latest(monkeypatch, configured, expected):
-    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['41', '42'])
-    assert LerobotSource('s3://bucket/exp', checkpoint=configured, device='cpu').checkpoint_id() == expected
+def test_the_configured_checkpoint_is_served_else_the_latest(unloaded, configured, expected):
+    model = server.lerobot_model(checkpoints_dir='s3://bucket/exp', checkpoint=configured, device='cpu')
+    assert model.meta()[offboard_keys.CHECKPOINT_ID] == expected
 
 
-def test_a_configured_checkpoint_the_directory_lacks_is_refused(monkeypatch):
-    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['41', '42'])
+def test_a_configured_checkpoint_the_directory_lacks_is_refused(unloaded):
     with pytest.raises(ValueError, match='not found'):
-        LerobotSource('s3://bucket/exp', checkpoint='43', device='cpu').checkpoint_id()
+        server.lerobot_model(checkpoints_dir='s3://bucket/exp', checkpoint='43', device='cpu')
 
 
 def test_warmup_observation_matches_the_features_the_policy_declares():

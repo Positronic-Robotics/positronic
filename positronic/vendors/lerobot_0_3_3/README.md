@@ -35,7 +35,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
 
 # 3. Serve (the subcommand selects the codec pipeline)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
 
 # 4. Run inference
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -90,7 +90,7 @@ See [Codecs Guide](../../../docs/codecs.md) for comprehensive codec documentatio
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
+  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --websocket.served_address.port=8000 \
   --websocket.served_address.host=0.0.0.0
 ```
@@ -100,10 +100,10 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
-| `--pipeline.source.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
-| `--pipeline.source.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipeline.source.policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
-| `--pipeline.source.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
+| `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
+| `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
+| `--model.policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
+| `--model.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
@@ -112,7 +112,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 
 **Available pipelines:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
 
-**Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
+**Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='fps=10'` on the inference CLI. Values must be JSON literals, and the model (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
 **Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 

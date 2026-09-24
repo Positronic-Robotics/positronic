@@ -1,14 +1,13 @@
 import logging
-from collections.abc import Callable
-from pathlib import Path
 
 import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
@@ -20,50 +19,39 @@ from positronic.vendors.lerobot.policy import LerobotModel, _detect_device, warm
 logger = logging.getLogger(__name__)
 
 
-class LerobotSource(ModelSource):
+@cfn.config(checkpoint=None, device=None)
+def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) -> Model:
     """One LeRobot 0.4.x checkpoint of an experiment directory: ``checkpoint``, else the latest one.
 
-    The policy type is auto-detected from each checkpoint's config, so this serves SmolVLA, ACT,
+    The policy type is auto-detected from the checkpoint's config, so this serves SmolVLA, ACT,
     Diffusion, or any other lerobot 0.4.x policy.
     """
-
-    def __init__(self, checkpoints_dir: str | Path, checkpoint: str | None = None, device: str | None = None):
-        self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
-        self.checkpoint = checkpoint
-        self.device = device or _detect_device()
-        self.experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
-
-    def checkpoint_id(self) -> str:
-        return resolve_checkpoint(self.checkpoints_dir, self.checkpoint)
-
-    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
-        logger.info(f'Loading checkpoint from {checkpoint_path}')
-        local = run_with_progress(
-            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}', on_progress
-        )
-        policy = LerobotModel(
-            str(local),
-            self.device,
-            extra_meta={
-                policy_keys.CHECKPOINT_PATH: checkpoint_path,
-                policy_keys.EXPERIMENT_NAME: self.experiment_name,
-                'device': self.device,
-            },
-        )
-        warmup(policy, warm_observation(policy.config), on_progress)
-        return policy
-
-
-lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
+    experiment_dir = checkpoints_dir.rstrip('/')
+    checkpoint_id = resolve_checkpoint(f'{experiment_dir}/checkpoints', checkpoint)
+    checkpoint_path = f'{experiment_dir}/checkpoints/{checkpoint_id}/pretrained_model'
+    device = device or _detect_device()
+    logger.info(f'Loading checkpoint from {checkpoint_path}')
+    local = run_with_progress(lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}')
+    policy = LerobotModel(
+        str(local),
+        device,
+        extra_meta={
+            offboard_keys.CHECKPOINT_ID: checkpoint_id,
+            policy_keys.CHECKPOINT_PATH: checkpoint_path,
+            policy_keys.EXPERIMENT_NAME: experiment_dir.split('/')[-1],
+            'device': device,
+        },
+    )
+    warmup(policy, warm_observation(policy.config))
+    return policy
 
 
 # No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
 # so none has a transform to declare.
-@cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: float | None = 1.0) -> PolicyDeployment:
+@cfn.config(codec=lerobot_codecs.ee)
+def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = 1.0) -> PolicyDeployment:
     return PolicyDeployment(
-        source, Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec
     )
 
 
@@ -75,16 +63,14 @@ joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
 COMMANDS = {
-    'serve': serve.override(pipeline=ee),
-    'ee': serve.override(pipeline=ee),
-    'joints': serve.override(pipeline=joints),
-    'joints_ik': serve.override(pipeline=joints_ik),
-    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'serve': serve.override(model=lerobot_model, pipeline=ee),
+    'ee': serve.override(model=lerobot_model, pipeline=ee),
+    'joints': serve.override(model=lerobot_model, pipeline=joints),
+    'joints_ik': serve.override(model=lerobot_model, pipeline=joints_ik),
+    'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
     'phail': serve.override(
-        pipeline=ee.override(
-            codec=lerobot_codecs.phail_v1,
-            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'},
-        )
+        model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/'),
+        pipeline=ee.override(codec=lerobot_codecs.phail_v1),
     ),
 }
 

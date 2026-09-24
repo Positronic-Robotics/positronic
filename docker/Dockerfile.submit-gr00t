@@ -44,4 +44,4 @@ EXPOSE 8000
 # `exec` makes the server pid 1, so it receives the stop signal.
 ENTRYPOINT ["/bin/sh", "-c", \
   "exec /positronic/.venv/bin/python -m positronic.vendors.gr00t.server droid \
-   --pipeline.source.model_source=\"$GROOT_MODEL_SOURCE\" \"$@\"", "--"]
+   --model.model_source=\"$GROOT_MODEL_SOURCE\" \"$@\"", "--"]

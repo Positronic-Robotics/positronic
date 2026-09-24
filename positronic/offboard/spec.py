@@ -1,7 +1,6 @@
-"""Model loading and policy deployment configuration for the inference server."""
+"""The model an inference server loads, and the policy deployment it serves the model through."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,32 +20,22 @@ class Model(ABC):
         return None
 
     def meta(self) -> dict[str, Any]:
+        """What each session's handshake reports about the model, its ``offboard.keys.CHECKPOINT_ID`` among it."""
         return {}
+
+    def check_codec(self, codec: Codec | None) -> None:
+        """Raise when this model cannot serve ``codec``."""
+        return None
 
     def close(self) -> None:
         """Release the model's resources after all calls have finished."""
         return None
 
 
-class ModelSource(ABC):
-    """The checkpoint a server loads at launch: cheap to build and to compare, and loaded once by ``load``."""
-
-    @abstractmethod
-    def checkpoint_id(self) -> str:
-        """The id of the checkpoint this source serves. The server reads it once, at launch."""
-
-    @abstractmethod
-    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model: ...
-
-    def __eq__(self, other):
-        return type(self) is type(other) and self.__dict__ == other.__dict__
-
-
 @dataclass
 class PolicyDeployment:
-    """A model source, a client stack of processors and codecs, and an optional server codec."""
+    """A client stack of processors and codecs, and an optional server codec, which a session may retune."""
 
-    source: ModelSource
     local: Policy
     codec: Codec | None = None
     compress_images: bool = False

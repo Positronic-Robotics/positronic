@@ -13,7 +13,7 @@ from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWi
 
 from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.layers import ChunkedSchedule
 
 
@@ -46,7 +46,7 @@ StartServer = Callable[..., Served]
 
 @pytest.fixture
 def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipelines on daemon threads; teardown stops and joins every started server.
+    """Factory serving a model through a pipeline on daemon threads; teardown stops and joins every server.
 
     Each wire asks for port 0, and servers started in parallel never draw the same port. ``grpc=True``
     serves the gRPC wire beside the websocket one. ``uds`` binds the websocket wire to that socket path
@@ -54,9 +54,9 @@ def start_server() -> Generator[StartServer, None, None]:
     """
     running: list[tuple[PolicyServer, threading.Thread]] = []
 
-    def start(pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
+    def start(model: Model, pipeline, *, grpc: bool = False, uds: str | None = None, **server_kwargs) -> Served:
         host = server_kwargs.pop('host', 'localhost')
-        server = PolicyServer(pipeline, **server_kwargs)
+        server = PolicyServer(lambda: model, pipeline, **server_kwargs)
         binds: server_wire.ServedAddress = (
             server_wire.ServedHostPort(host, 0) if uds is None else websocket_wire.ServedUnixSocket(Path(uds))
         )
@@ -105,20 +105,6 @@ def make_mock_model():
     return make
 
 
-class ReadySource(ModelSource):
-    """A source over one model that is already built."""
-
-    def __init__(self, policy: Model, checkpoint_id: str = 'stub'):
-        self._policy = policy
-        self._checkpoint_id = checkpoint_id
-
-    def checkpoint_id(self) -> str:
-        return self._checkpoint_id
-
-    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        return self._policy
-
-
 @pytest.fixture
 def mock_model(make_mock_model) -> MagicMock:
     """Callable model with independently configurable results and metadata."""
@@ -132,5 +118,5 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, *_ = start_server(PolicyDeployment(ReadySource(mock_model), ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(mock_model, PolicyDeployment(ChunkedSchedule(fps=10)))
     return host, port

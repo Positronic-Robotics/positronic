@@ -92,15 +92,16 @@ class _ServedTiming:
 
 
 class PolicyServer:
-    """Serve a callable model with explicit server codecs and a declared client processor stack.
+    """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
-    A config-launched pipeline accepts session parameters as dotted configuration overrides.
-    An instantiated PolicyDeployment refuses session parameters. The server loads the source's one
-    checkpoint at startup and serves it to every session.
+    ``build_model`` runs once, when ``serve`` starts, and its model serves every session. A config-launched
+    pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
+    never reach the model. An instantiated PolicyDeployment refuses session parameters.
     """
 
     def __init__(
         self,
+        build_model: Callable[[], Model],
         pipeline: cfn.Config | PolicyDeployment,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
@@ -111,9 +112,8 @@ class PolicyServer:
             f'PolicyServer requires a PolicyDeployment, got {type(self._pipeline).__name__}'
         )
         self._pipeline.local.to_spec()
-        self._source = self._pipeline.source
+        self._build_model = build_model
         # Set by ``serve`` before any wire binds, and closed when it returns.
-        self._checkpoint_id: str | None = None
         self._model: Model | None = None
 
         self.idle_timeout_min = idle_timeout_min
@@ -161,7 +161,9 @@ class PolicyServer:
             raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
-        return {wire.MODELS_KEY: [self._checkpoint_id]}
+        assert self._model is not None, 'The route answered before the model loaded'
+        checkpoint_id = self._model.meta().get(offboard_keys.CHECKPOINT_ID)
+        return {wire.MODELS_KEY: [] if checkpoint_id is None else [checkpoint_id]}
 
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -175,8 +177,8 @@ class PolicyServer:
         # ``override_data``: values came off the wire, so a string stays a string and never names a
         # Python object to import.
         pipeline = self._pipeline_cfg.override_data(**params).instantiate()
-        if pipeline.source != self._source:
-            raise ValueError('Session params must not change the model source; it is fixed at launch')
+        assert self._model is not None, 'A session arrived before the model loaded'
+        self._model.check_codec(pipeline.codec)
         return pipeline
 
     async def _answer_observations(
@@ -233,7 +235,6 @@ class PolicyServer:
                 **model.meta(),
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
                 **pipeline.local.meta(),
-                offboard_keys.CHECKPOINT_ID: self._checkpoint_id,
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
@@ -298,9 +299,8 @@ class PolicyServer:
             raise failed[0][1]
 
     def _load(self) -> None:
-        self._checkpoint_id = self._source.checkpoint_id()
-        logger.info(f'Loading checkpoint {self._checkpoint_id}')
-        self._model = self._source.load(self._checkpoint_id, logger.info)
+        self._model = self._build_model()
+        self._model.check_codec(self._pipeline.codec)
 
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
@@ -373,16 +373,17 @@ def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
 
 @cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
 def serve(
+    model: cfn.Config,
     pipeline: cfn.Config,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
 ):
-    """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
+    """The CLI entry point every vendor server exposes: bind ``model`` and ``pipeline``, and the commands are
+    configs of this.
 
-    Everything the served model is — codec, source, checkpoint — is reached through the pipeline
-    itself. GR00T names its checkpoints with ``--pipeline.source.model_source=...``; LeRobot and OpenPI
-    use ``--pipeline.source.checkpoints_dir=...``. The server serves one checkpoint of them, chosen here.
+    ``model`` names the one checkpoint the server loads: ``--model.checkpoints_dir=...`` for LeRobot and
+    OpenPI, ``--model.model_source=...`` for GR00T. ``pipeline`` is the rig-side stack and the server codec.
 
     Each wire carries the address it binds, and this binds what it is given::
 
@@ -393,5 +394,5 @@ def serve(
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
     """
-    server = PolicyServer(pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
+    server = PolicyServer(model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
     server.serve([w for w in (websocket, grpc) if w is not None])

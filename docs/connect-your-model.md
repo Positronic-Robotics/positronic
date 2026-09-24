@@ -88,8 +88,8 @@ A `Codec` converts observations and actions, and prepares the same features for
 training. `Sequential` combines codecs and processors such as `ChunkedSchedule`.
 The [Codecs Guide](codecs.md) lists the available conversions.
 
-A server loads callable `Model` objects through a `ModelSource`. A `PolicyDeployment`
-packages that source with the client processor stack and an optional server codec.
+A server builds one callable `Model` at launch. A `PolicyDeployment` holds the client
+processor stack and an optional server codec, which a session may retune.
 `RemotePolicy` opens a session and builds the declared stack around the remote call.
 
 ## The wire format
@@ -164,14 +164,14 @@ To connect a custom model you implement this protocol. The full low-level spec â
 
 ### Models and deployments
 
-Implement `Model` and `ModelSource`, then pass a deployment to `PolicyServer`:
+Implement `Model`, then pass a function that builds it and a deployment to `PolicyServer`:
 
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_wire import ServedHostPort
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
@@ -189,22 +189,12 @@ class MyModel(Model):
         ]
 
     def meta(self):
-        return {'type': 'my_model'}
+        return {'type': 'my_model', 'checkpoint_id': 'default'}
 
 
-class MySource(ModelSource):
-    def checkpoint_id(self):
-        return 'default'
-
-    def load(self, checkpoint_id, on_progress=None):
-        return MyModel(load_my_weights())  # supply your checkpoint loader
-
-
-deployment = PolicyDeployment(
-    source=MySource(),
-    local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)),
-)
-server = PolicyServer(deployment)
+deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
+# The server builds the model once, when it starts; supply your checkpoint loader.
+server = PolicyServer(lambda: MyModel(load_my_weights()), deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 

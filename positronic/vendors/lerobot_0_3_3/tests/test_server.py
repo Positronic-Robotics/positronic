@@ -59,17 +59,18 @@ class _DummyWebSocket:
 def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
     """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
     still yields complete metadata — ``checkpoint_path`` included, since sampling keys on it."""
+    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['42'])
     monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
     # A mock cannot answer an inference, but the warm observation is still built from what the factory returned,
     # so the load reaches no checkpoint on disk.
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
-    source = lerobot_server.LerobotSource(
+    model = lerobot_server.lerobot_model(
         policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
         checkpoints_dir='s3://bucket/exp',
         device='cpu',
     )
-    model = source.load('42')
     assert model.meta() == {
+        'checkpoint_id': '42',
         'type': 'act',
         'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
         'experiment_name': 'exp',
@@ -94,27 +95,26 @@ def test_act_sessions_reuse_full_chunk_prediction_without_resetting_the_model():
     model.close()
 
 
-def _make_server(checkpoint: str | None) -> PolicyServer:
-    source = lerobot_server.LerobotSource(
+def _make_server(monkeypatch, checkpoint: str | None) -> tuple[PolicyServer, MagicMock]:
+    """A server whose model build makes no backbone, and the mock that stands in for the model class."""
+    build = MagicMock(side_effect=lambda _backbone, _device, extra_meta: MagicMock(**{'meta.return_value': extra_meta}))
+    monkeypatch.setattr(lerobot_server, 'LerobotModel', build)
+    monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
+    monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
+    model_cfg = lerobot_server.lerobot_model.override(
         policy_factory=lambda _checkpoint: MagicMock(), checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint
     )
-    return PolicyServer(PolicyDeployment(source=source, local=ChunkedSchedule(fps=15)))
+    return PolicyServer(model_cfg, PolicyDeployment(local=ChunkedSchedule(fps=15))), build
 
 
 @pytest.mark.asyncio
 async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41', '42'])
-    model = MagicMock()
-    model.meta.return_value = {}
-    load = MagicMock(return_value=model)
-    monkeypatch.setattr(lerobot_server.LerobotSource, 'load', load)
-
-    server = _make_server(checkpoint='42')
+    server, _build = _make_server(monkeypatch, checkpoint='42')
     server._load()
     websocket = _DummyWebSocket()
     await server._serve_session(websocket.as_connection())
 
-    assert load.call_args.args[0] == '42'
     ready = deserialise(websocket._send_bytes.await_args_list[0].args[0])
     assert ready['status'] == 'ready'
     assert ready['meta']['checkpoint_id'] == '42'
@@ -122,17 +122,14 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
 def test_lerobot_server_rejects_missing_configured_checkpoint_at_startup(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41'])
-    load = MagicMock()
-    monkeypatch.setattr(lerobot_server.LerobotSource, 'load', load)
-
-    server = _make_server(checkpoint='42')
+    server, build = _make_server(monkeypatch, checkpoint='42')
 
     with pytest.raises(ValueError) as excinfo:
         server._load()
 
     assert 'Configured checkpoint not found: 42' in str(excinfo.value)
     assert "Available: ['41']" in str(excinfo.value)
-    load.assert_not_called()
+    build.assert_not_called()
 
 
 def test_warmup_observation_matches_the_features_the_policy_declares():

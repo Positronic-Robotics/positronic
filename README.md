@@ -258,7 +258,7 @@ Run a model server on the same machine or a GPU host, then connect it to the
 ```bash
 # On inference server (the subcommand selects the codec pipeline; must match training):
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-    --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/<run_id>
+    --model.checkpoints_dir=~/checkpoints/lerobot/<run_id>
 
 # On the simulator machine:
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \

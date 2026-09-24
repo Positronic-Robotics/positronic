@@ -3,9 +3,9 @@
 #
 # Usage
 #   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
-#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --pipeline.source.num_gpus=8
+#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --model.num_gpus=8
 #   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only ee \
-#     --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
+#     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
 #
 # The endpoint gets no public IP: Nebius fronts every HTTP container port with a
 # managed https:// URL, which is what this polls for and prints. The container
@@ -52,20 +52,20 @@ Examples:
 
   # Your own ACT checkpoint
   bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 
   # SmolVLA / lerobot 0.4.x checkpoint
   bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
   # OpenPI (ee_frame is the EE frame the checkpoint speaks; None means the rig's default)
   bash workflows/nebius/serve.sh openpi pi-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
     --pipeline.ee_frame=None
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server droid \
-    --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+    --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
 fi

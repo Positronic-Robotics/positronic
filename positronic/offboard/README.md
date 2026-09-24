@@ -108,7 +108,7 @@ Rules:
 - **Values are JSON literals.** The server parses each value as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. The query travels verbatim — `InferenceClient` forwards whatever the URL already says — so a caller who means the string `true` rather than the boolean writes the quoted literal itself, percent-encoded: `?tag=%22true%22`.
 - **Imports are rejected.** Overrides are applied with `Config.override_data`, so a value that configuronic would read as an import — `@module.path.Object`, or a leading-dot path relative to the argument's current value — is refused at any nesting depth, and the error names the offending key. Params can tune the pipeline's arguments, never swap its components. A leading-dot string on an argument that gives imports no base to resolve against (a number, a flag, a plain string) is ordinary data and passes through, so `?tag=./data` works.
 - **Duplicate keys are rejected.**
-- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected.
+- **Params never reach the model.** The server builds the model once, at launch, from a config apart from the pipeline, so a key that names it (e.g. `?model.checkpoint=...`) is an unknown key.
 - **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipeline rejects every param.
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
@@ -296,11 +296,11 @@ any running inference finishes. Reconnecting creates a new session ID.
 ```bash
 # LeRobot server (SmolVLA — 0.4.x); the subcommand names the codec pipeline
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/exp_v1
+  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server droid \
-  --pipeline.source.model_source=~/checkpoints/groot/exp_v1
+  --model.model_source=~/checkpoints/groot/exp_v1
 
 # Client connects the same way
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -316,10 +316,11 @@ checkpoints, start one server for each.
 ## Classes
 
 ### `server.PolicyServer`
-Serves a `PolicyDeployment` with explicit `source`, `local`, and `codec` arguments.
-`ModelSource.checkpoint_id()` names the checkpoint the source serves, and `load()` returns a callable
-`Model` that owns the loaded resources. The server calls both once, at startup.
-Server codecs wrap its call; the client receives one stack spec containing its processors and codecs.
+Serves one `Model` through a `PolicyDeployment` with explicit `local` and `codec` arguments. The server
+calls `build_model` once, when `serve` starts, and the model it returns owns the loaded resources and
+reports its checkpoint in `meta()`. `Model.check_codec` refuses a codec the model cannot serve, at launch
+and for each session codec. Server codecs wrap the model's call; the client receives one stack spec
+containing its processors and codecs.
 
 ```python
 from positronic.offboard.server import PolicyServer
@@ -331,13 +332,12 @@ from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 
 pipeline = PolicyDeployment(
-    source=my_model_source,
     local=Sequential(
         PauseOnUnavailable(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
     ),
     codec=my_model_codec,
 )
-server = PolicyServer(pipeline)
+server = PolicyServer(build_my_model, pipeline)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
@@ -366,7 +366,7 @@ an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the
 many minutes without activity.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--websocket`, `--grpc` and `--idle_timeout_min` are flags of `serve` itself — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other; everything the served model is — codec, source, checkpoint — is reached through the pipeline, which is also where a deployment preset binds it. Select GR00T checkpoints with `--pipeline.source.model_source=...`; LeRobot and OpenPI use `--pipeline.source.checkpoints_dir=...`.
+The CLI entry point every vendor server exposes. A vendor binds `model` and `pipeline` for each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. `--model.*` names the checkpoint: `--model.model_source=...` for GR00T, `--model.checkpoints_dir=...` for LeRobot and OpenPI. `--pipeline.*` tunes the rig-side stack and the server codec. `--websocket`, `--grpc` and `--idle_timeout_min` are the other flags of `serve` — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other. A deployment preset binds a model and a pipeline together.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. It takes the wire and the address that wire
@@ -403,7 +403,7 @@ exception of the WebSocket or gRPC library.
 
 ## Vendor Implementations
 
-Every vendor ships a `ModelSource` plus named pipelines and serves them through the one `PolicyServer`:
+Every vendor ships a model config plus named pipelines and serves them through the one `PolicyServer`:
 
 - **LeRobot (0.4.x)**: `positronic.vendors.lerobot.server` - Serves SmolVLA/ACT/Diffusion checkpoints (auto-detects policy type)
 - **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints
