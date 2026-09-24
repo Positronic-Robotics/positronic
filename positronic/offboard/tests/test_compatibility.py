@@ -1,5 +1,6 @@
 """Unversioned server contracts, exact component selection, and deprecation at connection time."""
 
+import logging
 import threading
 from concurrent.futures import Future
 from datetime import date
@@ -16,13 +17,15 @@ from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.compatibility import from_v1_spec
+from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
+from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
 
 
@@ -96,9 +99,11 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
         run.close()
 
 
-def test_v1_server_without_action_fps_is_refused():
-    with pytest.raises(ValueError, match='no action_timestamp and sends no action_fps'):
-        from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
+def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.compatibility'):
+        stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
+    assert flatten_dict(stack.meta())[policy_keys.ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
+    assert 'Rebuild the server on current positronic' in caplog.text
 
 
 def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_runtime):

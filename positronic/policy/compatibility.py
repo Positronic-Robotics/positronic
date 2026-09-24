@@ -3,6 +3,7 @@
 The offboard README states the translation and what the client refuses.
 """
 
+import logging
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -19,6 +20,9 @@ WALL_TIME_NS = 'wall_time_ns'
 ACTION_TIMESTAMP = 'action_timestamp'
 ACTION_HORIZON = 'action_horizon'
 V1_LAYER_NAMES = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_NAME)
+V1_SERVER_DEFAULT_ACTION_FPS = 15.0
+
+logger = logging.getLogger(__name__)
 
 
 class StampObservationTimes(Policy):
@@ -67,11 +71,12 @@ def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Proces
             parts.append(part)
     if 'fps' not in timing:
         if policy_keys.ACTION_FPS not in server_meta:
-            raise ValueError(
-                'The v1 server declares no action_timestamp and sends no action_fps, so the client cannot '
-                'schedule its answers; upgrade the server'
+            logger.warning(
+                'The v1 server declares no action_timestamp and sends no action_fps; the client assumes %s '
+                'actions per second. Rebuild the server on current positronic so that it declares its rate.',
+                V1_SERVER_DEFAULT_ACTION_FPS,
             )
-        timing['fps'] = server_meta[policy_keys.ACTION_FPS]
+        timing['fps'] = server_meta.get(policy_keys.ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
     if 'horizon_sec' not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
         timing['horizon_sec'] = server_meta[policy_keys.ACTION_HORIZON_SEC]
 

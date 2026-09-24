@@ -197,8 +197,8 @@ A protocol v1 server's stack runs as v2 processors. `stop_on_fault` v1 runs as `
 `temporal_stack` v1 as `TemporalStack`, and `chunked_schedule` v1 as one `ChunkedSchedule`. That
 schedule takes its rate and horizon from the declared `action_timestamp` and `action_horizon` codecs.
 A server that declares no `action_timestamp` stamps its own answers; the schedule then takes
-`action_fps` and `action_horizon_sec` from the handshake, and the client refuses a server that sends
-no `action_fps`. The client removes each answer's timestamps and its end row, and turns a single
+`action_fps` and `action_horizon_sec` from the handshake. A server that sends no `action_fps` runs
+at 15 actions per second, and the client logs a warning to rebuild it on current positronic. The client removes each answer's timestamps and its end row, and turns a single
 action into a one-row chunk. Codecs keep their declared positions. The client adds `obs_time_ns`
 and `wall_time_ns` to each observation. After a robot fault, the stack resumes its queued commands
 and its pending answer. Recovery after a fault is an open question:
