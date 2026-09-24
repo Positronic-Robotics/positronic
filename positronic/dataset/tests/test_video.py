@@ -232,11 +232,13 @@ class TestVideoEncoderSeam:
             w.__exit__(None, None, None)
         assert encoder.sessions[0].ended == 'abort'
 
-    def test_a_failed_finish_surfaces_on_exit(self, video_paths):
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=FINISH))
+    def test_a_failed_finish_surfaces_on_exit_and_aborts_the_session(self, video_paths):
+        encoder = FakeEncoder(fail_at=FINISH)
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
         w.append(create_frame(0), 1000)
         with pytest.raises(RuntimeError, match='Video encoding failed'):
             w.__exit__(None, None, None)
+        assert encoder.sessions[0].ended == 'abort'
 
 
 class TestLibavEncoder:
