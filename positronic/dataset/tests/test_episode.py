@@ -137,7 +137,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
 
 
 def test_each_episode_records_its_own_video_encoder(tmp_path):
-    encoders = [LibavEncoder(), LibavEncoder(options={'preset': 'ultrafast'})]
+    encoders = [LibavEncoder(), LibavEncoder(options=(('preset', 'ultrafast'),))]
     writers = [DiskEpisodeWriter(tmp_path / str(i), video_encoder=e) for i, e in enumerate(encoders)]
     for w in writers:
         with w:

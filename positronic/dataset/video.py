@@ -3,7 +3,7 @@ import struct
 import threading
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
@@ -51,8 +51,8 @@ class LibavEncoder:
     """Encodes in the calling process with a PyAV (libav) codec."""
 
     codec: str = 'h264'
-    # Encoder options, e.g. x264 ``preset``/``tune``; empty keeps the codec defaults.
-    options: dict[str, str] = field(default_factory=dict)
+    # Encoder options as (name, value) pairs, e.g. x264 ``preset``/``tune``; empty keeps the codec defaults.
+    options: tuple[tuple[str, str], ...] = ()
 
     def ensure_available(self) -> None:
         av.Codec(self.codec, 'w')

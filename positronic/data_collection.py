@@ -437,7 +437,7 @@ def so101cfg(robot_arm, **kwargs):
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
     # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
-    video_encoder=cfn.Config(LibavEncoder, options={'preset': 'ultrafast', 'tune': 'zerolatency'}),
+    video_encoder=cfn.Config(LibavEncoder, options=(('preset', 'ultrafast'), ('tune', 'zerolatency'))),
 )
 def yamcfg(robot_arm, **kwargs):
     """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""

@@ -241,7 +241,7 @@ class TestVideoEncoderSeam:
 
 class TestLibavEncoder:
     def test_options_reach_the_codec(self, video_paths):
-        encoder = LibavEncoder(options={'preset': 'ultrafast', 'bframes': '0'})
+        encoder = LibavEncoder(options=(('preset', 'ultrafast'), ('bframes', '0')))
         with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder) as w:
             for i in range(5):
                 w.append(create_frame(i * 40), 1000 * (i + 1))
