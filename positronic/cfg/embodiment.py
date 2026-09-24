@@ -3,6 +3,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.settle import SettleTuning
@@ -41,8 +42,10 @@ def droid(robot_arm, gripper, cameras):
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
-def yam(robot_arm, cameras):
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
+)
+def yam(robot_arm, cameras, video_encoder):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -63,6 +66,7 @@ def yam(robot_arm, cameras):
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 
@@ -87,6 +91,7 @@ def yam(robot_arm, cameras):
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
 def yam_bimanual(
     left_channel: str,
@@ -97,6 +102,7 @@ def yam_bimanual(
     park_after_idle_s: float | None,
     park_tuning: dict[str, SettleTuning],
     move_tuning: dict[str, SettleTuning],
+    video_encoder,
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -146,6 +152,7 @@ def yam_bimanual(
         meta_source=arms['left'].robot_meta,
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 
