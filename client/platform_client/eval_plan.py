@@ -9,11 +9,11 @@ import ipaddress
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
-from platform_client.enums import CameraVantage, EndpointKind, Placement, Wire
+from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, Wire
 from platform_client.evals import EvalRef
-from platform_client.ids import TransactionKey
+from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
@@ -287,6 +287,36 @@ class Endpoint(Cascade):
         return self.address is not None or self.spec is not None or self.image is not None
 
 
+class NebiusCompetition(BaseModel):
+    """A public run: one of the named public evals, one image, the daily quota, and a board."""
+
+    model_config = _FORBID_EXTRA
+
+    type: Literal['nebius_competition'] = 'nebius_competition'
+
+    @property
+    def kind(self) -> RequestType:
+        return RequestType.nebius_competition
+
+
+class PrivateEval(BaseModel):
+    """A run for one organisation: its approved evals, tasks and endpoint kinds, and no board."""
+
+    model_config = _FORBID_EXTRA
+
+    type: Literal['private_eval'] = 'private_eval'
+    # The caller must be a member of this org.
+    org: OrgSlug = Field(min_length=1)
+
+    @property
+    def kind(self) -> RequestType:
+        return RequestType.private_eval
+
+
+# Tagged by `type`. A later request type is one more member.
+PlanRequestType = Annotated[NebiusCompetition | PrivateEval, Field(discriminator='type')]
+
+
 class TaskNode(Cascade):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
@@ -319,6 +349,8 @@ class EvalPlan(Cascade):
     client from the key's grant.
     """
 
+    # The rules, the approvals and the board this plan runs under.
+    request_type: PlanRequestType
     tasks: list[TaskNode] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
@@ -347,6 +379,12 @@ class EvalPlan(Cascade):
             raise ValueError(f'a plan states tasks and names the eval {str(self.eval)!r}: it takes its tasks from one')
         if not self.tasks and not self.names_an_eval:
             raise ValueError('a plan names at least one task, or the eval whose tasks it runs')
+        return self
+
+    @model_validator(mode='after')
+    def _a_competition_run_names_an_eval(self) -> Self:
+        if isinstance(self.request_type, NebiusCompetition) and not self.names_an_eval:
+            raise ValueError('a nebius_competition plan names an eval and states no tasks')
         return self
 
     @model_validator(mode='after')
@@ -461,15 +499,21 @@ IMAGE_ENDPOINT_NAME = 'policy'
 
 
 def plan_of_image(
-    image: PolicyImage, eval_name: EvalRef, *, alias: str | None = None, transaction_key: TransactionKey | None = None
+    image: PolicyImage,
+    eval_name: EvalRef,
+    *,
+    alias: str | None = None,
+    transaction_key: TransactionKey | None = None,
+    org: OrgSlug | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The endpoint names the websocket wire: the platform opens every image session over the websocket.
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
-    neither.
+    neither. The plan is a `nebius_competition` run, or a private run for `org` where one is given.
     """
     return EvalPlan(
+        request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
         eval=eval_name,
         endpoints=[Endpoint(name=IMAGE_ENDPOINT_NAME, kind=EndpointKind.image, wire=Wire.websocket, image=image)],
         alias=alias,

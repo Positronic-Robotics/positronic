@@ -194,6 +194,7 @@ DOCUMENTED_COMMANDS = {
         'eval',
         'run',
         '--from-file=positronic/cli/examples/rig_plan.yaml',
+        '--org=acme',
     ],
     'eval-status': ['uv', 'run', 'positronic', 'eval', 'status', f'--id={SUBMISSION}'],
     'eval-list': ['uv', 'run', 'positronic', 'eval', 'list'],

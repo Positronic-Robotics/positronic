@@ -23,6 +23,9 @@ def a_plan_file(directory: Path, name: str, payload: str) -> str:
 
 
 PLAN_YAML = f"""
+request_type:
+  type: private_eval
+  org: acme
 tasks:
   - {SPOONS}
 endpoints:
@@ -33,6 +36,7 @@ episodes_per_endpoint: 4
 """
 
 PLAN_JSON = json.dumps({
+    'request_type': {'type': 'private_eval', 'org': 'acme'},
     'tasks': [SPOONS],
     'endpoints': [{'name': 'baseline', 'wire': 'websocket_tls', 'address': BASELINE}],
     'episodes_per_endpoint': 4,
@@ -123,7 +127,7 @@ def test_an_eval_beside_a_plan_file_is_refused(platform, run_command, tmp_path: 
 
 def test_a_file_that_is_not_a_plan_names_the_field(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='episodes_per_endpoint'):
-        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'))
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'), org='acme')
     assert platform.seen is None
 
 
@@ -166,3 +170,19 @@ def test_a_run_naming_no_policy_is_told_the_three_places(platform, run_command):
 @pytest.mark.parametrize(('value', 'is_given'), [(None, False), (False, True), (0, True), ('', True), (True, True)])
 def test_a_flag_is_given_unless_it_is_unset(value: object, is_given: bool):
     assert given(value) is is_given
+
+
+def test_a_rig_run_states_the_org_it_runs_for(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='other')
+    assert platform.body['request_type'] == {'type': 'private_eval', 'org': 'other'}
+    with pytest.raises(SystemExit, match='drop --org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), org='other')
+
+
+def test_an_empty_org_is_refused_in_one_line(platform, run_command, tmp_path: Path):
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    with pytest.raises(SystemExit, match=r'plan\.yaml: .*org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='')
+    assert platform.seen is None

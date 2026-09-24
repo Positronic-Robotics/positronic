@@ -254,6 +254,7 @@ def run(
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    org: str | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -261,9 +262,11 @@ def run(
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
     since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
-    as a YAML or JSON file. Two or more endpoints in it make one blind sample. A filed run — the
-    platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a run
-    here answers the dataset it wrote.
+    as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
+    organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
+    with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
+    the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a
+    run here answers the dataset it wrote.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -289,6 +292,7 @@ def run(
                 '--transaction-key': transaction_key,
                 '--platform-url': platform_url,
                 '--from-file': from_file,
+                '--org': org,
             },
             'local',
         )
@@ -307,11 +311,13 @@ def run(
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
-        return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
+        return submit(
+            eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url, org=org
+        )
 
     if source is not None:
         # The rig records under the client's own prefix, so it has no output of its own to name.
         _refuse(local_only, 'rig')
-        return file_plan(read_plan(source, transaction_key, alias), platform_url)
+        return file_plan(read_plan(source, transaction_key, alias, org), platform_url)
 
     raise SystemExit(_NO_POLICY_NAMED)

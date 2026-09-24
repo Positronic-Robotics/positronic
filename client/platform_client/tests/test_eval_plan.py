@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from platform_client.enums import EndpointKind, Placement, Wire
+from platform_client.enums import EndpointKind, Placement, RequestType, Wire
 from platform_client.eval_plan import (
     _ENDPOINT_MAY_STATE,
     ADDRESS_OF_WIRE,
@@ -15,7 +15,9 @@ from platform_client.eval_plan import (
     EvalPlan,
     Host,
     HostPortAddress,
+    NebiusCompetition,
     Port,
+    PrivateEval,
     RoboarenaAddress,
     SessionPath,
     SessionQuery,
@@ -25,6 +27,7 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
+from platform_client.ids import OrgSlug
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
@@ -33,6 +36,7 @@ from pydantic import TypeAdapter, ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
+PRIVATE = {'type': 'private_eval', 'org': 'acme'}
 SESSION = '/api/v1/session'
 
 
@@ -47,7 +51,12 @@ CANDIDATE = remote('candidate')
 
 
 def a_plan(**over) -> EvalPlan:
-    fields = {'tasks': [SPOONS], 'endpoints': [BASELINE, CANDIDATE], 'episodes_per_endpoint': 10}
+    fields = {
+        'request_type': PRIVATE,
+        'tasks': [SPOONS],
+        'endpoints': [BASELINE, CANDIDATE],
+        'episodes_per_endpoint': 10,
+    }
     return EvalPlan.model_validate({**fields, **over})
 
 
@@ -96,7 +105,7 @@ def test_a_plan_names_a_task():
 
 def test_a_plan_states_a_count():
     with pytest.raises(ValidationError, match='states episodes_per_endpoint'):
-        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE]})
+        EvalPlan.model_validate({'request_type': PRIVATE, 'tasks': [SPOONS], 'endpoints': [BASELINE]})
 
 
 def test_a_task_label_names_a_plan_endpoint():
@@ -237,7 +246,7 @@ def test_a_plan_takes_its_tasks_from_itself_or_from_an_eval_and_not_from_both():
     with pytest.raises(ValidationError, match='it takes its tasks from one'):
         a_plan(eval='robolab.public_subset')
     with pytest.raises(ValidationError, match='names at least one task, or the eval'):
-        EvalPlan.model_validate({'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
+        EvalPlan.model_validate({'request_type': PRIVATE, 'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
 
 
 @pytest.mark.parametrize(
@@ -458,9 +467,9 @@ def test_a_plan_naming_an_eval_states_the_policy_that_runs_it():
     # The catalogue supplies a named eval's tasks, so `tasks` is empty and every check that iterates
     # them reads nothing. Without this the plan files with no policy at all.
     with pytest.raises(ValidationError, match='defines no endpoint'):
-        EvalPlan.model_validate({'eval': 'robolab.public_subset'})
+        EvalPlan.model_validate({'request_type': PRIVATE, 'eval': 'robolab.public_subset'})
     # One plan-level endpoint is enough, which is the shape `plan_of_image` builds.
-    EvalPlan.model_validate({'eval': 'robolab.public_subset', 'endpoints': IMAGE_ENDPOINT})
+    EvalPlan.model_validate({'request_type': PRIVATE, 'eval': 'robolab.public_subset', 'endpoints': IMAGE_ENDPOINT})
 
 
 def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_it():
@@ -468,6 +477,7 @@ def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_i
     # it is checked there rather than through a task the plan does not have.
     with pytest.raises(ValidationError, match='over its own ceiling'):
         EvalPlan.model_validate({
+            'request_type': PRIVATE,
             'eval': 'robolab.public_subset',
             'endpoints': IMAGE_ENDPOINT,
             'cap_per_episode_sec': 120,
@@ -475,6 +485,7 @@ def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_i
         })
     # A cap under the ceiling passes, and a task's own override is still checked.
     EvalPlan.model_validate({
+        'request_type': PRIVATE,
         'eval': 'robolab.public_subset',
         'endpoints': IMAGE_ENDPOINT,
         'cap_per_episode_sec': 90,
@@ -494,3 +505,26 @@ def test_a_count_below_one_is_refused_at_every_level():
 def test_a_clutter_draw_needs_a_range():
     with pytest.raises(ValidationError, match='which is no range'):
         a_plan(clutter={'count_min': 8, 'count_max': 4})
+
+
+def test_a_plan_states_its_request_type():
+    with pytest.raises(ValidationError, match='request_type'):
+        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
+    plan = a_plan()
+    assert isinstance(plan.request_type, PrivateEval) and plan.request_type.org == 'acme'
+    assert plan.request_type.kind is RequestType.private_eval
+    assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
+
+
+def test_a_competition_plan_names_an_eval_and_states_no_tasks():
+    with pytest.raises(ValidationError, match='nebius_competition plan names an eval'):
+        a_plan(request_type={'type': 'nebius_competition'})
+    with pytest.raises(ValidationError, match='org'):
+        a_plan(request_type={'type': 'nebius_competition', 'org': 'acme'})
+
+
+def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
+    image = PolicyImage('org/policy:v1')
+    assert isinstance(plan_of_image(image, EvalRef('molmo.x')).request_type, NebiusCompetition)
+    private = plan_of_image(image, EvalRef('molmo.x'), org=OrgSlug('acme')).request_type
+    assert isinstance(private, PrivateEval) and private.org == 'acme'

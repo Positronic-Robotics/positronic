@@ -26,12 +26,13 @@ from platform_client.eval_plan import (
     Endpoint,
     EvalPlan,
     HostPortAddress,
+    PrivateEval,
     RoboarenaAddress,
     TaskNode,
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -121,6 +122,7 @@ CREDITS = QuotaLimit(
 )
 
 ASK = EvalPlan.model_validate({
+    'request_type': {'type': 'private_eval', 'org': 'acme'},
     'tasks': [
         'eight-spoons-into-grey-tote',
         {
@@ -289,6 +291,7 @@ MODELS: list[BaseModel] = [
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
     ASK,
     EvalPlan(
+        request_type=PrivateEval(org=OrgSlug('acme')),
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
         endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,
@@ -338,6 +341,7 @@ def test_ids_and_statuses_leave_as_wire_values():
 def test_a_request_rejects_an_unknown_field():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({
+            'request_type': {'type': 'private_eval', 'org': 'acme'},
             'eval': 'fake.smoke',
             'evals': 'fake.smoke',  # a plausible typo of eval
         })
@@ -346,6 +350,7 @@ def test_a_request_rejects_an_unknown_field():
 def test_a_policy_image_the_registry_could_never_resolve_is_refused_here():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({
+            'request_type': {'type': 'private_eval', 'org': 'acme'},
             'eval': 'fake.smoke',
             # a digest separator with nothing behind it
             'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/policy@'}],
@@ -424,7 +429,11 @@ def test_an_id_reaches_the_query_string_in_its_hex_wire_form():
 
 def test_an_empty_transaction_key_is_a_client_bug_not_an_absent_one():
     with pytest.raises(ValidationError):
-        EvalPlan.model_validate({'eval': 'fake.smoke', 'transaction_key': ''})
+        EvalPlan.model_validate({
+            'request_type': {'type': 'nebius_competition'},
+            'eval': 'fake.smoke',
+            'transaction_key': '',
+        })
 
 
 @pytest.mark.parametrize(

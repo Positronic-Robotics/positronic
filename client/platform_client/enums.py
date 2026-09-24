@@ -141,6 +141,15 @@ NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {Submissio
 
 
 @unique
+class RequestType(IntEnum):
+    """Which rules, approvals and board a plan runs under. The executor follows from the plan content."""
+
+    INVALID = 0
+    nebius_competition = 1
+    private_eval = 2
+
+
+@unique
 class EndpointKind(IntEnum):
     """Where a policy comes from: an address the caller provides (`remote`), a checkpoint the
     platform serves (`served`), or a container image the platform runs (`image`)."""
