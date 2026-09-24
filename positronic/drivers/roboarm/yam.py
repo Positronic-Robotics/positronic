@@ -8,7 +8,8 @@ DOF, normalized 0=closed/1=open — the inverse of positronic's grip convention 
 both directions.
 
 Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
-(``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, physical gripper
+(``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, the gravity
+compensation each joint needs (``gravity_comp_factor``), physical gripper
 polarity and joint-range check, mount pose survey (``base_pose``), teleop latency, and the arm going limp
 on close (``zero_torque_mode``).
 """
@@ -17,7 +18,7 @@ import contextlib
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
@@ -58,9 +59,15 @@ _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
 
-def _connect(channel: str, sim: bool):
+def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
-    return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
+    return get_yam_robot(
+        channel,
+        gripper_type=GripperType.LINEAR_4310,
+        zero_gravity_mode=False,
+        sim=sim,
+        gravity_comp_factor=gravity_comp_factor,
+    )
 
 
 class YamState(State, pimm.shared_memory.NumpySMAdapter):
@@ -469,9 +476,14 @@ class _Arm(DriverRun[command.CommandType]):
 
 
 @contextlib.contextmanager
-def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Iterator[Any]:
+def _opened(
+    connect: Callable[[str, bool, np.ndarray | None], Any],
+    channel: str,
+    sim: bool,
+    gravity_comp_factor: np.ndarray | None,
+) -> Iterator[Any]:
     """Release torque only after the driver completes its parking shutdown."""
-    vendor = connect(channel, sim)
+    vendor = connect(channel, sim, gravity_comp_factor)
     try:
         yield vendor
     except BaseException:
@@ -563,6 +575,7 @@ class Robot(pimm.ControlSystem):
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
+        gravity_comp_factor: Sequence[float] | None = None,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -575,7 +588,11 @@ class Robot(pimm.ControlSystem):
         :param park_tuning: How the park settles onto the parking pose on this arm (``SettleTuning``).
         :param move_tuning: How a blocking ``sync_move`` settles onto its target on this arm. Streamed commands
             go to the chain as they come, with no ramp and no correction.
-        :param connect: ``(channel, sim) -> i2rt Robot`` factory; the fake-mode smoke injects ``_FakeYam``.
+        :param gravity_comp_factor: One factor per arm joint, scaling the gravity torque i2rt compensates.
+            None keeps i2rt's own. A joint that reads a steady offset below where it was sent is under-
+            compensated, and the offset is what it carries divided by its position gain.
+        :param connect: ``(channel, sim, gravity_comp_factor) -> i2rt Robot`` factory; the fake-mode smoke
+            injects ``_FakeYam``.
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
             raise ValueError('park_after_idle_s must be finite and positive, or None')
@@ -585,6 +602,7 @@ class Robot(pimm.ControlSystem):
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
+        self._gravity_comp_factor = None if gravity_comp_factor is None else np.asarray(gravity_comp_factor, float)
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
@@ -620,7 +638,7 @@ class Robot(pimm.ControlSystem):
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         }
         fault = None
-        with _opened(self._connect, self._channel, self._sim) as vendor:
+        with _opened(self._connect, self._channel, self._sim, self._gravity_comp_factor) as vendor:
             arm = _Arm(
                 vendor,
                 self.sync_move,
@@ -764,7 +782,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     fake = _FakeYam() if args.fake else None
-    robot = Robot(args.channel, sim=args.sim, connect=(lambda channel, sim: fake) if args.fake else _connect)
+    fake_connect = (lambda channel, sim, gravity_comp_factor: fake) if args.fake else _connect
+    robot = Robot(args.channel, sim=args.sim, connect=fake_connect)
 
     with pimm.World() as world:
         commands = world.pair(robot.commands)

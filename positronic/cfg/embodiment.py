@@ -81,6 +81,7 @@ def yam(robot_arm, cameras):
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -91,6 +92,7 @@ def yam_bimanual(
     left_channel: str,
     right_channel: str,
     mounts: dict[str, list[float]],
+    gravity_comp_factor: list[float] | None,
     cameras,
     park_after_idle_s: float | None,
     park_tuning: dict[str, SettleTuning],
@@ -114,6 +116,7 @@ def yam_bimanual(
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
+            gravity_comp_factor=gravity_comp_factor,
         )
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
