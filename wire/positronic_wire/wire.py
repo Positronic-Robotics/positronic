@@ -15,8 +15,7 @@ from typing import ClassVar, Generic, Self, TypeVar
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The model route, served under the HTTP API: the route it answers on, and the key it answers under. It
-# answers the one checkpoint the server serves.
+# The model route under the HTTP API, and the key it answers the server's one checkpoint under.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
 MODELS_KEY = 'models'
