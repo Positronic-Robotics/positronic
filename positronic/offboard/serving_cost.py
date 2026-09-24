@@ -1,14 +1,17 @@
 """Where one inference's time goes, divided by the phases the server reports.
 
 Replays a recorded episode against a server and reports what each round trip cost beside what the
-server says it spent. Each run prints the stack it sent through: the one the ``--server_host``
+server says it spent. Each run prints the stack it sent through: the one the ``--server_address``
 server declares in its handshake, or the one the flags below build for the loopback server.
 
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
         --dataset.path=<episode root> --requests=20
-    ... --server_host=<endpoint> --headers=@positronic.cfg.policy.bearer_headers   # a served endpoint
-    ... --server_wire=websocket --server_port=8000   # a plain server started by hand
+    ... --server_address=@positronic.cfg.policy.network_address --server_address.host=<endpoint> \
+        --server_address.port=443 --headers=@positronic.cfg.policy.bearer_headers   # a served endpoint
+    ... --server_wire=websocket --server_address=@positronic.cfg.policy.network_address   # started by hand
+    ... --server_wire=websocket_unix --server_address=@positronic.cfg.policy.socket_address \
+        --server_address.uds=<socket>     # a server on this machine
     ... --compress_images=False           # loopback only: send raw stacks instead of per-frame JPEG
     ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
 """
@@ -162,17 +165,16 @@ class Measured(NamedTuple):
 
 @contextlib.contextmanager
 def against_server(
-    wire_name: str, host: str, port: int, model: str, query: str, headers: dict[str, str] | None = None
+    wire_name: str, address: wire.SessionAddress, headers: dict[str, str] | None = None
 ) -> Iterator[Measured]:
     """A session on the named server, running the stack and wire settings that server declares.
 
-    ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), and ``model`` names
-    the checkpoint — empty for the one the server pinned. ``headers`` carries the credential a served
-    endpoint asks for; a run that names none sends none, so ``--server_host`` cannot hand a token to a
-    host the operator did not mean to authenticate to.
+    ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), and ``address`` is
+    the one that wire dials. ``headers`` carries the credential a served endpoint asks for; a run that
+    names none sends none, so ``--server_address`` cannot hand a token to a host the operator did not
+    mean to authenticate to.
     """
     client_wire = registry.client_wire(wire_name)
-    address = wire.HostPortAddress(host, port, wire.session_path(model), query)
     session = InferenceClient(client_wire, address, headers=headers).new_session()
     try:
         meta = session.metadata
@@ -255,11 +257,8 @@ def report(rows: list[dict[str, float]]) -> str:
     dataset=positronic.cfg.ds.local,
     episode=0,
     requests=20,
-    server_host=None,
+    server_address=None,
     server_wire='websocket_tls',
-    server_port=443,
-    server_model='',
-    server_query='',
     headers=None,
     frames=25,
     rate_hz=15.0,
@@ -274,11 +273,8 @@ def main(
     dataset: Dataset,
     episode: int,
     requests: int,
-    server_host: str | None,
+    server_address: wire.SessionAddress | None,
     server_wire: str,
-    server_port: int,
-    server_model: str,
-    server_query: str,
     headers: dict[str, str] | None,
     frames: int,
     rate_hz: float,
@@ -297,14 +293,14 @@ def main(
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
 
     opened = (
-        against_server(server_wire, server_host, server_port, server_model, server_query, headers)
-        if server_host
+        against_server(server_wire, server_address, headers)
+        if server_address is not None
         else against_loopback(rig_stack(cameras, frames, rate_hz, width, height), compress_images, chunk_rows)
     )
     with opened as measured:
         print(f'stack: {json.dumps(measured.stack.to_spec())}')
         # The declared stack chooses for a named server; the flags do it here, so nothing unasked-for is sent.
-        selected = None if server_host else cameras
+        selected = None if server_address is not None else cameras
         payloads = capture(observations(chosen, rate_hz, selected), measured.stack, model, requests)
         if not payloads:
             raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
@@ -312,7 +308,7 @@ def main(
         replay(measured.session, payloads[:1], measured.compress_images)  # warm up, so no first touch is timed
         rows = replay(measured.session, payloads, measured.compress_images)
 
-    source = 'declared by the server' if server_host else 'built from the flags'
+    source = 'declared by the server' if server_address is not None else 'built from the flags'
     print(
         f'\n{len(rows)} requests against {measured.target}, stack {source}, '
         f'compress_images={measured.compress_images}\n'

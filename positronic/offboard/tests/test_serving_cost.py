@@ -104,7 +104,7 @@ def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
     """The probe sends what the server's handshake declares, not what its own flags would build."""
     served = start_server(_declared_deployment())
 
-    with against_server('websocket', served.host, served.port, '', '') as measured:
+    with against_server('websocket', served.ws()[1]) as measured:
         assert measured.compress_images, 'the wire setting comes from the handshake too'
         payloads = capture(_ticks(40, size=(360, 640)), measured.stack, _model(), requests=2)
         rows = replay(measured.session, payloads, measured.compress_images)
@@ -125,7 +125,7 @@ def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
     served = start_server(_declared_deployment())
     gripless = ((ts, {key: value for key, value in obs.items() if key != keys.GRIP}) for ts, obs in _ticks(12))
 
-    with against_server('websocket', served.host, served.port, '', '') as measured:
+    with against_server('websocket', served.ws()[1]) as measured:
         with pytest.raises(ValueError, match="asks for 'grip'"):
             capture(gripless, measured.stack, _model(), requests=1)
 
@@ -175,8 +175,19 @@ def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_serv
     monkeypatch.setenv(AUTH_TOKEN_ENV, token)
     served = start_server(_declared_deployment(), auth_token=token)
 
-    with pytest.raises(wire.ConnectRefused), against_server('websocket', served.host, served.port, '', ''):
+    with pytest.raises(wire.ConnectRefused), against_server('websocket', served.ws()[1]):
         pass
 
-    with against_server('websocket', served.host, served.port, '', '', bearer_headers.instantiate()) as measured:
+    with against_server('websocket', served.ws()[1], bearer_headers.instantiate()) as measured:
         assert measured.stack is not None, 'the offered credential opened the session'
+
+
+def test_a_server_on_a_socket_is_measured_through_the_wire_that_dials_it(start_server, socket_path):
+    """A socket wire dials a socket address, so the probe takes the address the chosen wire names."""
+    served = start_server(_declared_deployment(), uds=socket_path)
+
+    with against_server('websocket_unix', served.unix()[1]) as measured:
+        payloads = capture(_ticks(12), measured.stack, _model(), requests=1)
+        rows = replay(measured.session, payloads, measured.compress_images)
+
+    assert len(rows) == len(payloads) == 1
