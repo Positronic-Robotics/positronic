@@ -72,35 +72,45 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, '__init__', with_transport)
     monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
-    monkeypatch.setenv('OPENAI_BASE_URL', 'https://test.invalid/v1')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://endpoint-secret.invalid/path-secret/v1')
     policy = llm(model='openai-chat:test-model')
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
         complete(active, rt, clock, observation())
         meta = policy.meta() | rt.metadata
     assert len(requests) == 2
-    assert requests[0].url.host == 'test.invalid'
+    assert requests[0].url.host == 'endpoint-secret.invalid'
+    assert requests[0].url.path == '/path-secret/v1/chat/completions'
     assert requests[0].headers['authorization'] == 'Bearer test-secret-do-not-record'
     body = json.loads(requests[0].content)
     assert 'data:image/png;base64,' in str(body['messages'])
     assert {tool['function']['name'] for tool in body['tools']} == {'move_to', 'done', 'give_up'}
     assert meta['stop_reason'] == 'done'
-    assert 'test-secret-do-not-record' not in json.dumps(meta)
+    recorded = json.dumps(meta)
+    assert 'test-secret-do-not-record' not in recorded
+    assert 'base_url' not in meta
+    assert 'endpoint-secret' not in recorded
+    assert 'path-secret' not in recorded
     assert clients and all(client.is_closed for client in clients)
 
 
-def test_run_records_compact_reply_and_usage():
+def test_run_records_compact_reply_and_usage(monkeypatch):
     def respond(messages, info):
         return ModelResponse(
             [ThinkingPart('private reasoning', signature='native-signature'), TextPart('Finished.'), *finish().parts],
             usage=RequestUsage(input_tokens=100, output_tokens=20),
         )
 
-    with execution(llm(model=FunctionModel(respond))) as (active, rt, clock):
+    monkeypatch.setattr(FunctionModel, 'base_url', property(lambda _: 'https://endpoint-secret.invalid/path-secret/v1'))
+    policy = llm(model=FunctionModel(respond))
+    with execution(policy) as (active, rt, clock):
         clock.advance_to_ns(1000)
         complete(active, rt, clock, observation())
-        meta = rt.metadata
+        meta = policy.meta() | rt.metadata
     recorded = json.dumps(meta)
+    assert 'base_url' not in meta
+    assert 'endpoint-secret' not in recorded
+    assert 'path-secret' not in recorded
     assert 'private reasoning' not in recorded
     assert 'native-signature' not in recorded
     assert 'iVBOR' not in recorded
@@ -116,7 +126,7 @@ def test_run_records_compact_reply_and_usage():
 
 
 @pytest.mark.parametrize('base_url', ['https://key@example.com', 'https://example.com?key=secret', 'file:///tmp/api'])
-def test_endpoint_rejects_credentials_in_recorded_url(monkeypatch, base_url):
+def test_endpoint_rejects_userinfo_query_and_non_http_urls(monkeypatch, base_url):
     monkeypatch.setattr(FunctionModel, 'base_url', property(lambda _: base_url))
     with pytest.raises(ValueError, match='base_url'):
         Endpoint(FunctionModel(lambda messages, info: finish()))

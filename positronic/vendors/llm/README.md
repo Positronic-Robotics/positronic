@@ -51,7 +51,7 @@ policy = llm(
 )
 ```
 
-`--policy.settings` accepts [Pydantic AI model settings](https://ai.pydantic.dev/api/settings/), including provider-specific options. These override defaults on a configured model and are recorded with the episode. Put authentication and transport configuration on the provider, not in these recorded settings. Model URLs containing credentials or query parameters are rejected.
+`--policy.settings` accepts [Pydantic AI model settings](https://ai.pydantic.dev/api/settings/), including provider-specific options. These override defaults on a configured model and are recorded with the episode. Put authentication and transport configuration on the provider, not in these recorded settings. Endpoint URLs must use HTTP(S) and have no userinfo, query parameters, or fragments.
 
 Provider-specific behavior follows the library defaults. The example explicitly sets `openai_store=False` to disable OpenAI response storage. Conversation history belongs to each episode; do not configure server-side conversation IDs shared across episodes.
 
@@ -98,7 +98,7 @@ Translation is linear and rotation follows the shortest spherical interpolation.
 
 ## Recordings and lifecycle
 
-Each episode buffers a compact transcript in `Runtime.metadata`. The harness copies this metadata when the episode ends. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Without an output directory, the transcript remains in memory.
+Each episode buffers a compact transcript in `Runtime.metadata`. The harness copies this metadata when the episode ends. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Endpoint URLs are not recorded. Without an output directory, the transcript remains in memory.
 
 Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
 

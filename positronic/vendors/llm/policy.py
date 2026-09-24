@@ -349,7 +349,7 @@ class LLMPolicy(Policy):
         ]
 
     def meta(self) -> dict[str, Any]:
-        meta = {
+        return {
             policy_keys.TYPE: 'llm',
             'model': self.endpoint.model.model_id,
             'settings': dict(self.endpoint.settings),
@@ -362,9 +362,6 @@ class LLMPolicy(Policy):
             'image_size': self.image_size,
             'image_horizon': self.image_horizon,
         }
-        if self.endpoint.model.base_url is not None:
-            meta['base_url'] = self.endpoint.model.base_url
-        return meta
 
     def run(self, runtime: Runtime) -> PolicyRun:
         conversation = self._Conversation(self)
