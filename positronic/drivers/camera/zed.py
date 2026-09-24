@@ -14,6 +14,43 @@ with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
 
 logger = logging.getLogger(__name__)
 
+REBOOTED_CAMERA_POLL_SEC = 0.5
+REBOOTED_CAMERA_MAX_POLLS = 60
+
+
+def _is_listed(serial: int) -> bool:
+    with device_open_lock():
+        devices = sl.Camera.get_device_list()
+    return any(device.serial_number == serial for device in devices)
+
+
+def _lost_by_the_sdk(error_code, serial: int) -> bool:
+    return error_code == sl.ERROR_CODE.CAMERA_NOT_DETECTED or not _is_listed(serial)
+
+
+def _reboot_and_reopen(zed, init_params, serial: int, failure: str) -> Iterator[pimm.Sleep]:
+    """Reboot the camera over its HID half, with no replug, wait until the SDK lists it again, and open it once.
+
+    The SDK refuses the reboot for a model that does not support it, such as the ZED Mini.
+    """
+    logger.warning(f'The SDK cannot find camera {serial}; rebooting it')
+    with device_open_lock():
+        result = sl.Camera.reboot(serial)
+    if result != sl.ERROR_CODE.SUCCESS:
+        raise RuntimeError(f'{failure}; the SDK did not reboot camera {serial}: {result}')
+    for _ in range(REBOOTED_CAMERA_MAX_POLLS):
+        if _is_listed(serial):
+            break
+        yield pimm.Sleep(REBOOTED_CAMERA_POLL_SEC)
+    else:
+        raise RuntimeError(f'{failure}; camera {serial} is still not listed after its reboot')
+    logger.info(f'Camera {serial} is listed again after its reboot')
+    with device_open_lock():
+        error_code = zed.open(init_params)
+    if error_code != sl.ERROR_CODE.SUCCESS:
+        raise RuntimeError(f'Failed to open camera {serial} after its reboot: {error_code}')
+    logger.info(f'Opened camera {serial} after its reboot')
+
 
 class SLCamera(pimm.ControlSystem):
     def __init__(
@@ -75,8 +112,12 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mask_adapter = None  # Lazy init
 
     @staticmethod
-    def _open_under_device_lock(zed, init_params) -> Iterator[pimm.Sleep]:
-        """Open the camera, retrying: the lock binds only openers that take it, so an open can still lose the bus."""
+    def _open_under_device_lock(zed, init_params, reboot_serial: int | None) -> Iterator[pimm.Sleep]:
+        """Open the camera, retrying: the lock binds only openers that take it, so an open can still lose the bus.
+
+        When the retries fail and the SDK cannot find the camera ``reboot_serial`` names, the camera is rebooted once
+        and opened once more.
+        """
         OPEN_ATTEMPTS = 3
         OPEN_RETRY_SEC = 1.0
         for attempt in range(1, OPEN_ATTEMPTS + 1):
@@ -84,10 +125,14 @@ class SLCamera(pimm.ControlSystem):
                 error_code = zed.open(init_params)
             if error_code == sl.ERROR_CODE.SUCCESS:
                 return
-            if attempt == OPEN_ATTEMPTS:
-                raise RuntimeError(f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}')
             logger.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
-            yield pimm.Sleep(OPEN_RETRY_SEC)
+            if attempt < OPEN_ATTEMPTS:
+                yield pimm.Sleep(OPEN_RETRY_SEC)
+                continue
+            failure = f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}'
+            if reboot_serial is None or not _lost_by_the_sdk(error_code, reboot_serial):
+                raise RuntimeError(failure)
+            yield from _reboot_and_reopen(zed, init_params, reboot_serial, failure)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         SUCCESS = sl.ERROR_CODE.SUCCESS
@@ -129,7 +174,9 @@ class SLCamera(pimm.ControlSystem):
             )
 
         zed = sl.CameraOne() if self._mono else sl.Camera()
-        yield from self._open_under_device_lock(zed, init_params)
+        # `sl.Camera.reboot` serves the stereo models; a mono camera is not rebooted.
+        reboot_serial = None if self._mono else self._serial_number
+        yield from self._open_under_device_lock(zed, init_params, reboot_serial)
 
         self.recovery_start_time = None
 
