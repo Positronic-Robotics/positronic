@@ -11,11 +11,17 @@ from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
-from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
+from positronic.vendors.molmoact2.policy import (
+    BIMANUAL_YAM_STATE_DIM,
+    DROID_STATE_DIM,
+    MolmoAct2Model,
+    warm_observation,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HF_REPO = 'allenai/MolmoAct2-DROID'
+BIMANUAL_YAM_HF_REPO = 'allenai/MolmoAct2-BimanualYAM'
 
 
 class MolmoAct2Source(ModelSource):
@@ -28,8 +34,10 @@ class MolmoAct2Source(ModelSource):
         device_map: str = 'auto',
         norm_tag: str = 'franka_droid',
         num_steps: int = 10,
+        state_dim: int = DROID_STATE_DIM,
     ):
         self._hf_repo = hf_repo
+        self._state_dim = state_dim
         self._device_map = device_map
         self._norm_tag = norm_tag
         self._num_steps = num_steps
@@ -47,7 +55,7 @@ class MolmoAct2Source(ModelSource):
         policy = MolmoAct2Model(
             self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
         )
-        warmup(policy, warm_observation(), on_progress)
+        warmup(policy, warm_observation(self._state_dim), on_progress)
         return policy
 
 
@@ -63,13 +71,23 @@ def pipeline(codec: Codec, source: ModelSource, fps: float = 15.0, horizon_sec: 
 
 droid = pipeline
 droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
+# The checkpoint predicts 30 steps at 30 Hz; the upstream YAM example executes the first 25 of them.
+yam_bimanual = pipeline.override(
+    codec=molmoact2_codecs.yam_bimanual,
+    source=molmoact2_source.override(
+        hf_repo=BIMANUAL_YAM_HF_REPO, norm_tag='yam_dual_molmoact2', state_dim=BIMANUAL_YAM_STATE_DIM
+    ),
+    fps=30.0,
+    horizon_sec=25 / 30,
+)
 
 
-# Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
+# Every pipeline is a subcommand and pins its own checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
 COMMANDS = {
     **{k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')},
     'droid_3cam': serve.override(pipeline=droid_3cam),
+    'yam_bimanual': serve.override(pipeline=yam_bimanual),
 }
 
 

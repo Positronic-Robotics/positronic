@@ -10,18 +10,18 @@ from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION
 from positronic.vendors import molmoact2
 
-# The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
-# serves, at the 378x378 the model tiles every image to.
+# Both checkpoints take three views, at the 378x378 the model tiles every image to.
 _NUM_VIEWS = 3
 _IMAGE_SIZE = (378, 378)
-_STATE_DIM = 8
+DROID_STATE_DIM = 8  # [joint_positions(7), grip(1)]
+BIMANUAL_YAM_STATE_DIM = 14  # per arm, left first: [joint_positions(6), gripper_width(1)]
 
 
-def warm_observation() -> dict[str, Any]:
+def warm_observation(state_dim: int = DROID_STATE_DIM) -> dict[str, Any]:
     """Zero-filled inputs one inference can run on, so the model's first-call cost is paid before it serves."""
     return {
         molmoact2.IMAGES: [np.zeros((*_IMAGE_SIZE, 3), dtype=np.uint8) for _ in range(_NUM_VIEWS)],
-        molmoact2.STATE: np.zeros(_STATE_DIM, dtype=np.float32),
+        molmoact2.STATE: np.zeros(state_dim, dtype=np.float32),
         molmoact2.TASK: '',
     }
 
