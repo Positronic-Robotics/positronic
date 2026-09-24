@@ -135,8 +135,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._frame_timestamps: list[int] = []
         self._extra_timelines: dict[str, list[int]] = defaultdict(list)
 
-        # Encoding runs on a per-writer thread (an encoder releases the GIL), so several writers — e.g. one per
-        # camera — encode concurrently while ``append`` stays a validate-copy-enqueue. The queue bound gives
+        # Several writers — e.g. one per camera — encode concurrently: each runs its encoder on its own thread,
+        # the encoder releases the GIL, and ``append`` stays a validate-copy-enqueue. The queue bound gives
         # backpressure instead of unbounded memory when the encoder can't keep up.
         self._frames: queue.Queue[tuple[np.ndarray, int] | None] = queue.Queue(maxsize=8)
         self._encoder_thread: threading.Thread | None = None
@@ -248,7 +248,10 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             if self._encoder_error is not None:
                 self._session.abort()
                 raise RuntimeError('Video encoding failed') from self._encoder_error
-            self._session.finish()
+            try:
+                self._session.finish()
+            except Exception as e:
+                raise RuntimeError('Video encoding failed') from e
 
         # Write frame index with primary timestamp and extra timelines
         data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}

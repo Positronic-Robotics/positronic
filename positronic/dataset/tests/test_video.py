@@ -145,6 +145,10 @@ class TestVideoSignalWriter:
             w.append(frame, 2000)
 
 
+# ``FakeEncoder.fail_at`` value that fails the flush rather than a frame
+FINISH = -1
+
+
 @dataclass
 class FakeSession:
     path: Path
@@ -158,6 +162,8 @@ class FakeSession:
         self.writes.append((index, int(frame[0, 0, 0])))
 
     def finish(self) -> None:
+        if self.fail_at == FINISH:
+            raise OSError('flush failed')
         self.ended = 'finish'
 
     def abort(self) -> None:
@@ -211,7 +217,7 @@ class TestVideoEncoderSeam:
 
     def test_an_encoder_error_surfaces_on_append(self, video_paths):
         w = VideoSignalWriter(video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=0))
-        # The queue holds 8 frames, so an append past them waits for the failed write and sees its error.
+        # An append past the 8 queued frames waits for the failed write and sees its error.
         with pytest.raises(RuntimeError, match='Video encoding failed'):
             for i in range(20):
                 w.append(create_frame(i), 1000 * (i + 1))
@@ -225,6 +231,12 @@ class TestVideoEncoderSeam:
         with pytest.raises(RuntimeError, match='Video encoding failed'):
             w.__exit__(None, None, None)
         assert encoder.sessions[0].ended == 'abort'
+
+    def test_a_failed_finish_surfaces_on_exit(self, video_paths):
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=FINISH))
+        w.append(create_frame(0), 1000)
+        with pytest.raises(RuntimeError, match='Video encoding failed'):
+            w.__exit__(None, None, None)
 
 
 class TestLibavEncoder:
