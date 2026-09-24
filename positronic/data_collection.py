@@ -22,6 +22,7 @@ from positronic import geom, keys, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
@@ -276,7 +277,7 @@ def main(
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
-    video_options: dict[str, str] | None = None,
+    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -303,13 +304,14 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
+        video_encoder.ensure_available()
         output_path = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
 
-    dataset_factory = partial(LocalDatasetWriter, video_options=video_options) if output_path is not None else None
+    dataset_factory = partial(LocalDatasetWriter, video_encoder=video_encoder) if output_path is not None else None
     with pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_factory, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -435,7 +437,7 @@ def so101cfg(robot_arm, **kwargs):
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
     # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
-    video_options={'preset': 'ultrafast', 'tune': 'zerolatency'},
+    video_encoder=cfn.Config(LibavEncoder, options=(('preset', 'ultrafast'), ('tune', 'zerolatency'))),
 )
 def yamcfg(robot_arm, **kwargs):
     """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""

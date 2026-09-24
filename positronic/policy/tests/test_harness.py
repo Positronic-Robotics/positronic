@@ -21,6 +21,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
@@ -932,6 +933,27 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
     assert 2 in np.diff(list(positions.values()))
+
+
+def test_recorder_refuses_an_encoder_this_host_cannot_run():
+    class AbsentEncoder(LibavEncoder):
+        def ensure_available(self) -> None:
+            raise RuntimeError('no such encoder here')
+
+    with pimm.World(virtual_time=True) as world:
+        motion = Motion()
+        embodiment = Embodiment(
+            descriptor='recording-test',
+            observations={POSITION: Observation(motion.position, None)},
+            commands={MOTOR: Command(motion.command, None)},
+            prepare_handlers={},
+            static_meta={},
+            meta_source=None,
+            simulated=True,
+            video_encoder=AbsentEncoder(),
+        )
+        with pytest.raises(RuntimeError, match='no such encoder here'):
+            wire.wire_embodiment(world, Harness(embodiment), embodiment, TimeMode.MESSAGE)
 
 
 def test_cartesian_delta_wire_roundtrip():
