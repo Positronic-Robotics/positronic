@@ -135,6 +135,7 @@ class PolicyServer:
         self._auth_token = auth_token
 
         self._api = APIRouter()
+        # TODO: positronic#754 removes this route; `/api/v1/ready` replaces it as the readiness check.
         self._api.get(wire.MODELS_PATH, dependencies=[Depends(self._require_http_auth)])(self.get_models)
 
     @property
