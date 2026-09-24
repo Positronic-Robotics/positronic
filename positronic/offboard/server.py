@@ -312,6 +312,7 @@ class PolicyServer:
 
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
+            await asyncio.to_thread(self._load)
             # A wire binds when it starts; the ``finally`` stops every started one, even when a later one cannot bind.
             started: list[server_wire.Wire] = []
             serving: list[asyncio.Task] = []
@@ -340,7 +341,6 @@ class PolicyServer:
             self._raise_first_wire_failure(started, outcomes)
 
         try:
-            self._load()
             asyncio.run(_run())
         except KeyboardInterrupt:
             logger.info('Server stopped by user')

@@ -922,3 +922,32 @@ def test_shutdown_closes_the_loaded_model(start_server, make_mock_model):
     served.server.shutdown()
     assert closed.wait(timeout=5)
     model.close.assert_called_once()
+
+
+class _HeldSource(ReadySource):
+    """Holds ``load`` until the test releases it."""
+
+    def __init__(self, policy: Model):
+        super().__init__(policy)
+        self.loading = threading.Event()
+        self.release = threading.Event()
+
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        self.loading.set()
+        assert self.release.wait(timeout=10.0), 'the test never released the load'
+        return super().load(checkpoint_id, on_progress)
+
+
+def test_a_shutdown_during_the_load_ends_the_server_once_it_loads(make_mock_model):
+    source = _HeldSource(make_mock_model([], {}))
+    server = PolicyServer(PolicyDeployment(source, ChunkedSchedule(fps=10)))
+    wire_ = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
+    serving = threading.Thread(target=server.serve, args=([wire_],), daemon=True)
+    serving.start()
+    assert source.loading.wait(timeout=5.0)
+
+    server.shutdown()
+    source.release.set()
+
+    serving.join(timeout=10.0)
+    assert not serving.is_alive(), 'the shutdown asked for during the load was lost'
