@@ -124,11 +124,11 @@ so the grammar admits only a value the wire can write as it is:
 |---|---|---|
 | `host` | A hostname: labels of letters, digits, `-` and `_`, joined by `.`, with an optional last `.`. Or an IPv4 address, or an IPv6 address with no brackets | A scheme, a port, a path, userinfo, brackets, an IPv6 zone index, any other character. The wire adds the brackets that an IPv6 address needs |
 | `port` | An integer from 1 to 65535 | Any other value |
-| `path` | The session route: `/` first, then visible ASCII characters (`!` to `~`) | No leading `/`, a `?`, a `#`, a space, any other character |
+| `path` | The session route, `/api/v1/session` | Any other route, a checkpoint appended to it included |
 | `query` | The session params with no leading `?`, in visible ASCII characters. Empty by default | A leading `?`, a `#`, a space, any other character |
 | `uds` | An absolute socket path | A relative path, a NUL byte |
 
-Percent-encode a character that `path` or `query` refuses: a space is `%20`, and `#` is `%23`.
+Percent-encode a character that `query` refuses: a space is `%20`, and `#` is `%23`.
 
 `positronic eval run --from-file` files that plan with `submissions.create`. The file is YAML or
 JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
