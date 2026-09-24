@@ -19,7 +19,9 @@ TIMESTAMP = 'timestamp'
 WALL_TIME_NS = 'wall_time_ns'
 ACTION_TIMESTAMP = 'action_timestamp'
 ACTION_HORIZON = 'action_horizon'
-V1_LAYER_NAMES = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_NAME)
+V1_FPS_ARG = 'fps'
+V1_HORIZON_SEC_ARG = 'horizon_sec'
+V1_LAYERS_UPGRADED_IN_PLACE = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_NAME)
 V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 
 logger = logging.getLogger(__name__)
@@ -46,9 +48,9 @@ class ChunkFromV1Answer(Codec):
         return [{key: row[key] for key in row if key != TIMESTAMP} for row in rows if set(row) != {TIMESTAMP}]
 
 
-def _flat_parts(node: dict[str, Any]) -> list[dict[str, Any]]:
+def _unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
     if SEQ in node:
-        return [part for child in node[SEQ] for part in _flat_parts(child)]
+        return [part for child in node[SEQ] for part in _unnest_seq(child)]
     return [node]
 
 
@@ -60,31 +62,31 @@ def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Proces
     """Build the stack a protocol v1 server declares, from its spec and its handshake metadata."""
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
-    for part in _flat_parts(node):
+    for part in _unnest_seq(node):
         if _is_v1(part, ACTION_TIMESTAMP):
-            timing['fps'] = part[ARGS]['fps']
+            timing[ChunkedSchedule.FPS_ARG] = part[ARGS][V1_FPS_ARG]
         elif _is_v1(part, ACTION_HORIZON):
-            timing['horizon_sec'] = part[ARGS]['horizon_sec']
-        elif part.get(VERSION, 1) == 1 and part.get(NAME) in V1_LAYER_NAMES:
+            timing[ChunkedSchedule.HORIZON_SEC_ARG] = part[ARGS][V1_HORIZON_SEC_ARG]
+        elif part.get(VERSION, 1) == 1 and part.get(NAME) in V1_LAYERS_UPGRADED_IN_PLACE:
             parts.append({**part, VERSION: 2})
         else:
             parts.append(part)
-    if 'fps' not in timing:
+    if ChunkedSchedule.FPS_ARG not in timing:
         if policy_keys.ACTION_FPS not in server_meta:
             logger.warning(
                 'The v1 server declares no action_timestamp and sends no action_fps; the client assumes %s '
                 'actions per second. Rebuild the server on current positronic so that it declares its rate.',
                 V1_SERVER_DEFAULT_ACTION_FPS,
             )
-        timing['fps'] = server_meta.get(policy_keys.ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
-    if 'horizon_sec' not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
-        timing['horizon_sec'] = server_meta[policy_keys.ACTION_HORIZON_SEC]
+        timing[ChunkedSchedule.FPS_ARG] = server_meta.get(policy_keys.ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
+    if ChunkedSchedule.HORIZON_SEC_ARG not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
+        timing[ChunkedSchedule.HORIZON_SEC_ARG] = server_meta[policy_keys.ACTION_HORIZON_SEC]
 
     schedule = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: timing}
     positions = [i for i, part in enumerate(parts) if _is_v1(part, ChunkedSchedule.WIRE_NAME)]
     if positions:
         parts[positions[0]] = schedule
     else:
-        layers = [i for i, part in enumerate(parts) if part.get(NAME) in V1_LAYER_NAMES]
+        layers = [i for i, part in enumerate(parts) if part.get(NAME) in V1_LAYERS_UPGRADED_IN_PLACE]
         parts.insert(layers[-1] + 1 if layers else 0, schedule)
     return Sequential(StampObservationTimes(), from_spec({SEQ: parts}), ChunkFromV1Answer())
