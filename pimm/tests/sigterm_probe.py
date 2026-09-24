@@ -14,6 +14,9 @@ import time
 from pimm.core import ControlSystem, ShutdownPolicy, Sleep
 from pimm.world import World
 
+CHILD_PID_FILE = 'child.pid'
+SHUT_DOWN_FILE = 'shut_down'
+
 
 class Marker(ControlSystem):
     shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
@@ -22,10 +25,10 @@ class Marker(ControlSystem):
         self.directory = pathlib.Path(directory)
 
     def run(self, should_stop, clock):
-        (self.directory / 'child.pid').write_text(str(os.getpid()))
+        (self.directory / CHILD_PID_FILE).write_text(str(os.getpid()))
         while not should_stop.value:
             yield Sleep(0.01)
-        (self.directory / 'shut_down').write_text('')
+        (self.directory / SHUT_DOWN_FILE).write_text('')
 
 
 if __name__ == '__main__':

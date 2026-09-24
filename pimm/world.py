@@ -467,20 +467,20 @@ class _CallAnsweringLoop:
 
 
 _ORPHAN_POLL_S = 0.5
+_DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
 def _exit_on_sigterm(signum, frame) -> None:
     raise SystemExit(128 + signum)
 
 
-def _stop_when_orphaned(stop_event: EventClass, name: str) -> None:
+def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
     """Stop this child's World once its parent is gone, so the child runs its own shutdown and exits."""
-    parent = os.getppid()
 
     def watch() -> None:
         while not stop_event.is_set():
-            if os.getppid() != parent:
-                logger.warning(f'{name}: the parent process {parent} is gone; stopping')
+            if os.getppid() != parent_pid:
+                logger.warning(f'{name}: the parent process {parent_pid} is gone; stopping')
                 stop_event.set()
                 return
             time.sleep(_ORPHAN_POLL_S)
@@ -495,11 +495,13 @@ def _bg_wrapper(
     name: str,
     parent_component_levels: Mapping[str, int],
     shutdown_policy: ShutdownPolicy,
+    parent_pid: int,
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
-        # Ctrl-C stops the parent World; the device must complete its own shutdown before losing control.
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-    _stop_when_orphaned(stop_event, name)
+        # Ctrl-C or a SIGTERM stops the parent World; the device must complete its own shutdown before losing control.
+        for signum in _DEFERRED_SIGNALS:
+            signal.signal(signum, signal.SIG_IGN)
+    _stop_when_orphaned(stop_event, name, parent_pid)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
@@ -623,7 +625,7 @@ class World:
             raise BaseExceptionGroup('Background shutdown interrupted', errors)
 
     @contextlib.contextmanager
-    def _defer_sigint(self, errors: list[BaseException], *, registering_protected: bool = False) -> Iterator[None]:
+    def _defer_signals(self, errors: list[BaseException], *, registering_protected: bool = False) -> Iterator[None]:
         has_protected_systems = (
             registering_protected
             or bool(self._protected_foreground_loops)
@@ -632,24 +634,29 @@ class World:
         if not has_protected_systems or threading.current_thread() is not threading.main_thread():
             yield
             return
-        previous = signal.getsignal(signal.SIGINT)
-        if previous is None or previous == signal.SIG_IGN:
-            yield
-            return
+        previous = {}
+        for signum in _DEFERRED_SIGNALS:
+            handler = signal.getsignal(signum)
+            # A SIGINT left at SIG_DFL replays as `default_int_handler`; any other non-Python handler is left alone.
+            if callable(handler) or (signum == signal.SIGINT and handler == signal.SIG_DFL):
+                previous[signum] = handler
         pending = []
 
         def defer(signum, frame):
             pending.append((signum, frame))
 
-        signal.signal(signal.SIGINT, defer)
+        for signum in previous:
+            signal.signal(signum, defer)
         try:
             yield
         finally:
-            signal.signal(signal.SIGINT, previous)
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
             for signum, frame in pending:
+                handler = previous[signum]
                 try:
-                    if callable(previous):
-                        previous(signum, frame)
+                    if callable(handler):
+                        handler(signum, frame)
                     else:
                         signal.default_int_handler(signum, frame)
                 except BaseException as exc:
@@ -658,7 +665,7 @@ class World:
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
         errors: list[BaseException] = []
-        with self._defer_sigint(errors):
+        with self._defer_signals(errors):
             logger.info('Stopping background processes...')
             self.request_stop()
             cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
@@ -907,7 +914,7 @@ class World:
         while True:
             errors: list[BaseException] = []
             command = None
-            with self._defer_sigint(errors):
+            with self._defer_signals(errors):
                 try:
                     command = next(loop, None)
                 except BaseException as exc:
@@ -1026,7 +1033,7 @@ class World:
         self._drive(self.start(main_process, background))
 
     def start_in_subprocess(
-        self, *background_loops: ControlLoop, shutdown_policy: ShutdownPolicy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
+        self, *background_loops: ControlLoop, shutdown_policy: ShutdownPolicy = ShutdownPolicy.BEST_EFFORT
     ):
         """Starts background control loops. Can be called multiple times for different control loops.
 
@@ -1041,13 +1048,21 @@ class World:
             # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels, shutdown_policy),
+                args=(
+                    bg_loop,
+                    self._stop_event,
+                    SystemClock(),
+                    name,
+                    parent_component_levels,
+                    shutdown_policy,
+                    os.getpid(),
+                ),
                 daemon=True,
                 name=name,
             )
             # A Ctrl-C between the spawn and the registration would leave a protected child unjoined.
             errors: list[BaseException] = []
-            with self._defer_sigint(
+            with self._defer_signals(
                 errors, registering_protected=shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION
             ):
                 self._spawn_and_register(p, name, shutdown_policy)

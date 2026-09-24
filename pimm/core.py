@@ -124,8 +124,10 @@ ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Command]]
 class ShutdownPolicy(Enum):
     """How the runtime stops a control system."""
 
-    TERMINATE_AFTER_TIMEOUT = auto()  # Background processes get 90 seconds to exit.
-    WAIT_FOR_COMPLETION = auto()  # Drain foreground loops; ignore background SIGINT and wait without killing.
+    BEST_EFFORT = auto()  # Foreground loops stop at once; background processes get 90 seconds, then are terminated.
+    WAIT_FOR_COMPLETION = (
+        auto()
+    )  # Drain foreground loops; children ignore SIGINT and SIGTERM; the parent waits, never kills.
 
 
 class ControlSystem(ABC):
@@ -142,7 +144,7 @@ class ControlSystem(ABC):
     ``Yield``, allowing the ``World`` interleaver to sequence multiple systems.
     """
 
-    shutdown_policy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
+    shutdown_policy = ShutdownPolicy.BEST_EFFORT
 
     @abstractmethod
     def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:

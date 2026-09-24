@@ -32,6 +32,7 @@ from pimm.core import (
 )
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
+from pimm.tests.sigterm_probe import CHILD_PID_FILE, SHUT_DOWN_FILE
 from pimm.tests.testing import MockClock
 from pimm.world import (
     EventReceiver,
@@ -42,6 +43,7 @@ from pimm.world import (
     SystemClock,
     VirtualClock,
     World,
+    _stop_when_orphaned,
 )
 
 
@@ -1731,7 +1733,7 @@ def test_custom_sigint_handler_runs_after_protected_shutdown_and_is_restored():
 def test_interrupted_post_terminate_join_still_waits_for_protected_sibling(monkeypatch):
     ctx = mp.get_context('spawn')
     ordinary, protected = [ShutdownWaiter(*(ctx.Event() for _ in range(4))) for _ in range(2)]
-    ordinary.shutdown_policy = ShutdownPolicy.TERMINATE_AFTER_TIMEOUT
+    ordinary.shutdown_policy = ShutdownPolicy.BEST_EFFORT
     timeouts = []
     with pytest.raises(KeyboardInterrupt):
         with World() as world:
@@ -1814,20 +1816,80 @@ def _gone(pid: int) -> bool:
         return True
 
 
-@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
-@pytest.mark.parametrize('parent_signal', [signal.SIGTERM, signal.SIGKILL])
-def test_a_signalled_parent_leaves_no_child_running(tmp_path, parent_signal):
-    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)])
-    child_pid_file = tmp_path / 'child.pid'
+def _wait_for_probe_child(parent: subprocess.Popen, directory) -> int:
+    child_pid_file = directory / CHILD_PID_FILE
     deadline = time.monotonic() + 60
     while not child_pid_file.exists():
         assert time.monotonic() < deadline and parent.poll() is None, 'the child never started'
         time.sleep(0.05)
-    child = int(child_pid_file.read_text())
-    parent.send_signal(parent_signal)
-    parent.wait(timeout=30)
+    return int(child_pid_file.read_text())
+
+
+def _wait_until_gone(pid: int) -> None:
     deadline = time.monotonic() + 30
-    while not _gone(child):
+    while not _gone(pid):
         assert time.monotonic() < deadline, 'the child outlived its parent'
         time.sleep(0.05)
-    assert (tmp_path / 'shut_down').exists()
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+@pytest.mark.parametrize('parent_signal', [signal.SIGTERM, signal.SIGKILL])
+def test_a_signalled_parent_leaves_no_child_running(tmp_path, parent_signal):
+    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)])
+    child = _wait_for_probe_child(parent, tmp_path)
+    parent.send_signal(parent_signal)
+    parent.wait(timeout=30)
+    _wait_until_gone(child)
+    assert (tmp_path / SHUT_DOWN_FILE).exists()
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+def test_a_sigterm_to_the_process_group_still_runs_the_protected_child_shutdown(tmp_path):
+    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)], start_new_session=True)
+    child = _wait_for_probe_child(parent, tmp_path)
+    os.killpg(parent.pid, signal.SIGTERM)
+    parent.wait(timeout=30)
+    _wait_until_gone(child)
+    assert (tmp_path / SHUT_DOWN_FILE).exists()
+
+
+def test_a_child_whose_parent_is_already_gone_stops_at_once():
+    stop = mp.get_context('spawn').Event()
+    _stop_when_orphaned(stop, 'probe', parent_pid=os.getpid())
+    assert stop.wait(5)
+
+
+def test_a_child_whose_parent_is_alive_keeps_running():
+    stop = mp.get_context('spawn').Event()
+    _stop_when_orphaned(stop, 'probe', parent_pid=os.getppid())
+    try:
+        assert not stop.wait(1.0)
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize('stop_before_signal', [False, True])
+def test_sigterm_during_foreground_step_preserves_protected_shutdown(stop_before_signal):
+    closed = []
+
+    class SignalledDevice(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            if stop_before_signal:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            signal.raise_signal(signal.SIGTERM)
+            yield Sleep(0.01)
+            while not should_stop.value:
+                yield Sleep(0.01)
+            closed.append(self)
+
+    device = SignalledDevice()
+    previous = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(SystemExit):
+        with World(virtual_time=True) as world:
+            world.run([device, Finisher(2)])
+    assert closed == [device]
+    assert signal.getsignal(signal.SIGTERM) is previous
