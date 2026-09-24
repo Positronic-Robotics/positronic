@@ -92,9 +92,9 @@ def observations(
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     """Replay time and observation for each sampled control tick.
 
-    Every signal the episode recorded goes in, so a declared stack finds whatever it asks for and the
-    harness names none either. ``cameras`` keeps only those, for a flag-built stack: it stacks the
-    cameras it was told about and forwards the rest at full size, which the wire then carries.
+    Every signal the episode recorded goes in, so a declared stack finds whatever it asks for.
+    ``cameras`` keeps only those, for a flag-built stack: it stacks the cameras it was told about and
+    forwards the rest at full size, which the wire then carries.
     """
     period_ns = int(1e9 / rate_hz)
     for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
