@@ -193,12 +193,16 @@ The client selects the exact registered implementation; it never substitutes a n
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-V1 stack support includes timestamped chunks, timing codecs, and cancellation of pending results
-on robot faults. Its adapter emits ordinary policy steps, subject to the harness's polling bounds
-and immediate command delivery. V1 trajectory processors and v2 Step processors have different
-output contracts and cannot share a sequence; unchanged v1 codecs compose with v2 processors.
-In a V1 stack, the codecs below the innermost layer run with submitted inference, once per request.
-A codec above a layer runs on every policy call.
+A protocol v1 server's stack runs as v2 processors. `stop_on_fault` v1 runs as `PauseOnUnavailable`,
+`temporal_stack` v1 as `TemporalStack`, and `chunked_schedule` v1 as one `ChunkedSchedule`. That
+schedule takes its rate and horizon from the declared `action_timestamp` and `action_horizon` codecs.
+A server that declares no `action_timestamp` stamps its own answers; the schedule then takes
+`action_fps` and `action_horizon_sec` from the handshake, and the client refuses a server that sends
+no `action_fps`. The client removes each answer's timestamps and its end row, and turns a single
+action into a one-row chunk. Codecs keep their declared positions. The client adds `obs_time_ns`
+and `wall_time_ns` to each observation. After a robot fault, the stack resumes its queued commands
+and its pending answer. Recovery after a fault is an open question:
+[positronic#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 
 Published versions have three states in the protocol and component registries:
 

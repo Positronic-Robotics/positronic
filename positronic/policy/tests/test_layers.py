@@ -396,7 +396,10 @@ def test_stack_and_codec_specs_round_trip(definition):
         ({'par': []}, ValueError),
         ({'par': [{'name': 'stop_on_fault'}]}, ValueError),
         ({'name': 'unknown'}, ValueError),
-        ({'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}}, TypeError),
+        (
+            {'name': 'temporal_stack', 'version': 2, 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}},
+            TypeError,
+        ),
     ],
 )
 def test_invalid_stack_specs_are_rejected(node, error):
@@ -426,7 +429,7 @@ def test_wire_names_match_the_registered_components():
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
     }
     registered = spec.COMPONENTS
-    assert set(instances) | {'action_timestamp', 'action_horizon'} == set(registered)
+    assert set(instances) == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
         assert type(instance) is registered[name][instance.WIRE_VERSION].implementation
