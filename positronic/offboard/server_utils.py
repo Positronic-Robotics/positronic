@@ -14,6 +14,8 @@ from positronic.offboard.spec import Model
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_LOG_INTERVAL_S = 5.0
+
 
 def run_with_progress(fn: Callable[[], Any], description: str) -> Any:
     """Run blocking ``fn``, logging ``description`` with elapsed time every few seconds."""
@@ -21,7 +23,7 @@ def run_with_progress(fn: Callable[[], Any], description: str) -> Any:
     start = time.monotonic()
 
     def tick():
-        while not done.wait(5.0):
+        while not done.wait(PROGRESS_LOG_INTERVAL_S):
             logger.info(f'{description}... ({time.monotonic() - start:.0f}s elapsed)')
 
     ticker = threading.Thread(target=tick, daemon=True)
@@ -50,7 +52,6 @@ def wait_for_subprocess_ready(
     check_crashed: Callable[[], tuple[bool, int | None]],
     description: str,
     max_wait: float = 300.0,
-    update_interval: float = 5.0,
 ) -> None:
     """Poll a subprocess until ready, logging how long it has run."""
     start = time.monotonic()
@@ -62,7 +63,7 @@ def wait_for_subprocess_ready(
         if check_ready():
             logger.info(f'{description} ready after {time.monotonic() - start:.0f}s')
             return
-        if time.monotonic() - last_update >= update_interval:
+        if time.monotonic() - last_update >= PROGRESS_LOG_INTERVAL_S:
             logger.info(f'Starting {description}... ({time.monotonic() - start:.0f}s elapsed)')
             last_update = time.monotonic()
         time.sleep(1.0)

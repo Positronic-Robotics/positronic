@@ -87,14 +87,11 @@ class OpenpiSubprocess:
         except (ConnectionRefusedError, OSError, TimeoutError):
             return False
 
-    def _wait_for_ready(self, timeout: float = 300.0):
+    def _wait_for_ready(self):
         assert self.process is not None
         process = self.process
         wait_for_subprocess_ready(
-            self._check_ready,
-            lambda: (process.poll() is not None, process.returncode),
-            'OpenPI subprocess',
-            max_wait=timeout,
+            self._check_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
         )
 
     @property

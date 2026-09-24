@@ -4,6 +4,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
@@ -70,7 +71,7 @@ def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
         device='cpu',
     )
     assert model.meta() == {
-        'checkpoint_id': '42',
+        offboard_keys.CHECKPOINT_ID: '42',
         'type': 'act',
         'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
         'experiment_name': 'exp',
@@ -117,7 +118,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     ready = deserialise(websocket._send_bytes.await_args_list[0].args[0])
     assert ready['status'] == 'ready'
-    assert ready['meta']['checkpoint_id'] == '42'
+    assert ready['meta'][offboard_keys.CHECKPOINT_ID] == '42'
 
 
 def test_lerobot_server_rejects_missing_configured_checkpoint_at_startup(monkeypatch):

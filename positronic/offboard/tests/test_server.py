@@ -254,29 +254,6 @@ def test_no_codec(stub_server):
         session.close()
 
 
-def test_the_model_is_built_once_and_serves_every_session(make_mock_model):
-    policy = make_mock_model([{'action': [1, 2, 3]}], {offboard_keys.CHECKPOINT_ID: '100'})
-    build = MagicMock(return_value=policy)
-    server = PolicyServer(build, cfn.Config(_fps_pipe))
-    ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
-    ready = threading.Event()
-    serving = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
-    serving.start()
-    try:
-        assert ready.wait(timeout=10.0)
-        port = _bound_port(ws)
-        for query in ([], [('fps', '5')]):
-            session = _param_session('localhost', port, query)
-            try:
-                assert session.metadata[offboard_keys.CHECKPOINT_ID] == '100'
-            finally:
-                session.close()
-        build.assert_called_once_with()
-    finally:
-        server.shutdown()
-        serving.join(timeout=10.0)
-
-
 def test_a_session_route_that_names_a_checkpoint_is_refused(stub_server):
     """A route that names a checkpoint opens no session: the server serves one checkpoint."""
     host, port, *_ = stub_server
@@ -719,6 +696,29 @@ def test_session_param_retunes_the_client_schedule(start_server):
     finally:
         default_session.close()
         tuned_session.close()
+
+
+def test_the_model_is_built_once_and_serves_every_session(make_mock_model):
+    policy = make_mock_model([{'action': [1, 2, 3]}], {offboard_keys.CHECKPOINT_ID: '100'})
+    build = MagicMock(return_value=policy)
+    server = PolicyServer(build, cfn.Config(_fps_pipe))
+    ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
+    ready = threading.Event()
+    serving = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
+    serving.start()
+    try:
+        assert ready.wait(timeout=10.0)
+        port = _bound_port(ws)
+        for query in ([], [('fps', '5')]):
+            session = _param_session('localhost', port, query)
+            try:
+                assert session.metadata[offboard_keys.CHECKPOINT_ID] == '100'
+            finally:
+                session.close()
+        build.assert_called_once_with()
+    finally:
+        server.shutdown()
+        serving.join(timeout=10.0)
 
 
 def test_unknown_session_param_rejected(param_server):

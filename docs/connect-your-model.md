@@ -169,6 +169,7 @@ Implement `Model`, then pass a function that builds it and a deployment to `Poli
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -189,7 +190,7 @@ class MyModel(Model):
         ]
 
     def meta(self):
-        return {'type': 'my_model', 'checkpoint_id': 'default'}
+        return {'type': 'my_model', offboard_keys.CHECKPOINT_ID: 'default'}
 
 
 deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
