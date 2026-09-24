@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
-from unittest.mock import ANY, MagicMock
+from unittest.mock import MagicMock
 
 import configuronic as cfn
 import grpc
@@ -24,23 +24,24 @@ from cryptography.x509.oid import NameOID
 from positronic_wire import grpc as client_grpc
 from positronic_wire import wire
 
-from positronic.offboard import grpc_wire
+from positronic.offboard import grpc_wire, protocol
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.client import InferenceClient, _ConnectRetries
+from positronic.offboard.client import ConnectRetries, InferenceClient
 from positronic.offboard.server import AUTH_HEADER, bearer
+from positronic.offboard.spec import ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served, StartServer
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
-from positronic.policy.spec import ModelSource, PolicySource, remote
+from positronic.policy.sequential import Sequential
 
 _TOKEN = 'test-secret-token'
 
 
 @pytest.fixture
-def both_wires(start_server: StartServer, make_mock_policy) -> tuple[Served, MagicMock]:
+def both_wires(start_server: StartServer, make_mock_model) -> tuple[Served, MagicMock]:
     """A server that offers both wires over one policy."""
-    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
     return served, policy
 
 
@@ -51,7 +52,7 @@ def test_a_grpc_session_handshakes_and_infers(both_wires):
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
         assert session.infer(obs) == [{'action': [1, 2, 3]}]
-        policy._mock_session.assert_called_with(obs, ANY)
+        policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -109,31 +110,57 @@ def test_closing_a_session_ends_it_on_the_server(both_wires):
     assert served.server._active_sessions == 0
 
 
+def test_close_accepts_ack_before_the_final_write_receipt(both_wires, monkeypatch):
+    stream_ended = threading.Event()
+    requests = client_grpc.GrpcClientConnection._requests
+    read = client_grpc.GrpcClientConnection._read
+
+    def delayed_receipt(connection):
+        for message in requests(connection):
+            yield message
+            if protocol.deserialise(message).get(protocol.END_SESSION):
+                assert stream_ended.wait(5)
+
+    def read_until_end(connection):
+        try:
+            read(connection)
+        finally:
+            stream_ended.set()
+
+    monkeypatch.setattr(client_grpc.GrpcClientConnection, '_requests', delayed_receipt)
+    monkeypatch.setattr(client_grpc.GrpcClientConnection, '_read', read_until_end)
+    served, model = both_wires
+    session = InferenceClient(*served.grpc()).new_session()
+    session.close()
+    model.end_session.assert_called_once_with(session.session_id)
+    assert served.server._active_sessions == 0
+
+
 def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
     served, policy = both_wires
     session = InferenceClient(*served.grpc()).new_session()
     try:
-        policy._mock_session.side_effect = RuntimeError('no such joint')
+        policy.side_effect = RuntimeError('no such joint')
         with pytest.raises(RuntimeError, match='no such joint'):
             session.infer({'image': 'test'})
     finally:
         session.close()
 
 
-def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_server, make_mock_policy):
+def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_server, make_mock_model):
     """A model the source refuses fails in the handshake, before the session serves anything."""
-    policies = {'alpha': make_mock_policy([{'action': [1]}], {'model_name': 'alpha'})}
-    served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
+    policies = {'alpha': make_mock_model([{'action': [1]}], {'model_name': 'alpha'})}
+    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
     with pytest.raises(RuntimeError, match='Unknown model'):
         InferenceClient(*served.grpc(model='beta')).new_session()
 
 
-def test_the_session_path_names_the_model(start_server, make_mock_policy):
+def test_the_session_path_names_the_model(start_server, make_mock_model):
     policies = {
-        'alpha': make_mock_policy([{'action': ['alpha']}], {'model_name': 'alpha'}),
-        'beta': make_mock_policy([{'action': ['beta']}], {'model_name': 'beta'}),
+        'alpha': make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'}),
+        'beta': make_mock_model([{'action': ['beta']}], {'model_name': 'beta'}),
     }
-    served = start_server(ChunkedSchedule() | remote | DictSource(policies), grpc=True)
+    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
     session = InferenceClient(*served.grpc(model='beta')).new_session()
     try:
         assert session.metadata['model_name'] == 'beta'
@@ -143,12 +170,14 @@ def test_the_session_path_names_the_model(start_server, make_mock_policy):
 
 
 def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0)):
-    return TemporalStack(keys=('x',), offsets_sec=offsets) | ChunkedSchedule() | remote | source
+    return PolicyDeployment(
+        source, Sequential(TemporalStack(keys=('x',), offsets_sec=offsets), ChunkedSchedule(fps=10))
+    )
 
 
-def test_the_query_carries_the_session_params(start_server, make_mock_policy):
-    policies = {'alpha': make_mock_policy([{'action': ['alpha']}], {'model_name': 'alpha'})}
-    pipe = cfn.Config(_tunable_pipe, source=cfn.Config(DictSource, policies=policies))
+def test_the_query_carries_the_session_params(start_server, make_mock_model):
+    policies = {'alpha': make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'})}
+    pipe = cfn.Config(_tunable_pipe, source=cfn.Config(DictSource, models=policies))
     served = start_server(pipe, grpc=True)
     session = InferenceClient(*served.grpc(query='offsets=[-0.5, 0.0]')).new_session()
     try:
@@ -159,9 +188,11 @@ def test_the_query_carries_the_session_params(start_server, make_mock_policy):
 
 
 @pytest.fixture
-def authed_server(start_server: StartServer, make_mock_policy) -> Served:
-    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, auth_token=_TOKEN)
+def authed_server(start_server: StartServer, make_mock_model) -> Served:
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(
+        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, auth_token=_TOKEN
+    )
     return served
 
 
@@ -177,7 +208,7 @@ def test_the_grpc_wire_gates_on_the_bearer_token(authed_server):
 def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header, monkeypatch):
     # A refused credential answers like a cold backend, and the client retries it; one attempt shows the
     # refusal.
-    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
+    monkeypatch.setattr(ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     headers = None if header is None else {AUTH_HEADER: header}
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*authed_server.grpc(), headers=headers).new_session()
@@ -300,7 +331,7 @@ def test_a_session_through_a_tls_edge_handshakes_and_infers(both_wires, edged):
         assert session.metadata['model_name'] == 'stub'
         obs = {'image': 'test'}
         assert session.infer(obs) == [{'action': [1, 2, 3]}]
-        policy._mock_session.assert_called_with(obs, ANY)
+        policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
@@ -314,7 +345,7 @@ def test_a_tls_edge_carries_the_bearer_token(authed_server, edged):
 
 
 def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, monkeypatch):
-    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
+    monkeypatch.setattr(ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*edged(authed_server)).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
@@ -364,13 +395,15 @@ def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
         session.close()
 
 
-def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_policy):
+def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_model):
     """The bind target carries the brackets gRPC's syntax needs, and a session opens on the bound server."""
     assert client_grpc.target('::', 9000) == '[::]:9000'
     assert client_grpc.target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
-    policy = make_mock_policy([{'action': [4]}], {'model_name': 'stub'})
-    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True, host='::1')
+    policy = make_mock_model([{'action': [4]}], {'model_name': 'stub'})
+    served = start_server(
+        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, host='::1'
+    )
     session = InferenceClient(*served.grpc()).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
@@ -436,12 +469,12 @@ def test_a_session_answers_after_a_silence_no_frame_crossed(both_wires, chatty_c
 
 
 def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
-    start_server, make_mock_policy, chatty_client, monkeypatch
+    start_server, make_mock_model, chatty_client, monkeypatch
 ):
     """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``, and the session is lost."""
     monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(client_grpc.MESSAGE_SIZE_OPTIONS))
-    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(ChunkedSchedule() | remote | PolicySource(policy), grpc=True)
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
     with pytest.raises(wire.PeerDisconnected, match='Too many pings'):
         _silent_then_infer(served)
 
@@ -480,7 +513,7 @@ def test_an_edge_that_selects_no_alpn_is_not_retried(both_wires, tls_edge, monke
 def test_a_timed_out_session_refuses_the_next_inference(both_wires):
     """The timeout closes the connection, and the server may answer inside the close's own wait."""
     served, policy = both_wires
-    policy._mock_session.side_effect = lambda *_: time.sleep(1.0) or [{'action': [1, 2, 3]}]
+    policy.side_effect = lambda *_, **__: time.sleep(1.0) or [{'action': [1, 2, 3]}]
     session = InferenceClient(*served.grpc(), infer_timeout=0.2).new_session()
     with pytest.raises(TimeoutError):
         session.infer({'image': 'test'})

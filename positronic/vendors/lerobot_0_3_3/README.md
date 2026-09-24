@@ -6,7 +6,7 @@ LeRobot ACT (Action Chunking Transformer) is a single-task imitation learning mo
 
 ACT uses action chunking to output sequences of future actions, enabling smooth execution and reducing compounding errors. This makes it particularly effective for precise manipulation tasks where consistency and repeatability are critical.
 
-See [Model Selection Guide](../../docs/model-selection.md) for comparison.
+See [Model Selection Guide](../../../docs/model-selection.md) for comparison.
 
 ## Hardware Requirements
 
@@ -43,7 +43,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.address.host=localhost --policy.address.port=8000
 ```
 
-See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
+See [Training Workflow](../../../docs/training-workflow.md) for detailed step-by-step instructions.
 
 ## Available Codecs
 
@@ -58,7 +58,7 @@ LeRobot supports two primary codecs for different observation/action configurati
 
 **Key features:**
 - Uses `task_field='task'` (LerobotPolicy filters this before passing to ACT)
-- Images resized to 480x480
+- Images resized to 224x224
 - Quaternion rotation representation (7D)
 - Absolute action space (not delta)
 
@@ -67,7 +67,7 @@ LeRobot supports two primary codecs for different observation/action configurati
 - **Want joint feedback**: Use `joints` (may improve performance with joint position information)
 - **Trajectory training**: Use `ee_traj` or `joints_traj` (trains on actual robot trajectory with binarized grip)
 
-See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
+See [Codecs Guide](../../../docs/codecs.md) for comprehensive codec documentation.
 
 ## Configuration Reference
 
@@ -108,26 +108,25 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 | `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
-| `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
 **Available pipelines:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
 
-**Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
+**Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
-**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 
 ## Troubleshooting
 
-See vendor-specific guides and [Model Selection Guide](../../docs/model-selection.md) for issues.
+See vendor-specific guides and [Model Selection Guide](../../../docs/model-selection.md) for issues.
 
 ## See Also
 
 **Positronic Documentation:**
-- [Model Selection Guide](../../docs/model-selection.md) — When to use LeRobot vs GR00T vs OpenPI
-- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
-- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
-- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
+- [Model Selection Guide](../../../docs/model-selection.md) — When to use LeRobot vs GR00T vs OpenPI
+- [Codecs Guide](../../../docs/codecs.md) — Understanding observation/action encoding
+- [Training Workflow](../../../docs/training-workflow.md) — Unified training steps across all models
+- [Inference Guide](../../../docs/inference.md) — Deployment and evaluation patterns
 
 **Other Models:**
 - [OpenPI (π₀.₅)](../openpi/README.md) — Recommended for most tasks, most capable foundation model

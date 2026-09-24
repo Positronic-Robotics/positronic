@@ -25,11 +25,20 @@ from platform_client.enums import (
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    PrivateEval,
+    TaskNode,
+    credential_from_file,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
@@ -41,6 +50,7 @@ from platform_client.responses import (
     PendingSubmissionView,
     RankingsResponse,
     RegisterResponse,
+    ResolvedPlan,
     SubmissionCreateResponse,
     SubmissionListResponse,
 )
@@ -192,6 +202,66 @@ def test_create_submission_sends_the_run_defining_fields():
     assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
     assert gateway.body()['eval'] == 'fake.smoke'
     assert gateway.body()['transaction_key'] is None
+
+
+def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_path):
+    """The request carries the password as plaintext: a masked password opens no registry."""
+    gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
+    password_file = tmp_path / 'registry-password'
+    password_file.write_text('the-registry-password\n')
+    plan = plan_of_image(
+        PolicyImage('org/policy:v1'), EvalRef('fake.smoke'), credential=credential_from_file('a-reader', password_file)
+    )
+
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['image_credential'] == {
+        'username': 'a-reader',
+        'password': 'the-registry-password',
+    }
+
+
+def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
+    resolved = {
+        'episodes_total': 2,
+        'tasks': [
+            {
+                'task_id': 'stack-the-cubes',
+                'endpoints': [
+                    {
+                        'name': 'a',
+                        'kind': 'remote',
+                        'wire': 'websocket_tls',
+                        'address': {'host': 'a.example', 'port': 443, 'path': '/api/v1/session'},
+                        'episodes': 2,
+                    }
+                ],
+                'cap_per_episode_sec': 90,
+                'policy_preset': 'example_preset',
+                'tote_placement': 'none',
+                'episode_order': ['a', 'a'],
+            }
+        ],
+    }
+    gateway = Gateway(200, resolved)
+    plan = EvalPlan(
+        request_type=PrivateEval(org=OrgSlug('acme')),
+        tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
+        endpoints=[
+            Endpoint(
+                name='a',
+                wire=Wire.websocket_tls,
+                address=HostPortAddress(host='a.example', port=443, path='/api/v1/session'),
+            )
+        ],
+        episodes_per_endpoint=2,
+    )
+
+    response = make_client(gateway).resolve_plan(plan)
+
+    assert isinstance(response, ResolvedPlan) and response.episodes_total == 2
+    assert gateway.request().url.path == routes.SUBMISSIONS_RESOLVE
+    assert gateway.body()['episodes_per_endpoint'] == 2
 
 
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
@@ -466,6 +536,7 @@ def test_every_endpoint_has_exactly_one_method():
         'register',
         'me',
         'create_submission',
+        'resolve_plan',
         'list_submissions',
         'get_submission',
         'list_artifacts',
@@ -552,8 +623,15 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 # --- eval plans ---------------------------------------------------------------------------------
 
 PLAN = EvalPlan(
+    request_type=PrivateEval(org=OrgSlug('acme')),
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
-    endpoints=[Endpoint(name='baseline', url='wss://baseline.example/ws')],
+    endpoints=[
+        Endpoint(
+            name='baseline',
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session'),
+        )
+    ],
     episodes_per_endpoint=10,
 )
 
@@ -579,10 +657,12 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
     assert body['endpoints'][0] == {
         'name': 'baseline',
         'kind': 'remote',
-        'url': 'wss://baseline.example/ws',
+        'wire': 'websocket_tls',
+        'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': ''},
         'provider': None,
         'spec': None,
         'image': None,
+        'image_credential': None,
         'episodes_per_endpoint': None,
         'cap_per_episode_sec': None,
         'policy_preset': None,

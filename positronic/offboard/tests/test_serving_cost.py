@@ -1,8 +1,9 @@
+from functools import partial
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from positronic_wire import wire
+from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.cfg.policy import bearer_headers
@@ -10,10 +11,19 @@ from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
 from positronic.offboard.server import AUTH_TOKEN_ENV
-from positronic.offboard.serving_cost import InstantChunk, against_server, capture, observations, replay, rig_stack
+from positronic.offboard.serving_cost import (
+    InstantChunk,
+    InstantSource,
+    against_server,
+    capture,
+    observations,
+    replay,
+    rig_stack,
+)
+from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
-from positronic.policy.spec import PolicySource, remote
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.sequential import Sequential
 
 CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 
@@ -23,13 +33,14 @@ DECLARED_OFFSETS_SEC = (-23 / 15, -16 / 15, -8 / 15, 0.0)
 DECLARED_WIDTH, DECLARED_HEIGHT = 320, 176
 
 
-def _declared_stack():
-    return (
-        StopOnFault()
-        | TemporalStack(keys=(*CAMERAS, keys.EE_POSE, keys.GRIP), offsets_sec=DECLARED_OFFSETS_SEC)
-        | ChunkedSchedule()
-        | RestrictImageSize(width=DECLARED_WIDTH, height=DECLARED_HEIGHT)
+def _declared_deployment() -> PolicyDeployment:
+    stack = Sequential(
+        PauseOnUnavailable(),
+        TemporalStack(keys=(*CAMERAS, keys.EE_POSE, keys.GRIP), offsets_sec=DECLARED_OFFSETS_SEC),
+        ChunkedSchedule(fps=15.0),
+        RestrictImageSize(width=DECLARED_WIDTH, height=DECLARED_HEIGHT),
     )
+    return PolicyDeployment(InstantSource(2), stack, compress_images=True)
 
 
 def _ticks(count: int, period_ns: int = 66_666_666, size: tuple[int, int] = (48, 64)):
@@ -37,23 +48,25 @@ def _ticks(count: int, period_ns: int = 66_666_666, size: tuple[int, int] = (48,
     rng = np.random.default_rng(0)
     for tick in range(count):
         frame = rng.integers(0, 255, (*size, 3), dtype=np.uint8)
-        yield {
-            keys.EE_POSE: np.zeros(7),
-            keys.GRIP: 0.0,
-            keys.ROBOT_STATUS: 0,
-            keys.OBS_TIME_NS: 1_000_000_000 + tick * period_ns,
-            **dict.fromkeys(CAMERAS, frame),
-        }
+        yield (
+            1_000_000_000 + tick * period_ns,
+            {keys.EE_POSE: np.zeros(7), keys.GRIP: 0.0, keys.ROBOT_STATUS: 0, **dict.fromkeys(CAMERAS, frame)},
+        )
+
+
+def _model():
+    return partial(InstantChunk(rows=2), session_id='capture')
 
 
 def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_server):
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
-    model = InstantChunk(rows=2, period_s=1 / 15.0)
-    payloads = capture(_ticks(12), stack, model, requests=2)
+    payloads = capture(_ticks(12), stack, _model(), requests=2)
     assert payloads, 'the stack sent nothing'
 
-    served = start_server(stack | remote(compress_images=True) | PolicySource(model))
-    session = InferenceClient(*served.ws()).new_session()
+    host, port, *_ = start_server(PolicyDeployment(InstantSource(2), stack, compress_images=True))
+    session = InferenceClient(
+        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    ).new_session()
     try:
         rows = replay(session, payloads, compress_images=True)
     finally:
@@ -64,11 +77,12 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
         assert row['wire_kib'] > 0
         assert row[protocol.TIMING_SERVED] >= row[protocol.TIMING_DECODE]
         assert row['round_trip_ms'] >= row[protocol.TIMING_SERVED]
+        assert row[SEND_MS] >= 0.0 and row[RECV_MS] >= 0.0
 
 
 def test_a_captured_payload_carries_one_stack_per_stacked_key():
     stack = rig_stack(CAMERAS, frames=3, rate_hz=15.0, width=64, height=48)
-    payloads = capture(_ticks(12), stack, InstantChunk(rows=2, period_s=1 / 15.0), requests=1)
+    payloads = capture(_ticks(12), stack, _model(), requests=1)
 
     sent = payloads[0]
     for camera in CAMERAS:
@@ -88,12 +102,11 @@ def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
 
 def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
     """The probe sends what the server's handshake declares, not what its own flags would build."""
-    model = InstantChunk(rows=2, period_s=1 / 15.0)
-    served = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model))
+    served = start_server(_declared_deployment())
 
     with against_server('websocket', served.host, served.port, '', '') as measured:
         assert measured.compress_images, 'the wire setting comes from the handshake too'
-        payloads = capture(_ticks(40, size=(360, 640)), measured.stack, model, requests=2)
+        payloads = capture(_ticks(40, size=(360, 640)), measured.stack, _model(), requests=2)
         rows = replay(measured.session, payloads, measured.compress_images)
 
     sent = payloads[0]
@@ -109,13 +122,12 @@ def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
 
 def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
     """A key error from inside a layer names nothing a reader can act on; the capture names the key."""
-    model = InstantChunk(rows=2, period_s=1 / 15.0)
-    served = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model))
-    gripless = ({key: value for key, value in obs.items() if key != keys.GRIP} for obs in _ticks(12))
+    served = start_server(_declared_deployment())
+    gripless = ((ts, {key: value for key, value in obs.items() if key != keys.GRIP}) for ts, obs in _ticks(12))
 
     with against_server('websocket', served.host, served.port, '', '') as measured:
         with pytest.raises(ValueError, match="asks for 'grip'"):
-            capture(gripless, measured.stack, model, requests=1)
+            capture(gripless, measured.stack, _model(), requests=1)
 
 
 def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
@@ -130,7 +142,7 @@ def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
             writer.append(keys.GRIP, 0.0, at)
             writer.append(keys.WRIST_IMAGE, np.zeros((48, 64, 3), np.uint8), at)
 
-    handed = list(observations(DiskEpisode(tmp_path / 'episode'), rate_hz=15.0))
+    handed = [obs for _, obs in observations(DiskEpisode(tmp_path / 'episode'), rate_hz=15.0)]
 
     assert handed, 'the episode spans three ticks'
     for obs in handed:
@@ -149,8 +161,8 @@ def test_a_camera_the_flags_did_not_name_is_not_sent(tmp_path):
             writer.append(keys.GRIP, 0.0, at)
 
     episode = DiskEpisode(tmp_path / 'episode')
-    by_flags = next(iter(observations(episode, rate_hz=15.0, cameras=CAMERAS)))
-    declared = next(iter(observations(episode, rate_hz=15.0)))
+    _, by_flags = next(iter(observations(episode, rate_hz=15.0, cameras=CAMERAS)))
+    _, declared = next(iter(observations(episode, rate_hz=15.0)))
 
     assert keys.EXTERIOR_IMAGE_2 not in by_flags, 'a camera the flags did not name rode along to the wire'
     assert all(camera in by_flags for camera in CAMERAS)
@@ -161,8 +173,7 @@ def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_serv
     """`AUTH_TOKEN` is the operator's credential for one endpoint, not for every host `--server_host` dials."""
     token = 'a-token-for-another-endpoint'
     monkeypatch.setenv(AUTH_TOKEN_ENV, token)
-    model = InstantChunk(rows=2, period_s=1 / 15.0)
-    served = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model), auth_token=token)
+    served = start_server(_declared_deployment(), auth_token=token)
 
     with pytest.raises(wire.ConnectRefused), against_server('websocket', served.host, served.port, '', ''):
         pass

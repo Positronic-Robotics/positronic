@@ -35,13 +35,12 @@ openness, while Positronic and DROID's robot interface represent closure.
 See upstream [`DroidLerobotDataset._slice_meta_feature`](https://github.com/OpenGalaxea/GalaxeaVLA/blob/89f2322b4ad016e192437adc1a2c253b05bab246/src/g05/data/droid/droid_lerobot_dataset.py#L319).
 
 Galaxea's processor performs image resizing, state normalization, and action
-denormalization. There is no gripper conversion on the robot client. Every step
-receives its 15 Hz timestamp. `ActionHorizon` then keeps the steps inside the
-16-step open loop and closes the chunk at that boundary, so Positronic's
-`ChunkedSchedule` asks for a new prediction after 16 steps. A chunk of 16 steps or
-fewer passes through with its own end-of-chunk timestamp.
-The backend has no per-episode action cache; closing or cancelling a session
-cannot carry cached actions into another episode.
+denormalization. The server returns full chunks with decoded joint and gripper
+commands. The client `ChunkedSchedule` executes up to `execution_steps` actions
+(default 16), at `codec.fps` (default 15 Hz), before requesting another chunk.
+That same frequency is sent to the model as an observation field. Short chunks
+execute completely. The backend has no per-episode action cache; each server
+session owns and closes its backend connection.
 
 ## Docker setup
 

@@ -7,26 +7,28 @@ discriminated on the status slug.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Annotated, Any, Self
 
 from platform_client.boards import BoardRef
-from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import (
+    BoardVisibility,
+    CameraVantage,
+    EndpointKind,
+    KeyStatus,
+    OnExhausted,
+    Placement,
+    QuotaSubject,
+    ReasonCode,
+    SubmissionStatus,
+    Wire,
+)
+from platform_client.eval_plan import Clutter, EndpointAddress
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
-from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
-
-
-def _public(status: SubmissionStatus) -> SubmissionStatus:
-    """A status as a CALLER may see it: `submitting` is an internal claim state, reported as `pending`."""
-    if status is SubmissionStatus.submitting:
-        raise ValueError(f'{status.name} is an internal state and never reaches a caller')
-    return status
-
-
-# Every status a caller-facing model may carry. The `submissions.get` variants pin their own tag
-# instead (`_TaggedView`), which is the same rule stated per variant.
-PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
+from platform_client.tasks import TaskRef
+from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
 
 class Scores(BaseModel):
@@ -117,12 +119,135 @@ class EpisodeCounts(BaseModel):
 class RunSummary(BaseModel):
     """One launch that served the plan.
 
-    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs.
+    `started_at` is when the operator pressed Start; `ended_at` is unset while it runs. `episodes`
+    counts what the launch took on: `done` moves as the rig records each episode, and once it ends it
+    is what the bucket holds.
     """
 
     run_tag: str
     started_at: AwareDatetime | None = None
     ended_at: AwareDatetime | None = None
+    episodes: EpisodeCounts | None = None
+
+
+class ReplayLink(BaseModel):
+    """A page that plays back a run's recorded episodes. `expires_at` is unset on a link that does not expire."""
+
+    url: str
+    expires_at: AwareDatetime | None = None
+
+
+class EndpointOutcome(BaseModel):
+    """One endpoint's recorded episodes.
+
+    `kept` leaves out an episode a reviewer ruled out. `judged` counts the kept episodes that have a
+    verdict, and `succeeded` the judged ones whose verdict is a success.
+    """
+
+    endpoint: str
+    kept: int = Field(ge=0)
+    judged: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+
+
+class PlanOutcome(BaseModel):
+    """What a rig plan recorded, per endpoint, in the order the plan names them."""
+
+    endpoints: list[EndpointOutcome] = Field(default_factory=list)
+
+    @property
+    def kept(self) -> int:
+        return sum(entry.kept for entry in self.endpoints)
+
+    @property
+    def judged(self) -> int:
+        return sum(entry.judged for entry in self.endpoints)
+
+    @property
+    def succeeded(self) -> int:
+        return sum(entry.succeeded for entry in self.endpoints)
+
+
+class ResolvedEndpoint(BaseModel):
+    """One endpoint of a resolved task: where its policy comes from, and the episodes it takes there."""
+
+    name: str
+    kind: Slugged[EndpointKind]
+    wire: Slugged[Wire]
+    # Set on a remote endpoint, which the caller dials; None on a served or image endpoint the platform serves itself.
+    address: EndpointAddress | None = None
+    # Set on a served endpoint, which names what starts it; None on a remote or image endpoint.
+    provider: str | None = None
+    # The checkpoint a served endpoint runs; None on a remote or image endpoint.
+    spec: str | None = None
+    episodes: int = Field(ge=1)
+
+
+# The sides a resolution may not carry: a draw is made before the plan is answered.
+_UNRESOLVED_SIDES = frozenset({Placement.random, Placement.INVALID})
+
+
+def _require_a_side(side: Placement, what: str) -> None:
+    if side in _UNRESOLVED_SIDES:
+        raise ValueError(f'{what} resolves to {slug_of(side)}, which names no side')
+
+
+class ResolvedTask(BaseModel):
+    """One task of a plan as the rig runs it: every property with its final value.
+
+    The nearest level that states a value gives it; where none does, the task's catalogue entry gives
+    it, and where that gives none, the platform draws it (`README.md` §Eval plans).
+    `ResolvedPlan.tasks` lists the tasks in the plan's order.
+    """
+
+    task_id: TaskRef
+    endpoints: list[ResolvedEndpoint] = Field(min_length=1)
+    cap_per_episode_sec: int = Field(ge=1)
+    policy_preset: str = Field(min_length=1)
+    # `none` where the task has no tote.
+    tote_placement: Slugged[Placement]
+    # None where no external camera watches the task.
+    camera_vantage: Slugged[CameraVantage] | None = None
+    # Per external camera, keyed by its mount name.
+    external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
+    # The bounds of the clutter draw, or None where the task is laid out with nothing else.
+    clutter: Clutter | None = None
+    # The kit objects the draw puts on the table beside the task's own.
+    clutter_objects: list[str] = Field(default_factory=list)
+    # The endpoint name each episode runs against, in the order the episodes run.
+    episode_order: list[str] = Field(default_factory=list)
+
+    @property
+    def episodes(self) -> int:
+        """Every episode this task takes, over all of its endpoints."""
+        return sum(endpoint.episodes for endpoint in self.endpoints)
+
+    @model_validator(mode='after')
+    def _every_side_is_drawn(self) -> Self:
+        _require_a_side(self.tote_placement, f'task {self.task_id!r} tote_placement')
+        for mount, side in self.external_cameras.items():
+            _require_a_side(side, f'task {self.task_id!r} external camera {mount!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _the_order_serves_each_count(self) -> Self:
+        declared = {endpoint.name: endpoint.episodes for endpoint in self.endpoints}
+        if Counter(self.episode_order) != Counter(declared):
+            raise ValueError(f'task {self.task_id!r} orders {len(self.episode_order)} episodes against {declared}')
+        return self
+
+
+class ResolvedPlan(BaseModel):
+    """A rig plan as it runs: the episode total, and each task with every value resolved."""
+
+    episodes_total: int = Field(ge=1)
+    tasks: list[ResolvedTask] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _the_total_is_the_sum(self) -> Self:
+        if self.episodes_total != sum(task.episodes for task in self.tasks):
+            raise ValueError(f'episodes_total states {self.episodes_total}, and the tasks sum to another count')
+        return self
 
 
 # The outcomes that mint a key. `existing` is the one that does not.
@@ -151,13 +276,14 @@ class RegisterResponse(BaseModel):
 
 
 class MeResponse(BaseModel):
-    """`users.me`."""
+    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
 
     user_id: UserId
     alias: str | None = None
     tenant: str
     plan: str
     quota: list[QuotaLimit]
+    client: str | None = None
 
     def quota_for(self, key: str) -> QuotaLimit | None:
         """The limit under a rule key (`QUOTA_SUBMISSIONS_DAY` and friends), or None where the plan
@@ -168,7 +294,7 @@ class MeResponse(BaseModel):
 class _ReasonBearing(BaseModel):
     """A flat submission row whose `reason_code` is absent unless `status` is `errored`."""
 
-    status: PublicStatus
+    status: Slugged[SubmissionStatus]
     reason_code: Slugged[ReasonCode] | None = None
 
     @model_validator(mode='after')
@@ -187,6 +313,8 @@ class SubmissionCreateResponse(_ReasonBearing):
 
     submission_id: SubmissionId
     policy_image_digest: str | None = None
+    # A rig plan as it will run. None on a plan the simulator runs, which names an eval.
+    resolved: ResolvedPlan | None = None
 
 
 class SubmissionListRow(_ReasonBearing):
@@ -222,10 +350,9 @@ ID_FIELD = 'id'
 
 
 class _TaggedView(BaseModel):
-    """One `submissions.get` variant. Its `status` default IS the tag the union selects it by, so a
-    payload carrying any other status belongs to a different variant and is refused rather than
-    validated into this one — which is what stops an internal state the union has no variant for,
-    `submitting`, from arriving dressed as a pending view.
+    """One `submissions.get` variant. The union selects it by its `status` default, so a payload
+    carrying any other status belongs to a different variant and is refused rather than validated
+    into this one.
     """
 
     status: Slugged[SubmissionStatus]
@@ -233,6 +360,8 @@ class _TaggedView(BaseModel):
     # platform executes itself reports one launch; a plan the lab rig serves reports one per start.
     episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     runs: list[RunSummary] = Field(default_factory=list)
+    # A rig plan as it runs; `submissions.create` answered with the same. None on a simulator run.
+    resolved: ResolvedPlan | None = None
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
@@ -277,11 +406,13 @@ class ErroredSubmissionView(_TaggedView):
 
 
 class FinishedSubmissionView(_TaggedView):
-    """Terminal success."""
+    """Terminal success. `replay` plays the recorded episodes back, and `outcome` counts them per endpoint."""
 
     id: SubmissionId
     scores: Scores = Field(default_factory=Scores)
     artifacts: ArtifactRefs
+    replay: ReplayLink | None = None
+    outcome: PlanOutcome | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
 
 
@@ -329,7 +460,7 @@ SubmissionView = Annotated[
 class CancelResponse(BaseModel):
     """`submissions.cancel`. `refunded` is false once the run started — started work is charged."""
 
-    status: PublicStatus
+    status: Slugged[SubmissionStatus]
     refunded: bool
 
 

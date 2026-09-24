@@ -5,13 +5,13 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import (
-    ActionHorizon,
-    ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     FlipGrip,
+    Metadata,
     SetControlMode,
 )
 from positronic.policy.observation import ObservationCodec
@@ -54,27 +54,17 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False, ee_frame=None)
-def compose(
-    obs,
-    action,
-    fps: float,
-    horizon: float | None,
-    binarize_grip: tuple[str, ...] | None,
-    flip_grip: bool,
-    ee_frame: geom.Transform3D | None,
+@cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
+def compose_data(
+    obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: geom.Transform3D | None
 ):
-    """Compose observation and action codecs with timing and optional grip binarization.
+    """Compose observation and action conversions, with optional grip and frame conversions.
 
     ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
     places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
     and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
     the pipeline instead, so leave it unset there.
 
-    Layout::
-
-        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference]
-            | [FlipGrip] | [ChangeEEFrame] | obs & action
     """
     result = obs & action
     if ee_frame is not None:
@@ -83,10 +73,21 @@ def compose(
         result = FlipGrip() | result
     if binarize_grip:
         result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
-    result = ActionTimestamp(fps=fps) | result
-    if horizon is not None:
-        result = ActionHorizon(horizon) | result
     return result
+
+
+@cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None)
+def compose(
+    obs,
+    action,
+    training_fps: float,
+    binarize_grip: tuple[str, ...] | None,
+    flip_grip: bool,
+    ee_frame: geom.Transform3D | None,
+):
+    """Data conversions with the sampling cadence recorded in training metadata."""
+    result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)
+    return Metadata({policy_keys.ACTION_FPS: training_fps}) | result
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.TARGET_GRIP)

@@ -2,7 +2,6 @@
 
 import logging
 import os
-import socket
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -12,19 +11,20 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-import websockets.sync.client
 from huggingface_hub import snapshot_download
-from websockets.exceptions import ConnectionClosed
+from positronic_wire import roboarena as roboarena_wire
+from positronic_wire import wire
 
 from pimm.logging import init_logging
+from positronic.offboard.roboarena import ProbeOutcome, RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
-from positronic.policy import Codec, Layer, Policy, Session
+from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.policy import Codec, Policy, Sequential
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, RestrictImageSize
-from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
-from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs, roboarena
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _download_checkpoint(model_path: str) -> Path:
 def _is_run_directory(model_path: str) -> bool:
     """Whether ``model_path`` holds ``checkpoint-N`` children rather than being one checkpoint itself.
 
-    Decided by shape, not by name: a run directory may be called anything, including the step number of
+    Decided by its path: a run directory may be called anything, including the step number of
     the checkpoint inside it.
     """
     last = model_path.rstrip('/').split('/')[-1]
@@ -67,77 +67,6 @@ def _experiment_name(checkpoint_path: str) -> str:
     """The training run a resolved checkpoint belongs to."""
     parts = checkpoint_path.rstrip('/').split('/')
     return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
-
-
-# TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
-# standard (used by DreamZero, potentially GR00T N2, etc.) and other vendors may need it.
-class RoboarenaClient:
-    """Client for DreamZero's roboarena WebSocket server.
-
-    Protocol (from eval_utils/policy_server.py + policy_client.py):
-    - On connect: server sends PolicyServerConfig as first msgpack message
-    - Client sends obs dict with obs["endpoint"] = "infer" or "reset"
-    - Server responds with action as raw numpy array (N, 8) via msgpack
-    - Uses positronic.utils.serialization for msgpack+numpy wire format
-    """
-
-    def __init__(self, host: str = '127.0.0.1', port: int = 9000):
-        self._host = host
-        self._port = port
-        self._ws = None
-        self._server_config: dict | None = None
-
-    def connect(self):
-        self._ws = websockets.sync.client.connect(
-            f'ws://{self._host}:{self._port}', compression=None, max_size=None, ping_interval=60, ping_timeout=600
-        )
-        # First message from server is PolicyServerConfig metadata
-        self._server_config = deserialize(self._ws.recv())
-        logger.info(f'Connected to roboarena server, metadata: {self._server_config}')
-
-    @property
-    def server_config(self) -> dict:
-        """The ``PolicyServerConfig`` this backend announced on connect: which cameras it wants, at what
-        resolution, and whether it tracks sessions."""
-        if self._server_config is None:
-            raise RuntimeError('Not connected: the server announces its config on connect')
-        return self._server_config
-
-    def ping(self) -> bool:
-        """Check if the roboarena server port is accepting connections.
-
-        The eval_utils.policy_server.WebsocketPolicyServer has no HTTP health
-        endpoint, so we use a raw TCP connect check instead.
-        """
-        try:
-            with socket.create_connection((self._host, self._port), timeout=2):
-                return True
-        except OSError:
-            return False
-
-    def infer(self, observation: dict[str, Any]) -> np.ndarray:
-        if self._ws is None:
-            self.connect()
-        observation['endpoint'] = 'infer'
-        self._ws.send(serialize(observation))
-        response = self._ws.recv()
-        if isinstance(response, str):
-            raise RuntimeError(f'Server error: {response}')
-        return deserialize(response)
-
-    def reset(self, session_id: str | None = None):
-        if self._ws is None:
-            return
-        msg: dict[str, Any] = {'endpoint': 'reset'}
-        if session_id is not None:
-            msg['session_id'] = session_id
-        self._ws.send(serialize(msg))
-        self._ws.recv(timeout=10.0)  # Consume "reset successful" response
-
-    def close(self):
-        if self._ws is not None:
-            self._ws.close()
-            self._ws = None
 
 
 def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
@@ -223,7 +152,7 @@ class DreamZeroSubprocess:
         self._launch()
         client = RoboarenaClient(port=self.roboarena_port)
         wait_for_subprocess_ready(
-            check_ready=client.ping,
+            check_ready=lambda: client.probe() is ProbeOutcome.READY,
             check_crashed=self._check_crashed,
             description='DreamZero subprocess',
             on_progress=on_progress,
@@ -256,42 +185,46 @@ class DreamZeroSubprocess:
             self.process = None
 
 
-class _DreamZeroSession(Session):
-    def __init__(self, client: RoboarenaClient, session_id: str):
-        self._client = client
-        self._session_id = session_id
+class DreamZeroModel(Model):
+    """Own the backend process; its global video cache serves one active session."""
 
-    def __call__(self, obs, time_ns):
-        obs = dict(obs)
-        obs[roboarena.SESSION_ID] = self._session_id
-        action_array = np.asarray(self._client.infer(obs))
+    def __init__(self, sp: DreamZeroSubprocess, meta: dict[str, Any]):
+        self._subprocess = sp
+        self._meta = meta
+        self._clients: dict[str, RoboarenaClient] = {}
 
-        # Response is (N, 8) — 7 joints + 1 gripper
+    def __call__(self, obs: Obs, *, session_id: str):
+        if session_id not in self._clients:
+            if self._clients:
+                raise RuntimeError('DreamZero is serving another session; end it before starting inference')
+            client = RoboarenaClient(port=self._subprocess.roboarena_port)
+            client.connect()
+            self._clients[session_id] = client
+        action_array = np.asarray(self._clients[session_id].infer({**obs, roboarena.SESSION_ID: session_id}))
         if action_array.ndim == 1:
             return [{ACTION: action_array}]
-        return [{ACTION: action_array[i]} for i in range(action_array.shape[0])]
+        return [{ACTION: action} for action in action_array]
 
-    def close(self):
+    def end_session(self, session_id: str) -> None:
+        client = self._clients.pop(session_id, None)
+        if client is None:
+            return
         try:
-            self._client.reset(session_id=self._session_id)
-        except (OSError, TimeoutError, ConnectionClosed):
-            logger.info('DreamZero session reset skipped: backend connection already gone')
+            client.reset(session_id=session_id)
+        except (OSError, TimeoutError, wire.ConnectRefused, wire.PeerDisconnected, roboarena_wire.TextAnswer):
+            # The backend keeps this session's frame history, so a reset nobody accepted leaves it to
+            # condition the next session on this subprocess.
+            logger.exception('DreamZero session reset failed; the backend still holds its history')
         finally:
-            self._client.close()
+            client.close()
 
-
-class DreamZeroPolicy(Policy):
-    """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
-
-    def __init__(self, sp: DreamZeroSubprocess):
-        self._subprocess = sp
-
-    def new_session(self, context=None, rt=None):
-        client = RoboarenaClient(port=self._subprocess.roboarena_port)
-        client.connect()
-        return _DreamZeroSession(client, str(uuid.uuid4()))
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
     def close(self):
+        for client in self._clients.values():
+            client.close()
+        self._clients.clear()
         self._subprocess.stop()
 
 
@@ -334,7 +267,7 @@ class DreamZeroSource(ModelSource):
             return [_checkpoint_id(self._model_path)]
         return [_checkpoint_id(c) for c in list_checkpoints(self._model_path, prefix='checkpoint-')]
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         checkpoint_path = self._checkpoint_path(model_id)
         local_path = run_with_progress(
             lambda: _download_checkpoint(checkpoint_path), 'Downloading DreamZero checkpoint', on_progress
@@ -354,29 +287,28 @@ class DreamZeroSource(ModelSource):
         except Exception:
             sp.stop()
             raise
-        return DreamZeroPolicy(sp)
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        checkpoint_path = self._checkpoint_path(model_id)
-        return {
-            policy_keys.TYPE: 'dreamzero',
-            'backbone': self._backbone,
-            'num_gpus': self._num_gpus,
-            policy_keys.CHECKPOINT_PATH: checkpoint_path,
-            policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
-        }
+        return DreamZeroModel(
+            sp,
+            {
+                policy_keys.TYPE: 'dreamzero',
+                'backbone': self._backbone,
+                'num_gpus': self._num_gpus,
+                policy_keys.CHECKPOINT_PATH: checkpoint_path,
+                policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
+            },
+        )
 
 
 dreamzero_source = cfn.Config(DreamZeroSource)
 
 
 @cfn.config(local=codecs.dreamzero_layers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
-def pipeline(local: Layer, codec: Codec, source: ModelSource, width: int, height: int):
+def pipeline(local: Policy, codec: Codec, source: ModelSource, width: int, height: int):
     """One DreamZero serving pipeline: the rig-side AR video context, the codec, the subprocess-backed source.
 
     ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
     """
-    return local | RestrictImageSize(width, height) | remote | codec | source
+    return PolicyDeployment(source, Sequential(local, RestrictImageSize(width, height)), codec)
 
 
 joints = pipeline
@@ -401,7 +333,6 @@ COMMANDS = {
     # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
     'phail': serve.override(
         pipeline=joints.override(codec=codecs.phail_v1),
-        recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
         **{
             'pipeline.source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
             'pipeline.source.backbone': 'wan2.2',

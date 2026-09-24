@@ -1,8 +1,9 @@
 """The persisted enum values are pinned.
 
-Every value here is stored durably, so this test is the ratchet: adding a member is expected and
+The platform stores these integers, so this test is the ratchet: adding a member is expected and
 updates the map below; changing or reusing a value silently re-reads every existing row as
-something else, and that is what must fail.
+something else, and that is what must fail. A value moves only beside the migration that moves the
+rows it is stored in.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from enum import IntEnum
 
 import pytest
 from platform_client.enums import (
-    ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     BoardVisibility,
     CameraVantage,
@@ -22,8 +22,12 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    RequestType,
     SubmissionStatus,
+    Wire,
 )
+from platform_client.slug import members_by_slug
+from positronic_wire import registry
 
 ERROR_CODE_VALUES = {
     'INVALID': 0,
@@ -58,12 +62,11 @@ REASON_CODE_VALUES = {
 SUBMISSION_STATUS_VALUES = {
     'INVALID': 0,
     'pending': 1,
-    'submitting': 2,
-    'running': 3,
-    'finished': 4,
-    'errored': 5,
-    'cancelled': 6,
-    'blocked': 7,
+    'running': 2,
+    'finished': 3,
+    'errored': 4,
+    'cancelled': 5,
+    'blocked': 6,
 }
 
 KEY_STATUS_VALUES = {'INVALID': 0, 'created': 1, 'existing': 2, 'rotated': 3}
@@ -76,9 +79,21 @@ BOARD_VISIBILITY_VALUES = {'INVALID': 0, 'public': 1, 'tenant': 2}
 
 ENDPOINT_KIND_VALUES = {'INVALID': 0, 'remote': 1, 'served': 2, 'image': 3}
 
+WIRE_VALUES = {
+    'INVALID': 0,
+    'websocket': 1,
+    'websocket_tls': 2,
+    'websocket_unix': 3,
+    'grpc': 4,
+    'grpc_tls': 5,
+    'roboarena': 6,
+}
+
 PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}
 
 CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
+
+REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),
@@ -89,8 +104,10 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (QuotaSubject, QUOTA_SUBJECT_VALUES),
     (BoardVisibility, BOARD_VISIBILITY_VALUES),
     (EndpointKind, ENDPOINT_KIND_VALUES),
+    (Wire, WIRE_VALUES),
     (Placement, PLACEMENT_VALUES),
     (CameraVantage, CAMERA_VANTAGE_VALUES),
+    (RequestType, REQUEST_TYPE_VALUES),
 ]
 
 
@@ -109,11 +126,20 @@ def test_no_value_is_reused(enum_cls: type[IntEnum], expected: dict[str, int]):
     assert len(set(expected.values())) == len(expected)
 
 
-def test_the_status_sets_partition_the_decided_from_the_undecided():
-    # `blocked` is the third case: undecided like an active one, and holding no slot, so it belongs
-    # to neither set. Naming it here keeps the three together covering every status.
-    assert ACTIVE_STATUSES & TERMINAL_STATUSES == frozenset()
-    assert SubmissionStatus.blocked not in ACTIVE_STATUSES | TERMINAL_STATUSES
-    assert ACTIVE_STATUSES | TERMINAL_STATUSES | {SubmissionStatus.blocked} == set(SubmissionStatus) - {
-        SubmissionStatus.INVALID
-    }
+def test_every_status_is_terminal_or_still_in_flight():
+    # `blocked` is in flight too: it is undecided, and a later report moves it on. Naming the
+    # in-flight ones here fails when a status arrives that belongs to neither camp.
+    in_flight = {SubmissionStatus.pending, SubmissionStatus.running, SubmissionStatus.blocked}
+    assert in_flight & TERMINAL_STATUSES == frozenset()
+    assert in_flight | TERMINAL_STATUSES == set(SubmissionStatus) - {SubmissionStatus.INVALID}
+
+
+def test_the_platform_only_states_are_absent():
+    """A state no caller is shown is the platform's own, and it keeps those in a field of its own."""
+    assert {m.name for m in SubmissionStatus}.isdisjoint({'submitting', 'mirroring'})
+
+
+def test_the_wires_a_record_names_are_the_wires_the_registry_dials():
+    # A name the client takes and the registry lacks is a record no dial can open, and a registry wire
+    # the client lacks is one no record can name.
+    assert set(members_by_slug(Wire)) == set(registry.CLIENT_WIRES)

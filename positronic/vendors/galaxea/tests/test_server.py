@@ -1,34 +1,17 @@
-import runpy
 import threading
 from dataclasses import dataclass, field
+from functools import partial
 from unittest.mock import Mock
 
 import msgpack
 import numpy as np
-import pos3
 import pytest
 from websockets.sync.server import serve
 
 from positronic import keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.executor import Executor, blocking
-from positronic.policy.spec import split
 from positronic.utils.serialization import deserialize
 from positronic.vendors.galaxea import codecs, protocol, server
-
-
-def test_cli_supports_recording_directory(tmp_path, monkeypatch):
-    output = tmp_path / 'recordings'
-
-    def record(_commands):
-        local = pos3.sync(str(output))
-        local.mkdir(parents=True, exist_ok=True)
-        (local / 'recording.txt').write_text('recorded')
-
-    monkeypatch.setattr(server.cfn, 'cli', record)
-    monkeypatch.setattr('pimm.logging.init_logging', lambda: None)
-    runpy.run_path(server.__file__, run_name='__main__')
-    assert (output / 'recording.txt').read_text() == 'recorded'
 
 
 @dataclass
@@ -74,10 +57,10 @@ def backend():
             assert not thread.is_alive()
 
 
-def test_live_adapter_cuts_the_chunk_and_converts_grip_server_side(backend):
+def test_live_adapter_returns_full_chunk_and_converts_grip(backend):
     codec = codecs.droid()
-    policy = codec.wrap(server.GalaxeaPolicy(backend, 5))
-    session = blocking(policy).new_session()
+    model = server.GalaxeaModel(backend, 5, {})
+    infer = codec.wrap(partial(model, session_id='episode'))
     obs = {
         keys.JOINTS: np.zeros(7),
         keys.GRIP: 0.3,
@@ -86,57 +69,47 @@ def test_live_adapter_cuts_the_chunk_and_converts_grip_server_side(backend):
         keys.TASK: 'pick towel',
     }
     try:
-        assert session.meta == codec.meta
-        actions = session(obs, 0)
-        assert len(actions) == 17
-        assert actions[-1] == {keys.ACTION_TIMESTAMP: 16 / 15}
-        np.testing.assert_array_equal(actions[-2][keys.ROBOT_COMMAND].positions, np.arange(105, 112))
-        assert all(step[keys.TARGET_GRIP] == 1 for step in actions[:-1])
+        actions = infer(obs)
+        assert len(actions) == 32
+        np.testing.assert_array_equal(actions[15][keys.ROBOT_COMMAND].positions, np.arange(105, 112))
+        assert all(step[keys.TARGET_GRIP] == 1 for step in actions)
         assert len(backend.requests) == 1
         np.testing.assert_allclose(backend.requests[0][protocol.STATE][protocol.RIGHT_GRIPPER], [0.7])
     finally:
-        session.close()
+        model.end_session('episode')
+        model.close()
 
 
 def test_stock_step_server_is_rejected(backend):
     backend.metadata = {'action_steps': 16}
-    policy = blocking(server.GalaxeaPolicy(backend, 5))
+    model = server.GalaxeaModel(backend, 5, {})
     with pytest.raises(ValueError, match='full-chunk backend'):
-        policy.new_session()
+        model({}, session_id='episode')
 
 
 @pytest.mark.parametrize('response', [{protocol.ERROR: 'missing arm'}, {protocol.ACTIONS: []}, {protocol.ACTIONS: [0]}])
 def test_backend_errors_surface(backend, response):
     backend.response = response
-    session = blocking(server.GalaxeaPolicy(backend, 5)).new_session()
+    model = server.GalaxeaModel(backend, 5, {})
     try:
         with pytest.raises((RuntimeError, ValueError)):
-            session({}, 0)
+            model({}, session_id='episode')
     finally:
-        session.close()
+        model.end_session('episode')
+        model.close()
 
 
-def test_cancellation_discards_pending_chunk_and_next_call_recomputes(backend):
-    policy = server.GalaxeaPolicy(backend, 5)
-    rt = Executor(policy.functions)
-    session = policy.new_session(rt=rt)
-    backend.release.clear()
+def test_ending_one_session_preserves_another_connection(backend):
+    model = server.GalaxeaModel(backend, 5, {})
     try:
-        assert session({protocol.TASK: 'old'}, 0) is None
-        assert backend.entered.wait(5)
-        session.cancel()
-        backend.release.set()
-        rt.wait(timeout=5)
-        assert session({protocol.TASK: 'new'}, 1) is None
-        assert not rt.owes_an_answer
-        assert session({protocol.TASK: 'new'}, 2) is None
-        rt.wait(timeout=5)
-        assert len(session({}, 3)) == 32
-        assert [obs[protocol.TASK] for obs in backend.requests] == ['old', 'new']
+        model({}, session_id='first')
+        model({}, session_id='second')
+        second = model._connections['second']
+        model.end_session('first')
+        assert model._connections == {'second': second}
+        assert len(model({}, session_id='second')) == 32
     finally:
-        backend.release.set()
-        rt.close()
-        session.close()
+        model.close()
 
 
 def test_inference_timeout_closes_connection():
@@ -154,13 +127,15 @@ def test_inference_timeout_closes_connection():
 
     connection = Connection()
     with pytest.raises(TimeoutError):
-        server._GalaxeaSession.infer(connection, {}, 1)
+        model = server.GalaxeaModel(Mock(), 1, {})
+        model._connections['episode'] = connection
+        model({}, session_id='episode')
     assert connection.closed
 
 
 def test_vendor_codec_stays_on_server_side():
     pipeline = server.pipeline()
-    local, border, remote_half = split(pipeline)
+    local, remote_half = pipeline.local, pipeline.codec
     assert isinstance(pipeline.source, server.GalaxeaSource)
     assert remote_half is not None
     assert 'DroidCodec' not in str(local.to_spec())
@@ -192,7 +167,7 @@ def test_loaded_policy_metadata_and_cleanup(tmp_path, monkeypatch):
     checkpoint = tmp_path / 'model_state_dict.pt'
     source = server.GalaxeaSource(checkpoint_path=str(checkpoint))
     policy = source.load(protocol.MODEL_ID, progress)
-    assert source.meta(protocol.MODEL_ID)[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
+    assert policy.meta()[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
     backend.start.assert_called_once_with(progress)
     backend.stop.assert_not_called()
     policy.close()

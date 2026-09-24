@@ -1,18 +1,18 @@
-"""Observation keys of the roboarena wire protocol.
+"""Observation keys of the roboarena wire protocol, named once so both ends spell them the same."""
 
-The codec writes them when it encodes an observation and the source rebuilds them when it warms a freshly
-loaded checkpoint, so they are named once here rather than spelled out at each end.
-"""
+from positronic.offboard.roboarena import SESSION_ID as SESSION_ID
 
 JOINT_POSITION = 'observation/joint_position'
 GRIPPER_POSITION = 'observation/gripper_position'
 WRIST_IMAGE = 'observation/wrist_image_left'
 PROMPT = 'prompt'
-SESSION_ID = 'session_id'
 
 
 def exterior_image(index: int) -> str:
-    """The key of the ``index``-th exterior camera, counted from 0 as the server numbers them."""
+    """The key of the ``index``-th exterior camera.
+
+    DreamZero's own server counts ``index`` from 0, and a stock roboarena server counts it from 1.
+    """
     return f'observation/exterior_image_{index}_left'
 
 
@@ -22,3 +22,6 @@ RESOLUTION = 'image_resolution'
 NEEDS_WRIST_CAMERA = 'needs_wrist_camera'
 NEEDS_STEREO_CAMERA = 'needs_stereo_camera'
 NUM_EXTERIOR_CAMERAS = 'n_external_cameras'
+# Sent by a stock roboarena server and not by DreamZero's own.
+NEEDS_SESSION_ID = 'needs_session_id'
+ACTION_SPACE = 'action_space'

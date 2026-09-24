@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, final, overload
+from typing import Any, ClassVar, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
@@ -28,7 +28,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, _ComposedLayer
+from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -38,8 +38,8 @@ LEROBOT_FEATURES = 'lerobot_features'
 ACTION = 'action'
 
 
-def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
-    """LeRobot feature descriptor for a state vector."""
+def lerobot_vector(dim: int, names: list[str] | None = None) -> dict[str, Any]:
+    """LeRobot feature descriptor for a float32 vector."""
     f: dict[str, Any] = {'shape': (dim,), 'dtype': 'float32'}
     if names:
         f['names'] = names
@@ -53,10 +53,10 @@ def lerobot_image(width: int, height: int) -> dict[str, Any]:
 
 def lerobot_action(dim: int) -> dict[str, Any]:
     """LeRobot feature descriptor for an action vector."""
-    return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
+    return lerobot_vector(dim, ['actions'])
 
 
-class Codec(Layer):
+class Codec:
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
@@ -71,11 +71,13 @@ class Codec(Layer):
     """
 
     IMAGE_SIZES = 'image_sizes'
+    WIRE_NAME: ClassVar[str]
+    WIRE_VERSION: ClassVar[int] = 1
 
     def encode(self, data: dict) -> dict:
         return {}
 
-    def decode(self, data):
+    def decode(self, data: Any) -> Any:
         if isinstance(data, list):
             return [self.decode(d) for d in data]
         return self._decode_single(data)
@@ -91,22 +93,56 @@ class Codec(Layer):
     def meta(self) -> dict:
         return {}
 
-    def make_session(self, inner: Session):
-        return _CodecSession(inner, self)
+    @overload
+    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
 
     @overload
-    def __or__(self, other: 'Codec') -> 'Codec': ...
+    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
 
-    @overload
-    def __or__(self, other: Layer) -> Layer: ...
+    def wrap(
+        self, function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
+    ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        """Encode inputs and decode outputs around a callable or a primed processor run.
+
+        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
+        wrapped dependency, including closing it when it is a generator.
+        """
+        if isinstance(function, cabc.Generator):
+            run = self._wrap_run(function)
+            next(run)
+            return run
+
+        encode = telemetry.traced(
+            telemetry_keys.SPAN_POLICY_ENCODE, **{telemetry_keys.ATTR_CODEC: type(self).__name__}
+        )(self.encode)
+
+        @telemetry.traced(telemetry.component_name(self))
+        def call(obs: Obs) -> Any:
+            encoded = encode(dict(obs))
+            result = function(encoded)
+            if isinstance(result, Step):
+                return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
+            return self.decode(result) if result is not None else None
+
+        return call
+
+    def _wrap_run(self, inner: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]:
+        call = self.wrap(inner.send)
+        obs = yield
+        while True:
+            try:
+                result = call(obs)
+            except StopIteration:
+                return
+            obs = yield result
+
+    def to_spec(self) -> dict[str, Any]:
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
     @final
     def __or__(self, other) -> Any:
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
-        if isinstance(other, Layer):
-            # Mixed Codec | non-Codec layer → generic pipeline, not a Codec.
-            return _ComposedLayer((self, *other._layers()))
         return NotImplemented
 
     @final
@@ -114,27 +150,6 @@ class Codec(Layer):
         if isinstance(other, Codec):
             return _ParallelCodec(self, other)
         return NotImplemented
-
-
-class _CodecSession(DelegatingSession):
-    """Session wrapped with a codec: encodes observations, decodes actions."""
-
-    def __init__(self, inner: Session, codec: 'Codec'):
-        super().__init__(inner)
-        self._codec = codec
-
-    def __call__(self, obs, time_ns):
-        codec_name = {telemetry_keys.ATTR_CODEC: type(self._codec).__name__}
-        with telemetry.span(telemetry_keys.SPAN_POLICY_ENCODE, **codec_name):
-            encoded = self._codec.encode(obs)
-        action = self._inner(encoded, time_ns)
-        if action is None:
-            return None
-        return self._codec.decode(action)
-
-    @property
-    def meta(self):
-        return self._inner.meta | self._codec.meta
 
 
 def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
@@ -228,119 +243,30 @@ class _ParallelCodec(Codec):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
 
 
-def is_action(entry: dict) -> bool:
-    """True for a real command entry, False for a keyless validity sentinel.
+class Metadata(Codec):
+    """Attach metadata to a codec and its training transform without changing the data."""
 
-    Time codecs close a chunk with a timestamp-only sentinel marking where its validity ends
-    (see ``ActionTimestamp``). Consumers that classify or plot per-command fields skip the
-    sentinel through this predicate rather than hard-coding its shape.
-    """
-    return bool(entry.keys() - {obs_keys.ACTION_TIMESTAMP})
+    WIRE_NAME = 'metadata'
 
-
-class ActionTimestamp(Codec):
-    """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
-
-    Assigns ``timestamp = i * (1/fps)`` starting at 0. The scheduler anchors them to the
-    ``time_ns`` of the call that emits the chunk.
-
-    A K-action chunk covers K periods, so the list is closed with a sentinel entry —
-    a dict carrying only ``timestamp = K * (1/fps)`` and no command keys — stating when
-    the chunk's validity ends. The scheduler reads that end from the last entry, so the
-    final action gets a full period before re-inference. The sentinel carries no command
-    key, so the key-filtered demux emits it on no channel: drivers and recordings never
-    see it.
-
-    At training time, surfaces ``action_fps`` as transform metadata.
-    """
-
-    WIRE_NAME = 'action_timestamp'
-
-    def __init__(self, *, fps: float):
-        self._fps = fps
-        self._dt = 1.0 / fps
+    def __init__(self, values: dict[str, Any]):
+        self._values = dict(values)
 
     def encode(self, data):
         return data
 
     def decode(self, data):
-        # Build fresh entries rather than stamping in place: a session may hand back a cached template
-        # list, and appending the sentinel to it would regrow the chunk on every re-inference.
-        if isinstance(data, list):
-            stamped = [{**d, obs_keys.ACTION_TIMESTAMP: i * self._dt} for i, d in enumerate(data)]
-            if stamped:
-                stamped.append({obs_keys.ACTION_TIMESTAMP: len(stamped) * self._dt})
-            return stamped
-        return {**data, obs_keys.ACTION_TIMESTAMP: 0}
+        return data
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return dict(self._values)
 
     @property
     def training_encoder(self) -> EpisodeTransform:
         return Identity(meta=self.meta)
 
-    @property
-    def meta(self):
-        return {'action_fps': self._fps}
-
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'fps': self._fps}}
-
-
-class ActionHorizon(Codec):
-    """Truncates action chunks to a time horizon.
-
-    Keeps only actions whose (relative) ``timestamp`` is within ``horizon_sec``
-    of trajectory start. Single actions pass through.
-
-    When truncation drops entries, the kept list is closed with a sentinel entry —
-    a dict carrying only ``timestamp = horizon_sec`` and no command keys — marking the
-    boundary the chunk was cut at as where its validity ends, so the last surviving
-    action still gets a full period before re-inference. When nothing is dropped the
-    inner timestamp codec's own end-of-chunk sentinel already closes the list, so none
-    is added.
-
-    At training time, surfaces ``action_horizon_sec`` as transform metadata.
-    """
-
-    WIRE_NAME = 'action_horizon'
-
-    def __init__(self, horizon_sec: float):
-        self._horizon_sec = horizon_sec
-
-    def encode(self, data):
-        return data
-
-    def decode(self, data):
-        if isinstance(data, list):
-            # Treat untimestamped actions as t=0 so they always pass the horizon
-            # (servers may apply horizon truncation before stamping).
-            kept = [d for d in data if d.get(obs_keys.ACTION_TIMESTAMP, 0.0) < self._horizon_sec]
-            if len(kept) < len(data):
-                kept.append({obs_keys.ACTION_TIMESTAMP: self._horizon_sec})
-            return kept
-        return data
-
-    @property
-    def training_encoder(self) -> EpisodeTransform:
-        return Identity(meta=self.meta)
-
-    @property
-    def meta(self):
-        return {'action_horizon_sec': self._horizon_sec}
-
-    def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'horizon_sec': self._horizon_sec}}
-
-
-def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
-    """Convenience factory composing ``ActionTimestamp`` and ``ActionHorizon``.
-
-    Equivalent to ``ActionTimestamp(fps=fps) | ActionHorizon(horizon_sec)`` when
-    horizon_sec is set, or just ``ActionTimestamp(fps=fps)`` otherwise.
-    """
-    codec = ActionTimestamp(fps=fps)
-    if horizon_sec is not None:
-        codec = ActionHorizon(horizon_sec) | codec
-    return codec
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'values': self.meta}}
 
 
 class BinarizeGripTraining(Codec):
@@ -350,7 +276,7 @@ class BinarizeGripTraining(Codec):
     else 0.0) so the model learns to predict binary grip. Compose to the left of
     obs/action codecs::
 
-        timing | BinarizeGripTraining(('grip', 'target_grip')) | BinarizeGripInference() | obs & action
+        BinarizeGripTraining(('grip', 'target_grip')) | BinarizeGripInference() | obs & action
     """
 
     WIRE_NAME = 'binarize_grip_training'
@@ -381,7 +307,11 @@ class BinarizeGripTraining(Codec):
         return Group(Derive(**transforms), Identity())
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'keys': list(self._keys), 'threshold': self._threshold}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'keys': list(self._keys), 'threshold': self._threshold},
+        }
 
 
 class BinarizeGripInference(Codec):
@@ -389,7 +319,7 @@ class BinarizeGripInference(Codec):
 
     Compose to the left of action codecs so it runs after action decoding::
 
-        timing | BinarizeGripInference() | obs & action
+        BinarizeGripInference() | obs & action
     """
 
     WIRE_NAME = 'binarize_grip_inference'
@@ -411,7 +341,11 @@ class BinarizeGripInference(Codec):
         return data
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'threshold': self._threshold, 'key': self._key}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'threshold': self._threshold, 'key': self._key},
+        }
 
 
 class FlipGrip(Codec):
@@ -423,7 +357,7 @@ class FlipGrip(Codec):
 
     Compose to the left of obs/action codecs::
 
-        timing | FlipGrip() | obs & action
+        FlipGrip() | obs & action
     """
 
     WIRE_NAME = 'flip_grip'
@@ -444,7 +378,7 @@ class FlipGrip(Codec):
         return data
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
 def _usable_cpus() -> int:
@@ -473,9 +407,7 @@ class RestrictImageSize(Codec):
     already within it passes through untouched. This decides bandwidth, never geometry — the model's own
     codec still resizes exactly, and serving without this codec differs only in bytes on the wire.
 
-    Declared left of the ``remote`` marker, so the rig applies it before sending::
-
-        ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+    Place it in the client ``Sequential`` stack to apply it before sending observations to the server.
     """
 
     WIRE_NAME = 'restrict_image_size'
@@ -489,9 +421,9 @@ class RestrictImageSize(Codec):
         self._height = height
 
     def encode(self, data):
-        return {key: self._restrict(key, value) for key, value in data.items()}
+        return {key: self._restrict(value) for key, value in data.items()}
 
-    def _restrict(self, key: str, value: Any) -> Any:
+    def _restrict(self, value: Any) -> Any:
         # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
             # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
@@ -499,9 +431,9 @@ class RestrictImageSize(Codec):
                 return np.stack(self._scaled_frames(value))
             return _scaled(value, self._width, self._height)
         if isinstance(value, cabc.Mapping):
-            return {k: self._restrict(k, v) for k, v in value.items()}
+            return {k: self._restrict(v) for k, v in value.items()}
         if isinstance(value, list | tuple):
-            return type(value)(self._restrict(key, v) for v in value)
+            return type(value)(self._restrict(v) for v in value)
         return value
 
     def _workers(self, frames: int) -> int:
@@ -532,7 +464,7 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'width': self._width, 'height': self._height}}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'width': self._width, 'height': self._height}}
 
 
 class ChangeEEFrame(Codec):
@@ -624,8 +556,9 @@ class ChangeEEFrame(Codec):
     def to_spec(self):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.
         return {
-            'name': self.WIRE_NAME,
-            'args': {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
         }
 
 

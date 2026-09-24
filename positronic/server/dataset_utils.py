@@ -2,12 +2,13 @@
 
 import io
 import logging
+import math
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
@@ -18,12 +19,13 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 from av.video.stream import VideoStream
+from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind, TimelineColumn
 from rerun.urdf import UrdfTree
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import Kind, Signal
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -56,10 +58,13 @@ def _pose_color(name: str) -> list[int]:
     return _POSE_COLORS['default']
 
 
-# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
-# recording until they never decode.
+# A plot of more elements, or more distinct text values, than this is unreadable, and crowds the video
+# panels out of the recording until they never decode.
 # TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
 _MAX_PLOTTED_WIDTH = 32
+
+# The timeline every entity is logged on. The viewer page seeks on it by this name too.
+_TIMELINE = 'time'
 
 
 @dataclass
@@ -69,14 +74,31 @@ class EpisodeSignals:
     dims: dict[str, int]
     poses: list[str]
     joints: list[str]
+    # Each text signal's distinct values, in the order they first appear.
+    texts: dict[str, list[str]] = field(default_factory=dict)
+    # Width over height of each camera's frames.
+    camera_aspects: dict[str, float] = field(default_factory=dict)
+    neither_numeric_nor_text: list[str] = field(default_factory=list)
 
     @property
     def plotted(self) -> dict[str, int]:
         return {name: self.dims[name] for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH}
 
     @property
-    def unplotted(self) -> dict[str, int]:
-        return {name: dim for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
+    def plotted_texts(self) -> dict[str, list[str]]:
+        return {name: values for name, values in self.texts.items() if len(values) <= _MAX_PLOTTED_WIDTH}
+
+    @property
+    def unplotted(self) -> dict[str, str]:
+        """Each signal left out of the plots, and what it holds that a plot cannot show."""
+        wide = {name: f'{dim} values' for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
+        texts = {
+            name: f'{len(values)} distinct text values'
+            for name, values in self.texts.items()
+            if name not in self.plotted_texts
+        }
+        other = dict.fromkeys(self.neither_numeric_nor_text, 'values that are not numbers or text')
+        return wide | texts | other
 
 
 def _infer_dims(sig) -> int:
@@ -160,12 +182,13 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
 _UNPLOTTED_ENTITY = '/unplotted'
 
 
-def _unplotted_notice(unplotted: dict[str, int]) -> str:
-    lines = '\n'.join(f'- `{name}` — {dim} values' for name, dim in sorted(unplotted.items()))
+def _unplotted_notice(unplotted: dict[str, str]) -> str:
+    lines = '\n'.join(f'- `{name}` — {holds}' for name, holds in sorted(unplotted.items()))
     return (
         f'### Not plotted\n\n{lines}\n\n'
-        f'Wider than {_MAX_PLOTTED_WIDTH} values, so a per-element plot is unreadable and crowds out '
-        'the rest of the recording. The signals are in the episode and readable through the dataset API.'
+        f'A plot of more than {_MAX_PLOTTED_WIDTH} values or distinct text values is unreadable and crowds out '
+        'the rest of the recording. A text signal is in the text log. The signals are in the episode and '
+        'readable through the dataset API.'
     )
 
 
@@ -185,10 +208,19 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
-                sig[0]
+                height, width = np.asarray(sig[0][0]).shape[:2]
                 signals.videos.append(name)
+                signals.camera_aspects[name] = width / height
             except Exception:
-                pass
+                logging.exception(f'Image signal {name!r} has no readable first frame: it is absent from the recording')
+            continue
+
+        first = sig[0][0] if len(sig) else 0.0
+        if isinstance(first, str):
+            signals.texts[name] = list(dict.fromkeys(str(value) for value in sig.values()))
+            continue
+        if flatten_numeric(first) is None:
+            signals.neither_numeric_nor_text.append(name)
             continue
 
         try:
@@ -207,9 +239,49 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
 def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
     """Group plotted signals by prefix before the first '.'. Preserves insertion order."""
     groups: defaultdict[str, list[str]] = defaultdict(list)
-    for sig in signals.plotted:
+    for sig in [*signals.plotted, *signals.plotted_texts]:
         groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
+
+
+_TEXT_LOG_ENTITY = '/text'
+# A text log's own timeline: the `time` timeline reads as a date even where the clock counts from boot.
+_TIME_FROM_START = 'from start'
+
+
+def _text_log_view(sig: str) -> rrb.TextLogView:
+    hidden = [TextLogColumn(kind, visible=False) for kind in (TextLogColumnKind.EntityPath, TextLogColumnKind.LogLevel)]
+    # FOOTGUN: rerun draws the time cursor line in the `time` column only, so this view shows no cursor line.
+    columns = rrb.TextLogColumns(
+        timeline_columns=[TimelineColumn(_TIME_FROM_START, visible=True), TimelineColumn(_TIMELINE, visible=False)],
+        text_log_columns=[*hidden, TextLogColumn(TextLogColumnKind.Body)],
+    )
+    return rrb.TextLogView(name=sig, origin=f'{_TEXT_LOG_ENTITY}/{sig}', columns=columns)
+
+
+# The layout is sized for a viewer this many times wider than tall: a wide browser window under the page header.
+_VIEWER_ASPECT = 2.4
+# Width over height a signal plot reads best at.
+_PLOT_CELL_ASPECT = 2.0
+# The cameras' share of the top row, and the 3D view's.
+_TOP_ROW_SHARES = [3, 1]
+_NO_CAMERA_TOP_SHARE = 0.75
+
+
+def _camera_row_share(signals: EpisodeSignals) -> float:
+    """The share of the viewer's height that shows every camera, side by side, without black bands."""
+    width = _TOP_ROW_SHARES[0] / sum(_TOP_ROW_SHARES) if signals.poses else 1.0
+    return float(np.clip(width / sum(signals.camera_aspects.values()) * _VIEWER_ASPECT, 0.2, 0.75))
+
+
+def _series_columns(cells: int, height_share: float) -> int:
+    """The column count that brings a grid of ``cells`` closest to plot-shaped cells."""
+    area_aspect = _VIEWER_ASPECT / height_share
+
+    def miss(columns: int) -> float:
+        return abs(math.log(area_aspect * math.ceil(cells / columns) / columns / _PLOT_CELL_ASPECT))
+
+    return min(range(1, cells + 1), key=miss)
 
 
 def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
@@ -223,21 +295,38 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
             axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
 
-    # Group time series by prefix, each group becomes a Tabs container
-    series_views = []
+    def _steps_view(sig: str) -> rrb.TimeSeriesView:
+        return rrb.TimeSeriesView(
+            name=sig,
+            origin=f'/signals/{sig}',
+            plot_legend=rrb.PlotLegend(visible=True),
+            axis_y=rrb.ScalarAxis(range=(-0.5, len(signals.texts[sig]) - 0.5), zoom_lock=True),
+        )
+
+    def _view(sig: str) -> rrb.TimeSeriesView:
+        return _steps_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
+
+    # Group time series by prefix, each group becomes a Tabs container that opens on its first text signal.
+    # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
+    series_views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
-            view = _ts_view(sigs[0])
+            view = _view(sigs[0])
         else:
-            view = rrb.Tabs(*[_ts_view(sig) for sig in sigs], name=group_name)
+            texts = [index for index, sig in enumerate(sigs) if sig in signals.plotted_texts]
+            view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         series_views.append(view)
+        series_views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
+    series_views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
     if signals.unplotted:
         series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
 
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
     if image_views:
-        top_items.append(rrb.Grid(*image_views))
+        # Widths in proportion to the aspect ratios give every camera one height.
+        aspects = [signals.camera_aspects[k] for k in signals.videos]
+        top_items.append(rrb.Horizontal(*image_views, column_shares=aspects))
     if signals.poses:
         eye = _compute_eye_controls(signals, ep)
         top_items.append(
@@ -252,18 +341,20 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 
     rows = []
     row_shares = []
+    top_share = _camera_row_share(signals) if image_views else _NO_CAMERA_TOP_SHARE
     if top_items:
-        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=[3, 1]))
-        row_shares.append(3)
+        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
+        row_shares.append(top_share)
     if series_views:
-        rows.append(rrb.Grid(*series_views))
-        row_shares.append(1)
+        series_share = 1 - top_share if top_items else 1.0
+        rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
+        row_shares.append(series_share)
 
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
-        rrb.TimePanel(state=rrb.PanelState.Collapsed),
+        rrb.TimePanel(state=rrb.PanelState.Collapsed, timeline=_TIMELINE),
         rrb.Vertical(*rows, row_shares=row_shares),
     )
 
@@ -338,7 +429,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
         for packet in packets:
             assert packet.pts is not None
-            set_timeline_time('time', times_by_pts[packet.pts])
+            set_timeline_time(_TIMELINE, times_by_pts[packet.pts])
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
     first_frame = np.asarray(sig[0][0])
@@ -417,7 +508,7 @@ def _log_video_signals(
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
                 name,
-                indexes=[rr.TimeColumn('time', timestamp=our_ts[kept])],
+                indexes=[rr.TimeColumn(_TIMELINE, timestamp=our_ts[kept])],
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
@@ -426,7 +517,7 @@ def _log_video_signals(
 
 
 def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None:
-    time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
+    time_idx = [rr.TimeColumn(_TIMELINE, timestamp=ts_arr)]
     if vals.shape[1] == 1:
         rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
         return
@@ -542,7 +633,7 @@ def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, entity_path:
         quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
     rr.send_columns(
         entity_path,
-        indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+        indexes=[rr.TimeColumn(_TIMELINE, timestamp=ts_arr)],
         columns=rr.Transform3D.columns(
             translation=translations,
             quaternion=quaternions,
@@ -637,13 +728,63 @@ def _log_pose_signals(
 
         rr.send_columns(
             f'/3d/{key}',
-            indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+            indexes=[rr.TimeColumn(_TIMELINE, timestamp=ts_arr)],
             columns=[
                 *rr.Points3D.columns(positions=positions).partition([1] * len(ts_arr)),
                 *rr.Points3D.columns(colors=np.tile(color, (len(ts_arr), 1))).partition([1] * len(ts_arr)),
                 *rr.Points3D.columns(radii=np.full(len(ts_arr), 0.01)),
             ],
         )
+        yield from drainer.drain()
+
+
+def _changes(values: np.ndarray) -> np.ndarray:
+    """Indices where ``values`` differ from the sample before, the first sample included."""
+    return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
+
+
+def _to_centiseconds(durations: np.ndarray) -> np.ndarray:
+    """``durations`` rounded to 10 ms, so the viewer prints them short."""
+    step = np.timedelta64(10, 'ms')
+    return np.round(durations / step).astype(np.int64) * step
+
+
+def _recording_start(ep_signals: dict[str, Signal[Any]], signals: EpisodeSignals) -> np.datetime64:
+    """The first time the recording logs, which the viewer's time and its `?t=` link count from."""
+    logged = {*signals.videos, *signals.plotted, *signals.texts, *signals.poses, *signals.joints}
+    starts = [ep_signals[name].start_ts for name in logged if len(ep_signals[name])]
+    return np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
+
+
+def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+    """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
+
+    A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
+    """
+    plotted = signals.plotted_texts
+    ep_signals = ep.signals  # `Episode.signals` builds a new dict on every read
+    recording_start = _recording_start(ep_signals, signals)
+    for key in signals.texts:
+        sig = ep_signals[key]
+        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        texts = np.asarray([str(value) for value in sig.values()], dtype=object)
+        changes = _changes(texts)
+        time_idx = [
+            rr.TimeColumn(_TIMELINE, timestamp=ts_arr[changes]),
+            rr.TimeColumn(_TIME_FROM_START, duration=_to_centiseconds(ts_arr[changes] - recording_start)),
+        ]
+        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
+
+        if key in plotted:
+            values = plotted[key]
+            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
+            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
+            rr.log(f'/signals/{key}', style, static=True)
+            # The last sample holds the final value to the end of the episode.
+            shown = np.union1d(changes, [len(texts) - 1])
+            index_of = {value: index for index, value in enumerate(values)}
+            indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
+            _send_scalar_columns(key, ts_arr[shown], indices.reshape(-1, 1))
         yield from drainer.drain()
 
 
@@ -662,6 +803,7 @@ def stream_episode_rrd(
     """
 
     ep = ds[episode_id]
+    assert isinstance(ep, Episode)
     logging.info(f'Streaming RRD for episode {episode_id}')
 
     dataset_root = get_dataset_root(ds)
@@ -684,6 +826,7 @@ def stream_episode_rrd(
 
         yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz)
         pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz)
+        yield from _log_text_signals(ep, signals, drainer)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
         yield from _log_pose_signals(ep, signals, pose_data, drainer)
 

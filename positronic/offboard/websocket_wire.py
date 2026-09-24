@@ -1,10 +1,12 @@
 """The server side of the websocket wire."""
 
+import asyncio
 import dataclasses
 import errno
 import os
 import socket
 import stat
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
+from starlette.websockets import WebSocketState
 
 from . import keys, server_wire
 
@@ -163,6 +166,7 @@ class WebsocketWire(server_wire.Wire):
     # How long ``stop`` lets an open session finish before it cuts the connection. The uvicorn default
     # waits for ever, and a session mid-inference holds the whole server open.
     STOP_GRACE_SEC = 2
+    CLOSE_TIMEOUT_SEC = 5
 
     def __init__(self, served_address: server_wire.ServedAddress):
         if isinstance(served_address, ServedUnixSocket) and not served_address.uds.is_absolute():
@@ -206,6 +210,8 @@ class WebsocketWire(server_wire.Wire):
             log_level='info',
             ws=WS_IMPL,
             ws_max_size=wire.MAX_MESSAGE_BYTES,
+            # Deflate stays off for a client that offers it too, for the reason in positronic_wire.websocket.
+            ws_per_message_deflate=False,
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
@@ -218,20 +224,28 @@ class WebsocketWire(server_wire.Wire):
             if not authorized(websocket.headers):
                 raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
-        async def serve_pinned_model(websocket: WebSocket) -> None:
-            """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
-            await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.served_address), None)
-
-        async def serve_named_model(websocket: WebSocket, model_id: str) -> None:
+        async def serve_model(websocket: WebSocket, model_id: str | None) -> None:
             await websocket.accept()
             await session(WebsocketServerConnection(websocket, self.served_address), model_id)
+            if (
+                websocket.application_state is WebSocketState.CONNECTED
+                and websocket.client_state is WebSocketState.CONNECTED
+            ):
+                # A server-initiated close can discard the final message on Unix sockets.
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(websocket.receive(), timeout=self.CLOSE_TIMEOUT_SEC)
+                if websocket.client_state is WebSocketState.CONNECTED:
+                    await websocket.close()
+
+        async def serve_pinned_model(websocket: WebSocket) -> None:
+            """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
+            await serve_model(websocket, None)
 
         auth = [Depends(require_auth)]
         app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)
         # ``:path``: a model id can itself be a path (a HuggingFace repo), and opens under the name the
         # catalogue advertises.
-        app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_named_model)
+        app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_model)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

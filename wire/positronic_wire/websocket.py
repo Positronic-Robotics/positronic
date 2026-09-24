@@ -59,7 +59,7 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 
 
-def _refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
+def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
     """What a handshake that did not open says about the server."""
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)
@@ -80,7 +80,7 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
 
     def _refusal(self, raised: OSError | InvalidHandshake | ConnectionClosed, address: wire.AddressT) -> wire.Refusal:
         """What a handshake that did not open says about the server, in this wire's terms."""
-        return _refusal_of(raised)
+        return refusal_of(raised)
 
     @abc.abstractmethod
     def _connect(self, address: wire.AddressT, **settings) -> Connection:
@@ -123,6 +123,8 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
                 additional_headers=headers,
                 ping_interval=20.0,
                 max_size=wire.MAX_MESSAGE_BYTES,
+                # Deflate costs ~100 ms of sender CPU on three raw 640x400 frames; compress_images makes them small.
+                compression=None,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (connecting to {url})') from e

@@ -105,6 +105,33 @@ def test_nested_spans_round_trip(tmp_path):
     assert spans['inner'].end_ns >= spans['inner'].start_ns
 
 
+def test_scoped_spans_nest_without_an_episode_anchor(tmp_path):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'scoped'):
+        with telemetry.span('parent'):
+            with telemetry.span('child'):
+                pass
+        with telemetry.span('outside'):
+            pass
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    assert spans['child'].parent_id == spans['parent'].span_id
+    assert spans['outside'].parent_id is None
+
+
+def test_timing_sink_without_exporter_reports_failures_and_restores_scope(monkeypatch):
+    now = 0
+    monkeypatch.setattr(telemetry.time, 'time_ns', lambda: now)
+    timings = []
+    with telemetry.timings_to(lambda *args: timings.append(args)):
+        with pytest.raises(ValueError, match='failed'):
+            with telemetry.span('outer'):
+                with telemetry.span('inner'):
+                    now = 10
+                    raise ValueError('failed')
+    with telemetry.span('outside'):
+        pass
+    assert timings == [('inner', 0, 10), ('outer', 0, 10)]
+
+
 def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
     """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial param
     holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""

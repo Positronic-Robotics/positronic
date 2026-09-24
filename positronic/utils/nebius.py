@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from positronic.offboard.server import AUTH_TOKEN_ENV
+from positronic.offboard.protocol import AUTH_TOKEN_ENV
 
 # The project holding the secrets, and the secret `serve.sh` injects into every endpoint it creates.
 # `workflows/nebius/common.sh` carries the same two values under the same overrides for the shell scripts;

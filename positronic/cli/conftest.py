@@ -22,6 +22,11 @@ ID = '5f3a91c2b7d40e18'
 AT = '2026-03-04T05:06:07Z'
 
 
+def runs_of_four(secret: str) -> set[str]:
+    """Every four characters of `secret` in a row. A partial echo in a refusal contains one."""
+    return {secret[at : at + 4] for at in range(len(secret) - 3)}
+
+
 class StubPlatform:
     """Records what a command sent, and the URL and key it was sent with, and answers a canned payload."""
 

@@ -1,13 +1,12 @@
 """The part of `positronic eval run` that files an eval plan for the lab rig."""
 
-from collections.abc import Mapping
+import functools
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode
-from platform_client.ids import TransactionKey
+from platform_client.eval_plan import EvalPlan, PrivateEval, RegistryCredentialFile, plan_with_passwords_read
+from platform_client.ids import OrgSlug
 from platform_client.responses import SubmissionCreateResponse
-from platform_client.tasks import TaskRef
 from pydantic import ValidationError
 
 from positronic.cli.account.gateway import gateway, one_line
@@ -15,43 +14,89 @@ from positronic.cli.account.gateway import gateway, one_line
 # The plan fields the command line states beside a plan file.
 TRANSACTION_KEY_FIELD = 'transaction_key'
 ALIAS_FIELD = 'alias'
+REQUEST_TYPE_FIELD = 'request_type'
+
+
+class _KeyGivenTwice(yaml.constructor.ConstructorError):
+    """A plan repeated a mapping key. The message names the key only where it is a plan field."""
+
+
+@functools.cache
+def _plan_field_names() -> frozenset[str]:
+    """Every name a plan file's schema declares, at any depth."""
+    schema = EvalPlan[RegistryCredentialFile].model_json_schema()
+    names = set(schema.get('properties', ()))
+    for definition in schema.get('$defs', {}).values():
+        names.update(definition.get('properties', ()))
+    return frozenset(names)
 
 
 class _OneValuePerKey(yaml.SafeLoader):
     """`yaml.safe_load` keeps the last of two equal keys. A plan that repeats one states two counts or
-    two caps, and the one it keeps is a typo, so a repeated key is refused by name."""
+    two caps, and the one it keeps is a typo, so a repeated key is refused.
+
+    This runs over every mapping in the file, so a key is not always a plan field. A key the plan
+    does not declare is a caller's own text, and goes unnamed.
+    """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
         seen: set[str] = set()
         for key_node, _ in node.value:
             key = self.construct_object(key_node, deep=deep)
             if isinstance(key, str) and key in seen:
-                raise yaml.constructor.ConstructorError(None, None, f'{key!r} is given twice', key_node.start_mark)
+                stated = repr(key) if key in _plan_field_names() else 'a key'
+                raise _KeyGivenTwice(None, None, f'{stated} is given twice', key_node.start_mark)
             if isinstance(key, str):
                 seen.add(key)
         return super().construct_mapping(node, deep=deep)
 
 
-def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
+def _refusal(exc: yaml.YAMLError) -> str:
+    """Why the plan was refused, and where, in this file's own words.
+
+    PyYAML renders what it read into the mark's snippet and into `problem`: a source line, an
+    alias, an anchor, a tag. A refusal prints none of that text, and says where the parser stopped.
+    `_KeyGivenTwice` carries this file's own message, whose key `_plan_field_names` has already
+    cleared.
+    """
+    mark = None
+    if isinstance(exc, yaml.MarkedYAMLError):
+        mark = exc.problem_mark or exc.context_mark
+    where = f', at line {mark.line + 1}, column {mark.column + 1}' if mark is not None else ''
+    if isinstance(exc, _KeyGivenTwice):
+        return f'{exc.problem}{where}'
+    return f'it reads as neither YAML nor JSON{where}'
+
+
+def read_plan(
+    path: Path, transaction_key: str | None = None, alias: str | None = None, org: str | None = None
+) -> EvalPlan:
     """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
 
-    `--transaction-key` and `--alias` are the plan fields the command line states beside a file: each
-    belongs to one filing, and the file names the plan. A file carrying either takes no flag for it.
+    A credential in the file names the file its password is in, and the plan this returns holds the
+    password read from it.
+
+    `--transaction-key`, `--alias` and `--org` are the plan fields the command line states beside a
+    file. A file carrying one takes no flag for it. `--org` states a private request for that org.
     """
     try:
         payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
     except OSError as exc:
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
-        raise SystemExit(f'{path} reads as neither YAML nor JSON: {exc}') from exc
-    for field, stated in ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias)):
+        raise SystemExit(f'{path}: {_refusal(exc)}') from exc
+    # Unvalidated here: `EvalPlan` validates it with the rest of the plan, inside the refusal below.
+    request_type = PrivateEval.model_construct(org=OrgSlug(org)).model_dump() if org is not None else None
+    stated_fields = ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias), (REQUEST_TYPE_FIELD, request_type))
+    for field, stated in stated_fields:
         if stated is None or not isinstance(payload, dict):
             continue
         if field in payload:
-            raise SystemExit(f'{path} carries {field}; drop --{field.replace("_", "-")}')
+            flag = 'org' if field == REQUEST_TYPE_FIELD else field.replace('_', '-')
+            raise SystemExit(f'{path} carries {field}; drop --{flag}')
         payload = {**payload, field: stated}
     try:
-        return EvalPlan.model_validate(payload)
+        return plan_with_passwords_read(EvalPlan[RegistryCredentialFile].model_validate(payload))
     except ValidationError as exc:
         raise SystemExit(f'{path}: {one_line(exc)}') from exc
 
@@ -59,75 +104,6 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
 def given(value: object) -> bool:
     """Whether a flag was given. An unstated flag is `None`, so `0`, `""` and `False` are values."""
     return value is not None
-
-
-def flag_entries(value: object, flag: str) -> list[str]:
-    """The entries of a repeatable flag, in both forms the command line produces.
-
-    The CLI reads a value with `ast.literal_eval`: `[a,b]` arrives as a list, and a value it cannot
-    read (a hyphen or a `=` inside the brackets) arrives as text. This splits the text on commas,
-    so `--tasks=[a,b]` and `--tasks=a-b,c-d` state one list.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list | tuple):
-        entries = [str(entry) for entry in value]
-    elif isinstance(value, str):
-        # Only a pair that brackets the WHOLE value is a list. A URL may end in `]`
-        # (`wss://[::1]`), and trimming that alone would hand on a malformed address.
-        bracketed = value.startswith('[') and value.endswith(']')
-        entries = (value[1:-1] if bracketed else value).split(',')
-    else:
-        raise SystemExit(f'{flag} takes text; quote a value that reads as a number: \'"{value}"\'')
-    stripped = [entry.strip() for entry in entries]
-    if not all(stripped):
-        raise SystemExit(f'{flag} carries an empty entry: {value!r}')
-    return stripped
-
-
-def endpoint_of(spec: str, position: int) -> Endpoint:
-    """One `--policy-url` entry: `NAME=URL`, or a bare URL named for its place in the list.
-
-    A URL carries `=` in a query string, so the part before the first one is a label only where it
-    names no scheme and no path.
-    """
-    label, separator, address = spec.partition('=')
-    if separator and ':' not in label and '/' not in label:
-        return Endpoint(name=label, url=address)
-    return Endpoint(name=f'policy{position}', url=spec)
-
-
-def plan_from_flags(
-    *,
-    policy_url: object,
-    tasks: object,
-    episodes: int | None,
-    cap: int | None,
-    preset: str | None,
-    transaction_key: str | None,
-    alias: str | None = None,
-) -> EvalPlan:
-    """The plan the rig flags state."""
-    task_ids = flag_entries(tasks, '--tasks')
-    urls = flag_entries(policy_url, '--policy-url')
-    if not task_ids or not urls or episodes is None:
-        raise SystemExit('a rig run states --tasks, --policy-url and --episodes, or the whole plan in a file')
-    try:
-        return EvalPlan(
-            tasks=[TaskNode(task_id=TaskRef(task_id)) for task_id in task_ids],
-            endpoints=[endpoint_of(spec, position) for position, spec in enumerate(urls, start=1)],
-            episodes_per_endpoint=episodes,
-            cap_per_episode_sec=cap,
-            policy_preset=preset,
-            transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
-            alias=alias,
-        )
-    except ValidationError as exc:
-        raise SystemExit(one_line(exc)) from exc
-    except ValueError as exc:
-        # A field type refuses its own value before the model sees it: a task id that is no id,
-        # an endpoint URL with no host. The message already names what it refused.
-        raise SystemExit(str(exc)) from exc
 
 
 def file_plan(plan: EvalPlan, platform_url: str | None = None) -> SubmissionCreateResponse:
@@ -152,10 +128,3 @@ def plan_source(eval: object, from_file: str | None) -> Path | None:
     if eval is not None:
         raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
     return Path(from_file)
-
-
-def refusing_a_second_source(source: Path, stated: Mapping[str, object]) -> None:
-    """Exit when a plan file and plan flags are both given: one source states the plan."""
-    twice = sorted(flag for flag, value in stated.items() if given(value))
-    if twice:
-        raise SystemExit(f'{source} carries the whole plan; drop {", ".join(twice)}')

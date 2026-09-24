@@ -7,7 +7,7 @@ command channel, and nothing but the channel tells that mapping from any other d
 
 import collections.abc as cabc
 import functools
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Any
 
 import msgpack
@@ -16,6 +16,16 @@ import numpy as np
 from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.utils import serialization
+from positronic.utils.versions import Version
+
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+AUTH_HEADER = 'Authorization'
+
+
+def bearer(token: str) -> str:
+    """The authorization header value for a bearer token."""
+    return f'Bearer {token}'
+
 
 # The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
 # and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
@@ -24,6 +34,23 @@ MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
 ERROR = 'error'
+# The ready handshake issues an ID. Requests carry it beside the observation, and an end request
+# is acknowledged with the same ID after the model releases the session's state.
+SESSION_ID = 'session_id'
+OBSERVATION = 'observation'
+END_SESSION = 'end_session'
+PROTOCOL_VERSION = 'protocol_version'
+
+
+class ProtocolVersion(IntEnum):
+    V1 = 1
+    V2 = 2
+
+
+CURRENT_VERSION = ProtocolVersion.V2
+VERSIONS = {version.value: Version(version) for version in ProtocolVersion}
+
+
 # What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
 # milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
 TIMING = 'timing'
@@ -41,7 +68,7 @@ def timing_key(name: str) -> str:
     return f'{name}_ms'
 
 
-# What a blocking session's call is timed as: the heavy work it waits out.
+# The loaded model's call, excluding codec conversions.
 MODEL_CALL = 'model'
 # Time the model's own call took, inside `INFER`.
 TIMING_MODEL = timing_key(MODEL_CALL)

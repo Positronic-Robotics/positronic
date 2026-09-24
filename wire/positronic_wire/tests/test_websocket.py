@@ -3,6 +3,7 @@
 import dataclasses
 import socket
 import ssl
+import threading
 from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from positronic_wire import websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidStatus
 from websockets.http11 import Response
+from websockets.sync.server import serve
 
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
@@ -64,6 +66,35 @@ def test_a_handshake_that_does_not_open_is_a_refusal_naming_the_url(raised, refu
         websocket.WebsocketClientWire().dial(_ADDRESS, None, 1.0)
     assert refused.value.refusal is refusal
     assert refused.value.__cause__ is raised
+
+
+def test_a_dial_carries_the_headers_on_the_handshake():
+    with patch('positronic_wire.websocket.connect') as connect:
+        websocket.WebsocketClientWire().dial(_ADDRESS, {'Modal-Key': 'k'}, 3.0)
+    assert connect.call_args.kwargs['additional_headers'] == {'Modal-Key': 'k'}
+
+
+def test_a_dial_negotiates_no_deflate_with_a_server_that_offers_it():
+    """A stock websockets server offers permessage-deflate, and the session still opens uncompressed."""
+    negotiated = []
+
+    def echo(connection):
+        negotiated.append(connection.protocol.extensions)
+        connection.send(connection.recv())
+
+    with serve(echo, '127.0.0.1', 0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.socket.getsockname()[1]
+        connection = websocket.WebsocketClientWire().dial(
+            dataclasses.replace(_ADDRESS, host='127.0.0.1', port=port), None, 5.0
+        )
+        try:
+            connection.send(b'frame')
+            assert connection.recv(timeout=5.0) == b'frame'
+        finally:
+            connection.close()
+        server.shutdown()
+    assert negotiated == [[]]
 
 
 def test_a_probe_asks_the_host_root_with_the_headers():

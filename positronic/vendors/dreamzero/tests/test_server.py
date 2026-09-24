@@ -1,6 +1,10 @@
 from pathlib import Path
+from unittest.mock import Mock
 
+import numpy as np
 import pytest
+from positronic_wire import roboarena as roboarena_wire
+from positronic_wire import wire
 
 pytest.importorskip('huggingface_hub')
 
@@ -60,7 +64,7 @@ def test_run_directory_is_served_at_its_latest_step(holding):
     assert source.get_models() == ['100000']
     # rules-allow: hardcoded-keys — the wire spelling is what this asserts; reading it from the same
     # constants the code writes with would pass whatever those constants held.
-    assert source.meta('100000') == {
+    assert source.load('100000').meta() == {
         'type': 'dreamzero',
         'backbone': 'wan2.2',
         'num_gpus': 1,
@@ -73,11 +77,11 @@ def test_a_newer_checkpoint_does_not_displace_the_id_being_loaded(holding):
     downloaded = holding('100000', '105000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
-    source.load('100000')
+    model = source.load('100000')
 
     assert downloaded == [RUN_DIR + 'checkpoint-100000']
     # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
-    assert source.meta('100000')['checkpoint_path'] == RUN_DIR + 'checkpoint-100000'
+    assert model.meta()['checkpoint_path'] == RUN_DIR + 'checkpoint-100000'
 
 
 def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(holding):
@@ -153,12 +157,12 @@ def test_warmup_observation_drops_a_camera_the_server_does_not_want():
     assert roboarena.exterior_image(1) not in obs
 
 
-def test_meta_does_not_relist_the_bucket(monkeypatch):
+def test_meta_does_not_relist_the_bucket(monkeypatch, holding):
     monkeypatch.setattr(server, 'list_checkpoints', lambda _path, prefix='': pytest.fail('meta must not reach S3'))
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
     # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
-    assert source.meta('100000')['experiment_name'] == 'w22f1_100k_200626'
+    assert source.load('100000').meta()['experiment_name'] == 'w22f1_100k_200626'
 
 
 def test_a_server_that_announces_no_resolution_cannot_be_warmed():
@@ -171,3 +175,45 @@ def test_a_server_that_announces_no_resolution_cannot_be_warmed():
 
     with pytest.raises(ValueError, match='no image resolution'):
         _warm_observation(announced, 'session-1')
+
+
+def test_session_owns_video_cache_and_probe_cannot_reset_it(monkeypatch):
+    first, second = Mock(), Mock()
+    first.infer.return_value = second.infer.return_value = np.zeros((24, 8))
+    monkeypatch.setattr(server, 'RoboarenaClient', Mock(side_effect=[first, second]))
+    backend = Mock(roboarena_port=1234)
+    model = server.DreamZeroModel(backend, {})
+    try:
+        assert len(model({}, session_id='first')) == 24
+        assert first.infer.call_args.args[0][roboarena.SESSION_ID] == 'first'
+        model.end_session('probe')
+        first.reset.assert_not_called()
+        with pytest.raises(RuntimeError, match='another session'):
+            model({}, session_id='second')
+        model.end_session('first')
+        first.reset.assert_called_once_with(session_id='first')
+        first.close.assert_called_once()
+        assert len(model({}, session_id='second')) == 24
+        model.end_session('second')
+        second.reset.assert_called_once_with(session_id='second')
+    finally:
+        model.close()
+    backend.stop.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'failure',
+    [roboarena_wire.TextAnswer('CUDA out of memory'), wire.ConnectRefused(wire.Refusal.FINAL, 'CUDA out of memory')],
+)
+def test_a_reset_that_fails_is_logged_and_the_client_closed(monkeypatch, caplog, failure):
+    client = Mock()
+    client.infer.return_value = np.zeros((24, 8))
+    client.reset.side_effect = failure
+    monkeypatch.setattr(server, 'RoboarenaClient', Mock(return_value=client))
+    model = server.DreamZeroModel(Mock(roboarena_port=1234), {})
+    model({}, session_id='first')
+
+    model.end_session('first')
+
+    assert 'CUDA out of memory' in caplog.text
+    client.close.assert_called_once()

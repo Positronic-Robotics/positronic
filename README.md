@@ -250,15 +250,8 @@ Progress to OpenPI or GR00T when you need more capable models. See:
 
 ### 4. Run Inference and Iterate
 
-Run trained policies through the [eval runner](positronic/cli/eval/run.py):
-
-```bash
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-    --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
-    --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --eval.timeout=60 \
-    --output_dir=~/datasets/inference_logs/stack_cubes_act
-```
+Run a model server on the same machine or a GPU host, then connect it to the
+[eval runner](positronic/cli/eval/run.py).
 
 **Remote inference** (run policy on a different machine):
 

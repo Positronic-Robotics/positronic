@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from positronic_wire import grpc, websocket, wire
+from positronic_wire import grpc, roboarena, websocket, wire
 
 # One stateless wire per name. A wire holds no address: the caller builds the wire's own and hands it in.
 CLIENT_WIRES: dict[str, wire.ClientWire[Any]] = {
@@ -13,6 +13,7 @@ CLIENT_WIRES: dict[str, wire.ClientWire[Any]] = {
         websocket.WebsocketUnixClientWire(),
         grpc.GrpcClientWire(),
         grpc.GrpcTlsClientWire(),
+        roboarena.RoboarenaClientWire(),
     )
 }
 
