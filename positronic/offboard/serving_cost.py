@@ -169,8 +169,8 @@ def against_server(
 ) -> Iterator[Measured]:
     """A session on the named server, running the stack and wire settings that server declares.
 
-    ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), and ``address`` is
-    the one that wire dials. ``headers`` carries the credential a served endpoint asks for; a run that
+    ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), which dials
+    ``address``. ``headers`` carries the credential a served endpoint asks for; a run that
     names none sends none, so ``--server_address`` cannot hand a token to a host the operator did not
     mean to authenticate to.
     """
