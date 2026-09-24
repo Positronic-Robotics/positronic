@@ -271,11 +271,6 @@ class PolicyServer:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
 
-    def _load(self) -> None:
-        self._checkpoint_id = self._source.checkpoint_id()
-        logger.info(f'Loading checkpoint {self._checkpoint_id}')
-        self._model = self._source.load(self._checkpoint_id, logger.info)
-
     async def _idle_watchdog(self):
         """Return once no session has touched the server for ``idle_timeout_min``."""
         assert self.idle_timeout_min is not None
@@ -300,6 +295,11 @@ class PolicyServer:
         if failed:
             # A wire that ended on an error raises; a silent return reads as a shutdown.
             raise failed[0][1]
+
+    def _load(self) -> None:
+        self._checkpoint_id = self._source.checkpoint_id()
+        logger.info(f'Loading checkpoint {self._checkpoint_id}')
+        self._model = self._source.load(self._checkpoint_id, logger.info)
 
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
