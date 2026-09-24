@@ -162,12 +162,10 @@ class GalaxeaSource(ModelSource):
         self._port = backend_port
         self._timeout = infer_timeout
 
-    def get_models(self) -> list[str]:
-        return [protocol.MODEL_ID]
+    def checkpoint_id(self) -> str:
+        return protocol.MODEL_ID
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        if model_id != protocol.MODEL_ID:
-            raise ValueError(f'Unknown Galaxea model: {model_id}')
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         backend = _BackendProcess(self._root, self._checkpoint, self._device, self._port)
         try:
             backend.start(on_progress)

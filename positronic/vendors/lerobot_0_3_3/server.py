@@ -18,7 +18,7 @@ from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
-from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
+from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, _detect_device, warm_observation
 
@@ -32,8 +32,8 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
 
 
 class LerobotSource(ModelSource):
-    """In-process LeRobot checkpoints from one experiment directory (its ``checkpoints/`` subdirectory),
-    which ``load`` downloads one at a time.
+    """One in-process LeRobot checkpoint from an experiment directory (its ``checkpoints/`` subdirectory):
+    ``checkpoint``, else the latest one.
 
     ``policy_factory`` builds the backbone policy from a checkpoint path — that is its whole contract,
     so any callable returning a ``PreTrainedPolicy`` works. ``model_type`` names what it built, for the
@@ -55,17 +55,14 @@ class LerobotSource(ModelSource):
         self._model_type = model_type
         self._experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
 
-    def get_models(self) -> list[str]:
-        return list_checkpoints(self._checkpoints_dir)
+    def checkpoint_id(self) -> str:
+        return resolve_checkpoint(self._checkpoints_dir, self._checkpoint)
 
-    def resolve(self, model_id: str | None) -> str:
-        return resolve_checkpoint(self._checkpoints_dir, self._checkpoint, model_id)
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        checkpoint_path = f'{self._checkpoints_dir}/{model_id}/{PRETRAINED_MODEL_DIR}'
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        checkpoint_path = f'{self._checkpoints_dir}/{checkpoint_id}/{PRETRAINED_MODEL_DIR}'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         local = run_with_progress(
-            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}', on_progress
         )
         backbone = self._policy_factory(str(local))
         meta = {

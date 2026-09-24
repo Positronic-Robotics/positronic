@@ -12,21 +12,21 @@ from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
 
 
-def _source(monkeypatch, checkpoints: list[str]) -> gr00t_server.Gr00tSource:
+def _source(monkeypatch, checkpoints: list[str], checkpoint: str | None) -> gr00t_server.Gr00tSource:
     monkeypatch.setattr(gr00t_server, 'list_checkpoints', lambda _dir, prefix='': checkpoints)
-    return gr00t_server.droid.override_data(**{'source.model_source': 's3://bucket/exp'})().source
+    overrides = {'source.model_source': 's3://bucket/exp', 'source.checkpoint': checkpoint}
+    return gr00t_server.droid.override_data(**overrides)().source
 
 
-def test_zero_padded_checkpoints_are_served_under_the_id_they_advertise(monkeypatch):
-    """The padding is the directory's, not the model's: a client asking for the advertised id must be
-    recorded under that same id, or analysis splits one checkpoint in two."""
-    source = _source(monkeypatch, ['checkpoint-005000', 'checkpoint-010000'])
+@pytest.mark.parametrize(('checkpoint', 'expected'), [(None, '10000'), ('5000', '5000'), ('005000', '5000')])
+def test_zero_padded_checkpoints_are_served_under_their_step(monkeypatch, checkpoint, expected):
+    """The padding is the directory's, not the model's: one checkpoint records one id, or analysis splits
+    it in two."""
+    source = _source(monkeypatch, ['checkpoint-005000', 'checkpoint-010000'], checkpoint)
 
-    assert source.get_models() == ['5000', '10000']
-    assert source.resolve('5000') == '5000'
-    assert source.resolve(None) == '10000'
+    assert source.checkpoint_id() == expected
     # The raw suffix survives only where it is needed — reaching the directory.
-    assert source._raw_for('5000') == '005000'
+    assert source._raw_for(expected) in {'005000', '010000'}
 
 
 def test_msgpack_numpy_preserves_actions_and_camera_arrays():
@@ -52,8 +52,7 @@ def test_serializer_rejects_pickle_bearing_arrays():
 def test_published_checkpoint_is_served_without_a_local_checkpoint_scan(monkeypatch):
 
     source = gr00t_server.droid().source
-    assert source.get_models() == [gr00t.BASE_MODEL]
-    assert source.resolve(None) == gr00t.BASE_MODEL
+    assert source.checkpoint_id() == gr00t.BASE_MODEL
 
 
 @pytest.mark.parametrize('config', [gr00t_server.droid, gr00t_server.droid_three_cameras])

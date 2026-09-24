@@ -63,15 +63,6 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         """The root this wire dials; a roboarena session names no route under it."""
         return f'ws://{wire.bracket_ipv6(address.host)}:{address.port}'
 
-    def list_models(
-        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
-    ) -> list[str]:
-        """Raises: this wire has no catalogue route to read."""
-        raise ValueError(
-            f'{self.NAME} serves one model and no catalogue; the model a partner serves is the endpoint '
-            f'itself, and the server announces its configuration on connect'
-        )
-
     def _open(self, address: RoboarenaAddress, open_timeout: float) -> RoboarenaClientConnection:
         """One opened connection on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         url = self.session_url(address)

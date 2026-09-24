@@ -29,22 +29,14 @@ class Model(ABC):
 
 
 class ModelSource(ABC):
-    """Configuration that discovers and loads models; loaded resources belong to the returned model."""
+    """The checkpoint a server loads at launch: cheap to build and to compare, and loaded once by ``load``."""
 
     @abstractmethod
-    def get_models(self) -> list[str]:
-        """Available IDs, oldest first. The default resolver selects the last entry."""
-
-    def resolve(self, model_id: str | None) -> str:
-        models = self.get_models()
-        if model_id is None:
-            return models[-1]
-        if model_id not in models:
-            raise ValueError(f'Unknown model {model_id!r}. Available: {models}')
-        return model_id
+    def checkpoint_id(self) -> str:
+        """The id of the checkpoint this source serves. The server reads it once, at launch."""
 
     @abstractmethod
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model: ...
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model: ...
 
     def __eq__(self, other):
         return type(self) is type(other) and self.__dict__ == other.__dict__

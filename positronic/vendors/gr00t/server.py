@@ -212,9 +212,10 @@ class Gr00tModel(Model):
 
 
 class Gr00tSource(ModelSource):
-    """A Hugging Face model (``hf://owner/model``) or a directory of fine-tuned checkpoints.
+    """A Hugging Face model (``hf://owner/model``), or one checkpoint of a directory of fine-tuned ones:
+    ``checkpoint``, else the latest one.
 
-    Model ids are checkpoint step numbers (``'5000'`` for ``checkpoint-5000``). ``load`` downloads the
+    Checkpoint ids are step numbers (``'5000'`` for ``checkpoint-5000``). ``load`` downloads the
     checkpoint and boots the gr00t subprocess; the returned policy owns the subprocess.
     """
 
@@ -242,12 +243,13 @@ class Gr00tSource(ModelSource):
             for cp in list_checkpoints(self.model_source, prefix=gr00t.CHECKPOINT_PREFIX)
         ]
 
-    def _raw_for(self, model_id: str) -> str:
-        """The directory's own suffix for ``model_id``, which may be zero-padded where the advertised id is not."""
-        for r in self._raw_ids():
-            if r == model_id or (r.isdigit() and model_id.isdigit() and int(r) == int(model_id)):
+    def _raw_for(self, checkpoint_id: str) -> str:
+        """The directory's own suffix for ``checkpoint_id``, which may be zero-padded where the id is not."""
+        raw_ids = self._raw_ids()
+        for r in raw_ids:
+            if r == checkpoint_id or (r.isdigit() and checkpoint_id.isdigit() and int(r) == int(checkpoint_id)):
                 return r
-        raise ValueError(f'Checkpoint not found: {model_id}. Available: {self.get_models()}')
+        raise ValueError(f'Checkpoint not found: {checkpoint_id}. Available: {raw_ids}')
 
     @property
     def _is_hub_model(self) -> bool:
@@ -258,27 +260,17 @@ class Gr00tSource(ModelSource):
         """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
         return str(int(raw)) if raw.isdigit() else raw
 
-    def get_models(self) -> list[str]:
-        if self._is_hub_model:
-            return [self.model_source.removeprefix(gr00t.HF_MODEL_PREFIX)]
-        return [self._step_id(r) for r in self._raw_ids()]
+    def checkpoint_id(self) -> str:
+        """The configured ``checkpoint``, else the latest, as its step number.
 
-    def resolve(self, model_id: str | None) -> str:
-        """Explicit id > the configured ``checkpoint`` > latest, always as the id ``get_models`` advertises.
-
-        The zero-padding a directory may carry stays out of the public id; ``load`` puts it back to reach
-        the directory.
+        The zero-padding a directory may carry stays out of the id; ``load`` puts it back to reach the
+        directory.
         """
         if self._is_hub_model:
-            only_model = self.get_models()[0]
-            if model_id is not None and model_id != only_model:
-                raise ValueError(f'This source serves only {only_model}')
-            return only_model
-        if model_id is None and self.checkpoint is not None:
-            model_id = str(self.checkpoint).strip('/')
-        if model_id is None:
+            return self.model_source.removeprefix(gr00t.HF_MODEL_PREFIX)
+        if self.checkpoint is None:
             return self._step_id(self._raw_ids()[-1])
-        return self._step_id(self._raw_for(model_id))
+        return self._step_id(self._raw_for(str(self.checkpoint).strip('/')))
 
     def _warm_observation(self, modalities: dict) -> dict[str, Any]:
         """Validate checkpoint modalities against the codec before building a warmup observation."""
@@ -309,15 +301,14 @@ class Gr00tSource(ModelSource):
             gr00t.LANGUAGE: {gr00t.TASK: [['pick up the object']]},
         }
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         if self._is_hub_model:
-            self.resolve(model_id)
             model_path = self.model_source
         else:
-            checkpoint_path = f'{self.model_source}/{gr00t.CHECKPOINT_PREFIX}{self._raw_for(model_id)}'
+            checkpoint_path = f'{self.model_source}/{gr00t.CHECKPOINT_PREFIX}{self._raw_for(checkpoint_id)}'
             model_path = run_with_progress(
                 lambda: pos3.download(checkpoint_path, exclude=[gr00t.OPTIMIZER_FILENAME]),
-                f'Downloading checkpoint {gr00t.CHECKPOINT_PREFIX}{model_id}',
+                f'Downloading checkpoint {gr00t.CHECKPOINT_PREFIX}{checkpoint_id}',
                 on_progress,
             )
         groot = Gr00tSubprocess(

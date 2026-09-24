@@ -26,10 +26,10 @@ class StubModel(Model):
 
 
 class StubSource(ModelSource):
-    def get_models(self) -> list[str]:
-        return ['stub']
+    def checkpoint_id(self) -> str:
+        return 'stub'
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         return StubModel()
 
 

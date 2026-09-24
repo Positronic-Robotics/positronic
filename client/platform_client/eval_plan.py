@@ -126,7 +126,7 @@ def _an_absolute_path(uds: Path) -> Path:
 
 Host = Annotated[str, AfterValidator(_a_bare_host)]
 Port = Annotated[int, Field(ge=1, le=65535)]
-# `session_path(model)` in `positronic_wire.wire`: the route a session on one model opens on.
+# `SESSION_PATH` in `positronic_wire.wire`: the route a session opens on.
 SessionPath = Annotated[str, AfterValidator(_a_session_path)]
 # The session params as written: the server reads each value as a JSON literal.
 SessionQuery = Annotated[str, AfterValidator(_a_bare_query)]

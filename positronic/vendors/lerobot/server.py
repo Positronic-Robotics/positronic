@@ -13,7 +13,7 @@ from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
-from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
+from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotModel, _detect_device, warm_observation
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class LerobotSource(ModelSource):
-    """LeRobot 0.4.x checkpoints of one experiment directory, which ``load`` downloads one at a time.
+    """One LeRobot 0.4.x checkpoint of an experiment directory: ``checkpoint``, else the latest one.
 
     The policy type is auto-detected from each checkpoint's config, so this serves SmolVLA, ACT,
     Diffusion, or any other lerobot 0.4.x policy.
@@ -33,17 +33,14 @@ class LerobotSource(ModelSource):
         self.device = device or _detect_device()
         self.experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
 
-    def get_models(self) -> list[str]:
-        return list_checkpoints(self.checkpoints_dir)
+    def checkpoint_id(self) -> str:
+        return resolve_checkpoint(self.checkpoints_dir, self.checkpoint)
 
-    def resolve(self, model_id: str | None) -> str:
-        return resolve_checkpoint(self.checkpoints_dir, self.checkpoint, model_id)
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        checkpoint_path = f'{self.checkpoints_dir}/{model_id}/pretrained_model'
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         local = run_with_progress(
-            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}', on_progress
         )
         policy = LerobotModel(
             str(local),

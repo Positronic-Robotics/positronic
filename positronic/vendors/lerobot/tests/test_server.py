@@ -12,13 +12,16 @@ from positronic.vendors.lerobot.policy import LerobotModel, warm_observation
 from positronic.vendors.lerobot.server import LerobotSource
 
 
-@pytest.mark.parametrize('requested, expected', [(None, '42'), ('41', '41')])
-def test_configured_checkpoint_and_explicit_selection(monkeypatch, requested, expected):
-    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41', '42'])
-    source = LerobotSource('s3://bucket/exp', checkpoint='42', device='cpu')
-    assert source.resolve(requested) == expected
+@pytest.mark.parametrize('configured, expected', [(None, '42'), ('41', '41')])
+def test_the_configured_checkpoint_is_served_else_the_latest(monkeypatch, configured, expected):
+    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['41', '42'])
+    assert LerobotSource('s3://bucket/exp', checkpoint=configured, device='cpu').checkpoint_id() == expected
+
+
+def test_a_configured_checkpoint_the_directory_lacks_is_refused(monkeypatch):
+    monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['41', '42'])
     with pytest.raises(ValueError, match='not found'):
-        source.resolve('43')
+        LerobotSource('s3://bucket/exp', checkpoint='43', device='cpu').checkpoint_id()
 
 
 def test_warmup_observation_matches_the_features_the_policy_declares():

@@ -34,12 +34,10 @@ class MolmoAct2Source(ModelSource):
         self._norm_tag = norm_tag
         self._num_steps = num_steps
 
-    def get_models(self) -> list[str]:
-        # Clients echo the advertised id onto the single-segment session route
-        # (/api/v1/session/{model_id}), so it must be slash-free — derive it from the repo name.
-        return [self._hf_repo.split('/')[-1]]
+    def checkpoint_id(self) -> str:
+        return self._hf_repo.split('/')[-1]
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         message = f'Loading MolmoAct2 model {self._hf_repo} (device_map={self._device_map})'
         logger.info(message)
         if on_progress is not None:

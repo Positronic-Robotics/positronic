@@ -142,7 +142,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
   --pipeline.source.backbone=wan2.2
 ```
 
-Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
+Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<step>"]}`.
 
 ### 4. Run sim inference
 

@@ -23,7 +23,7 @@ from positronic.offboard.client import (
     InferenceSession,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.offboard.tests.conftest import DictSource
+from positronic.offboard.tests.conftest import ReadySource
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
@@ -45,16 +45,10 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
-        self.catalogue_reads: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
-        self.models: list[str] = []
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
         return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
-
-    def list_models(self, address: wire.HostPortAddress, headers, open_timeout: float) -> list[str]:
-        self.catalogue_reads.append((address, headers, open_timeout))
-        return self.models
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -69,9 +63,9 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         return outcome
 
 
-def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+def _address(host: str, port: int, query: str = '') -> wire.HostPortAddress:
     """Where a network wire opens a session."""
-    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+    return wire.HostPortAddress(host, port, wire.SESSION_PATH, query)
 
 
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
@@ -154,20 +148,9 @@ class TestInferenceClientHeaders:
 
         assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
-    def test_the_catalogue_read_hands_the_wire_the_headers_and_the_open_timeout(self):
-        """The client asks the wire for the catalogue, with the headers and the timeout it dials with."""
-        headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        fake = _FakeWire()
-        fake.models = ['m1']
-
-        client = InferenceClient(fake, _ADDRESS, headers=headers, open_timeout=3.0)
-
-        assert client.list_models() == ['m1']
-        assert fake.catalogue_reads == [(_ADDRESS, headers, 3.0)]
-
 
 def test_every_session_dials_the_same_address():
-    address = wire.HostPortAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
+    address = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, 'fps=10')
     fake = _FakeWire(MagicMock(), MagicMock())
     with patch('positronic.offboard.client.InferenceSession'):
         client = InferenceClient(fake, address)
@@ -175,7 +158,7 @@ def test_every_session_dials_the_same_address():
         client.new_session()
 
     assert [dialed for dialed, _headers, _timeout in fake.dials] == [address, address]
-    assert client.session_url == 'fake://localhost:8000/api/v1/session/10000?fps=10'
+    assert client.session_url == 'fake://localhost:8000/api/v1/session?fps=10'
 
 
 def _refused(refusal: wire.Refusal) -> wire.ConnectRefused:
@@ -242,13 +225,11 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 2 * len(one_session)
 
 
-def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
+def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy(
-        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
-    )
+    policy = RemotePolicy('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
     client = policy._client
-    assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
+    assert client.session_url == 'wss://example.com/api/v1/session?fps=2.5'
     assert client.headers == headers
 
 
@@ -277,12 +258,12 @@ def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
-            DictSource({'050000': model}),
+            ReadySource(model, checkpoint_id='050000'),
             local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
         server = start_server(pipeline, grpc=transport == 'grpc')
-        address = server.ws(model='050000')[1] if transport == 'websocket' else server.grpc(model='050000')[1]
+        address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
         return address, model, pipeline
 
     return start
@@ -598,7 +579,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 def test_pipeline_rejects_frame_conversion_on_both_sides():
     local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(DictSource({'050000': FixedModel()}), local, codec=ChangeEEFrame(Transform3D.identity))
+        PolicyDeployment(ReadySource(FixedModel()), local, codec=ChangeEEFrame(Transform3D.identity))
 
 
 @pytest.fixture
@@ -729,9 +710,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(
-        PolicyDeployment(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc'
-    )
+    server = start_server(PolicyDeployment(ReadySource(model), ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
         run = runtime.start(RemotePolicy(transport, address))

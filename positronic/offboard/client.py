@@ -218,7 +218,7 @@ class InferenceClient:
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
-        A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
+        A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._wire.dial(self._address, self.headers, self.open_timeout)
@@ -229,7 +229,7 @@ class InferenceClient:
             raise
 
     def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the address names.
+        """Creates a new inference session on the server's model.
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
@@ -251,7 +251,3 @@ class InferenceClient:
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
-
-    def list_models(self) -> list[str]:
-        """The models this server serves, read by the wire on the transport it carries sessions on."""
-        return self._wire.list_models(self._address, self.headers, self.open_timeout)

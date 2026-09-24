@@ -52,44 +52,6 @@ def test_connections_reuse_the_loaded_model(inference_server, mock_model):
     mock_model.close.assert_not_called()
 
 
-def test_session_url_selects_the_model(multi_model_server):
-    host, port, policies = multi_model_server
-
-    default_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
-    ).new_session()
-    try:
-        assert default_session.metadata['model_name'] == 'alpha'
-        action = default_session.infer({'obs': 'default'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        default_session.close()
-
-    alpha_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('alpha'), '')
-    ).new_session()
-    try:
-        assert alpha_session.metadata['model_name'] == 'alpha'
-        action = alpha_session.infer({'obs': 'alpha'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        alpha_session.close()
-
-    beta_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('beta'), '')
-    ).new_session()
-    try:
-        assert beta_session.metadata['model_name'] == 'beta'
-        action = beta_session.infer({'obs': 'beta'})
-        assert action['action_data'] == ['beta']
-    finally:
-        beta_session.close()
-
-    policies['alpha'].assert_any_call({'obs': 'alpha'}, session_id=alpha_session.session_id)
-    policies['beta'].assert_any_call({'obs': 'beta'}, session_id=beta_session.session_id)
-    policies['alpha'].assert_any_call({'obs': 'default'}, session_id=default_session.session_id)
-
-
 def test_wire_serialisation_accepts_mappingproxy():
     backing = {'a': 1, 'b': {'c': 2}}
     frozen = MappingProxyType(backing)

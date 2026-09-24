@@ -224,9 +224,10 @@ class WebsocketWire(server_wire.Wire):
             if not authorized(websocket.headers):
                 raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
-        async def serve_model(websocket: WebSocket, model_id: str | None) -> None:
+        async def serve_model(websocket: WebSocket) -> None:
+            """Serve the server's one model. Every query param is a pipeline override."""
             await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.served_address), model_id)
+            await session(WebsocketServerConnection(websocket, self.served_address))
             if (
                 websocket.application_state is WebSocketState.CONNECTED
                 and websocket.client_state is WebSocketState.CONNECTED
@@ -237,15 +238,7 @@ class WebsocketWire(server_wire.Wire):
                 if websocket.client_state is WebSocketState.CONNECTED:
                     await websocket.close()
 
-        async def serve_pinned_model(websocket: WebSocket) -> None:
-            """Serve the model the server pinned. The path names a model; every query param is a pipeline override."""
-            await serve_model(websocket, None)
-
-        auth = [Depends(require_auth)]
-        app.websocket(wire.SESSION_PATH, dependencies=auth)(serve_pinned_model)
-        # ``:path``: a model id can itself be a path (a HuggingFace repo), and opens under the name the
-        # catalogue advertises.
-        app.websocket(f'{wire.SESSION_PATH}/{{model_id:path}}', dependencies=auth)(serve_model)
+        app.websocket(wire.SESSION_PATH, dependencies=[Depends(require_auth)])(serve_model)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

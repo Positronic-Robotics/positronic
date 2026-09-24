@@ -63,10 +63,10 @@ class InstantSource(ModelSource):
     def __init__(self, rows: int):
         self._rows = rows
 
-    def get_models(self) -> list[str]:
-        return ['instant']
+    def checkpoint_id(self) -> str:
+        return 'instant'
 
-    def load(self, model_id: str, on_progress=None) -> Model:
+    def load(self, checkpoint_id: str, on_progress=None) -> Model:
         return InstantChunk(self._rows)
 
 

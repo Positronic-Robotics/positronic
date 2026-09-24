@@ -193,10 +193,10 @@ class MyModel(Model):
 
 
 class MySource(ModelSource):
-    def get_models(self):
-        return ['default']
+    def checkpoint_id(self):
+        return 'default'
 
-    def load(self, model_id, on_progress=None):
+    def load(self, checkpoint_id, on_progress=None):
         return MyModel(load_my_weights())  # supply your checkpoint loader
 
 

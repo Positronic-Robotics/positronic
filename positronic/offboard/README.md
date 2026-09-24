@@ -51,7 +51,7 @@ Both wires ping through a silent wait. A front drops a connection it reads nothi
 front after about 90 s), and the pings keep an inference open through that wait.
 
 `/api/v1/models` is an HTTP route. It answers on the address the WebSocket wire binds: a port, or a
-Unix socket. `InferenceClient.list_models` refuses a gRPC wire.
+Unix socket. The gRPC port carries sessions alone.
 
 ### Authentication
 
@@ -66,7 +66,8 @@ carries the header, and `positronic.cfg.policy.authed_remote` fills it in from t
 ### Endpoints
 
 #### `GET /api/v1/models`
-Returns a list of available model IDs.
+Returns the ID of the one checkpoint the server serves. The route answers only after the model loads,
+so a probe can read it to find a ready server.
 
 **Example Request:**
 ```bash
@@ -76,32 +77,23 @@ curl http://localhost:8000/api/v1/models
 **Response:**
 ```json
 {
-  "models": ["10000", "20000", "30000"]
+  "models": ["30000"]
 }
 ```
 
-Use this to discover which models are available before connecting.
-
 #### `/api/v1/session`
-Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
-
-#### `/api/v1/session/{model_id}`
-Establishes an inference session with a **specific** model.
+Establishes an inference session with the server's model. The server loads one checkpoint at startup:
+the configured one, or the latest available at that moment. To serve another checkpoint, start another
+server.
 
 **Example:**
-- `ws://localhost:8000/api/v1/session` → Default model
-- `localhost:9000/api/v1/session` → Default model, over gRPC
-- `ws://localhost:8000/api/v1/session/10000` → Model 10000
-- `localhost:9000/api/v1/session/10000` → Model 10000, over gRPC
+- `ws://localhost:8000/api/v1/session` → over the WebSocket wire
+- `localhost:9000/api/v1/session` → over gRPC
 
 Each wire from the table above carries the same route, and each names the server its own way:
 `websocket` and `websocket_tls` a host and a port with a scheme, `grpc` and `grpc_tls` a target, and
-`websocket_unix` a socket path and no authority at all.
-
-The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
-`ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
-that would end the path or be decoded away (`?`, `#`, `%`, `:`) must be percent-encoded by whoever writes the URL,
-so `s3://bucket/ckpt-1` is requested as `s3%3A//bucket/ckpt-1` and arrives as the original id.
+`websocket_unix` a socket path and no authority at all. A route below `/api/v1/session` opens no
+session.
 
 #### Session parameters
 
@@ -116,14 +108,13 @@ Rules:
 - **Values are JSON literals.** The server parses each value as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. The query travels verbatim — `InferenceClient` forwards whatever the URL already says — so a caller who means the string `true` rather than the boolean writes the quoted literal itself, percent-encoded: `?tag=%22true%22`.
 - **Imports are rejected.** Overrides are applied with `Config.override_data`, so a value that configuronic would read as an import — `@module.path.Object`, or a leading-dot path relative to the argument's current value — is refused at any nesting depth, and the error names the offending key. Params can tune the pipeline's arguments, never swap its components. A leading-dot string on an argument that gives imports no base to resolve against (a number, a flag, a plain string) is ordinary data and passes through, so `?tag=./data` works.
 - **Duplicate keys are rejected.**
-- **Params never name a model.** The path does that, and only the path: `/api/v1/session/20000?fps=10` serves model `20000` with that override. A `?model_id=...` param is an ordinary unknown key and is rejected.
-- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is the path.
+- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected.
 - **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipeline rejects every param.
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
 The client names each part: `--policy=.remote --policy.wire=websocket --policy.address.host=gpu-host --policy.address.port=8000
---policy.address.model=<model_id> --policy.address.query='fps=10'`, and forwards the query string verbatim. Credentials stay a
+--policy.address.query='fps=10'`, and forwards the query string verbatim. Credentials stay a
 separate `headers` argument.
 
 ### Session Flow
@@ -217,9 +208,13 @@ removal replaces the factory with `None` and records `removed_on`. Both registri
 validation in `positronic.utils.versions`. Compatibility tests cover wire messages and behavior,
 including chunk timing and fault cancellation.
 
-#### 2. Status Updates (Long Model Loading)
+#### 2. Status Updates
 
-Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-300s). The client gives the handshake 30 s per message; the server sends status updates during loading, on either wire:
+The server loads its checkpoint before any wire binds, so every session opens on a loaded model. A
+load can take minutes (OpenPI and GR00T take 120-300 s), and its progress goes to the server log.
+
+The protocol keeps the `loading` and `waiting` statuses. The client gives the handshake 30 s per
+message, and logs each status it receives before `ready`:
 
 ```json
 {
@@ -227,8 +222,6 @@ Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-30
   "message": "Loading checkpoint 10000, please wait..."
 }
 ```
-
-The client should display these status updates to the user. Once loading completes, the server sends the `status: "ready"` packet shown above.
 
 #### 3. Inference Loop
 
@@ -315,9 +308,8 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy.address.host=localhost --policy.address.port=8000
 ```
 
-**Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.
-
-**Status Streaming:** Long model loads are handled gracefully with progress updates.
+**One checkpoint per server:** A server serves the checkpoint it was launched with. To compare
+checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
@@ -325,8 +317,8 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 ### `server.PolicyServer`
 Serves a `PolicyDeployment` with explicit `source`, `local`, and `codec` arguments.
-`ModelSource.get_models()` backs the catalogue, `resolve()` selects a checkpoint, and `load()` returns
-a callable `Model` that owns the loaded resources.
+`ModelSource.checkpoint_id()` names the checkpoint the source serves, and `load()` returns a callable
+`Model` that owns the loaded resources. The server calls both once, at startup.
 Server codecs wrap its call; the client receives one stack spec containing its processors and codecs.
 
 ```python
@@ -349,8 +341,8 @@ server = PolicyServer(pipeline)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
-`serve` takes the wires that sessions arrive on. Each wire carries the address it binds, reads its own
-route for the model a session asks for, and checks its own session headers:
+`serve` takes the wires that sessions arrive on. Each wire carries the address it binds, and checks
+its own session headers:
 
 ```python
 from positronic.offboard import grpc_wire, server_wire, websocket_wire
@@ -363,7 +355,7 @@ wires = [
 server.serve(wires)
 ```
 
-`serve` hands every wire the model catalogue it owns; a wire whose transport carries HTTP answers it
+`serve` hands every wire the HTTP routes it owns; a wire whose transport carries HTTP answers them
 beside its sessions, and the gRPC wire, whose port carries sessions alone, does not. A wire names
 where it bound in its `served_address` property: `ServedHostPort` for a host and a port — a wire
 asked for port 0 binds any free one, and `ws.served_address.port` is the port it took — or
@@ -378,26 +370,26 @@ The CLI entry point every vendor server exposes. A vendor binds `pipeline` to ea
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. It takes the wire and the address that wire
-dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the model
-and the session params, so serving another model means another client. Each wire names its own
-address type, and the client refuses one built for another wire.
+dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the server
+and the session params. Each wire names its own address type, and the client refuses one built for
+another wire.
 
 ```python
 from pathlib import Path
 
 from positronic.offboard.client import InferenceClient
 from positronic_wire import registry
-from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
+from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
-# The server's pinned checkpoint, with no session params
-client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path(), ''))
-# A named model, tuned for every session this client opens
-# client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, session_path('model_a'), 'fps=10'))
+# The server's model, with no session params
+client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, SESSION_PATH, ''))
+# The same model, tuned for every session this client opens
+# client = InferenceClient(registry.client_wire('websocket'), HostPortAddress('localhost', 8000, SESSION_PATH, 'fps=10'))
 # The same session on the gRPC wire, on a LAN and behind a TLS edge
-# client = InferenceClient(registry.client_wire('grpc'), HostPortAddress('localhost', 9000, session_path('model_a'), ''))
-# client = InferenceClient(registry.client_wire('grpc_tls'), HostPortAddress('gpu-host', 443, session_path('model_a'), ''))
+# client = InferenceClient(registry.client_wire('grpc'), HostPortAddress('localhost', 9000, SESSION_PATH, ''))
+# client = InferenceClient(registry.client_wire('grpc_tls'), HostPortAddress('gpu-host', 443, SESSION_PATH, ''))
 # A server on this machine: the socket wire's address names the socket, and no host and no port
-# client = InferenceClient(registry.client_wire('websocket_unix'), UnixSocketAddress(Path('/run/policy.sock'), session_path(), ''))
+# client = InferenceClient(registry.client_wire('websocket_unix'), UnixSocketAddress(Path('/run/policy.sock'), SESSION_PATH, ''))
 
 session = client.new_session()
 meta = session.metadata
@@ -414,13 +406,11 @@ exception of the WebSocket or gRPC library.
 Every vendor ships a `ModelSource` plus named pipelines and serves them through the one `PolicyServer`:
 
 - **LeRobot (0.4.x)**: `positronic.vendors.lerobot.server` - Serves SmolVLA/ACT/Diffusion checkpoints (auto-detects policy type)
-- **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints with dynamic loading
+- **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints
 - **GR00T**: `positronic.vendors.gr00t.server` - Serves GR00T checkpoints with modality config
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
 - **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
-
-The server enforces a **Singleton Policy** (only one checkpoint loaded at a time) to manage GPU resources efficiently.
 
 ## See Also
 

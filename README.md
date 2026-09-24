@@ -352,7 +352,6 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 - **Delivered**
   - **Policy presets for π₀.₅ and GR00T.** Full support for both architectures.
   - **Remote inference primitives.** Run policies on different machines over one session protocol, on a WebSocket or a gRPC wire.
-  - **Batch evaluation harness.** `utilities/validate_server.py` for automated checkpoint scoring.
 - **Short term**
   - **Richer Positronic Server.** Surface metadata fields, annotation, and filtering flows for rapid triage.
   - **Direct Positronic Dataset integration.** Native adapter for training scripts to stream tensors directly from Positronic datasets.

@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import json
 import logging
 import os
 import pathlib
@@ -8,6 +9,7 @@ import stat
 import threading
 import time
 import urllib.parse
+import urllib.request
 from collections.abc import Callable, Generator
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +19,7 @@ from fastapi import APIRouter
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
-from websockets.exceptions import ConnectionClosedOK
+from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect, unix_connect
 
 from positronic.offboard import keys as offboard_keys
@@ -27,29 +29,11 @@ from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
-from positronic.offboard.tests.conftest import DictSource, Served
+from positronic.offboard.tests.conftest import ReadySource, Served
 from positronic.policy import Codec
 from positronic.policy.base import ARGS
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
-
-
-class _StubSource(ModelSource):
-    """Serves one loaded model under any requested id, so route-supplied checkpoints resolve as-is."""
-
-    def __init__(self, policy: Model, name: str = 'stub'):
-        self._policy = policy
-        self._name = name
-
-    def get_models(self) -> list[str]:
-        return [self._name]
-
-    def resolve(self, model_id: str | None) -> str:
-        return model_id if model_id is not None else self._name
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        return self._policy
-
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
 _A_MOMENT_IDLE = 0.5
@@ -107,14 +91,14 @@ class _UnbindableWire(server_wire.Wire):
 
 def test_a_server_with_no_wire_refuses_to_serve(make_mock_model):
     """A server that binds nothing answers nobody, so it raises instead of reporting itself ready."""
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     with pytest.raises(ValueError, match='at least one wire'):
         server.serve([], on_ready=lambda: pytest.fail('it reported ready with no wire bound'))
 
 
 def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_model):
     """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = _FailingWire(_A_MOMENT_IDLE)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -129,7 +113,7 @@ def _rebind_and_release(host: str, port: int) -> None:
 
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_model):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -139,7 +123,7 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_mo
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_model):
     """A wire that served and stopped starts again with a fresh socket, and a rollback before it serves frees it."""
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     serving = threading.Thread(target=server.serve, args=([bound],))
     serving.start()
@@ -188,7 +172,7 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
 
 
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_model):
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
     asyncio.run(bound.start(MagicMock(), lambda _headers: True, server.api))
     try:
@@ -201,7 +185,7 @@ def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(mak
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_model, caplog):
     """No wire ends in silence: one failure raises out of ``serve``, and ``serve`` logs every other one."""
-    server = PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)))
     with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
         with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):
             server.serve([_FailingWire(0.05), _FailingWire(0.1)])
@@ -211,7 +195,7 @@ def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_mod
 def test_an_idle_server_stops_itself(make_mock_model):
     """The idle watchdog ends every wire, and ``serve`` returns with no ``shutdown`` call."""
     server = PolicyServer(
-        PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)),
+        PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)),
         idle_timeout_min=_A_MOMENT_IDLE / 60,
     )
     serving = threading.Thread(
@@ -225,7 +209,7 @@ def test_an_idle_server_stops_itself(make_mock_model):
 @pytest.fixture
 def stub_server(start_server, make_mock_model) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, server, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)))
+    host, port, server, *_ = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)))
     return host, port, server, policy
 
 
@@ -270,44 +254,17 @@ def test_no_codec(stub_server):
         session.close()
 
 
-@pytest.mark.parametrize(
-    'checkpoint_id',
-    [
-        'my_checkpoint',
-        'GEAR-Dreams/DreamZero-DROID',
-        's3://bucket/ckpt-1',
-        's3://bucket/checkpoint-500/',
-        'weird?x#y',
-        '100%done',
-    ],
-)
-def test_checkpoint_id_in_route(stub_server, checkpoint_id):
-    host, port, _server, _policy = stub_server
-    client = InferenceClient(
-        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path(checkpoint_id), '')
-    )
-    session = client.new_session()
-    try:
-        assert session.metadata['checkpoint_id'] == checkpoint_id
-    finally:
-        session.close()
-
-
 class _LatestSource(ModelSource):
-    """Source whose 'latest' checkpoint can change after startup; ``resolve(None)``
-    returns the current latest, mirroring real vendor sources."""
+    """Source whose latest checkpoint can change after startup, as a real vendor source's can."""
 
     def __init__(self, policy: Model):
         self._policy = policy
         self.latest = '100'
 
-    def get_models(self) -> list[str]:
-        return [self.latest]
+    def checkpoint_id(self) -> str:
+        return self.latest
 
-    def resolve(self, model_id: str | None) -> str:
-        return model_id if model_id is not None else self.latest
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         return self._policy
 
 
@@ -319,45 +276,42 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_model)
     client = InferenceClient(
         client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
     )
-    # ...but a default session still serves the checkpoint pinned at startup.
+    # ...but a session still serves the checkpoint pinned at startup.
     session = client.new_session()
     try:
         assert session.metadata['checkpoint_id'] == '100'
     finally:
         session.close()
-    # Explicit requests still load the named checkpoint.
-    session = InferenceClient(
-        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('200'), '')
-    ).new_session()
-    try:
-        assert session.metadata['checkpoint_id'] == '200'
-    finally:
-        session.close()
 
 
-class _ProgressSource(_StubSource):
-    """Reports load progress, so switching models exercises the ``loading`` frame stream."""
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        if on_progress is not None:
-            on_progress('halfway there')
-        return self._policy
+def test_a_session_route_that_names_a_checkpoint_is_refused(stub_server):
+    """The server serves one checkpoint, so a route that names one opens no session."""
+    host, port, *_ = stub_server
+    with pytest.raises(InvalidStatus):
+        connect(f'ws://{host}:{port}{wire.SESSION_PATH}/other').close()
 
 
-def test_load_progress_frames_reach_the_client(start_server, make_mock_model):
+def test_the_model_route_answers_the_served_checkpoint(stub_server):
+    """Probes read this route to tell that a server has loaded its model."""
+    host, port, *_ = stub_server
+    with urllib.request.urlopen(f'http://{host}:{port}{wire.MODELS_PATH}', timeout=5.0) as answer:
+        assert json.loads(answer.read()) == {wire.MODELS_KEY: ['stub']}
+
+
+class _ProgressSource(ReadySource):
+    """Reports load progress."""
+
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        assert on_progress is not None, 'the server hands every load a progress callback'
+        on_progress('halfway there')
+        return super().load(checkpoint_id, on_progress)
+
+
+def test_load_progress_reaches_the_server_log(start_server, make_mock_model, caplog):
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, *_ = start_server(PolicyDeployment(_ProgressSource(policy), ChunkedSchedule(fps=10)))
-    # Requesting a non-pinned id forces a load inside the handshake; the source's progress
-    # callbacks must arrive as ``loading`` frames before ``ready``.
-    ws = connect(f'ws://{host}:{port}/api/v1/session/other')
-    try:
-        frames = []
-        while not any(f.get('status') == 'ready' for f in frames):
-            frames.append(deserialise(ws.recv(timeout=10)))
-        messages = [f.get('message', '') for f in frames if f.get('status') == 'loading']
-        assert any('halfway there' in m for m in messages)
-    finally:
-        ws.close()
+    with caplog.at_level(logging.INFO, logger='positronic.offboard.server'):
+        start_server(PolicyDeployment(_ProgressSource(policy), ChunkedSchedule(fps=10)))
+    assert 'halfway there' in caplog.messages
 
 
 def test_a_client_that_leaves_mid_inference_is_a_lost_peer_not_an_error(stub_server, caplog):
@@ -408,7 +362,7 @@ class _IdentityCodec(Codec):
 def codec_server(start_server, make_mock_model) -> tuple[str, int, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(
-        PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10), codec=_IdentityCodec())
+        PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10), codec=_IdentityCodec())
     )
     return host, port, policy
 
@@ -473,7 +427,7 @@ def test_warmup_failure_propagates_without_closing_the_model(make_mock_model):
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    pipeline = PolicyDeployment(_StubSource(stub), ChunkedSchedule(fps=10), codec=_IdentityCodec())
+    pipeline = PolicyDeployment(ReadySource(stub), ChunkedSchedule(fps=10), codec=_IdentityCodec())
     host, port, *_ = start_server(pipeline)
     client = InferenceClient(
         client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
@@ -488,7 +442,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
 @pytest.fixture
 def unix_stub_server(start_server, socket_path, make_mock_model) -> tuple[Served, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), uds=socket_path)
+    served = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)), uds=socket_path)
     return served, policy
 
 
@@ -496,7 +450,6 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
     served, policy = unix_stub_server
     client = InferenceClient(*served.unix())
 
-    assert client.list_models() == ['stub']
     session = client.new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
@@ -516,24 +469,12 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
         session.close()
 
 
-def test_a_session_over_a_socket_carries_the_model_id(unix_stub_server):
-    """The route is the address's, not a URL's, so a socket carries a model id like any other wire."""
-    served, _policy = unix_stub_server
-
-    session = InferenceClient(*served.unix(model='10000')).new_session()
-    try:
-        assert session.metadata[offboard_keys.CHECKPOINT_ID] == '10000'
-    finally:
-        session.close()
-
-
-@pytest.mark.parametrize('model_id', ['', 'stub'])
 @pytest.mark.parametrize('client_closes', [True, False])
-def test_session_end_leaves_time_to_read_the_ack(unix_stub_server, socket_path, monkeypatch, model_id, client_closes):
+def test_session_end_leaves_time_to_read_the_ack(unix_stub_server, socket_path, monkeypatch, client_closes):
     if not client_closes:
         monkeypatch.setattr(websocket_wire.WebsocketWire, 'CLOSE_TIMEOUT_SEC', 0.05)
     _served, model = unix_stub_server
-    with unix_connect(socket_path, uri=f'ws://localhost{wire.session_path(model_id)}') as conn:
+    with unix_connect(socket_path, uri=f'ws://localhost{wire.SESSION_PATH}') as conn:
         ready = deserialise(conn.recv(timeout=5))
         message = {protocol.SESSION_ID: ready[protocol.SESSION_ID], protocol.END_SESSION: True}
         conn.send(serialise(message))
@@ -557,7 +498,7 @@ def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_se
 def test_a_probe_of_a_socket_nothing_has_bound_is_cold(socket_path):
     """A path no server has bound yet can still become one, so the probe says to wait rather than refuse."""
     client_wire = registry.client_wire('websocket_unix')
-    address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.session_path(), '')
+    address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
 
     assert client_wire.probe(address, None, 1.0) is wire.Refusal.COLD
 
@@ -569,12 +510,11 @@ def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(star
     odd.mkdir(parents=True)
     uds = str(odd / 's.sock')
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), uds=uds)
+    served = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)), uds=uds)
 
     client = InferenceClient(*served.unix())
 
     assert str(served.uds) == uds
-    assert client.list_models() == ['stub']
     session = client.new_session()
     try:
         assert session.infer({'obs': 'data'}) == [{'action': [1, 2, 3]}]
@@ -585,7 +525,7 @@ def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(star
 def _dial_socket(uds: str, **settings) -> InferenceClient:
     """A client for a socket no server need have bound yet, as a co-located one is built."""
     client_wire = registry.client_wire('websocket_unix')
-    address = wire.UnixSocketAddress(pathlib.Path(uds), wire.session_path(), '')
+    address = wire.UnixSocketAddress(pathlib.Path(uds), wire.SESSION_PATH, '')
     return InferenceClient(client_wire, address, **settings)
 
 
@@ -594,7 +534,7 @@ def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_server, 
     """``serve`` binds only once the model has loaded, so a co-located client starting beside its
     server finds no socket at all for that interval."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10))
+    pipeline = PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10))
     late = threading.Timer(1.5, lambda: start_server(pipeline, uds=socket_path))
     late.start()
 
@@ -616,7 +556,7 @@ def test_a_client_waits_for_a_server_restarting_over_the_socket_it_left(start_se
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gone:
         gone.bind(socket_path)
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10))
+    pipeline = PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10))
     late = threading.Timer(1.5, lambda: start_server(pipeline, uds=socket_path))
     late.start()
 
@@ -663,9 +603,10 @@ def test_a_server_binds_over_the_socket_an_earlier_run_left(start_server, socket
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
         stale.bind(socket_path)
 
-    served = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), uds=socket_path)
+    served = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)), uds=socket_path)
 
-    assert InferenceClient(*served.unix()).list_models() == ['stub']
+    session = InferenceClient(*served.unix()).new_session()
+    session.close()
 
 
 def test_a_path_that_is_not_a_socket_is_refused_and_left_alone(socket_path):
@@ -716,7 +657,7 @@ def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mo
     """``asyncio.create_unix_server`` unlinks the file it finds, so only a refusal here keeps the
     address with the server that owns it."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    server = PolicyServer(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)))
+    server = PolicyServer(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)))
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
         live.bind(socket_path)
@@ -764,7 +705,7 @@ def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> Infere
 @pytest.fixture
 def param_server(start_server, make_mock_model) -> Generator[tuple[str, int], None, None]:
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    pipe_cfg = cfn.Config(_tunable_pipe, source=cfn.Config(_StubSource, policy=stub))
+    pipe_cfg = cfn.Config(_tunable_pipe, source=cfn.Config(ReadySource, policy=stub))
     host, port, *_ = start_server(pipe_cfg)
     yield host, port
 
@@ -794,7 +735,7 @@ def _fps_pipe(source: ModelSource, fps: float = 10.0):
 
 
 def test_session_param_retunes_the_client_schedule(start_server):
-    pipe_cfg = cfn.Config(_fps_pipe, source=cfn.Config(DictSource, models={'default': _ScriptedModel()}))
+    pipe_cfg = cfn.Config(_fps_pipe, source=cfn.Config(ReadySource, policy=_ScriptedModel()))
     host, port, *_ = start_server(pipe_cfg)
 
     default_session = _param_session(host, port, [])
@@ -806,20 +747,6 @@ def test_session_param_retunes_the_client_schedule(start_server):
     finally:
         default_session.close()
         tuned_session.close()
-
-
-def test_model_id_is_named_by_path_not_query(param_server):
-    host, port = param_server
-    with pytest.raises(RuntimeError, match='model_id'):
-        _param_session(host, port, [('model_id', 'other')])
-
-    uri = f'ws://{host}:{port}/api/v1/session/other?pad_start=false'
-    session = InferenceSession(WebsocketClientConnection(connect(uri)))
-    try:
-        assert session.metadata['checkpoint_id'] == 'other'
-        assert session.metadata['local_stack']['seq'][0]['args']['pad_start'] is False
-    finally:
-        session.close()
 
 
 def test_unknown_session_param_rejected(param_server):
@@ -855,12 +782,12 @@ def test_dotted_param_is_data_where_it_could_not_import(param_server):
 def test_source_touching_session_param_rejected(param_server):
     host, port = param_server
     with pytest.raises(RuntimeError, match='fixed at launch'):
-        _param_session(host, port, [('source.name', '"other"')])
+        _param_session(host, port, [('source.checkpoint_id', '"other"')])
 
 
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, *_ = start_server(_tunable_pipe(_StubSource(stub)))
+    host, port, *_ = start_server(_tunable_pipe(ReadySource(stub)))
     with pytest.raises(RuntimeError, match='config-launched'):
         _param_session(host, port, [('pad_start', 'false')])
 
@@ -889,7 +816,7 @@ def authed_endpoint(start_server, make_mock_model) -> tuple[tuple[wire.ClientWir
         address = wire.HostPortAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
         return (registry.client_wire(os.environ[ENDPOINT_WIRE_ENV]), address), os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    served = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     return served.ws(), _TOKEN
 
 
@@ -912,17 +839,12 @@ def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, m
     with pytest.raises(wire.ConnectRefused) as refused:
         client.new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
-    # The catalogue refuses in the same vocabulary: the wire reads it, so it raises what a dial raises.
-    with pytest.raises(wire.ConnectRefused) as catalogue:
-        client.list_models()
-    assert catalogue.value.refusal is wire.Refusal.FINAL
 
 
 @pytest.mark.endpoint
 def test_auth_accepts_the_token(authed_endpoint):
     endpoint, token = authed_endpoint
     client = InferenceClient(*endpoint, headers={AUTH_HEADER: bearer(token)})
-    assert client.list_models()
     session = client.new_session()
     try:
         # Reaching the handshake metadata means the upgrade completed and the server's first frame arrived.
@@ -954,9 +876,10 @@ def test_session_outlives_an_idle_ingress_window(authed_endpoint):
 
 def test_server_without_a_token_serves_open(stub_server):
     host, port, _server, _policy = stub_server
-    assert InferenceClient(
+    session = InferenceClient(
         client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
-    ).list_models() == ['stub']
+    ).new_session()
+    session.close()
 
 
 @pytest.mark.parametrize(
@@ -971,14 +894,14 @@ def test_server_without_a_token_serves_open(stub_server):
 )
 def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, token):
     with pytest.raises(ValueError, match='ASCII'):
-        PolicyServer(PolicyDeployment(_StubSource(make_mock_model([], {})), ChunkedSchedule(fps=10)), auth_token=token)
+        PolicyServer(PolicyDeployment(ReadySource(make_mock_model([], {})), ChunkedSchedule(fps=10)), auth_token=token)
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, *_ = start_server(PolicyDeployment(_StubSource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    host, port, *_ = start_server(PolicyDeployment(ReadySource(policy), ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'
@@ -992,7 +915,7 @@ def test_shutdown_closes_the_loaded_model(start_server, make_mock_model):
     model = make_mock_model([], {})
     closed = threading.Event()
     model.close.side_effect = closed.set
-    served = start_server(PolicyDeployment(_StubSource(model), ChunkedSchedule(fps=10)))
+    served = start_server(PolicyDeployment(ReadySource(model), ChunkedSchedule(fps=10)))
     session = InferenceClient(*served.ws()).new_session()
     session.close()
     model.close.assert_not_called()

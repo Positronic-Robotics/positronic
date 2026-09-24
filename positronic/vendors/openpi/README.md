@@ -151,17 +151,13 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 The server exposes the following endpoints:
 
 **GET `/api/v1/models`**
-- Returns list of available checkpoints
-- Response: `{"models": ["checkpoint-1000", "checkpoint-2000", ...]}`
+- Returns the checkpoint the server serves
+- Response: `{"models": ["2000"]}`
 
 **WebSocket `/api/v1/session`**
-- Default session (uses latest checkpoint)
+- Session with the checkpoint the server serves: `--pipeline.source.checkpoint`, else the latest
 - Sends metadata on connection, then enters inference loop
 - Client sends serialized observations, server responds with serialized actions
-
-**WebSocket `/api/v1/session/{checkpoint_id}`**
-- Session with specific checkpoint
-- Same protocol as default session
 
 **Session parameters:** query params on the session URL tune the serving pipeline per session — each key
 is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
@@ -216,13 +212,12 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 
 ### Checkpoint not found
 
-**Problem:** Server returns "Checkpoint not found" error
+**Problem:** Server fails at startup: it finds no checkpoint, or cannot download the one it names
 
 **Solutions:**
-1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
-3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
-4. If using specific checkpoint, verify the checkpoint ID exists
+1. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
+2. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
+3. If using `--pipeline.source.checkpoint`, verify the checkpoint ID exists
 
 ### Checkpoint directory one level too deep
 

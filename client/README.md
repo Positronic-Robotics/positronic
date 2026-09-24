@@ -104,7 +104,7 @@ Every kind names its wire. There is no default.
 | `grpc_tls` | `host`, `port`, `path`, `query` |
 | `roboarena` | `host`, `port` |
 
-`path` is the session route: `/api/v1/session`, or `/api/v1/session/<model>`. `query` defaults to empty.
+`path` is the session route: `/api/v1/session`. `query` defaults to empty.
 
 Each kind carries its own locator:
 

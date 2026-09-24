@@ -20,7 +20,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
-from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
+from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
@@ -151,7 +151,8 @@ class OpenpiModel(Model):
 
 
 class OpenpiSource(ModelSource):
-    """OpenPI checkpoints under ``checkpoints_dir``; each load boots a serve_policy.py subprocess.
+    """One OpenPI checkpoint under ``checkpoints_dir``: ``checkpoint``, else the latest one. ``load``
+    boots a serve_policy.py subprocess.
 
     A ``gs://`` checkpoints_dir is a published openpi checkpoint served as-is: openpi fetches it
     itself via fsspec[gcs] (pos3 handles only s3://), and there are no numeric-step subdirs to
@@ -181,39 +182,20 @@ class OpenpiSource(ModelSource):
     def _passthrough(self) -> bool:
         return self.checkpoints_dir.startswith('gs://')
 
-    def get_models(self) -> list[str]:
+    def checkpoint_id(self) -> str:
         if self._passthrough:
-            return [self.checkpoints_dir.rsplit('/', 1)[-1]]
-        checkpoints = list_checkpoints(self.checkpoints_dir)
-        return [str(n) for n in sorted(int(cp) for cp in checkpoints if cp.isdigit())]
-
-    def resolve(self, model_id: str | None) -> str:
-        """Digit ids match numerically ('5000' resolves to '005000'); ``None`` picks the configured
-        checkpoint, else the latest."""
-        if self._passthrough:
-            served = self.checkpoints_dir.rsplit('/', 1)[-1]
-            if model_id and model_id != served:
-                raise ValueError(f'Checkpoint not found or invalid ID: {model_id}. This server serves only {served}.')
-            return served
-        if model_id:
-            available = list_checkpoints(self.checkpoints_dir)
-            if model_id.isdigit():
-                target = int(model_id)
-                for cp in available:
-                    if cp.isdigit() and int(cp) == target:
-                        return cp
-            raise ValueError(f'Checkpoint not found or invalid ID: {model_id}.')
+            return self.checkpoints_dir.rsplit('/', 1)[-1]
         if self.checkpoint:
             return self.checkpoint
         return get_latest_checkpoint(self.checkpoints_dir)
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
         if self._passthrough:
             checkpoint_dir = self.checkpoints_dir  # openpi's subprocess downloads gs:// itself
         else:
-            path = f'{self.checkpoints_dir}/{model_id}'
+            path = f'{self.checkpoints_dir}/{checkpoint_id}'
             checkpoint_dir = run_with_progress(
-                lambda: pos3.download(path), f'Downloading checkpoint {model_id}', on_progress
+                lambda: pos3.download(path), f'Downloading checkpoint {checkpoint_id}', on_progress
             )
         subproc = OpenpiSubprocess(
             checkpoint_dir=str(checkpoint_dir), config_name=self.config_name, ws_port=self.openpi_ws_port
@@ -227,7 +209,7 @@ class OpenpiSource(ModelSource):
                     policy_keys.CONFIG_NAME: self.config_name,
                     policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
                     if self._passthrough
-                    else f'{self.checkpoints_dir}/{model_id}',
+                    else f'{self.checkpoints_dir}/{checkpoint_id}',
                     policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
                 },
             )

@@ -1,7 +1,7 @@
 import os
 import tempfile
 import threading
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest.mock import MagicMock
@@ -26,19 +26,19 @@ class Served(NamedTuple):
     grpc_port: int | None
     uds: Path | None = None
 
-    def ws(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
+    def ws(self, query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The websocket wire, and this server's session on it: ``InferenceClient(*served.ws())``."""
-        return WebsocketClientWire(), wire.HostPortAddress(self.host, self.port, wire.session_path(model), query)
+        return WebsocketClientWire(), wire.HostPortAddress(self.host, self.port, wire.SESSION_PATH, query)
 
-    def grpc(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
+    def grpc(self, query: str = '') -> tuple[wire.ClientWire[Any], wire.HostPortAddress]:
         """The gRPC wire, and this server's session on it."""
         assert self.grpc_port is not None, 'the server serves no gRPC wire'
-        return GrpcClientWire(), wire.HostPortAddress(self.host, self.grpc_port, wire.session_path(model), query)
+        return GrpcClientWire(), wire.HostPortAddress(self.host, self.grpc_port, wire.SESSION_PATH, query)
 
-    def unix(self, model: str = '', query: str = '') -> tuple[wire.ClientWire[Any], wire.UnixSocketAddress]:
+    def unix(self, query: str = '') -> tuple[wire.ClientWire[Any], wire.UnixSocketAddress]:
         """The socket wire, and this server's session on the socket it bound."""
         assert self.uds is not None, 'the server bound no socket'
-        return WebsocketUnixClientWire(), wire.UnixSocketAddress(self.uds, wire.session_path(model), query)
+        return WebsocketUnixClientWire(), wire.UnixSocketAddress(self.uds, wire.SESSION_PATH, query)
 
 
 StartServer = Callable[..., Served]
@@ -105,24 +105,18 @@ def make_mock_model():
     return make
 
 
-class DictSource(ModelSource):
-    """Multi-model source over ready models; the dict's first key is the default."""
+class ReadySource(ModelSource):
+    """A source over one model that is already built."""
 
-    def __init__(self, models: Mapping[str, Model]):
-        self._models = models
+    def __init__(self, policy: Model, checkpoint_id: str = 'stub'):
+        self._policy = policy
+        self._checkpoint_id = checkpoint_id
 
-    def get_models(self) -> list[str]:
-        return list(self._models)
+    def checkpoint_id(self) -> str:
+        return self._checkpoint_id
 
-    def resolve(self, model_id: str | None) -> str:
-        if model_id is None:
-            return next(iter(self._models))
-        if model_id not in self._models:
-            raise ValueError(f'Unknown model {model_id!r}. Available: {list(self._models)}')
-        return model_id
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        return self._models[model_id]
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        return self._policy
 
 
 @pytest.fixture
@@ -132,27 +126,11 @@ def mock_model(make_mock_model) -> MagicMock:
 
 
 @pytest.fixture
-def mock_model_registry(make_mock_model) -> dict[str, MagicMock]:
-    return {
-        'alpha': make_mock_model({'action_data': ['alpha']}, {'model_name': 'alpha'}),
-        'beta': make_mock_model({'action_data': ['beta']}, {'model_name': 'beta'}),
-    }
-
-
-@pytest.fixture
 def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[str, int]:
     """A served single-policy pipeline.
 
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, *_ = start_server(PolicyDeployment(DictSource({'default': mock_model}), ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(PolicyDeployment(ReadySource(mock_model), ChunkedSchedule(fps=10)))
     return host, port
-
-
-@pytest.fixture
-def multi_model_server(
-    start_server: StartServer, mock_model_registry: dict[str, MagicMock]
-) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, *_ = start_server(PolicyDeployment(DictSource(mock_model_registry), ChunkedSchedule(fps=10)))
-    return host, port, mock_model_registry

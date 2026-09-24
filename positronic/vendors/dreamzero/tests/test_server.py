@@ -43,25 +43,17 @@ def holding(monkeypatch):
 
     def _set(*steps: str) -> list[str]:
         names = [f'checkpoint-{s}' for s in steps]
-        monkeypatch.setattr(server, 'list_checkpoints', lambda _path, prefix='': list(names))
+        monkeypatch.setattr(server, 'get_latest_checkpoint', lambda _path, prefix='': names[-1])
         return downloaded
 
     return _set
 
 
-def test_a_run_directory_advertises_every_checkpoint_it_holds(holding):
+def test_run_directory_is_served_at_its_latest_step(holding):
     holding('95000', '100000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
-    assert source.get_models() == ['95000', '100000']
-    assert source.resolve(None) == '100000'
-
-
-def test_run_directory_is_served_at_its_latest_step(holding):
-    holding('100000')
-    source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
-
-    assert source.get_models() == ['100000']
+    assert source.checkpoint_id() == '100000'
     # rules-allow: hardcoded-keys — the wire spelling is what this asserts; reading it from the same
     # constants the code writes with would pass whatever those constants held.
     assert source.load('100000').meta() == {
@@ -88,31 +80,30 @@ def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(holding):
     downloaded = holding('100000')
     source = DreamZeroSource(model_path='s3://bucket/100000/', backbone='wan2.2')
 
-    source.load(source.resolve(None))
+    source.load(source.checkpoint_id())
 
     assert downloaded == ['s3://bucket/100000/checkpoint-100000']
 
 
 def test_a_huggingface_repo_is_addressed_by_its_whole_name():
-    """The id a client puts in /api/v1/session/<id>, which for a repo keeps its own slash."""
+    """A repo names no step, so its id keeps its own slash."""
     source = DreamZeroSource(model_path='GEAR-Dreams/DreamZero-DROID')
 
-    assert source.get_models() == ['GEAR-Dreams/DreamZero-DROID']
-    assert source.resolve('GEAR-Dreams/DreamZero-DROID') == 'GEAR-Dreams/DreamZero-DROID'
+    assert source.checkpoint_id() == 'GEAR-Dreams/DreamZero-DROID'
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
 
 
 def test_a_pinned_checkpoint_directory_is_addressed_by_its_step():
     source = DreamZeroSource(model_path='s3://bucket/exp/checkpoint-40000')
 
-    assert source.get_models() == ['40000']
+    assert source.checkpoint_id() == '40000'
     assert _checkpoint_id('checkpoint-005000') == '005000'
 
 
 def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(holding):
     holding('005000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
-    pinned = source.resolve(None)
+    pinned = source.checkpoint_id()
 
     downloaded = holding('005000', '010000')
     source.load(pinned)
@@ -155,14 +146,6 @@ def test_warmup_observation_drops_a_camera_the_server_does_not_want():
 
     assert roboarena.WRIST_IMAGE not in obs
     assert roboarena.exterior_image(1) not in obs
-
-
-def test_meta_does_not_relist_the_bucket(monkeypatch, holding):
-    monkeypatch.setattr(server, 'list_checkpoints', lambda _path, prefix='': pytest.fail('meta must not reach S3'))
-    source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
-
-    # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
-    assert source.load('100000').meta()['experiment_name'] == 'w22f1_100k_200626'
 
 
 def test_a_server_that_announces_no_resolution_cannot_be_warmed():

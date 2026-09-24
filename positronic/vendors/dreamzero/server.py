@@ -24,7 +24,7 @@ from positronic.policy import Codec, Policy, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION, RestrictImageSize
-from positronic.utils.checkpoints import list_checkpoints
+from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors.dreamzero import codecs, roboarena
 
 logger = logging.getLogger(__name__)
@@ -53,11 +53,10 @@ def _is_run_directory(model_path: str) -> bool:
 
 
 def _checkpoint_id(checkpoint_path: str) -> str:
-    """The public id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
+    """The id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
 
     The step is kept as the directory writes it, zero-padding and all, so the id maps back to a directory
-    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole, since
-    that whole string is the id a client addresses it by.
+    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole.
     """
     last = checkpoint_path.rstrip('/').split('/')[-1]
     return last.removeprefix('checkpoint-') if last.startswith('checkpoint-') else checkpoint_path
@@ -232,7 +231,7 @@ class DreamZeroSource(ModelSource):
     """DreamZero checkpoints served through a torchrun subprocess speaking the roboarena protocol.
 
     ``model_path`` is an ``s3://`` run directory (served at its latest ``checkpoint-N``), a pinned
-    checkpoint dir, a HuggingFace repo, or a local path. Model ids are checkpoint step numbers
+    checkpoint dir, a HuggingFace repo, or a local path. Checkpoint ids are step numbers
     (``'100000'`` for ``checkpoint-100000``).
     """
 
@@ -252,23 +251,19 @@ class DreamZeroSource(ModelSource):
         self._roboarena_port = roboarena_port
         self._enable_dit_cache = enable_dit_cache
 
-    def _checkpoint_path(self, model_id: str) -> str:
-        """The checkpoint directory whose public id is ``model_id``.
-
-        Composed rather than looked up: a session handshake reaches here, and must not need the
-        checkpoint bucket to describe weights that are already loaded.
-        """
+    def _checkpoint_path(self, checkpoint_id: str) -> str:
+        """The checkpoint directory whose id is ``checkpoint_id``."""
         if not _is_run_directory(self._model_path):
             return self._model_path
-        return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
+        return f'{self._model_path.rstrip("/")}/checkpoint-{checkpoint_id}'
 
-    def get_models(self) -> list[str]:
+    def checkpoint_id(self) -> str:
         if not _is_run_directory(self._model_path):
-            return [_checkpoint_id(self._model_path)]
-        return [_checkpoint_id(c) for c in list_checkpoints(self._model_path, prefix='checkpoint-')]
+            return _checkpoint_id(self._model_path)
+        return _checkpoint_id(get_latest_checkpoint(self._model_path, prefix='checkpoint-'))
 
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        checkpoint_path = self._checkpoint_path(model_id)
+    def load(self, checkpoint_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
+        checkpoint_path = self._checkpoint_path(checkpoint_id)
         local_path = run_with_progress(
             lambda: _download_checkpoint(checkpoint_path), 'Downloading DreamZero checkpoint', on_progress
         )

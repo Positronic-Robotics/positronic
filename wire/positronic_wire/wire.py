@@ -7,7 +7,6 @@ spells whatever its library takes.
 
 import abc
 import dataclasses
-import urllib.parse
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
@@ -16,19 +15,11 @@ from typing import ClassVar, Generic, Self, TypeVar
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The model catalogue, served under the HTTP API: the route it answers on, and the key it answers under.
+# The model route, served under the HTTP API: the route it answers on, and the key it answers under. It
+# answers the one checkpoint the server serves.
 MODELS_ROUTE = 'models'
 MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
 MODELS_KEY = 'models'
-
-
-def session_path(model: str = '') -> str:
-    """The route a session on ``model`` opens on; the model the server pinned when ``model`` is empty.
-
-    The id is percent-encoded as a path, so an id that is itself a path (a HuggingFace repo) keeps its
-    slashes as separators and the server decodes the rest.
-    """
-    return f'{SESSION_PATH}/{urllib.parse.quote(model, safe="/")}' if model else SESSION_PATH
 
 
 def bracket_ipv6(host: str) -> str:
@@ -39,7 +30,7 @@ def bracket_ipv6(host: str) -> str:
 class SessionAddress(abc.ABC):
     """Where one session opens. Each wire declares the address it dials, and takes no other.
 
-    ``path`` is ``session_path(model)``, and ``query`` carries the session params as written: the server
+    ``path`` is the session route, ``SESSION_PATH``, and ``query`` carries the session params as written: the server
     reads each value as a JSON literal, and only whoever wrote the query knows whether ``true`` means the
     bool or the string. Every wire carries both; how a wire names the server is its own.
     """
@@ -137,15 +128,6 @@ class ClientWire(abc.ABC, Generic[AddressT]):
 
         Each wire dials its own way: a member whose library takes this spelling dials it, and one
         that takes a target or a socket dials that instead.
-        """
-
-    @abc.abstractmethod
-    def list_models(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> list[str]:
-        """The models the server at ``address`` serves, read over this wire's own transport.
-
-        ``headers`` are the ones ``dial`` sends, so an edge that authenticates on them lets the read
-        through. Raises ``ConnectRefused`` when the catalogue does not answer, in the terms ``dial``
-        uses, and ``ValueError`` on a wire whose transport carries sessions alone.
         """
 
     @abc.abstractmethod
