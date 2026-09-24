@@ -34,40 +34,6 @@ def _dreamzero_root():
     return Path(__file__).parents[4] / 'dreamzero'
 
 
-def _download_checkpoint(model_path: str) -> Path:
-    """Local checkpoint dir for ``model_path``: an ``s3://`` URL or local path via pos3, else a HuggingFace repo."""
-    local = os.path.expanduser(model_path)
-    if model_path.startswith('s3://') or os.path.exists(local):
-        return pos3.download(local)
-    return Path(snapshot_download(model_path))
-
-
-def _is_run_directory(model_path: str) -> bool:
-    """Whether ``model_path`` holds ``checkpoint-N`` children rather than being one checkpoint itself.
-
-    Decided by its path: a run directory may be called anything, including the step number of
-    the checkpoint inside it.
-    """
-    last = model_path.rstrip('/').split('/')[-1]
-    return model_path.startswith('s3://') and not last.startswith('checkpoint-')
-
-
-def _checkpoint_id(checkpoint_path: str) -> str:
-    """The id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
-
-    The step is kept as the directory writes it, zero-padding and all, so the id maps back to a directory
-    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole.
-    """
-    last = checkpoint_path.rstrip('/').split('/')[-1]
-    return last.removeprefix('checkpoint-') if last.startswith('checkpoint-') else checkpoint_path
-
-
-def _experiment_name(checkpoint_path: str) -> str:
-    """The training run a resolved checkpoint belongs to."""
-    parts = checkpoint_path.rstrip('/').split('/')
-    return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
-
-
 def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
     """Zero-filled inputs at the geometry and camera count ``server_config`` announced on connect."""
     if server_config[roboarena.NEEDS_STEREO_CAMERA]:
@@ -224,6 +190,40 @@ class DreamZeroModel(Model):
             client.close()
         self._clients.clear()
         self._subprocess.stop()
+
+
+def _download_checkpoint(model_path: str) -> Path:
+    """Local checkpoint dir for ``model_path``: an ``s3://`` URL or local path via pos3, else a HuggingFace repo."""
+    local = os.path.expanduser(model_path)
+    if model_path.startswith('s3://') or os.path.exists(local):
+        return pos3.download(local)
+    return Path(snapshot_download(model_path))
+
+
+def _is_run_directory(model_path: str) -> bool:
+    """Whether ``model_path`` holds ``checkpoint-N`` children rather than being one checkpoint itself.
+
+    Decided by its path: a run directory may be called anything, including the step number of
+    the checkpoint inside it.
+    """
+    last = model_path.rstrip('/').split('/')[-1]
+    return model_path.startswith('s3://') and not last.startswith('checkpoint-')
+
+
+def _checkpoint_id(checkpoint_path: str) -> str:
+    """The id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
+
+    The step is kept as the directory writes it, zero-padding and all, so the id maps back to a directory
+    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole.
+    """
+    last = checkpoint_path.rstrip('/').split('/')[-1]
+    return last.removeprefix('checkpoint-') if last.startswith('checkpoint-') else checkpoint_path
+
+
+def _experiment_name(checkpoint_path: str) -> str:
+    """The training run a resolved checkpoint belongs to."""
+    parts = checkpoint_path.rstrip('/').split('/')
+    return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
 
 
 @cfn.config(dreamzero_venv='/.venv/', backbone='wan2.1', num_gpus=1, roboarena_port=1234, enable_dit_cache=True)
