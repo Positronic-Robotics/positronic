@@ -105,8 +105,8 @@ def local_stack(config: Mapping[str, Any]) -> Sequential:
     return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
 
 
-# The keys the chunk can arrive under in the server's reply, which is a mapping rather than a bare array. Servers
-# differ on the key, so the first of these keys that the reply carries is read.
+# The keys the chunk can arrive under in the server's reply, which is a mapping. The first key that the reply
+# carries holds the chunk: servers differ on the key.
 ACTIONS_FIELDS = ('actions', 'action')
 
 # How many values one action in `JOINT_POSITION_SPACE` carries: seven joints and a gripper. A row of another
