@@ -9,6 +9,7 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
 
@@ -120,6 +121,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
     assert 'created_ts_ns' in m and isinstance(m['created_ts_ns'], int)
     assert 'writer' in m and isinstance(m['writer'], dict)
     assert m['writer'].get('name') == 'positronic.dataset.local_dataset.DiskEpisodeWriter'
+    assert m['writer']['video_encoder'] == repr(DEFAULT_VIDEO_ENCODER)
     expected_path = str(ep_dir.expanduser().absolute())
     assert m.get('path') == expected_path
     assert 'size_mb' in m and isinstance(m['size_mb'], float)
@@ -132,6 +134,17 @@ def test_episode_meta_written_and_exposed(tmp_path):
         git = m['writer']['git']
         assert isinstance(git, dict)
         assert {'commit', 'dirty'}.issubset(git.keys())
+
+
+def test_each_episode_records_its_own_video_encoder(tmp_path):
+    encoders = [LibavEncoder(), LibavEncoder(options={'preset': 'ultrafast'})]
+    writers = [DiskEpisodeWriter(tmp_path / str(i), video_encoder=e) for i, e in enumerate(encoders)]
+    for w in writers:
+        with w:
+            w.append('a', 1, 1000)
+
+    recorded = [DiskEpisode(w.path).meta['writer']['video_encoder'] for w in writers]
+    assert recorded == [repr(e) for e in encoders]
 
 
 def test_episode_written_by_an_installed_wheel_records_that_wheel_revision(tmp_path, monkeypatch):

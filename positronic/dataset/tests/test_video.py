@@ -1,9 +1,14 @@
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import av
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
+from av.codec.codec import UnknownCodecError
 
 from positronic.dataset.signal import Kind
-from positronic.dataset.video import VideoSignal, VideoSignalWriter
+from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
 
 
 @pytest.fixture
@@ -138,6 +143,106 @@ class TestVideoSignalWriter:
             w.append(frame, 1000)
         with pytest.raises(RuntimeError, match='Cannot append to a finished writer'):
             w.append(frame, 2000)
+
+
+@dataclass
+class FakeSession:
+    path: Path
+    fail_at: int | None
+    writes: list[tuple[int, int]] = field(default_factory=list)
+    ended: str | None = None
+
+    def write(self, frame: np.ndarray, index: int) -> None:
+        if index == self.fail_at:
+            raise OSError('encoder died')
+        self.writes.append((index, int(frame[0, 0, 0])))
+
+    def finish(self) -> None:
+        self.ended = 'finish'
+
+    def abort(self) -> None:
+        self.ended = 'abort'
+
+
+@dataclass
+class FakeEncoder:
+    fail_at: int | None = None
+    opened: list[tuple[int, int, int, int]] = field(default_factory=list)
+    sessions: list[FakeSession] = field(default_factory=list)
+
+    def ensure_available(self) -> None:
+        pass
+
+    def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> FakeSession:
+        path.write_bytes(b'partial')
+        self.opened.append((width, height, fps, gop))
+        self.sessions.append(FakeSession(path, self.fail_at))
+        return self.sessions[-1]
+
+
+class TestVideoEncoderSeam:
+    def test_encoder_gets_every_frame_in_order_then_finishes(self, video_paths):
+        encoder = FakeEncoder()
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, gop_size=12, fps=50) as w:
+            for i in range(20):
+                w.append(create_frame(i, (6, 8, 3)), 1000 * (i + 1))
+
+        assert encoder.opened == [(8, 6, 50, 12)]
+        (session,) = encoder.sessions
+        assert session.writes == [(i, i) for i in range(20)]
+        assert session.ended == 'finish'
+        assert len(pq.read_table(video_paths['frames'])) == 20
+
+    def test_empty_writer_never_opens_the_encoder(self, video_paths):
+        encoder = FakeEncoder()
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder):
+            pass
+        assert encoder.sessions == []
+
+    def test_abort_stops_the_encoder_and_deletes_the_files(self, video_paths):
+        encoder = FakeEncoder()
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w.append(create_frame(0), 1000)
+        w.abort()
+
+        assert encoder.sessions[0].ended == 'abort'
+        assert not video_paths['video'].exists()
+        assert not video_paths['frames'].exists()
+
+    def test_an_encoder_error_surfaces_on_append(self, video_paths):
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=0))
+        # The queue holds 8 frames, so an append past them waits for the failed write and sees its error.
+        with pytest.raises(RuntimeError, match='Video encoding failed'):
+            for i in range(20):
+                w.append(create_frame(i), 1000 * (i + 1))
+        w.abort()
+
+    def test_an_encoder_error_surfaces_on_exit_and_aborts_the_session(self, video_paths):
+        encoder = FakeEncoder(fail_at=1)
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w.append(create_frame(0), 1000)
+        w.append(create_frame(1), 2000)
+        with pytest.raises(RuntimeError, match='Video encoding failed'):
+            w.__exit__(None, None, None)
+        assert encoder.sessions[0].ended == 'abort'
+
+
+class TestLibavEncoder:
+    def test_options_reach_the_codec(self, video_paths):
+        encoder = LibavEncoder(options={'preset': 'ultrafast', 'bframes': '0'})
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder) as w:
+            for i in range(5):
+                w.append(create_frame(i * 40), 1000 * (i + 1))
+
+        with av.open(str(video_paths['video'])) as container:
+            (stream,) = container.streams.video
+            assert stream.codec_context.name == 'h264'
+            assert not stream.codec_context.has_b_frames
+
+    def test_an_absent_codec_is_refused(self):
+        with pytest.raises(UnknownCodecError):
+            LibavEncoder(codec='no-such-codec').ensure_available()
+        LibavEncoder().ensure_available()
 
 
 class TestVideoSignalStartLastTs:
