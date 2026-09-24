@@ -285,7 +285,7 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_model)
 
 
 def test_a_session_route_that_names_a_checkpoint_is_refused(stub_server):
-    """The server serves one checkpoint, so a route that names one opens no session."""
+    """A route that names a checkpoint opens no session: the server serves one checkpoint."""
     host, port, *_ = stub_server
     with pytest.raises(InvalidStatus):
         connect(f'ws://{host}:{port}{wire.SESSION_PATH}/other').close()

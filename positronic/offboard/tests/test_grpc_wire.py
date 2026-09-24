@@ -160,7 +160,7 @@ def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(both_wire
 
 
 def test_a_session_path_that_names_a_checkpoint_is_refused(both_wires):
-    """The server serves one checkpoint, so a path that names one opens no session, as on the websocket wire."""
+    """A path that names a checkpoint opens no session, as on the websocket wire: the server serves one checkpoint."""
     served, _policy = both_wires
     client_wire, address = served.grpc()
     named = dataclasses.replace(address, path=f'{wire.SESSION_PATH}/other')
