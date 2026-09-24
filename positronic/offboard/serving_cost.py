@@ -7,7 +7,7 @@ server declares in its handshake, or the one the flags below build for the loopb
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
         --dataset.path=<episode root> --requests=20
-    ... --server_host=<endpoint>          # AUTH_TOKEN gates a served endpoint, reached over TLS
+    ... --server_host=<endpoint> --headers=@positronic.cfg.policy.bearer_headers   # a served endpoint
     ... --server_wire=websocket --server_port=8000   # a plain server started by hand
     ... --compress_images=False           # loopback only: send raw stacks instead of per-frame JPEG
     ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
@@ -15,7 +15,6 @@ Usage
 
 import contextlib
 import json
-import os
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -31,13 +30,12 @@ from positronic_wire.websocket import WebsocketClientWire
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
-from positronic.cfg.policy import bearer_headers
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
-from positronic.offboard.server import AUTH_TOKEN_ENV, PolicyServer
+from positronic.offboard.server import PolicyServer
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -164,14 +162,16 @@ class Measured(NamedTuple):
 
 
 @contextlib.contextmanager
-def against_server(wire_name: str, host: str, port: int, model: str, query: str) -> Iterator[Measured]:
+def against_server(
+    wire_name: str, host: str, port: int, model: str, query: str, headers: dict[str, str] | None = None
+) -> Iterator[Measured]:
     """A session on the named server, running the stack and wire settings that server declares.
 
     ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), and ``model`` names
-    the checkpoint — empty for the one the server pinned. ``AUTH_TOKEN_ENV`` gates a served endpoint; a
-    server started by hand needs none.
+    the checkpoint — empty for the one the server pinned. ``headers`` carries the credential a served
+    endpoint asks for; a run that names none sends none, so ``--server_host`` cannot hand a token to a
+    host the operator did not mean to authenticate to.
     """
-    headers = bearer_headers.instantiate() if os.environ.get(AUTH_TOKEN_ENV) else None
     client_wire = registry.client_wire(wire_name)
     address = wire.HostPortAddress(host, port, wire.session_path(model), query)
     session = InferenceClient(client_wire, address, headers=headers).new_session()
@@ -260,6 +260,7 @@ def report(rows: list[dict[str, float]]) -> str:
     server_port=443,
     server_model='',
     server_query='',
+    headers=None,
     frames=25,
     rate_hz=15.0,
     width=1024,
@@ -278,6 +279,7 @@ def main(
     server_port: int,
     server_model: str,
     server_query: str,
+    headers: dict[str, str] | None,
     frames: int,
     rate_hz: float,
     width: int,
@@ -295,7 +297,7 @@ def main(
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
 
     opened = (
-        against_server(server_wire, server_host, server_port, server_model, server_query)
+        against_server(server_wire, server_host, server_port, server_model, server_query, headers)
         if server_host
         else against_loopback(rig_stack(cameras, frames, rate_hz, width, height), compress_images, model)
     )

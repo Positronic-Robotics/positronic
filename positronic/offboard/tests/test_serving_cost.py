@@ -2,11 +2,14 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from positronic_wire import wire
 
 from positronic import keys
+from positronic.cfg.policy import bearer_headers
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
+from positronic.offboard.server import AUTH_TOKEN_ENV
 from positronic.offboard.serving_cost import InstantChunk, against_server, capture, observations, replay, rig_stack
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -117,13 +120,13 @@ def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
 
 def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
     """A declared stack can ask for a channel no whitelist here knows, and a drop reports a false absence."""
+    # A channel `positronic.keys` does not name.
+    suffixed = 'robot_state.left.q'
     period_ns = int(1e9 / 15.0)
     with DiskEpisodeWriter(tmp_path / 'episode') as writer:
         for tick in range(3):
             at = tick * period_ns
-            # rules-allow: hardcoded-keys — the test needs a channel `positronic.keys` does not name, and
-            # a constant for it would defeat the point. The other sites spelling it are unrelated tests.
-            writer.append('robot_state.left.q', np.zeros(7), at)
+            writer.append(suffixed, np.zeros(7), at)
             writer.append(keys.GRIP, 0.0, at)
             writer.append(keys.WRIST_IMAGE, np.zeros((48, 64, 3), np.uint8), at)
 
@@ -131,7 +134,7 @@ def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
 
     assert handed, 'the episode spans three ticks'
     for obs in handed:
-        assert 'robot_state.left.q' in obs, 'a suffixed state channel was dropped'
+        assert suffixed in obs, 'a suffixed state channel was dropped'
         assert keys.GRIP in obs and keys.WRIST_IMAGE in obs
 
 
@@ -152,3 +155,17 @@ def test_a_camera_the_flags_did_not_name_is_not_sent(tmp_path):
     assert keys.EXTERIOR_IMAGE_2 not in by_flags, 'a camera the flags did not name rode along to the wire'
     assert all(camera in by_flags for camera in CAMERAS)
     assert keys.EXTERIOR_IMAGE_2 in declared, 'a declared stack picks its own cameras, so every one is handed over'
+
+
+def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_server, monkeypatch):
+    """`AUTH_TOKEN` is the operator's credential for one endpoint, not for every host `--server_host` dials."""
+    token = 'a-token-for-another-endpoint'
+    monkeypatch.setenv(AUTH_TOKEN_ENV, token)
+    model = InstantChunk(rows=2, period_s=1 / 15.0)
+    served = start_server(_declared_stack() | remote(compress_images=True) | PolicySource(model), auth_token=token)
+
+    with pytest.raises(wire.ConnectRefused), against_server('websocket', served.host, served.port, '', ''):
+        pass
+
+    with against_server('websocket', served.host, served.port, '', '', bearer_headers.instantiate()) as measured:
+        assert measured.stack is not None, 'the offered credential opened the session'
