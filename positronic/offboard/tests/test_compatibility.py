@@ -11,6 +11,7 @@ from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import keys as eval_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
@@ -19,7 +20,7 @@ from positronic.offboard.tests.conftest import DictSource
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.compatibility import ChunkedScheduleV1
+from positronic.policy.compatibility import ChunkedScheduleV1, StackV1
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
@@ -164,6 +165,28 @@ def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
         assert len(calls) == 2
     finally:
         run.close()
+
+
+@pytest.mark.parametrize('scheduled', [True, False], ids=['scheduled-chunk', 'codec-only'])
+def test_v1_schedule_counts_are_reported_only_for_a_stack_that_schedules(controlled_runtime, scheduled):
+    runtime, now, calls = controlled_runtime
+    timing = {'name': 'action_timestamp', 'args': {'fps': 10}}
+    stack = StackV1(spec.from_spec({'seq': [{'name': 'chunked_schedule'}, timing]} if scheduled else timing))
+    run = runtime.start(stack, MagicMock(return_value=[{'value': i} for i in range(2)]))
+    try:
+        run.send({})
+        future, obs, function = calls[0]
+        future.set_result(function(obs))
+        run.send({})
+        meta = runtime.episode_meta()
+    finally:
+        run.close()
+    prefix = f'{eval_keys.SCHEDULE}.value'
+    if scheduled:
+        assert meta[f'{prefix}.{eval_keys.EMITTED}'] == 1
+        assert meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] == 0.0
+    else:
+        assert meta == {}
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])

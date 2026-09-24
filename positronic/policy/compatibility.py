@@ -15,7 +15,7 @@ from typing import Any, cast
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import ARGS, NAME, VERSION, Answer, Obs, Policy, PolicyRun, Runtime, Step
 from positronic.policy.codec import Codec
-from positronic.policy.layers import _arms_available, _StackBuffer
+from positronic.policy.layers import ScheduleAccount, _arms_available, _StackBuffer
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
@@ -163,17 +163,30 @@ class StackV1(Sequential):
                 call = component.bind(runtime, call)
             else:
                 call = _Call(cast(Codec, component).wrap(call.send), call.cancel)
-        trajectory: deque[dict[str, Any]] = deque()
+        trajectory: deque[tuple[dict[str, Any], int]] = deque()
+        account = ScheduleAccount()
+        # Only ChunkedScheduleV1 anchors rows to the runtime clock. Without it, a due time has no lateness.
+        if any(isinstance(component, ChunkedScheduleV1) for component in self._components):
+            runtime.report(account.meta)
         obs = yield
         while True:
             now_ns = runtime.time_ns
             result = call.send({**obs, OBS_TIME_NS: now_ns, WALL_TIME_NS: time.time_ns()})
             if result is not None:
-                trajectory = deque(result)
-            commands = {}
-            while trajectory and round(trajectory[0].get(TIMESTAMP, 0.0) * 1e9) <= now_ns:
-                commands.update({key: value for key, value in trajectory.popleft().items() if key != TIMESTAMP})
-            resume_at_ns = round(trajectory[0][TIMESTAMP] * 1e9) if trajectory else now_ns
+                account.skip(row for row, due_ns in trajectory if due_ns <= now_ns)
+                trajectory = deque(
+                    (
+                        {key: value for key, value in action.items() if key != TIMESTAMP},
+                        round(action.get(TIMESTAMP, 0.0) * 1e9),
+                    )
+                    for action in result
+                )
+                account.plan(row for row, _ in trajectory)
+            due = []
+            while trajectory and trajectory[0][1] <= now_ns:
+                due.append(trajectory.popleft())
+            commands = account.emit(due, now_ns)
+            resume_at_ns = trajectory[0][1] if trajectory else now_ns
             obs = yield Step(commands, resume_at_ns)
 
 

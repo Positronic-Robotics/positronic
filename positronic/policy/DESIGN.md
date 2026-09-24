@@ -272,7 +272,9 @@ Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
 Processors report metadata about their definitions. A composition combines its
-components' metadata. Metadata specific to a run is deferred.
+components' metadata. A run reports metadata about itself with
+`Runtime.report`. The chunk schedule reports the rows it planned, emitted and
+dropped this way.
 
 ### Remote policies
 
@@ -316,8 +318,7 @@ what each part saw, what it returned, and when. That includes inference inputs
 and outputs on other machines, and values a run chooses to record itself.
 
 The framework records sensor and executed-command signals as an episode dataset.
-Inference input/output recording, custom run recording, and per-run metadata
-are deferred.
+Inference input/output recording and custom run recording are deferred.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,
 and submitted jobs, with parent-child links. The outermost processor span times
@@ -388,6 +389,8 @@ class Runtime(ABC):
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Answer[T]: ...
+
+    def report(self, source: Callable[[], Mapping[str, Any]]) -> None: ...
 ```
 
 ### Processors and policies
@@ -450,9 +453,8 @@ their caller. `Codec.wrap` does not take ownership of the child it wraps.
 
 - Plan invalidation and recovery after robot unavailability; [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
-- TODO: Record dropped and late waypoints in the scheduling processor.
 - The shape of the robot description, and a server's ability to refuse one.
-- Inference input/output recording, custom run recording, and per-run metadata.
+- Inference input/output recording and custom run recording.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the run. The pimm signals
   already carry these timestamps.

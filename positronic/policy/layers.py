@@ -14,8 +14,8 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
-from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections import Counter, defaultdict, deque
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -23,6 +23,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     ARGS,
@@ -82,6 +83,62 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
+class ScheduleAccount:
+    """Per command channel: rows planned, emitted and skipped, how late each emitted row went out, and the
+    largest gap between two emits of one chunk.
+
+    A row is skipped when it came due and went out on no round: a later due row replaced it in the same
+    round, or a new chunk replaced it after its due time.
+    """
+
+    def __init__(self) -> None:
+        self._planned: Counter[str] = Counter()
+        self._skipped: Counter[str] = Counter()
+        self._late_ns: defaultdict[str, list[int]] = defaultdict(list)
+        self._gap_max_ns: Counter[str] = Counter()
+        self._chunk_emit_ns: dict[str, int] = {}
+
+    def plan(self, rows: Iterable[Commands]) -> None:
+        """Take a new chunk's rows. Rows of the chunk before it that are still due must go to ``skip`` first."""
+        self._chunk_emit_ns.clear()
+        for row in rows:
+            self._planned.update(row.keys())
+
+    def skip(self, rows: Iterable[Commands]) -> None:
+        for row in rows:
+            self._skipped.update(row.keys())
+
+    def emit(self, due: Sequence[tuple[Commands, int]], now_ns: int) -> dict[str, Any]:
+        """The commands of the due ``(row, due_ns)`` rows: per channel, the last row wins and the rest skip."""
+        commands: dict[str, Any] = {}
+        due_ns_by_name: dict[str, int] = {}
+        for row, due_ns in due:
+            self._skipped.update(name for name in row if name in due_ns_by_name)
+            due_ns_by_name.update(dict.fromkeys(row, due_ns))
+            commands.update(row)
+        for name, due_ns in due_ns_by_name.items():
+            self._late_ns[name].append(now_ns - due_ns)
+            if name in self._chunk_emit_ns:
+                self._gap_max_ns[name] = max(self._gap_max_ns[name], now_ns - self._chunk_emit_ns[name])
+            self._chunk_emit_ns[name] = now_ns
+        return commands
+
+    def meta(self) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        for name, planned in self._planned.items():
+            prefix = f'{eval_keys.SCHEDULE}.{name}'
+            meta[f'{prefix}.{eval_keys.SCHEDULED}'] = planned
+            meta[f'{prefix}.{eval_keys.EMITTED}'] = len(self._late_ns[name])
+            meta[f'{prefix}.{eval_keys.DROPPED}'] = self._skipped[name]
+            if late_ns := self._late_ns[name]:
+                p50, p90 = np.percentile(late_ns, (50, 90))
+                meta[f'{prefix}.{eval_keys.LATE_P50_MS}'] = float(p50) / 1e6
+                meta[f'{prefix}.{eval_keys.LATE_P90_MS}'] = float(p90) / 1e6
+                meta[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = max(late_ns) / 1e6
+                meta[f'{prefix}.{eval_keys.GAP_MAX_MS}'] = self._gap_max_ns[name] / 1e6
+        return meta
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -108,6 +165,8 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
+        account = ScheduleAccount()
+        runtime.report(account.meta)
         obs = yield
         try:
             while True:
@@ -120,15 +179,18 @@ class ChunkedSchedule(Policy):
                     if self._horizon_sec is not None:
                         duration_sec = min(duration_sec, self._horizon_sec)
                     end_ns = now_ns + round(duration_sec * 1e9)
+                    account.skip(row for row, due_ns in trajectory if due_ns <= now_ns)
                     trajectory = deque(
                         (waypoint, now_ns + round(i * period_sec * 1e9))
                         for i, waypoint in enumerate(chunk)
                         if i * period_sec < duration_sec
                     )
+                    account.plan(row for row, _ in trajectory)
 
-                commands: dict[str, Any] = {}
+                due = []
                 while trajectory and trajectory[0][1] <= now_ns:
-                    commands.update(trajectory.popleft()[0])
+                    due.append(trajectory.popleft())
+                commands = account.emit(due, now_ns)
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)

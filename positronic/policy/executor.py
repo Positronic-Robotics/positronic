@@ -4,7 +4,7 @@ import concurrent.futures
 import contextvars
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -108,6 +108,7 @@ class Executor(Runtime):
         self._tick_time_ns: int | None = None
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._answers: set[_UnchargedAnswer[Any]] = set()
+        self._meta_sources: list[Callable[[], Mapping[str, Any]]] = []
 
     @property
     def time_ns(self) -> int:
@@ -145,6 +146,16 @@ class Executor(Runtime):
             if not (answer.completion_reported and (answer.result_read or answer.call.cancelled()))
         }
         return completed
+
+    def report(self, source: Callable[[], Mapping[str, Any]]) -> None:
+        self._meta_sources.append(source)
+
+    def episode_meta(self) -> dict[str, Any]:
+        """The metadata every reported source holds now. Read it while the policy run is still open."""
+        meta: dict[str, Any] = {}
+        for source in self._meta_sources:
+            meta.update(source())
+        return meta
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         context = contextvars.copy_context()
