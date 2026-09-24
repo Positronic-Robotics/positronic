@@ -256,6 +256,8 @@ class TestLibavEncoder:
     def test_an_absent_codec_is_refused(self):
         with pytest.raises(UnknownCodecError):
             LibavEncoder(codec='no-such-codec').ensure_available()
+        with pytest.raises(ValueError, match='not a video codec'):
+            LibavEncoder(codec='aac').ensure_available()
         LibavEncoder().ensure_available()
 
 

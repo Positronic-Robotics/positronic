@@ -27,6 +27,7 @@ from .episode import (
     META_CREATED_TS_NS,
     META_PATH,
     META_UID,
+    META_WRITER_VIDEO_ENCODER,
     SIGNAL_FACTORY_T,
     Episode,
     EpisodeWriter,
@@ -127,7 +128,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._meta['writer'] = {
             **_cached_env_writer_info(),
             'name': f'{self.__class__.__module__}.{self.__class__.__qualname__}',
-            'video_encoder': repr(video_encoder),
+            META_WRITER_VIDEO_ENCODER: repr(video_encoder),
         }
         self._meta[META_PATH] = str(self._path.resolve(strict=True))
 

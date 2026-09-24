@@ -6,6 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset import Episode
+from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
@@ -121,7 +122,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
     assert 'created_ts_ns' in m and isinstance(m['created_ts_ns'], int)
     assert 'writer' in m and isinstance(m['writer'], dict)
     assert m['writer'].get('name') == 'positronic.dataset.local_dataset.DiskEpisodeWriter'
-    assert m['writer']['video_encoder'] == repr(DEFAULT_VIDEO_ENCODER)
+    assert m['writer'][META_WRITER_VIDEO_ENCODER] == repr(DEFAULT_VIDEO_ENCODER)
     expected_path = str(ep_dir.expanduser().absolute())
     assert m.get('path') == expected_path
     assert 'size_mb' in m and isinstance(m['size_mb'], float)
@@ -143,7 +144,7 @@ def test_each_episode_records_its_own_video_encoder(tmp_path):
         with w:
             w.append('a', 1, 1000)
 
-    recorded = [DiskEpisode(w.path).meta['writer']['video_encoder'] for w in writers]
+    recorded = [DiskEpisode(w.path).meta['writer'][META_WRITER_VIDEO_ENCODER] for w in writers]
     assert recorded == [repr(e) for e in encoders]
 
 

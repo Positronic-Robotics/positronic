@@ -46,30 +46,6 @@ class VideoEncoder(Protocol):
         ...
 
 
-@dataclass(frozen=True)
-class LibavEncoder:
-    """Encodes in the calling process with a PyAV (libav) codec."""
-
-    codec: str = 'h264'
-    # Encoder options as (name, value) pairs, e.g. x264 ``preset``/``tune``; empty keeps the codec defaults.
-    options: tuple[tuple[str, str], ...] = ()
-
-    def ensure_available(self) -> None:
-        av.Codec(self.codec, 'w')
-
-    def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
-        container = av.open(str(path), mode='w')
-        stream = container.add_stream(self.codec, rate=fps, options=dict(self.options))
-        if not isinstance(stream, VideoStream):
-            container.close()
-            raise ValueError(f"'{self.codec}' is not a video codec")
-        stream.width = width
-        stream.height = height
-        stream.pix_fmt = 'yuv420p'
-        stream.gop_size = gop
-        return _LibavSession(container, stream)
-
-
 class _LibavSession:
     def __init__(self, container: OutputContainer, stream: VideoStream):
         self._container = container
@@ -88,6 +64,31 @@ class _LibavSession:
 
     def abort(self) -> None:
         self._container.close()
+
+
+@dataclass(frozen=True)
+class LibavEncoder:
+    """Encodes in the calling process with a PyAV (libav) codec."""
+
+    codec: str = 'h264'
+    # Encoder options as (name, value) pairs, e.g. x264 ``preset``/``tune``; empty keeps the codec defaults.
+    options: tuple[tuple[str, str], ...] = ()
+
+    def ensure_available(self) -> None:
+        if av.Codec(self.codec, 'w').type != 'video':
+            raise ValueError(f"'{self.codec}' is not a video codec")
+
+    def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
+        container = av.open(str(path), mode='w')
+        stream = container.add_stream(self.codec, rate=fps, options=dict(self.options))
+        if not isinstance(stream, VideoStream):
+            container.close()
+            raise ValueError(f"'{self.codec}' is not a video codec")
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = 'yuv420p'
+        stream.gop_size = gop
+        return _LibavSession(container, stream)
 
 
 # libx264 at its default preset
