@@ -16,13 +16,14 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
+import positronic.cfg.video_encoder
 import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder, VideoEncoder
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
@@ -435,9 +436,7 @@ def so101cfg(robot_arm, **kwargs):
     operator_position=OperatorPosition.BACK,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
-    # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
-    # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
-    video_encoder=cfn.Config(LibavEncoder, options=(('preset', 'ultrafast'), ('tune', 'zerolatency'))),
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
 def yamcfg(robot_arm, **kwargs):
     """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""
