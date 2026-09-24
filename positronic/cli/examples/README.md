@@ -26,7 +26,7 @@ place of a policy sends it to the platform, and a plan file files a plan for the
 
 ```bash
 uv run positronic eval catalog
-uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml
+uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --org=<org>
 ```
 
 Two or more endpoints in the plan make one blind sample: the operator is told no policy, and each

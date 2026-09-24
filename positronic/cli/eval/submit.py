@@ -8,7 +8,7 @@ from pathlib import Path
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import RegistryCredential, password_from_file, plan_of_image
 from platform_client.evals import EvalRef
-from platform_client.ids import TransactionKey
+from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
 from pydantic import SecretStr
@@ -36,6 +36,7 @@ def submit(
     alias: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    org: str | None = None,
     registry_username: str | None = None,
     registry_password_file: str | None = None,
 ) -> SubmissionCreateResponse:
@@ -45,9 +46,10 @@ def submit(
     that runs them, and the catalogue expands that name. Naming one the platform does not offer
     answers with the ones it does. An image pinned by digest runs the bytes you tested, while a
     mutable tag is resolved at submission time. Repeating a submission under one `transaction_key`
-    returns the original instead of spending another day's quota. An image the platform cannot
-    pull anonymously takes a credential: `registry_username` and `registry_password_file`, the file
-    the password is in.
+    returns the original instead of spending another day's quota. `org` runs it as a private
+    request for that organisation instead of a `nebius_competition` one. An image the platform
+    cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
+    the file the password is in.
     """
     with refusing_bad_input():
         plan = plan_of_image(
@@ -56,6 +58,7 @@ def submit(
             alias=alias,
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
             credential=_credential(registry_username, registry_password_file),
+            org=OrgSlug(org) if org is not None else None,
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)

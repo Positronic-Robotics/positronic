@@ -1,5 +1,5 @@
 # A plan for the lab rig: two endpoints make one blind sample.
-# `uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml` files it.
+# `uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --org=<org>` files it for that org.
 tasks:
   - eight-spoons-into-grey-tote
 endpoints:

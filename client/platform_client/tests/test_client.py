@@ -28,9 +28,17 @@ from platform_client.enums import (
     Wire,
 )
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, TASKS_DETAIL, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, HostPortAddress, TaskNode, credential_from_file, plan_of_image
+from platform_client.eval_plan import (
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    PrivateEval,
+    TaskNode,
+    credential_from_file,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import CancelRequest, RegisterRequest
 from platform_client.responses import (
@@ -237,6 +245,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     }
     gateway = Gateway(200, resolved)
     plan = EvalPlan(
+        request_type=PrivateEval(org=OrgSlug('acme')),
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
         endpoints=[
             Endpoint(
@@ -614,6 +623,7 @@ def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
 # --- eval plans ---------------------------------------------------------------------------------
 
 PLAN = EvalPlan(
+    request_type=PrivateEval(org=OrgSlug('acme')),
     tasks=[TaskNode(task_id=TaskRef('eight-spoons-into-grey-tote'))],
     endpoints=[
         Endpoint(

@@ -123,6 +123,8 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
                 additional_headers=headers,
                 ping_interval=20.0,
                 max_size=wire.MAX_MESSAGE_BYTES,
+                # Deflate costs ~100 ms of sender CPU on three raw 640x400 frames; compress_images makes them small.
+                compression=None,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (connecting to {url})') from e

@@ -2,7 +2,8 @@
 
     with PlatformClient() as client:
         client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
-        client.create_submission(EvalPlan(tasks=..., endpoints=..., episodes_per_endpoint=...))
+        plan = EvalPlan(request_type=PrivateEval(org=...), tasks=..., endpoints=..., episodes_per_endpoint=...)
+        client.create_submission(plan)
 
 The platform is `base_url`, else `POSITRONIC_PLATFORM_URL`, else production; the key is `api_key`,
 else `POSITRONIC_PLATFORM_API_KEY`, else whatever `register` came back with. A non-2xx raises

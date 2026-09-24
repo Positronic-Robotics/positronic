@@ -4,7 +4,8 @@ import functools
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import EvalPlan, RegistryCredentialFile, plan_with_passwords_read
+from platform_client.eval_plan import EvalPlan, PrivateEval, RegistryCredentialFile, plan_with_passwords_read
+from platform_client.ids import OrgSlug
 from platform_client.responses import SubmissionCreateResponse
 from pydantic import ValidationError
 
@@ -13,6 +14,7 @@ from positronic.cli.account.gateway import gateway, one_line
 # The plan fields the command line states beside a plan file.
 TRANSACTION_KEY_FIELD = 'transaction_key'
 ALIAS_FIELD = 'alias'
+REQUEST_TYPE_FIELD = 'request_type'
 
 
 class _KeyGivenTwice(yaml.constructor.ConstructorError):
@@ -66,14 +68,16 @@ def _refusal(exc: yaml.YAMLError) -> str:
     return f'it reads as neither YAML nor JSON{where}'
 
 
-def read_plan(path: Path, transaction_key: str | None = None, alias: str | None = None) -> EvalPlan:
+def read_plan(
+    path: Path, transaction_key: str | None = None, alias: str | None = None, org: str | None = None
+) -> EvalPlan:
     """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
 
     A credential in the file names the file its password is in, and the plan this returns holds the
     password read from it.
 
-    `--transaction-key` and `--alias` are the plan fields the command line states beside a file: each
-    belongs to one filing, and the file names the plan. A file carrying either takes no flag for it.
+    `--transaction-key`, `--alias` and `--org` are the plan fields the command line states beside a
+    file. A file carrying one takes no flag for it. `--org` states a private request for that org.
     """
     try:
         payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
@@ -81,11 +85,15 @@ def read_plan(path: Path, transaction_key: str | None = None, alias: str | None 
         raise SystemExit(f'{path}: {exc.strerror}') from exc
     except yaml.YAMLError as exc:
         raise SystemExit(f'{path}: {_refusal(exc)}') from exc
-    for field, stated in ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias)):
+    # Unvalidated here: `EvalPlan` validates it with the rest of the plan, inside the refusal below.
+    request_type = PrivateEval.model_construct(org=OrgSlug(org)).model_dump() if org is not None else None
+    stated_fields = ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias), (REQUEST_TYPE_FIELD, request_type))
+    for field, stated in stated_fields:
         if stated is None or not isinstance(payload, dict):
             continue
         if field in payload:
-            raise SystemExit(f'{path} carries {field}; drop --{field.replace("_", "-")}')
+            flag = 'org' if field == REQUEST_TYPE_FIELD else field.replace('_', '-')
+            raise SystemExit(f'{path} carries {field}; drop --{flag}')
         payload = {**payload, field: stated}
     try:
         return plan_with_passwords_read(EvalPlan[RegistryCredentialFile].model_validate(payload))
