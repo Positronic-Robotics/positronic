@@ -42,15 +42,15 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# How well the loop kept the trajectory's schedule, per command channel, keyed
-# f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. The harness owns every key under ``SCHEDULE``.
-# ``DROPPED`` counts a waypoint that came due and went out on no round.
+# How well the chunk schedule played its rows, per command channel. A run writes
+# f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}' into its metadata, and the episode records it under
+# ``policy.keys.POLICY_META``. ``DROPPED`` counts a row that came due and went out on no round.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
-# Milliseconds. A percentile is floored to the whole millisecond, and the harness's top bin saturates, so a
-# percentile reading that bound is a lower bound; ``LATE_MAX_MS`` is exact.
+# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk's rows.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'
+GAP_MAX_MS = 'gap_max_ms'

@@ -14,8 +14,9 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
-from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from bisect import insort
+from collections import Counter, defaultdict, deque
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -23,6 +24,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     ARGS,
@@ -82,6 +84,79 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
+class _ScheduleAccount:
+    """Per command channel: rows planned, emitted and dropped, how late each emitted row went out, and the
+    largest gap between two emits of one chunk. Each change is written into ``metadata`` at once.
+
+    A row is dropped when it came due and went out on no round: a later due row replaced it in the same
+    round, or a new chunk replaced it after its due time.
+    """
+
+    def __init__(self, metadata: dict[str, Any]) -> None:
+        self._metadata = metadata
+        self._planned: Counter[str] = Counter()
+        self._dropped: Counter[str] = Counter()
+        self._sorted_late_ns: defaultdict[str, list[int]] = defaultdict(list)
+        self._late_max_ns: Counter[str] = Counter()
+        self._gap_max_ns: Counter[str] = Counter()
+        self._chunk_emit_ns: dict[str, int] = {}
+
+    def plan(self, rows: Iterable[Commands]) -> None:
+        """Take a new chunk's rows. Rows of the chunk before it that are still due must go to ``drop`` first."""
+        self._chunk_emit_ns.clear()
+        planned: Counter[str] = Counter()
+        for row in rows:
+            planned.update(row.keys())
+        self._planned.update(planned)
+        self._write(planned)
+
+    def drop(self, rows: Iterable[Commands]) -> None:
+        dropped: Counter[str] = Counter()
+        for row in rows:
+            dropped.update(row.keys())
+        self._dropped.update(dropped)
+        self._write(dropped)
+
+    def emit(self, due: Sequence[tuple[Commands, int]], now_ns: int) -> dict[str, Any]:
+        """The commands of the due ``(row, due_ns)`` rows: per channel, the last row wins and the rest drop."""
+        commands: dict[str, Any] = {}
+        due_ns_by_name: dict[str, int] = {}
+        for row, due_ns in due:
+            self._dropped.update(name for name in row if name in due_ns_by_name)
+            due_ns_by_name.update(dict.fromkeys(row, due_ns))
+            commands.update(row)
+        for name, due_ns in due_ns_by_name.items():
+            late_ns = now_ns - due_ns
+            insort(self._sorted_late_ns[name], late_ns)
+            self._late_max_ns[name] = max(self._late_max_ns[name], late_ns)
+            if name in self._chunk_emit_ns:
+                self._gap_max_ns[name] = max(self._gap_max_ns[name], now_ns - self._chunk_emit_ns[name])
+            self._chunk_emit_ns[name] = now_ns
+        self._write(due_ns_by_name)
+        return commands
+
+    def _write(self, names: Iterable[str]) -> None:
+        for name in names:
+            prefix = f'{eval_keys.SCHEDULE}.{name}'
+            late_ns = self._sorted_late_ns[name]
+            self._metadata[f'{prefix}.{eval_keys.SCHEDULED}'] = self._planned[name]
+            self._metadata[f'{prefix}.{eval_keys.EMITTED}'] = len(late_ns)
+            self._metadata[f'{prefix}.{eval_keys.DROPPED}'] = self._dropped[name]
+            if late_ns:
+                self._metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] = _percentile_of_sorted(late_ns, 0.5) / 1e6
+                self._metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] = _percentile_of_sorted(late_ns, 0.9) / 1e6
+                self._metadata[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._late_max_ns[name] / 1e6
+                self._metadata[f'{prefix}.{eval_keys.GAP_MAX_MS}'] = self._gap_max_ns[name] / 1e6
+
+
+def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
+    """``np.percentile``'s linear interpolation, in constant time, because the control thread calls it per emit."""
+    position = fraction * (len(values) - 1)
+    low = int(position)
+    high = min(low + 1, len(values) - 1)
+    return values[low] + (values[high] - values[low]) * (position - low)
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -110,6 +185,7 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
+        account = _ScheduleAccount(runtime.metadata)
         obs = yield
         try:
             while True:
@@ -122,15 +198,18 @@ class ChunkedSchedule(Policy):
                     if self._horizon_sec is not None:
                         duration_sec = min(duration_sec, self._horizon_sec)
                     end_ns = now_ns + round(duration_sec * 1e9)
+                    account.drop(row for row, due_ns in trajectory if due_ns <= now_ns)
                     trajectory = deque(
                         (waypoint, now_ns + round(i * period_sec * 1e9))
                         for i, waypoint in enumerate(chunk)
                         if i * period_sec < duration_sec
                     )
+                    account.plan(row for row, _ in trajectory)
 
-                commands: dict[str, Any] = {}
+                due = []
                 while trajectory and trajectory[0][1] <= now_ns:
-                    commands.update(trajectory.popleft()[0])
+                    due.append(trajectory.popleft())
+                commands = account.emit(due, now_ns)
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
