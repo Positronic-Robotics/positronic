@@ -193,16 +193,8 @@ The client selects the exact registered implementation; it never substitutes a n
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-A protocol v1 server's stack runs as v2 processors. `stop_on_fault` v1 runs as `PauseOnUnavailable`,
-`temporal_stack` v1 as `TemporalStack`, and `chunked_schedule` v1 as one `ChunkedSchedule`. That
-schedule takes its rate and horizon from the declared `action_timestamp` and `action_horizon` codecs.
-A server that declares no `action_timestamp` stamps its own answers; the schedule then takes
-`action_fps` and `action_horizon_sec` from the handshake. A server that sends no `action_fps` runs
-at 15 actions per second, and the client logs a warning to rebuild it on current positronic. The client removes each answer's timestamps and its end row, turns a single
-action into a one-row chunk, and turns a `None` answer into an empty chunk. Codecs keep their declared positions. The client adds `obs_time_ns`
-and `wall_time_ns` to each observation. After a robot fault, the stack resumes its queued commands
-and its pending answer. Recovery after a fault is an open question:
-[positronic#789](https://github.com/Positronic-Robotics/positronic/issues/789).
+The client runs a protocol v1 server's stack on the current processors. A new server uses
+protocol v2 and the current components.
 
 Published versions have three states in the protocol and component registries:
 
