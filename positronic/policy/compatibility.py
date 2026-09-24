@@ -136,7 +136,7 @@ class StackV1(Sequential):
             result = completed.result()
             if discard:
                 return None
-            return [dict(result)] if isinstance(result, Mapping) else result
+            return result
 
         def cancel() -> None:
             nonlocal cancelled
@@ -145,9 +145,20 @@ class StackV1(Sequential):
         return _Call(send, cancel)
 
     def run(self, runtime: Runtime, *dependencies: Any) -> PolicyRun:
-        (infer,) = dependencies
+        (infer_one_or_many,) = dependencies
+
+        def infer_trajectory(obs: Obs) -> Any:
+            result = infer_one_or_many(obs)
+            return [dict(result)] if isinstance(result, Mapping) else result
+
+        infer: Callable[[Obs], Any] = infer_trajectory
+        components = list(self._components)
+        # Codecs under the innermost layer run in the submitted work, so a tick that sends nothing encodes nothing.
+        while components and isinstance(tail := components[-1], Codec):
+            components.pop()
+            infer = tail.wrap(infer)
         call = self._inference(runtime, infer)
-        for component in reversed(self._components):
+        for component in reversed(components):
             if isinstance(component, _LayerV1):
                 call = component.bind(runtime, call)
             else:
