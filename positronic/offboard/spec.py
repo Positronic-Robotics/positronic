@@ -57,7 +57,7 @@ class PolicyDeployment:
     source: ModelSource
     local: Policy
     codec: Codec | None = None
-    compress_images: bool = False
+    compress_images: bool = True
 
     def __post_init__(self) -> None:
         if (

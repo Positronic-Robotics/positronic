@@ -249,6 +249,18 @@ def test_full_inference_cycle(stub_server):
         session.close()
 
 
+def test_a_deployment_asks_for_jpeg_frames_unless_it_says_otherwise(stub_server):
+    host, port, *_ = stub_server
+    client = InferenceClient(
+        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    )
+    session = client.new_session()
+    try:
+        assert session.metadata[offboard_keys.COMPRESS_IMAGES] is True
+    finally:
+        session.close()
+
+
 def test_the_server_negotiates_no_deflate_with_a_client_that_offers_it(stub_server):
     """A stock websockets client offers permessage-deflate, and the session still opens uncompressed."""
     host, port, *_ = stub_server
