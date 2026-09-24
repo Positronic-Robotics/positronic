@@ -207,9 +207,10 @@ belong in `local`, where they can mix with processors. For example,
 `compress_images=True` on the deployment enables JPEG transport compression.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
-The server calls `load` off the event loop and forwards progress messages during
-slow downloads or subprocess startup. The loaded model owns those resources and
-releases them in `close()`. See the OpenPI and GR00T adapters for examples.
+The server builds the model off the event loop, before any wire binds. A slow
+download or subprocess startup writes its progress to the server log. The model
+owns those resources and releases them in `close()`. See the OpenPI and GR00T
+adapters for examples.
 
 The server supplies `session_id` on every call. A stateless model may ignore it;
 a stateful model must keep episodes separate or reject another active owner.

@@ -13,7 +13,7 @@ deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
-# The subcommand names the pipeline; everything the model is lives inside it
+# The subcommand pairs a model with a pipeline; --model.* names the checkpoint
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/

@@ -114,7 +114,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 
 **Session params:** clients can tune pipeline arguments per session via `--policy.address.query` — e.g. `--policy.address.query='fps=10'` on the inference CLI. Values must be JSON literals, and the model (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
-**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir` bound (e.g. `lerobot-0_3_3-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` serve a bound checkpoint through those pipelines (e.g. `lerobot-0_3_3-server phail`).
 
 ## Troubleshooting
 

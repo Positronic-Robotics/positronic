@@ -113,7 +113,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 | `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
-**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` is the `ee` pipeline with its `checkpoints_dir` bound (e.g. `lerobot-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` serves a bound checkpoint through the `ee` pipeline (e.g. `lerobot-server phail`).
 
 **Session parameters:** A client can tune the served pipeline per session with query params on the session URL —
 dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`). The model

@@ -113,7 +113,7 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-ser
   --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
-# Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
+# Pretrained DROID model (pi05_droid) — preset model (public checkpoint + config) and pipeline (codec)
 docker compose run --rm --service-ports openpi-server droid
 
 # DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
