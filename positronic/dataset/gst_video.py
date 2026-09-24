@@ -87,7 +87,7 @@ class _GstSession:
         self._pixels[..., :3] = frame[..., ::-1] if self._swap_red_blue else frame
         stdin = self._process.stdin
         assert stdin is not None
-        pending = memoryview(self._pixels).cast('B')
+        pending = self._pixels.data.cast('B')
         try:
             while pending:
                 pending = pending[stdin.write(pending) :]
