@@ -273,8 +273,8 @@ its run directly.
 
 Processors report metadata about their definitions. A composition combines its
 components' metadata. Processors write episode values into `runtime.metadata` on
-the control thread. When an episode ends with a result, the harness closes the
-run and then snapshots these values, so a processor can write them as it closes.
+the control thread. When an episode ends, the harness closes the run and then
+snapshots these values, so a processor can write them as it closes.
 Episode values override definition values with the same flattened keys. Each
 episode gets a separate metadata mapping. The chunk schedule writes the
 waypoints it planned, emitted and dropped this way.

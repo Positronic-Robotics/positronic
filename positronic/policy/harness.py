@@ -245,8 +245,7 @@ class Harness(pimm.ControlSystem):
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
-        """Prepare, run, record, and return the rig. Return None, and abort the recording, when stopped without
-        a terminal payload."""
+        """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
@@ -258,14 +257,12 @@ class Harness(pimm.ControlSystem):
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
         policy_run = None
-        recording = stopped = False
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             self.ds_command.emit(DsWriterCommand.START(rollout.output_path))
-            recording = True
             payload = None
             resume_at_ns = None
             completed = ()
@@ -281,14 +278,12 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
-            if payload is not None:
-                # The run writes its last episode values as it closes, so it closes before the snapshot.
-                policy_run.close()
-                self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **payload}))
-                stopped = True
+            # The run writes its last episode values as it closes, so it closes before the snapshot.
+            policy_run.close()
+            self.ds_command.emit(
+                DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
+            )
         finally:
-            if recording and not stopped:
-                self.ds_command.emit(DsWriterCommand.ABORT())
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
             if policy_run is not None:

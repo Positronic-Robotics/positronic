@@ -346,7 +346,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
         DsWriterCommandType.START_EPISODE,
         DsWriterCommandType.STOP_EPISODE,
         DsWriterCommandType.START_EPISODE,
-        DsWriterCommandType.ABORT_EPISODE,
+        DsWriterCommandType.STOP_EPISODE,
     ]
 
 
@@ -787,8 +787,6 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
                 pass
             h.world.request_stop()
             list(h.loop)
-    last_record = DsWriterCommandType.STOP_EPISODE if ending == 'done' else DsWriterCommandType.ABORT_EPISODE
-    assert h.records.values[-1][1].type is last_record
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     reset = next(s for s in spans if s.name == telemetry_keys.SPAN_RESET)
