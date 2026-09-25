@@ -8,7 +8,6 @@ import queue
 import threading
 import time
 from collections.abc import Mapping
-from typing import Any
 
 import grpc
 from positronic_wire import wire
@@ -17,6 +16,9 @@ from positronic_wire import wire
 SERVICE = 'positronic.offboard.v1.Inference'
 METHOD = 'Session'
 METHOD_PATH = f'/{SERVICE}/{METHOD}'
+# The unary method beside the session that resets the server's idle timer. Both ends carry JSON on it.
+KEEPALIVE_METHOD = 'KeepAlive'
+KEEPALIVE_METHOD_PATH = f'/{SERVICE}/{KEEPALIVE_METHOD}'
 
 # A path no handler serves: a probe of it opens no session on a server that is up.
 PROBE_PATH = f'/{SERVICE}/ChannelProbe'
@@ -258,34 +260,22 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
 
-    def call(
-        self,
-        address: wire.HostPortAddress,
-        control_call: wire.ControlCall,
-        payload: Mapping[str, Any],
-        headers: Mapping[str, str] | None,
-        timeout: float,
-    ) -> Mapping[str, Any]:
-        """What the server answers ``control_call`` with, over a unary call on its own channel.
-
-        ``timeout`` bounds the whole call: the channel takes what it needs, and the call takes the rest.
-        """
+    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """Call ``KEEPALIVE_METHOD_PATH`` on its own channel. ``timeout`` bounds the whole call: the channel takes what
+        it needs, and the call takes the rest."""
         dialled = target(address.host, address.port)
         deadline = time.monotonic() + timeout
         channel = _ready_channel(self.channel(dialled), dialled, timeout)
         try:
-            unary = channel.unary_unary(
-                f'/{SERVICE}/{control_call.grpc_method}', request_serializer=None, response_deserializer=None
-            )
-            remaining = max(0.0, deadline - time.monotonic())
-            answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=remaining)
+            unary = channel.unary_unary(KEEPALIVE_METHOD_PATH, request_serializer=None, response_deserializer=None)
+            answer = unary(b'', metadata=_metadata(headers), timeout=max(0.0, deadline - time.monotonic()))
         except grpc.RpcError as e:
             if e.code() is grpc.StatusCode.UNIMPLEMENTED:
-                raise wire.ControlCallUnsupported(f'{dialled} serves sessions but not {control_call.name}') from e
-            raise wire.ConnectRefused(_refusal(e), f'{e} (calling {control_call.name} on {dialled})') from e
+                raise wire.KeepaliveUnsupported(f'{dialled} serves sessions but not {KEEPALIVE_METHOD}') from e
+            raise wire.ConnectRefused(_refusal(e), f'{e} (calling {KEEPALIVE_METHOD} on {dialled})') from e
         finally:
             channel.close()
-        return json.loads(answer)
+        return json.loads(answer)[wire.ALIVE_SECONDS]
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float

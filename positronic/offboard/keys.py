@@ -1,5 +1,7 @@
-"""The keys of the server's own entries in what it tells a client about itself."""
+"""The keys of the server's own entries in the meta it hands a client."""
 
+# The server's own entries in the ``META`` it hands over: where it serves, which checkpoint it resolved, and
+# what the rig builds and obeys — the local stack spec, image compression, the positronic version it runs.
 HOST = 'host'
 PORT = 'port'
 # The socket path a server bound instead of a host and a port. One of the two pairs is present, never both.

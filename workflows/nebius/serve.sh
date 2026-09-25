@@ -227,7 +227,7 @@ The container is still warming up (image pull + uv sync + checkpoint load,
 Once the model is loaded, sanity-check with (see workflows/nebius/README.md
 for loading AUTH_TOKEN out of MysteryBox):
 
-  curl -H "Authorization: Bearer \$AUTH_TOKEN" $URL/api/v1/ready
+  curl -X POST -H "Authorization: Bearer \$AUTH_TOKEN" $URL/api/v1/keepalive
 
 $POLICY_NOTE
 

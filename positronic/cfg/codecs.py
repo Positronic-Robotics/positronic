@@ -13,8 +13,6 @@ from positronic.policy.codec import (
     FlipGrip,
     Metadata,
     SetControlMode,
-    StateFeature,
-    pose_feature,
 )
 from positronic.policy.observation import ObservationCodec
 
@@ -23,10 +21,7 @@ RotRep = geom.Rotation.Representation
 
 @cfn.config()
 def general_obs(
-    state_name: str,
-    state_features: dict[str, StateFeature],
-    image_mappings: dict[str, str],
-    image_size: tuple[int, int],
+    state_name: str, state_features: dict[str, int], image_mappings: dict[str, str], image_size: tuple[int, int]
 ):
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: state_features}
@@ -35,7 +30,7 @@ def general_obs(
 
 
 eepose_grip_obs = general_obs.override(
-    state_name='observation.state', state_features={keys.EE_POSE: pose_feature(), keys.GRIP: 1}, image_size=(224, 224)
+    state_name='observation.state', state_features={keys.EE_POSE: 7, keys.GRIP: 1}, image_size=(224, 224)
 )
 
 joints_grip_obs = general_obs.override(
@@ -44,7 +39,7 @@ joints_grip_obs = general_obs.override(
 
 eepose_grip_joints_obs = general_obs.override(
     state_name='observation.state',
-    state_features={keys.EE_POSE: pose_feature(), keys.GRIP: 1, keys.JOINTS: 7},
+    state_features={keys.EE_POSE: 7, keys.GRIP: 1, keys.JOINTS: 7},
     image_size=(224, 224),
 )
 

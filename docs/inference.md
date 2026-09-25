@@ -32,7 +32,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
   --pipeline.ee_frame=None
 ```
 
-Check server: `curl http://localhost:8000/api/v1/ready` answers `"status": "ready"` once the model loads.
+Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.
 
 **Run inference:**
 ```bash

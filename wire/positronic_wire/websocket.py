@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from pathlib import Path
-from typing import Any, ClassVar, Generic
+from typing import ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
@@ -91,26 +91,19 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     def _api_connection(self, address: wire.AddressT, open_timeout: float) -> HTTPConnection:
         """An unopened connection to the server's HTTP API, however this wire reaches it."""
 
-    def _exchange(
-        self,
-        address: wire.AddressT,
-        method: str,
-        path: str,
-        body: bytes | None,
-        headers: Mapping[str, str] | None,
-        phase_timeout: float,
-    ) -> tuple[int, bytes]:
-        """One HTTP request on the server's API, and its status and body.
+    def keepalive(self, address: wire.AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """``POST`` to ``wire.KEEPALIVE_PATH`` on the HTTP API beside the session route.
 
-        Each phase the connection times takes the whole ``phase_timeout``: a share per phase refuses a call
-        that would have fitted.
+        ``timeout`` bounds each phase the connection times, not the whole call: no HTTP client bounds a
+        request as a whole.
         """
-        where = f'{self.session_url(address)} ({method} {path})'
-        connection = self._api_connection(address, max(0.0, phase_timeout))
+        deadline = time.monotonic() + timeout
+        where = f'{wire.KEEPALIVE_PATH} on {self.session_url(address)}'
+        connection = self._api_connection(address, max(0.0, timeout))
         try:
-            connection.request(method, path, body=body, headers=dict(headers or {}))
+            connection.request('POST', wire.KEEPALIVE_PATH, headers=dict(headers or {}))
             answer = connection.getresponse()
-            return answer.status, answer.read()
+            status, body = answer.status, answer.read()
         except HTTPException as e:
             # The connection opened and the exchange did not finish: a backend that is not ready.
             raise wire.ConnectRefused(wire.Refusal.COLD, f'{e} (calling {where})') from e
@@ -118,43 +111,17 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (calling {where})') from e
         finally:
             connection.close()
-
-    def call(
-        self,
-        address: wire.AddressT,
-        control_call: wire.ControlCall,
-        payload: Mapping[str, Any],
-        headers: Mapping[str, str] | None,
-        timeout: float,
-    ) -> Mapping[str, Any]:
-        """What the server answers ``control_call`` with, over the HTTP API beside the session route.
-
-        The call carries JSON, so a person reads the answer with ``curl``. ``timeout`` bounds each phase the
-        connection times, not the whole call.
-        """
-        deadline = time.monotonic() + timeout
-        request_headers = dict(headers or {})
-        body = None
-        if payload:
-            body = json.dumps(dict(payload)).encode()
-            request_headers['Content-Type'] = 'application/json'
-        status, answer = self._exchange(
-            address, control_call.http_method, control_call.http_path, body, request_headers, timeout
-        )
-        where = f'{control_call.http_path} on {self.session_url(address)}'
         if status == HTTPStatus.NOT_FOUND:
-            # A server too old for the call answers 404, and so does an address that serves something else.
+            # A server without the call answers 404, and so does an address that serves something else.
             refusal = self.probe(address, headers, max(0.0, deadline - time.monotonic()))
             if refusal is None:
-                raise wire.ControlCallUnsupported(
-                    f'{where} answers 404; this server serves sessions but not {control_call.name}'
-                )
+                raise wire.KeepaliveUnsupported(f'{where} answers 404; this server serves sessions but not keepalive')
             raise wire.ConnectRefused(refusal, f'{where} answers 404, and no session server answers there')
         if status != HTTPStatus.OK:
             # An HTTP route refuses a credential with 401, where the upgrade beside it refuses with 403.
             refusal = wire.Refusal.FORBIDDEN if status == HTTPStatus.UNAUTHORIZED else _status_refusal(status)
             raise wire.ConnectRefused(refusal, f'{where} answers {status}')
-        return json.loads(answer)
+        return json.loads(body)[wire.ALIVE_SECONDS]
 
     def dial(
         self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float

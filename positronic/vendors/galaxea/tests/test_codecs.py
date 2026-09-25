@@ -101,15 +101,3 @@ def test_full_chunk_uses_droid_control_mode(observation):
         assert action[keys.ROBOT_COMMAND].mode == DROID_IMPEDANCE
         assert action[keys.TARGET_GRIP] == pytest.approx(1 - i / 31, abs=1e-7)
     assert codec.encode(observation)[protocol.FREQUENCY] == 10
-
-
-def test_observation_warms_at_the_size_the_processor_resizes_to():
-    obs = codecs.DroidCodec().warm_observation('pick up the towel')
-
-    assert obs is not None
-    assert obs[protocol.TASK] == 'pick up the towel'
-    assert obs[protocol.STATE][protocol.RIGHT_ARM].shape == (protocol.NUM_JOINTS,)
-    # An open gripper: the codec inverts the canonical 0=open into Galaxea's convention.
-    assert obs[protocol.STATE][protocol.RIGHT_GRIPPER] == pytest.approx([1.0])
-    width, height = protocol.IMAGE_SIZE
-    assert obs[protocol.IMAGES][protocol.WRIST_IMAGE].shape == (3, height, width)

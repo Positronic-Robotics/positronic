@@ -142,7 +142,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
   --model.backbone=wan2.2
 ```
 
-Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/ready` answers `"status": "ready"`.
+Sanity-check once warm: `curl -X POST http://<h100-host>:8000/api/v1/keepalive` answers.
 
 ### 4. Run sim inference
 

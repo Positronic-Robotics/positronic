@@ -8,7 +8,6 @@ import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
 from . import keys
@@ -73,15 +72,16 @@ class ServerConnection(abc.ABC):
 # What a wire hands the server for each session it accepts.
 SessionHandler = Callable[[ServerConnection], Awaitable[None]]
 
-# What a wire hands the server for one control call: the call, and the payload the caller sent.
-ControlCallHandler = Callable[[wire.ControlCall, Mapping[str, Any]], Awaitable[Mapping[str, Any]]]
+# What a wire calls for each keepalive call: it resets the idle timer, and returns the seconds the server
+# stays alive after the call, or ``None`` for a server with no idle timeout.
+KeepaliveHandler = Callable[[], int | None]
 
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
 Authorized = Callable[[Mapping[str, str]], bool]
 
 
 class Wire(abc.ABC):
-    """One transport that sessions and control calls arrive on.
+    """One transport that sessions and keepalive calls arrive on.
 
     A wire refuses an unauthorized peer before the session opens.
     """
@@ -92,8 +92,8 @@ class Wire(abc.ABC):
         """Where this wire serves, known once ``start`` returns: a bound port, or the socket path."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, control_calls: ControlCallHandler, authorized: Authorized) -> None:
-        """Bind, and give every accepted session to ``session`` and every control call to ``control_calls``.
+    async def start(self, session: SessionHandler, keepalive: KeepaliveHandler, authorized: Authorized) -> None:
+        """Bind, give every accepted session to ``session``, and answer every keepalive call from ``keepalive``.
 
         Raises when the address is taken: a port another process holds, or a socket path a live
         server is already serving on.

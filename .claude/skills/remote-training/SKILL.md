@@ -204,8 +204,8 @@ SECRET_ID=$(nebius mysterybox secret get-by-name --parent-id "$PARENT_ID" \
 export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
   --secret-id "$SECRET_ID" --key "$AUTH_TOKEN_KEY" --format json | jq -r '.data.string_value')
 
-curl -H "Authorization: Bearer $AUTH_TOKEN" \
-  https://<managed-url>/api/v1/ready   # → {"status": "ready", "checkpoint_id": "<step>", ...}
+curl -X POST -H "Authorization: Bearer $AUTH_TOKEN" \
+  https://<managed-url>/api/v1/keepalive   # → {"alive_seconds": <seconds>}, once the model is ready
 ```
 
 Tear down (releases compute, retires the managed URL):
@@ -293,7 +293,7 @@ on a port conflict, `docker --context <ctx> ps -a | grep -E "server"` then
 ## End-to-End Validation
 
 `e2e.sh` runs the whole pipeline for one vendor (convert → train 200 steps → serve
-→ `/api/v1/ready` smoke → teardown), polling Nebius and printing a per-stage
+→ `/api/v1/keepalive` smoke → teardown), polling Nebius and printing a per-stage
 status line. ~$2–5 per run. Use it to verify a vendor still works after an
 image/dependency/script change.
 

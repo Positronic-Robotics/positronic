@@ -204,20 +204,20 @@ case "$AUTH_TOKEN" in
   ''|null) note "FAIL: no $AUTH_TOKEN_KEY payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
 esac
 
-# Only a 200 with `status: ready` means the model is loaded and serving. A warming endpoint answers 502/503,
-# and a bad token answers 401.
+# Only a 200 means the model is loaded and serving. A warming endpoint answers 502/503 and a bad token
+# answers 401, both with a body of their own, so "got bytes back" would call either one warm.
 RESP=""
-READY=""
+CODE=""
 for i in $(seq 1 50); do
-  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/ready" || true)
+  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -X POST -H "Authorization: Bearer $AUTH_TOKEN" \
+    "$SERVE_URL/api/v1/keepalive" || true)
   CODE=${OUT##*$'\n'}
-  RESP=${OUT%$'\n'*}
-  if [ "$CODE" = "200" ] && [ "$(jq -r '.status' <<<"$RESP" 2>/dev/null)" = "ready" ]; then READY=1; break; fi
+  if [ "$CODE" = "200" ]; then RESP=${OUT%$'\n'*}; break; fi
   sleep 30
 done
 STATUS=0
-if [ -n "$READY" ]; then
-  note "ready: $RESP"
+if [ "$CODE" = "200" ]; then
+  note "keepalive: $RESP"
   # That was an HTTP route. Sessions are WebSockets, and a managed ingress can carry the two differently,
   # so the endpoint answers the same assertions the suite otherwise makes against a server of its own.
   if POSITRONIC_ENDPOINT_WIRE=websocket_tls POSITRONIC_ENDPOINT_HOST="${SERVE_URL#https://}" \

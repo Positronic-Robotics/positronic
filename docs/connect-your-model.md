@@ -17,8 +17,8 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server demo
 Check it is ready:
 
 ```bash
-curl http://localhost:8000/api/v1/ready
-# {"status": "ready", "checkpoint_id": "050000", ...}
+curl -X POST http://localhost:8000/api/v1/keepalive
+# {"alive_seconds": null}
 ```
 
 In a separate terminal, run inference inside the simulation:

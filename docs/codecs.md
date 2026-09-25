@@ -72,8 +72,6 @@ GR00T's DROID codec sets `DROID_IMPEDANCE` directly on its joint-position comman
 
 Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.
 
-An observation codec also overrides `warm_inputs(task)`, the observation that a warm runs on the inference server ([`POST /api/v1/warm`](../positronic/offboard/README.md)).
-
 ## Codec catalog by vendor
 
 These are the codecs each vendor ships. `compose` combines observation and action conversion, optional grip/frame conversion, and training cadence metadata. `ChunkedSchedule` owns inference cadence and the execution horizon; codecs return full chunks without timestamps.
