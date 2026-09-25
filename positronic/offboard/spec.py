@@ -20,7 +20,6 @@ class Model(ABC):
         return None
 
     def meta(self) -> dict[str, Any]:
-        """What each session's handshake reports about the model, its ``offboard.keys.CHECKPOINT_ID`` among it."""
         return {}
 
     def close(self) -> None:
