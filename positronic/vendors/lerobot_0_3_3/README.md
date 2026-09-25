@@ -102,8 +102,6 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 | subcommand | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
 | `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--model.policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
-| `--model.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |

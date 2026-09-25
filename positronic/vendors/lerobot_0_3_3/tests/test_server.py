@@ -57,19 +57,16 @@ class _DummyWebSocket:
         return websocket_wire.WebsocketServerConnection(self, server_wire.ServedHostPort('localhost', 8000))
 
 
-def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
-    """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
-    still yields complete metadata — ``checkpoint_path`` included, since sampling keys on it."""
+def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
+    """``checkpoint_path`` is in the metadata, since sampling keys on it."""
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['42'])
     monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
-    # A mock cannot answer an inference, but the warm observation is still built from what the factory returned,
+    policy = MagicMock(spec=lerobot_server.ACTPolicy, config=_act_config())
+    monkeypatch.setattr(lerobot_server.ACTPolicy, 'from_pretrained', lambda *_args, **_kwargs: policy)
+    # A mock cannot answer an inference, but the warm observation is still built from the loaded policy,
     # so the load reaches no checkpoint on disk.
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
-    model = lerobot_server.lerobot_model(
-        policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
-        checkpoints_dir='s3://bucket/exp',
-        device='cpu',
-    )
+    model = lerobot_server.act_model(checkpoints_dir='s3://bucket/exp', device='cpu')
     assert model.meta() == {
         offboard_keys.CHECKPOINT_ID: '42',
         'type': 'act',
@@ -102,9 +99,8 @@ def _make_server(monkeypatch, checkpoint: str | None) -> tuple[PolicyServer, Mag
     monkeypatch.setattr(lerobot_server, 'LerobotModel', build)
     monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
-    model_cfg = lerobot_server.lerobot_model.override(
-        policy_factory=lambda _checkpoint: MagicMock(), checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint
-    )
+    monkeypatch.setattr(lerobot_server.ACTPolicy, 'from_pretrained', lambda *_args, **_kwargs: MagicMock())
+    model_cfg = lerobot_server.act_model.override(checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint)
     return PolicyServer(model_cfg, PolicyDeployment(local=ChunkedSchedule(fps=15))), build
 
 

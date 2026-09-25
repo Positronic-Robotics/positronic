@@ -1,11 +1,9 @@
 import logging
-from collections.abc import Callable
 
 import configuronic as cfn
 import pos3
 from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.policies.pretrained import PreTrainedPolicy
 
 from pimm.logging import init_logging
 from positronic import geom, keys
@@ -27,35 +25,20 @@ register_all()
 logger = logging.getLogger(__name__)
 
 
-def act(checkpoint_path: str) -> PreTrainedPolicy:
-    return ACTPolicy.from_pretrained(checkpoint_path, strict=True)
-
-
-@cfn.config(policy_factory=act, checkpoint=None, device=None, model_type='act')
-def lerobot_model(
-    policy_factory: Callable[[str], PreTrainedPolicy],
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    device: str | None,
-    model_type: str,
-) -> Model:
-    """One in-process LeRobot checkpoint from an experiment directory (its ``checkpoints/`` subdirectory):
-    ``checkpoint``, else the latest one.
-
-    ``policy_factory`` builds the backbone policy from a checkpoint path — that is its whole contract,
-    so any callable returning a ``PreTrainedPolicy`` works. ``model_type`` names what it built, for the
-    handshake.
-    """
+@cfn.config(checkpoint=None, device=None)
+def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) -> Model:
+    """One in-process ACT checkpoint from an experiment directory (its ``checkpoints/`` subdirectory):
+    ``checkpoint``, else the latest one."""
     experiment_dir = checkpoints_dir.rstrip('/')
     checkpoint_id = resolve_checkpoint(f'{experiment_dir}/{CHECKPOINTS_DIR}', checkpoint)
     checkpoint_path = f'{experiment_dir}/{CHECKPOINTS_DIR}/{checkpoint_id}/{PRETRAINED_MODEL_DIR}'
     device = device or _detect_device()
     logger.info(f'Loading checkpoint from {checkpoint_path}')
     local = run_with_progress(lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}')
-    backbone = policy_factory(str(local))
+    backbone = ACTPolicy.from_pretrained(str(local), strict=True)
     meta = {
         offboard_keys.CHECKPOINT_ID: checkpoint_id,
-        policy_keys.TYPE: model_type,
+        policy_keys.TYPE: 'act',
         policy_keys.CHECKPOINT_PATH: checkpoint_path,
         policy_keys.EXPERIMENT_NAME: experiment_dir.split('/')[-1],
         'device': device,
@@ -139,23 +122,22 @@ demo = pipeline.override(**{
 # Every pipeline is a subcommand, and so is every deployment — a pipeline and the checkpoints it pairs with.
 # The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
 COMMANDS = {
-    'serve': serve.override(model=lerobot_model, pipeline=ee),
-    'ee': serve.override(model=lerobot_model, pipeline=ee),
-    'joints': serve.override(model=lerobot_model, pipeline=joints),
-    'ee_traj': serve.override(model=lerobot_model, pipeline=ee_traj),
-    'joints_traj': serve.override(model=lerobot_model, pipeline=joints_traj),
-    'joints_ik': serve.override(model=lerobot_model, pipeline=joints_ik),
-    'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
-    'ee_flip': serve.override(model=lerobot_model, pipeline=ee_flip),
+    'serve': serve.override(model=act_model, pipeline=ee),
+    'ee': serve.override(model=act_model, pipeline=ee),
+    'joints': serve.override(model=act_model, pipeline=joints),
+    'ee_traj': serve.override(model=act_model, pipeline=ee_traj),
+    'joints_traj': serve.override(model=act_model, pipeline=joints_traj),
+    'joints_ik': serve.override(model=act_model, pipeline=joints_ik),
+    'joints_ik_sim': serve.override(model=act_model, pipeline=joints_ik_sim),
+    'ee_flip': serve.override(model=act_model, pipeline=ee_flip),
     'phail': serve.override(
-        model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'),
-        pipeline=phail,
+        model=act_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'), pipeline=phail
     ),
     'sim_stack': serve.override(
-        model=lerobot_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'), pipeline=ee_flip
+        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'), pipeline=ee_flip
     ),
     'demo': serve.override(
-        model=lerobot_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),
+        model=act_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),
         pipeline=demo,
     ),
 }
