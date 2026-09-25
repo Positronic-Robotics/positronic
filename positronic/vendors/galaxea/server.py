@@ -8,13 +8,14 @@ from typing import Any
 
 import configuronic as cfn
 import msgpack
+import numpy as np
 import pos3
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import wait_for_subprocess_ready
+from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
@@ -145,6 +146,23 @@ class GalaxeaModel(Model):
         self._backend.stop()
 
 
+def _warm_observation() -> dict[str, Any]:
+    """An observation in the shape ``codecs.DroidCodec`` encodes: black views, the arm at zero, the gripper open."""
+    view = np.zeros((3, 224, 224), dtype=np.uint8)
+    return {
+        protocol.IMAGES: dict.fromkeys(
+            (protocol.EXTERIOR_IMAGE, protocol.WRIST_IMAGE, protocol.DUMMY_WRIST_RIGHT), view
+        ),
+        protocol.STATE: {
+            protocol.RIGHT_ARM: np.zeros(7, dtype=np.float32),
+            protocol.RIGHT_GRIPPER: np.ones(1, dtype=np.float32),
+        },
+        protocol.TASK: '',
+        protocol.FREQUENCY: 15.0,
+        protocol.EMBODIMENT_TYPE: protocol.DROID_FRANKA,
+    }
+
+
 @cfn.config(
     checkpoint_path='/galaxea/checkpoints/g05-droid/checkpoints/model_state_dict.pt',
     galaxea_root='/galaxea',
@@ -157,12 +175,7 @@ def galaxea_model(
 ) -> Model:
     """G0.5-DROID in its own Python 3.10 process, with full-chunk inference."""
     backend = _BackendProcess(Path(galaxea_root), Path(checkpoint_path), device, backend_port)
-    try:
-        backend.start()
-    except Exception:
-        backend.stop()
-        raise
-    return GalaxeaModel(
+    model = GalaxeaModel(
         backend,
         infer_timeout,
         {
@@ -171,6 +184,14 @@ def galaxea_model(
             'usage': 'internal non-commercial evaluation only',
         },
     )
+    try:
+        backend.start()
+        # The backend compiles the model on its first inference, which a rig's inference timeout does not cover.
+        warmup(model, _warm_observation())
+    except Exception:
+        model.close()
+        raise
+    return model
 
 
 @cfn.config(codec=cfn.Config(codecs.DroidCodec))

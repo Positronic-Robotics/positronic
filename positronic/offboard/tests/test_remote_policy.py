@@ -1,9 +1,9 @@
 import dataclasses
+import json
 import pathlib
 import threading
 import time
 from collections.abc import Mapping
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -45,12 +45,6 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
-        self.calls: list[wire.ControlCall] = []
-        self.call_timeouts: list[float] = []
-        # What ``call`` answers; ``None`` stands for a server without control calls.
-        self.readiness: Mapping[str, Any] | None = None
-        # Answers ``call`` returns first, one per call, before it falls back to ``readiness``.
-        self.readiness_answers: list[Mapping[str, Any]] = []
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
@@ -61,14 +55,8 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
-    def call(self, address, control_call, payload, headers, timeout):
-        self.calls.append(control_call)
-        self.call_timeouts.append(timeout)
-        if self.readiness_answers:
-            return self.readiness_answers.pop(0)
-        if self.readiness is None:
-            raise wire.ControlCallUnsupported('this wire answers sessions alone')
-        return self.readiness
+    def keepalive(self, address, headers, timeout):
+        raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         self.dials.append((address, headers, open_timeout))
@@ -216,14 +204,6 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 1
         assert refused.value.refusal is wire.Refusal.FINAL
-
-    def test_a_direct_readiness_call_raises_on_a_record_it_cannot_read(self):
-        fake = _FakeWire()
-        # rules-allow: hardcoded-keys — this fake stands in for a newer server, so it spells the wire fields.
-        fake.readiness = {'status': 'a-status-this-client-does-not-name', 'message': ''}
-
-        with pytest.raises(ValueError, match='status'):
-            InferenceClient(fake, _ADDRESS).readiness()
 
     def test_a_cold_refusal_retries_to_the_deadline(self):
         fake = _FakeWire(_refused(wire.Refusal.COLD))
@@ -796,7 +776,7 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
 
     def test_the_registry_holds_the_wires_these_cover(self):
         """A wire added later fails here until a test covers its budget. The websocket members share one
-        ``call``, and so do the gRPC members. ``roboarena`` answers no control call."""
+        ``keepalive``, and so do the gRPC members. ``roboarena`` answers no keepalive."""
         assert set(registry.CLIENT_WIRES) == {
             'websocket',
             'websocket_tls',
@@ -806,81 +786,20 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
             'roboarena',
         }
 
-    def test_the_request_that_starts_a_warm_is_inside_the_wait_deadline(self):
-        budget = 0.3
-        fake = _FakeWire()
-        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
-        fake.readiness = {'status': 'ready', 'message': '', 'inferences': 1}
-
-        InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=budget)
-
-        assert fake.calls[0] is wire.WARM, 'the first call is the one that starts the warm'
-        given = fake.call_timeouts[0]
-        assert given <= budget, f'a {budget}s wait deadline gave the warm request {given}s'
-
-    def test_a_checkpoint_switch_under_a_warm_restarts_the_count_it_waits_for(self):
-        fake = _FakeWire()
-        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
-        fake.readiness_answers = [
-            {'status': 'ready', 'message': '', 'checkpoint_id': 'a', 'inferences': 3},
-            {'status': 'ready', 'message': '', 'checkpoint_id': 'b', 'inferences': 1},
-        ]
-
-        with patch('positronic.offboard.client.time.sleep'):
-            answered = InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=10.0)
-
-        assert answered.checkpoint_id == 'b'
-        assert answered.inferences == 1, "the new checkpoint's first inference is what this warm waited for"
-        assert fake.calls == [wire.WARM, wire.READY], 'the wait went on past the switch'
-
-    def test_a_warm_that_fails_ends_the_wait_with_its_error(self):
-        fake = _FakeWire()
-        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
-        fake.readiness_answers = [{'status': 'ready', 'message': '', 'checkpoint_id': 'a', 'inferences': 0}]
-        fake.readiness = {'status': 'error', 'message': 'Warming failed: refused', 'checkpoint_id': 'a'}
-        clock = [0.0]
-
-        with (
-            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-            patch(
-                'positronic.offboard.client.time.sleep',
-                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-            ),
-        ):
-            answered = InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=60.0)
-
-        assert answered.status is protocol.ServerStatus.ERROR
-        assert fake.calls == [wire.WARM, wire.READY], 'the wait polled on past the failed warm'
-
-    def test_an_error_from_before_this_warm_does_not_end_the_wait(self):
-        fake = _FakeWire()
-        # rules-allow: hardcoded-keys — this fake stands in for a server, so it spells the wire fields.
-        fake.readiness_answers = [
-            {'status': 'error', 'message': 'Warming failed: earlier', 'checkpoint_id': 'a', 'inferences': 0},
-            {'status': 'error', 'message': 'Warming failed: earlier', 'checkpoint_id': 'a', 'inferences': 0},
-            {'status': 'ready', 'message': '', 'checkpoint_id': 'a', 'inferences': 1},
-        ]
-
-        with patch('positronic.offboard.client.time.sleep'):
-            answered = InferenceClient(fake, _ADDRESS).warm('stack the cubes', wait_deadline=60.0)
-
-        assert answered.inferences == 1, 'an error from before this warm ended the wait'
-        assert fake.calls == [wire.WARM, wire.READY, wire.READY]
-
     def test_the_websocket_wire_gives_every_phase_the_connection_times_the_whole_budget(self):
         budget = 8.0
         connection = MagicMock(**{
             'getresponse.return_value.status': 200,
-            'getresponse.return_value.read.return_value': b'{}',
+            'getresponse.return_value.read.return_value': json.dumps({wire.ALIVE_SECONDS: None}).encode(),
         })
         with patch.object(websocket.WebsocketClientWire, '_api_connection', return_value=connection) as opened:
-            websocket.WebsocketClientWire().call(_ADDRESS, wire.READY, {}, None, budget)
+            websocket.WebsocketClientWire().keepalive(_ADDRESS, None, budget)
 
         assert opened.call_args.args[1] == budget
 
     def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
         budget, on_the_channel = 4.0, 1.0
-        unary = MagicMock(return_value=b'{}')
+        unary = MagicMock(return_value=json.dumps({wire.ALIVE_SECONDS: None}).encode())
         channel = MagicMock(**{'unary_unary.return_value': unary})
 
         def a_channel_that_took_its_time(*_args, **_kwargs):
@@ -891,7 +810,7 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
             patch.object(grpc.GrpcClientWire, 'channel', return_value=channel),
             patch('positronic_wire.grpc._ready_channel', side_effect=a_channel_that_took_its_time),
         ):
-            grpc.GrpcClientWire().call(_ADDRESS, wire.READY, {}, None, budget)
+            grpc.GrpcClientWire().keepalive(_ADDRESS, None, budget)
 
         given = unary.call_args.kwargs['timeout']
         assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'

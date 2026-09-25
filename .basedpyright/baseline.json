@@ -4538,6 +4538,40 @@
                 }
             }
         ],
+        "./positronic/policy/tests/test_policy_io.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 55,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 55,
+                    "endColumn": 66,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 55,
+                    "endColumn": 60,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./positronic/server/positronic_server.py": [
             {
                 "code": "reportOperatorIssue",

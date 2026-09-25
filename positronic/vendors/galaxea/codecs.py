@@ -1,14 +1,12 @@
 """Server-side DROID observation and action conversion for non-commercial G0.5 evaluation."""
 
-from typing import Any
-
 import configuronic as cfn
 import numpy as np
 
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import Codec, warm_image, warm_vector
+from positronic.policy.codec import Codec
 from positronic.vendors.galaxea import protocol
 
 
@@ -52,22 +50,6 @@ class DroidCodec(Codec):
             raise ValueError(f'{name} must be a nonempty uint8 HWC RGB image, got {image.shape}, {image.dtype}')
         return np.ascontiguousarray(image.transpose(2, 0, 1))
 
-    def warm_inputs(self, task: str) -> dict[str, Any]:
-        """The rig-side inputs a warm carries, at the size the processor resizes to."""
-        frame = warm_image(*protocol.IMAGE_SIZE)
-        return {
-            self._task_key: task,
-            **dict.fromkeys(self._cameras.values(), frame),
-            self._joint_key: warm_vector(protocol.NUM_JOINTS),
-            self._grip_key: warm_vector(1),
-        }
-
-    @staticmethod
-    def _dummy_view() -> np.ndarray:
-        """A black view, in the CHW layout every encoded view takes. The single-arm DROID rig has no right wrist."""
-        width, height = protocol.IMAGE_SIZE
-        return np.zeros((3, height, width), dtype=np.uint8)
-
     def encode(self, data: dict) -> dict:
         grip = self._vector(data[self._grip_key], 1, self._grip_key)
         if np.any((grip < 0) | (grip > 1)):
@@ -75,10 +57,10 @@ class DroidCodec(Codec):
         return {
             protocol.IMAGES: {
                 **{name: self._image(data[key], key) for name, key in self._cameras.items()},
-                protocol.DUMMY_WRIST_RIGHT: self._dummy_view(),
+                protocol.DUMMY_WRIST_RIGHT: np.zeros((3, 224, 224), dtype=np.uint8),
             },
             protocol.STATE: {
-                protocol.RIGHT_ARM: self._vector(data[self._joint_key], protocol.NUM_JOINTS, self._joint_key),
+                protocol.RIGHT_ARM: self._vector(data[self._joint_key], 7, self._joint_key),
                 protocol.RIGHT_GRIPPER: 1.0 - grip,
             },
             protocol.TASK: data[self._task_key],
@@ -87,7 +69,7 @@ class DroidCodec(Codec):
         }
 
     def _decode_single(self, data: dict) -> dict:
-        joints = self._vector(data[protocol.RIGHT_ARM], protocol.NUM_JOINTS, protocol.RIGHT_ARM)
+        joints = self._vector(data[protocol.RIGHT_ARM], 7, protocol.RIGHT_ARM)
         result = {keys.ROBOT_COMMAND: command.JointPosition(positions=joints)}
         if protocol.RIGHT_GRIPPER in data:
             grip = self._vector(data[protocol.RIGHT_GRIPPER], 1, protocol.RIGHT_GRIPPER)

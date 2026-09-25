@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
-from unittest.mock import ANY, MagicMock
+from unittest.mock import MagicMock
 
 import configuronic as cfn
 import grpc
@@ -30,7 +30,7 @@ from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import ConnectRetries, InferenceClient
 from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import PolicyDeployment
-from positronic.offboard.tests.conftest import WARM_PROMPT_FIELD, Served, StartServer, warm_pipeline
+from positronic.offboard.tests.conftest import Served, StartServer
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
@@ -66,27 +66,19 @@ def _apart_from_the_endpoint(meta: dict) -> dict:
     return {key: value for key, value in meta.items() if key not in (offboard_keys.HOST, offboard_keys.PORT)}
 
 
-def test_both_wires_answer_ready_alike(both_wires):
+def test_both_wires_answer_keepalive_alike(start_server, make_mock_model):
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True, idle_timeout_min=2)
+    assert InferenceClient(*served.grpc()).keepalive() == InferenceClient(*served.ws()).keepalive() == 120
+
+
+def test_a_grpc_server_without_keepalive_says_so(both_wires, monkeypatch):
     served, _policy = both_wires
-    over_grpc = InferenceClient(*served.grpc()).readiness()
-    over_websocket = InferenceClient(*served.ws()).readiness()
-    assert over_grpc == over_websocket
-    assert over_grpc.status is protocol.ServerStatus.READY
-
-
-def test_a_grpc_warm_starts_one_inference(start_server, make_mock_model):
-    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(model, warm_pipeline(), grpc=True)
-    client = InferenceClient(*served.grpc())
-    assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
-    model.assert_called_once_with({WARM_PROMPT_FIELD: 'stack the cubes'}, session_id=ANY)
-
-
-def test_a_grpc_server_without_the_control_call_says_so(both_wires, monkeypatch):
-    served, _policy = both_wires
-    monkeypatch.setattr(wire, 'READY', wire.ControlCall('ready', 'GET', 'ReadyTheServerNeverRegistered'))
-    with pytest.raises(wire.ControlCallUnsupported):
-        InferenceClient(*served.grpc()).readiness()
+    monkeypatch.setattr(
+        client_grpc, 'KEEPALIVE_METHOD_PATH', f'/{client_grpc.SERVICE}/KeepAliveTheServerNeverRegistered'
+    )
+    with pytest.raises(wire.KeepaliveUnsupported):
+        InferenceClient(*served.grpc()).keepalive()
 
 
 def test_both_wires_answer_one_observation_alike(both_wires):
@@ -231,6 +223,13 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*authed_server.grpc(), headers=headers).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
+
+
+def test_the_grpc_keepalive_takes_the_token_that_gates_the_session(authed_server):
+    with pytest.raises(wire.ConnectRefused) as refused:
+        InferenceClient(*authed_server.grpc()).keepalive()
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
+    assert InferenceClient(*authed_server.grpc(), headers={AUTH_HEADER: bearer(_TOKEN)}).keepalive() is None
 
 
 # An address, and no name that resolves to two families: gRPC reports the last address it failed on,
@@ -427,8 +426,8 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
             opened.append(client_wire.dial(address, headers, open_timeout))
             return opened[-1]
 
-        def call(self, address, control_call, payload, headers, timeout):
-            return client_wire.call(address, control_call, payload, headers, timeout)
+        def keepalive(self, address, headers, timeout):
+            return client_wire.keepalive(address, headers, timeout)
 
         def probe(self, address, headers, open_timeout):
             return client_wire.probe(address, headers, open_timeout)

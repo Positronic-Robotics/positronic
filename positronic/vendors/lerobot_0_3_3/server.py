@@ -14,7 +14,7 @@ from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import RestrictImageSize, pose_feature
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
@@ -53,7 +53,7 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
 @cfn.config(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
-    'obs.state_features': {keys.EE_POSE: pose_feature(), keys.GRIP: 1},
+    'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
     'obs.image_mappings': {'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE},
     'obs.image_size': (224, 224),
     'action': codecs.absolute_pos_action,
@@ -109,7 +109,7 @@ phail = pipeline.override(**{'action': codecs.phail_v1_execution, 'action.action
 demo = pipeline.override(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
-    'obs.state_features': {keys.EE_POSE: pose_feature(), keys.GRIP: 1},
+    'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
     'obs.image_mappings': {'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE},
     'obs.image_size': (224, 224),
     'action': codecs.absolute_pos_action,

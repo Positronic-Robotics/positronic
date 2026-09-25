@@ -1,7 +1,7 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries a protocol's frames as opaque bytes and reads none of them, and encodes a control call
-itself. Nothing here reads a URL:
+A wire carries a protocol's frames as opaque bytes and reads none of them, and encodes the keepalive
+call itself. Nothing here reads a URL:
 a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
 spells whatever its library takes.
 """
@@ -11,33 +11,14 @@ import dataclasses
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Generic, NamedTuple, Self, TypeVar
+from typing import ClassVar, Generic, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-
-
-class ControlCall(NamedTuple):
-    """A call beside the session, and how each wire spells it.
-
-    ``ready`` asks what the server can do now, and ``warm`` asks it to warm, naming the run's task under
-    ``positronic.keys.TASK``. Both answer one ``positronic.offboard.protocol.Readiness`` record, and
-    neither opens a session.
-    """
-
-    name: str
-    http_method: str
-    grpc_method: str
-
-    @property
-    def http_path(self) -> str:
-        return f'{API_PATH}/{self.name}'
-
-
-READY = ControlCall('ready', 'GET', 'Ready')
-WARM = ControlCall('warm', 'POST', 'Warm')
-CONTROL_CALLS = (READY, WARM)
+# The keepalive route beside the session, and the key its JSON answer carries the seconds under.
+KEEPALIVE_PATH = f'{API_PATH}/keepalive'
+ALIVE_SECONDS = 'alive_seconds'
 
 
 def bracket_ipv6(host: str) -> str:
@@ -107,8 +88,8 @@ class PeerDisconnected(Exception):
     """The peer ended the session."""
 
 
-class ControlCallUnsupported(Exception):
-    """The server answers sessions but not this control call."""
+class KeepaliveUnsupported(Exception):
+    """The server answers sessions but not the keepalive call."""
 
 
 class Refusal(Enum):
@@ -157,19 +138,12 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
 
     @abc.abstractmethod
-    def call(
-        self,
-        address: AddressT,
-        control_call: ControlCall,
-        payload: Mapping[str, Any],
-        headers: Mapping[str, str] | None,
-        timeout: float,
-    ) -> Mapping[str, Any]:
-        """What the server on ``address`` answers ``control_call`` with, outside any session.
+    def keepalive(self, address: AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """Reset the idle timer of the server on ``address``, outside any session.
 
-        ``payload`` and the answer are plain data, and each wire encodes them its own way. Each wire says
-        what ``timeout`` bounds: the whole call, or each phase its transport times. Raises
-        ``ControlCallUnsupported`` where the server serves sessions but not this control call, and
+        Returns the seconds the server stays alive after the call, or ``None`` for a server with no idle
+        timeout. Each wire says what ``timeout`` bounds: the whole call, or each phase its transport times.
+        Raises ``KeepaliveUnsupported`` where the server serves sessions but not the call, and
         ``ConnectRefused`` where it answers nothing.
         """
 

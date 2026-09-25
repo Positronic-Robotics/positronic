@@ -170,7 +170,7 @@ def test_the_address_carries_the_host_and_the_port_alone():
     assert roboarena.RoboarenaClientWire().ADDRESS is roboarena.RoboarenaAddress
 
 
-def test_a_control_call_is_refused_without_a_dial():
-    with patch('positronic_wire.roboarena.connect') as dialled, pytest.raises(wire.ControlCallUnsupported):
-        roboarena.RoboarenaClientWire().call(_ADDRESS, wire.READY, {}, None, 1.0)
+def test_a_keepalive_is_refused_without_a_dial():
+    with patch('positronic_wire.roboarena.connect') as dialled, pytest.raises(wire.KeepaliveUnsupported):
+        roboarena.RoboarenaClientWire().keepalive(_ADDRESS, None, 1.0)
     dialled.assert_not_called()

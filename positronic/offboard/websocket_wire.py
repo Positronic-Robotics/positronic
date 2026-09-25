@@ -6,7 +6,6 @@ import errno
 import os
 import socket
 import stat
-from collections.abc import Mapping
 from contextlib import suppress
 from http import HTTPStatus
 from pathlib import Path
@@ -162,7 +161,7 @@ WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(server_wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the API and control calls answer beside it.
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the keepalive route answers beside it.
 
     ``served_address`` is what this binds: a host and a port, or a Unix socket path. A socket file
     stays after ``stop``, where an unlink could take a path a successor has claimed.
@@ -192,7 +191,7 @@ class WebsocketWire(server_wire.Wire):
     async def start(
         self,
         session: server_wire.SessionHandler,
-        control_calls: server_wire.ControlCallHandler,
+        keepalive: server_wire.KeepaliveHandler,
         authorized: server_wire.Authorized,
     ) -> None:
         self._served = False
@@ -210,7 +209,7 @@ class WebsocketWire(server_wire.Wire):
             self._served_address = server_wire.ServedHostPort(host, bound_port)
         app = FastAPI()
         self._route_sessions(app, session, authorized)
-        self._route_control_calls(app, control_calls, authorized)
+        self._route_keepalive(app, keepalive, authorized)
         config = uvicorn.Config(
             app,
             host=host,
@@ -249,25 +248,19 @@ class WebsocketWire(server_wire.Wire):
         app.websocket(wire.SESSION_PATH, dependencies=[Depends(require_auth)])(serve_model)
 
     @staticmethod
-    def _route_control_calls(
-        app: FastAPI, control_calls: server_wire.ControlCallHandler, authorized: server_wire.Authorized
+    def _route_keepalive(
+        app: FastAPI, keepalive: server_wire.KeepaliveHandler, authorized: server_wire.Authorized
     ) -> None:
-        """Answer every control call on the HTTP API, under the credential the session route takes."""
+        """Answer ``POST wire.KEEPALIVE_PATH`` under the credential the session route takes."""
 
         async def require_auth(request: Request) -> None:
             if not authorized(request.headers):
                 raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail='Invalid or missing bearer token')
 
-        def answer(control_call: wire.ControlCall):
-            async def route(request: Request) -> Mapping[str, Any]:
-                return await control_calls(control_call, await request.json() if await request.body() else {})
+        async def answer() -> dict[str, int | None]:
+            return {wire.ALIVE_SECONDS: keepalive()}
 
-            return route
-
-        for call in wire.CONTROL_CALLS:
-            app.add_api_route(
-                call.http_path, answer(call), methods=[call.http_method], dependencies=[Depends(require_auth)]
-            )
+        app.post(wire.KEEPALIVE_PATH, dependencies=[Depends(require_auth)])(answer)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

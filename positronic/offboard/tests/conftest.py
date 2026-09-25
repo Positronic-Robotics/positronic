@@ -15,7 +15,6 @@ from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.observation import ObservationCodec
 
 
 class Served(NamedTuple):
@@ -104,16 +103,6 @@ def make_mock_model():
         return model
 
     return make
-
-
-# Not ``keys.TASK``, so a test that reads the prompt back here proves the codec encoded the warm.
-WARM_PROMPT_FIELD = 'prompt'
-
-
-def warm_pipeline() -> PolicyDeployment:
-    """A served deployment whose server codec builds the observation a warm runs on."""
-    codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
-    return PolicyDeployment(ChunkedSchedule(fps=10), codec)
 
 
 @pytest.fixture

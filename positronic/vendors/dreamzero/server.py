@@ -47,7 +47,7 @@ def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
     height, width = resolution
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     obs: dict[str, Any] = {
-        roboarena.JOINT_POSITION: np.zeros(codecs.NUM_JOINTS, dtype=np.float32),
+        roboarena.JOINT_POSITION: np.zeros(7, dtype=np.float32),
         roboarena.GRIPPER_POSITION: np.zeros(1, dtype=np.float32),
         roboarena.PROMPT: '',
         roboarena.SESSION_ID: session_id,

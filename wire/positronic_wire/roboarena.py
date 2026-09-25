@@ -2,7 +2,7 @@
 
 import dataclasses
 from collections.abc import Mapping
-from typing import Any, Self
+from typing import Self
 
 from positronic_wire import wire
 from positronic_wire.websocket import WebsocketClientConnection, refusal_of
@@ -63,18 +63,9 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         """The root this wire dials; a roboarena session names no route under it."""
         return f'ws://{wire.bracket_ipv6(address.host)}:{address.port}'
 
-    def call(
-        self,
-        address: RoboarenaAddress,
-        control_call: wire.ControlCall,
-        payload: Mapping[str, Any],
-        headers: Mapping[str, str] | None,
-        timeout: float,
-    ) -> Mapping[str, Any]:
-        """Raises ``wire.ControlCallUnsupported``: a partner's protocol carries no control call."""
-        raise wire.ControlCallUnsupported(
-            f"{self.NAME} carries a partner's frames alone and answers no {control_call.name}"
-        )
+    def keepalive(self, address: RoboarenaAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """Raises ``wire.KeepaliveUnsupported``: a partner's protocol carries no keepalive call."""
+        raise wire.KeepaliveUnsupported(f"{self.NAME} carries a partner's frames alone and answers no keepalive")
 
     def _open(self, address: RoboarenaAddress, open_timeout: float) -> RoboarenaClientConnection:
         """One opened connection on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""

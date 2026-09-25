@@ -6,20 +6,9 @@ from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation, Transform3D
-from positronic.policy import spec
+from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.codec import (
-    BinarizeGripInference,
-    BinarizeGripTraining,
-    ChangeEEFrame,
-    Codec,
-    FlipGrip,
-    Metadata,
-    pose_feature,
-    warm_input_of,
-    warm_vector,
-)
+from positronic.policy.codec import BinarizeGripInference, BinarizeGripTraining, Codec, FlipGrip, Metadata
 from positronic.policy.observation import ObservationCodec
 
 
@@ -29,7 +18,7 @@ def test_observation_encode_images_and_state_shapes():
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
     enc = ObservationCodec(
-        state={'observation.state': {'a': 2, 'b': 1}}, images={'observation.images.left': ('left.image', (w, h))}
+        state={'observation.state': ['a', 'b']}, images={'observation.images.left': ('left.image', (w, h))}
     )
     obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})
 
@@ -46,7 +35,7 @@ def test_observation_encode_images_and_state_shapes():
 
 
 def test_observation_encode_missing_or_bad_images_raise():
-    enc = ObservationCodec(state={'observation.state': {}}, images={'observation.images.left': ('left.image', (8, 6))})
+    enc = ObservationCodec(state={'observation.state': []}, images={'observation.images.left': ('left.image', (8, 6))})
     with pytest.raises(KeyError):  # Missing key
         enc.encode({})
 
@@ -55,107 +44,18 @@ def test_observation_encode_missing_or_bad_images_raise():
 
 
 def test_observation_encode_missing_state_inputs_raise():
-    enc = ObservationCodec(state={'observation.state': {'missing': 1}}, images={})
+    enc = ObservationCodec(state={'observation.state': ['missing']}, images={})
     with pytest.raises(KeyError):
         enc.encode({})
 
 
 def test_observation_encode_task():
-    enc = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    enc = ObservationCodec(state={'observation.state': ['a']}, images={})
     obs = enc.encode({'a': 1.0, obs_keys.TASK: 'test_task'})
     assert obs[obs_keys.TASK] == 'test_task'
 
     obs_no_task = enc.encode({'a': 1.0})
     assert obs_keys.TASK not in obs_no_task
-
-
-def test_warm_observation_carries_the_task_at_the_widths_the_codec_declares():
-    enc = ObservationCodec(
-        state={'observation.state': {'a': 2, 'b': 1}},
-        images={'observation.images.left': ('left.image', (8, 6))},
-        task_field='prompt',
-    )
-
-    obs = enc.warm_observation('pick up the red cube')
-
-    assert obs is not None, 'the codec declares warm inputs, so it builds an observation from them'
-    assert obs['prompt'] == 'pick up the red cube'
-    assert obs['observation.state'].shape == (3,)
-    assert obs['observation.images.left'].shape == (6, 8, 3)
-
-
-def test_a_chain_encodes_the_warm_inputs_its_observation_encoder_declares():
-    """The serving shape: the encoder sits inside a parallel pair under a grip codec."""
-    enc = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field='prompt')
-    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip')
-
-    obs = (BinarizeGripInference() | (enc & action)).warm_observation('stack the cubes')
-
-    assert obs == {'prompt': 'stack the cubes', 'observation.state': pytest.approx(np.zeros(1))}
-
-
-def test_a_field_declared_a_pose_warms_as_one_whatever_the_rig_calls_it():
-    """``geom`` refuses a zero quaternion. The key is not the canonical one, so only the declaration says
-    this field holds a pose."""
-    pose_key = f'{obs_keys.ROBOT_STATE}.left.tool'
-    enc = ObservationCodec(
-        state={'observation.state': {pose_key: pose_feature(), obs_keys.GRIP: 1}}, images={}, task_field='prompt'
-    )
-
-    obs = (ChangeEEFrame(Transform3D(), keys=(pose_key,)) | enc).warm_observation('pick up the cube')
-
-    assert obs is not None
-    assert obs['observation.state'] == pytest.approx([0, 0, 0, 1, 0, 0, 0, 0])
-
-
-def test_a_warm_value_that_is_not_a_vector_is_refused():
-    """A state field is one flat stretch of the state vector, so a 2-D declaration names no width."""
-    with pytest.raises(ValueError, match=r'\(2, 3\)'):
-        warm_input_of(np.zeros((2, 3)))
-
-
-def test_a_vector_and_a_bare_width_both_give_a_warm_input():
-    assert warm_input_of([0.5, 1.5]) == pytest.approx([0.5, 1.5])
-    assert warm_input_of(3) == pytest.approx(np.zeros(3))
-
-
-def test_a_warm_vector_is_zeros():
-    assert warm_vector(7) == pytest.approx(np.zeros(7))
-
-
-def test_two_codecs_that_both_declare_warm_inputs_refuse_to_compose_a_warm():
-    left = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field='prompt')
-    right = ObservationCodec(state={'observation.other': {'b': 1}}, images={}, task_field='prompt')
-
-    with pytest.raises(ValueError, match='both composed codecs declare warm inputs'):
-        (left & right).warm_observation('stack the cubes')
-
-
-def test_a_codec_that_encodes_no_observation_builds_no_warm_observation():
-    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip')
-    assert (BinarizeGripInference() | action).warm_observation('stack the cubes') is None
-
-
-def test_a_state_field_publishes_its_width():
-    """A peer of any version writes and reads a width here."""
-    obs = ObservationCodec(state={'observation.state': {obs_keys.EE_POSE: pose_feature(), 'grip': 1}}, images={})
-
-    assert obs.to_spec()['args']['state'] == {'observation.state': {obs_keys.EE_POSE: 7, 'grip': 1}}
-
-
-def test_a_spec_that_carries_widths_rebuilds():
-    """A server of any version publishes widths. The warm input stays on the serving side."""
-    # rules-allow: hardcoded-keys — this spec stands in for one an older server published, so it
-    # spells the entry's arguments; sharing the constructor's own names would pin nothing.
-    declared = {
-        'name': ObservationCodec.WIRE_NAME,
-        'version': 1,
-        'args': {'state': {'observation.state': {'grip': 1}}, 'images': {}, 'task_field': 'task'},
-    }
-
-    rebuilt = spec.from_spec(declared)
-
-    assert isinstance(rebuilt, Codec) and rebuilt.to_spec() == declared
 
 
 def test_absolute_position_action_encode_decode_quat():

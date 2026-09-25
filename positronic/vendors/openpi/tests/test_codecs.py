@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 from positronic import keys
-from positronic.policy.codec import pose_feature
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs
 
@@ -32,24 +31,3 @@ def test_warmup_state_is_the_width_the_transform_that_does_not_pad_hands_over(ra
     encoded = codecs.libero_obs.instantiate().encode(raw_observation)
 
     assert openpi.warm_observation()[openpi.STATE].shape == encoded[openpi.STATE].shape
-
-
-def test_droid_observation_warms_at_the_widths_it_declares():
-    codec = codecs.ObservationCodec(state_features={keys.EE_POSE: pose_feature(), keys.GRIP: 1}, image_size=(8, 6))
-
-    obs = codec.warm_observation('pick up the red cube')
-
-    assert obs is not None
-    assert obs[openpi.PROMPT] == 'pick up the red cube'
-    assert obs[openpi.STATE] == pytest.approx([0, 0, 0, 1, 0, 0, 0, 0])
-    assert obs[openpi.IMAGE].shape == (6, 8, 3)
-
-
-def test_libero_observation_warms_through_its_pose_maths():
-    """Its state recodes the rotation, so a zero-filled pose would raise rather than warm."""
-    obs = codecs.LiberoObservationCodec(image_size=(8, 6)).warm_observation('close the microwave')
-
-    assert obs is not None
-    assert obs[openpi.PROMPT] == 'close the microwave'
-    assert obs[openpi.STATE].shape == (8,)
-    assert obs[openpi.WRIST_IMAGE].shape == (6, 8, 3)
