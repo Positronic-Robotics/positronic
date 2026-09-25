@@ -21,7 +21,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.codec import Codec, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors import gr00t
@@ -189,15 +189,11 @@ class Gr00tSubprocess:
 
 
 class Gr00tModel(Model):
-    """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``.
+    """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``."""
 
-    ``modalities`` is the checkpoint's own modality config, which a codec must match.
-    """
-
-    def __init__(self, groot: Gr00tSubprocess, meta: dict[str, Any], modalities: dict[str, Any]):
+    def __init__(self, groot: Gr00tSubprocess, meta: dict[str, Any]):
         self._groot = groot
         self._meta = meta
-        self._modalities = modalities
 
     def __call__(self, obs: Obs, *, session_id: str):
         action_response, _info = self._groot.client.get_action(dict(obs))
@@ -209,19 +205,6 @@ class Gr00tModel(Model):
 
     def meta(self) -> dict[str, Any]:
         return self._meta
-
-    def check_codec(self, codec: Codec | None) -> None:
-        """Refuse a codec whose declared modality keys are not the checkpoint's."""
-        declared = None if codec is None else codec.training_encoder.meta.get(GR00T_MODALITY)
-        if declared is None:
-            raise ValueError('A GR00T checkpoint needs a codec that declares its modality')
-        for name in (gr00t.VIDEO, gr00t.STATE, ACTION):
-            expected = set(self._modalities[name][gr00t.MODALITY_KEYS])
-            supplied = set(declared[name])
-            if supplied != expected:
-                raise ValueError(
-                    f'Checkpoint {name} keys {sorted(expected)} do not match codec keys {sorted(supplied)}'
-                )
 
     def close(self):
         self._groot.stop()
@@ -321,7 +304,6 @@ def gr00t_model(
                 'embodiment': gr00t.EMBODIMENT,
                 policy_keys.EXPERIMENT_NAME: model_source.split('/')[-1] or '',
             },
-            modalities,
         )
         # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
         warmup(policy, _warm_observation(modalities))

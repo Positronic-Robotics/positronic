@@ -318,8 +318,7 @@ checkpoints, start one server for each.
 ### `server.PolicyServer`
 Serves one `Model` through a `PolicyDeployment` with explicit `local` and `codec` arguments. The server
 calls `build_model` once, when `serve` starts, and the model it returns owns the loaded resources and
-reports its checkpoint in `meta()`. `Model.check_codec` refuses a codec the model cannot serve, at launch
-and for each session codec. Server codecs wrap the model's call; the client receives one stack spec
+reports its checkpoint in `meta()`. Server codecs wrap the model's call; the client receives one stack spec
 containing its processors and codecs.
 
 ```python

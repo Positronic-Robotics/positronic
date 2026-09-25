@@ -23,10 +23,6 @@ class Model(ABC):
         """What each session's handshake reports about the model, its ``offboard.keys.CHECKPOINT_ID`` among it."""
         return {}
 
-    def check_codec(self, codec: Codec | None) -> None:
-        """Raise when this model cannot serve ``codec``."""
-        return None
-
     def close(self) -> None:
         """Release the model's resources after all calls have finished."""
         return None

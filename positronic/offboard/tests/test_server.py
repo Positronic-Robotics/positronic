@@ -764,34 +764,6 @@ def test_a_session_param_cannot_reach_the_model(param_server):
         _param_session(host, port, [('model.checkpoint', '"other"')])
 
 
-class _RefusingModel(_ScriptedModel):
-    """Serves only the codec it was launched with."""
-
-    def check_codec(self, codec: Codec | None) -> None:
-        if codec is not None:
-            raise ValueError('this checkpoint serves no codec')
-
-
-def _codec_pipe(with_codec: bool = False):
-    return PolicyDeployment(ChunkedSchedule(fps=10), _IdentityCodec() if with_codec else None)
-
-
-def test_a_session_codec_the_model_refuses_opens_no_session(start_server):
-    host, port, *_ = start_server(_RefusingModel(), cfn.Config(_codec_pipe))
-    _param_session(host, port, []).close()
-    with pytest.raises(RuntimeError, match='serves no codec'):
-        _param_session(host, port, [('with_codec', 'true')])
-
-
-def test_a_launch_codec_the_model_refuses_stops_the_server_and_closes_the_model():
-    model = MagicMock(spec=Model)
-    model.check_codec.side_effect = ValueError('this checkpoint serves no codec')
-    server = PolicyServer(lambda: model, PolicyDeployment(ChunkedSchedule(fps=10), _IdentityCodec()))
-    with pytest.raises(ValueError, match='serves no codec'):
-        server.serve([websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))])
-    model.close.assert_called_once_with()
-
-
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(stub, _tunable_pipe())

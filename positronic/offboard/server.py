@@ -176,10 +176,7 @@ class PolicyServer:
             )
         # ``override_data``: values came off the wire, so a string stays a string and never names a
         # Python object to import.
-        pipeline = self._pipeline_cfg.override_data(**params).instantiate()
-        assert self._model is not None, 'A session arrived before the model loaded'
-        self._model.check_codec(pipeline.codec)
-        return pipeline
+        return self._pipeline_cfg.override_data(**params).instantiate()
 
     async def _answer_observations(
         self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
@@ -300,7 +297,6 @@ class PolicyServer:
 
     def _load(self) -> None:
         self._model = self._build_model()
-        self._model.check_codec(self._pipeline.codec)
 
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.

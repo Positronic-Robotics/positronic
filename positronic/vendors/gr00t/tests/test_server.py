@@ -7,7 +7,7 @@ import pytest
 import zmq
 
 from positronic.offboard import keys as offboard_keys
-from positronic.policy.codec import ACTION, GR00T_MODALITY
+from positronic.policy.codec import ACTION
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
 
@@ -81,57 +81,29 @@ def test_published_checkpoint_is_served_without_a_local_checkpoint_scan(monkeypa
     assert gr00t_server.gr00t_model().meta()[offboard_keys.CHECKPOINT_ID] == gr00t.BASE_MODEL
 
 
-@pytest.mark.parametrize('config', [gr00t_server.droid, gr00t_server.droid_three_cameras])
 @pytest.mark.parametrize('checkpoint_cameras', [2, 3])
-def test_a_checkpoint_refuses_a_codec_with_other_cameras(monkeypatch, config, checkpoint_cameras):
+def test_the_warmup_runs_in_the_checkpoints_own_cameras(monkeypatch, checkpoint_cameras):
     cameras = [gr00t.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE]
     if checkpoint_cameras == 3:
         cameras.append(gr00t.EXTERIOR_IMAGE_2)
     _backend(monkeypatch, _modalities(cameras))
-    codec = config().codec
 
     model = gr00t_server.gr00t_model()
     try:
-        # The warmup runs in the checkpoint's own cameras, whatever codec the server pairs it with.
         assert set(gr00t_server.warmup.call_args.args[1][gr00t.VIDEO]) == set(cameras)
-        if len(codec.training_encoder.meta[GR00T_MODALITY][gr00t.VIDEO]) != checkpoint_cameras:
-            with pytest.raises(ValueError, match='Checkpoint video keys'):
-                model.check_codec(codec)
-        else:
-            model.check_codec(codec)
     finally:
         model.close()
 
 
-@pytest.mark.parametrize('modality', [gr00t.STATE, ACTION, gr00t.LANGUAGE])
-def test_same_camera_checkpoint_with_incompatible_modalities_is_refused(monkeypatch, modality):
-    codec = gr00t_server.droid().codec
-    declared = codec.training_encoder.meta[GR00T_MODALITY]
-    modalities = {
-        name: {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: list(declared[name])}
-        for name in (gr00t.VIDEO, gr00t.STATE, ACTION)
-    }
-    modalities[gr00t.LANGUAGE] = {gr00t.DELTA_INDICES: [0], gr00t.MODALITY_KEYS: [gr00t.TASK]}
+@pytest.mark.parametrize('modality', [gr00t.STATE, gr00t.LANGUAGE])
+def test_a_checkpoint_the_warmup_cannot_serve_stops_the_subprocess(monkeypatch, modality):
+    modalities = _modalities([gr00t.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE])
     modalities[modality][gr00t.MODALITY_KEYS] = ['incompatible_field']
     backend = _backend(monkeypatch, modalities)
 
-    built = []
     with pytest.raises(ValueError, match='Checkpoint .* key'):
-        built.append(gr00t_server.gr00t_model())
-        built[0].check_codec(codec)
-    for model in built:
-        model.close()
+        gr00t_server.gr00t_model()
     backend.stop.assert_called_once()
-
-
-def test_a_codec_that_declares_no_modality_is_refused(monkeypatch):
-    _backend(monkeypatch, _modalities([gr00t.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE]))
-    model = gr00t_server.gr00t_model()
-    try:
-        with pytest.raises(ValueError, match='declares its modality'):
-            model.check_codec(None)
-    finally:
-        model.close()
 
 
 @pytest.mark.parametrize('failure', [zmq.Again(), zmq.ZMQError(zmq.EFSM)])
