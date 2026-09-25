@@ -149,12 +149,6 @@ def test_a_send_on_a_closed_connection_says_the_peer_ended_the_session():
     assert ended.value.__cause__ is closed
 
 
-def test_the_wire_serves_one_model_and_refuses_a_catalogue_read():
-    """A partner's endpoint is the model, so there is no route a catalogue could be read on."""
-    with pytest.raises(ValueError, match='roboarena serves one model and no catalogue'):
-        roboarena.RoboarenaClientWire().list_models(_ADDRESS, None, 1.0)
-
-
 @pytest.mark.parametrize(
     ('address', 'session_url'),
     [

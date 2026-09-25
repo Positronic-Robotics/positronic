@@ -31,7 +31,7 @@ Use the predefined Docker Compose service from the checkout whose server code yo
 ```bash
 CACHE_ROOT=/home/vertix docker --context notebook compose -f docker/docker-compose.yml \
   run --rm --no-deps --name act-integration-server -p 127.0.0.1:18024:8000 \
-  lerobot-0_3_3-server demo --pipeline.source.checkpoint=050000
+  lerobot-0_3_3-server demo --model.checkpoint=050000
 ```
 
 `CACHE_ROOT` is the remote user's home directory. `IMAGE_TAG` selects a built image; use a matching
@@ -43,7 +43,7 @@ In another terminal, forward the endpoint:
 ssh -N -L 18024:127.0.0.1:18024 notebook
 ```
 
-The server is ready when `curl --fail http://localhost:18024/api/v1/models` returns the checkpoint list.
+The server is ready when `curl --fail http://localhost:18024/api/v1/models` returns the served checkpoint.
 The eval client and MuJoCo run locally, with a working renderer; model prediction runs on the server.
 A local server can instead be started with the same Compose service and `--service-ports`.
 

@@ -15,6 +15,7 @@ from platform_client.eval_plan import (
     _PER_TASK_ONLY,
     ADDRESS_OF_WIRE,
     REVEAL_REGISTRY_PASSWORD,
+    SESSION_ROUTE,
     Cascade,
     Endpoint,
     EvalPlan,
@@ -41,13 +42,13 @@ from platform_client.ids import OrgSlug
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
-from positronic_wire import registry
+from positronic_wire import registry, wire
 from pydantic import TypeAdapter, ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
 PRIVATE = {'type': 'private_eval', 'org': 'acme'}
-SESSION = '/api/v1/session'
+SESSION = SESSION_ROUTE
 
 
 def remote(name: str, **over) -> dict:
@@ -284,7 +285,7 @@ def test_a_plan_takes_its_tasks_from_itself_or_from_an_eval_and_not_from_both():
     ('wire', 'address', 'dialled'),
     [
         ('websocket_tls', {'host': 'h.example', 'port': 443, 'path': SESSION, 'query': 'mode=native'}, HostPortAddress),
-        ('grpc', {'host': '::1', 'port': 50051, 'path': f'{SESSION}/org/model'}, HostPortAddress),
+        ('grpc', {'host': '::1', 'port': 50051, 'path': SESSION}, HostPortAddress),
         ('websocket_unix', {'uds': '/run/policy.sock', 'path': SESSION}, UnixSocketAddress),
         ('roboarena', {'host': 'h.example', 'port': 8000}, RoboarenaAddress),
     ],
@@ -390,20 +391,22 @@ def test_a_port_is_an_integer_from_1_to_65535(port: object, refused: str | None)
     ('path', 'refused'),
     [
         (SESSION, None),
-        (f'{SESSION}/org/model', None),
-        (f'{SESSION}/org%20model', None),
-        ('/', None),
-        ('', 'is no session route'),
-        ('api/v1/session', 'is no session route'),
-        ('wss://h/ws', 'is no session route'),
-        (f'{SESSION}?fps=10', 'carries `?`: write the params in `query`'),
-        (f'{SESSION}#frag', FRAGMENT),
-        (f'{SESSION}/org model', NOT_VISIBLE),
-        (f'{SESSION}/modèle', NOT_VISIBLE),
+        (f'{SESSION}/org/model', 'is not the session route'),
+        (f'{SESSION}/10000', 'is not the session route'),
+        (f'{SESSION}/', 'is not the session route'),
+        ('/', 'is not the session route'),
+        ('', 'is not the session route'),
+        ('api/v1/session', 'is not the session route'),
+        ('wss://h/ws', 'is not the session route'),
+        (f'{SESSION}?fps=10', 'write the params in `query`'),
     ],
 )
-def test_a_path_is_the_session_route_in_visible_ascii(path: str, refused: str | None):
+def test_a_path_is_the_one_session_route(path: str, refused: str | None):
     assert_field(SessionPath, path, refused)
+
+
+def test_the_session_route_is_the_one_the_server_serves():
+    assert SESSION_ROUTE == wire.SESSION_PATH
 
 
 @pytest.mark.parametrize(

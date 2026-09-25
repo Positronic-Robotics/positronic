@@ -70,9 +70,8 @@ class ServerConnection(abc.ABC):
         """End a session the server cannot serve, and tell the client why."""
 
 
-# What a wire hands the server for each session it accepts: the connection, and the model the route
-# names, or ``None`` for the model the server pinned.
-SessionHandler = Callable[[ServerConnection, str | None], Awaitable[None]]
+# What a wire hands the server for each session it accepts.
+SessionHandler = Callable[[ServerConnection], Awaitable[None]]
 
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
 Authorized = Callable[[Mapping[str, str]], bool]
@@ -81,8 +80,7 @@ Authorized = Callable[[Mapping[str, str]], bool]
 class Wire(abc.ABC):
     """One transport that sessions arrive on.
 
-    A wire reads its own route for the model a session names, and refuses an unauthorized peer before
-    the session opens.
+    A wire refuses an unauthorized peer before the session opens.
     """
 
     @property
@@ -94,7 +92,7 @@ class Wire(abc.ABC):
     async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
         """Bind, and give every accepted session to ``session``.
 
-        ``api`` is the server's own HTTP routes, the model catalogue among them. A wire whose
+        ``api`` is the server's own HTTP routes, the model route among them. A wire whose
         transport carries HTTP serves them beside its sessions; one that does not ignores them, and
         says so.
 

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
@@ -39,6 +40,7 @@ class MolmoAct2Model(Model):
             'norm_tag': norm_tag,
             'hf_repo': model_id,
             'model_id': model_id.split('/')[-1],
+            offboard_keys.CHECKPOINT_ID: model_id.split('/')[-1],
         }
 
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:

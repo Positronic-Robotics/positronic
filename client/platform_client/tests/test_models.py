@@ -140,7 +140,7 @@ ASK = EvalPlan.model_validate({
                 {
                     'name': 'ours',
                     'wire': 'grpc_tls',
-                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session/org/ours'},
+                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session'},
                 },
             ],
         },

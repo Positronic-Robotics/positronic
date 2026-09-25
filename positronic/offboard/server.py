@@ -22,121 +22,13 @@ from starlette.datastructures import QueryParams
 
 from positronic import telemetry
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
 
 from . import grpc_wire, protocol, server_wire, websocket_wire
 from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
 
 logger = logging.getLogger(__name__)
-
-
-async def _acquire_with_keepalives(lock: asyncio.Lock, conn: server_wire.ServerConnection | None, message: str):
-    """Acquire ``lock``, emitting ``waiting`` keepalives while queued behind another holder.
-
-    A peer may hold the lock for a slow load, first-call compile or inference; a silent wait here
-    would trip the client handshake's 30s per-message timeout before ``ready`` is sent.
-    """
-    while True:
-        try:
-            await asyncio.wait_for(lock.acquire(), timeout=10.0)
-            return
-        except TimeoutError:
-            if conn is not None:
-                await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message}))
-
-
-class ModelManager:
-    """Manages the lifecycle of the one model ``source`` currently has loaded.
-
-    Ensures only one model is loaded at a time. Waits for all active sessions
-    to finish before switching models.
-    """
-
-    def __init__(self, source: ModelSource):
-        self._source = source
-        self.current_checkpoint_id: str | None = None
-        self.current_model: Model | None = None
-        self.active_sessions: int = 0
-        self._lock = asyncio.Lock()
-        self._condition = asyncio.Condition(self._lock)
-
-    async def get_model(self, checkpoint_id: str, conn: server_wire.ServerConnection | None = None) -> Model:
-        await _acquire_with_keepalives(self._lock, conn, 'Waiting for the model slot')
-        try:
-            if self.current_checkpoint_id != checkpoint_id:
-                logger.info(f'Switching model from {self.current_checkpoint_id} to {checkpoint_id}')
-
-                while self.active_sessions > 0:
-                    message = f'Waiting for {self.active_sessions} active session(s) to finish...'
-                    logger.info(message)
-                    if conn:
-                        await conn.send(
-                            serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
-                        )
-
-                    try:
-                        await asyncio.wait_for(self._condition.wait(), timeout=5.0)
-                    except TimeoutError:
-                        continue
-
-                if self.current_model:
-                    logger.info('Unloading current model')
-                    self.current_model.close()
-                    # Empty the slot first: a failed load must not leave the closed model under the old id.
-                    self.current_model = None
-                    self.current_checkpoint_id = None
-
-                if conn:
-                    await conn.send(
-                        serialise({
-                            protocol.STATUS: protocol.ServerStatus.LOADING,
-                            protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
-                        })
-                    )
-
-                logger.info(f'Loading model {checkpoint_id}')
-                on_progress = self._progress_callback(conn)
-                self.current_model = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
-                self.current_checkpoint_id = checkpoint_id
-
-            assert self.current_model is not None
-            if conn:
-                self.active_sessions += 1
-            return self.current_model
-        finally:
-            self._lock.release()
-
-    @staticmethod
-    def _progress_callback(conn: server_wire.ServerConnection | None) -> Callable[[str], None] | None:
-        """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
-
-        Blocks the loader until each message is on the wire, so one emitted at the very end of a load
-        cannot overtake the ``ready`` that follows it and be read as the first inference result.
-        """
-        if conn is None:
-            return None
-        loop = asyncio.get_running_loop()
-
-        def on_progress(msg: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                conn.send(serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})), loop
-            ).result()
-
-        return on_progress
-
-    async def release_session(self):
-        async with self._lock:
-            self.active_sessions -= 1
-            if self.active_sessions == 0:
-                self._condition.notify_all()
-
-    def close(self):
-        """Close the loaded model. Runs outside the event loop, at server shutdown."""
-        if self.current_model is not None:
-            self.current_model.close()
-            self.current_model = None
-            self.current_checkpoint_id = None
 
 
 def _literal_value(raw: str) -> Any:
@@ -200,15 +92,16 @@ class _ServedTiming:
 
 
 class PolicyServer:
-    """Serve a callable model with explicit server codecs and a declared client processor stack.
+    """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
-    A config-launched pipeline accepts session parameters as dotted configuration overrides.
-    An instantiated PolicyDeployment refuses session parameters. The model source is fixed at launch;
-    the default checkpoint is resolved and pinned at startup.
+    ``build_model`` runs once, when ``serve`` starts, and its model serves every session. A config-launched
+    pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
+    never reach the model. An instantiated PolicyDeployment refuses session parameters.
     """
 
     def __init__(
         self,
+        build_model: Callable[[], Model],
         pipeline: cfn.Config | PolicyDeployment,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
@@ -219,8 +112,9 @@ class PolicyServer:
             f'PolicyServer requires a PolicyDeployment, got {type(self._pipeline).__name__}'
         )
         self._pipeline.local.to_spec()
-        self._source = self._pipeline.source
-        self._manager = ModelManager(self._source)
+        self._build_model = build_model
+        # Set by ``serve`` before any wire binds, and closed when it returns.
+        self._model: Model | None = None
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
@@ -229,7 +123,6 @@ class PolicyServer:
         # serialized here: sessions may share one backend client, which concurrent calls would corrupt.
         self._infer_lock = asyncio.Lock()
 
-        self._default_id: str | None = None
         # Set while ``serve`` runs; ``shutdown`` reaches the loop from another thread.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
@@ -242,11 +135,12 @@ class PolicyServer:
         self._auth_token = auth_token
 
         self._api = APIRouter()
+        # TODO: positronic#754 removes this route; `/api/v1/ready` replaces it as the readiness check.
         self._api.get(wire.MODELS_PATH, dependencies=[Depends(self._require_http_auth)])(self.get_models)
 
     @property
     def api(self) -> APIRouter:
-        """The server's own HTTP routes: the model catalogue a client reads before it opens a session."""
+        """The server's own HTTP routes: the model route, which answers the one checkpoint this server serves."""
         return self._api
 
     def _token_matches(self, authorization: str | None) -> bool:
@@ -267,7 +161,9 @@ class PolicyServer:
             raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def get_models(self) -> dict:
-        return {wire.MODELS_KEY: self._source.get_models()}
+        assert self._model is not None, 'The route answered before the model loaded'
+        checkpoint_id = self._model.meta().get(offboard_keys.CHECKPOINT_ID)
+        return {wire.MODELS_KEY: [] if checkpoint_id is None else [checkpoint_id]}
 
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -280,10 +176,7 @@ class PolicyServer:
             )
         # ``override_data``: values came off the wire, so a string stays a string and never names a
         # Python object to import.
-        pipeline = self._pipeline_cfg.override_data(**params).instantiate()
-        if pipeline.source != self._source:
-            raise ValueError('Session params must not change the model source; it is fixed at launch')
-        return pipeline
+        return self._pipeline_cfg.override_data(**params).instantiate()
 
     async def _answer_observations(
         self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
@@ -324,24 +217,21 @@ class PolicyServer:
                 logger.error(f'Error processing message: {e}', exc_info=True)
                 await conn.send(serialise({protocol.ERROR: str(e)}))
 
-    async def _serve_session(self, conn: server_wire.ServerConnection, model_id: str | None):
-        logger.info(f'Connected to {conn.peer} requesting {model_id or "default"}')
+    async def _serve_session(self, conn: server_wire.ServerConnection):
+        logger.info(f'Connected to {conn.peer}')
 
         self._active_sessions += 1
         self._last_activity = time.monotonic()
-        model: Model | None = None
         try:
+            model = self._model
+            assert model is not None, 'A session arrived before the model loaded'
             pipeline = self._session_pipeline(_session_params(conn.query_params))
-            rid = self._source.resolve(model_id) if model_id is not None else self._default_id
-            assert rid is not None
-            model = await self._manager.get_model(rid, conn)
             session_id = uuid4().hex
             meta = {
                 **conn.served_address.meta,
                 **model.meta(),
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
                 **pipeline.local.meta(),
-                offboard_keys.CHECKPOINT_ID: rid,
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
@@ -379,13 +269,6 @@ class PolicyServer:
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
-            if model is not None:
-                await self._manager.release_session()
-
-    async def _startup(self):
-        self._default_id = self._source.resolve(None)
-        logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
-        await self._manager.get_model(self._default_id)
 
     async def _idle_watchdog(self):
         """Return once no session has touched the server for ``idle_timeout_min``."""
@@ -412,10 +295,13 @@ class PolicyServer:
             # A wire that ended on an error raises; a silent return reads as a shutdown.
             raise failed[0][1]
 
+    def _load(self) -> None:
+        self._model = self._build_model()
+
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
-        Every wire shares this server's model slot and inference lock. ``on_ready`` runs on the server's
+        Every wire shares this server's model and inference lock. ``on_ready`` runs on the server's
         own loop once every wire has bound; a caller that asked for port 0 reads the port there.
         """
         if not wires:
@@ -423,7 +309,7 @@ class PolicyServer:
 
         async def _run():
             self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
-            await self._startup()
+            await asyncio.to_thread(self._load)
             # A wire binds when it starts; the ``finally`` stops every started one, even when a later one cannot bind.
             started: list[server_wire.Wire] = []
             serving: list[asyncio.Task] = []
@@ -446,7 +332,7 @@ class PolicyServer:
                     task.cancel()
                 for w in started:
                     await w.stop()
-                # Each wire ends the sessions it carries before this returns and the model slot closes.
+                # Each wire ends the sessions it carries before this returns and the model closes.
                 outcomes = await asyncio.gather(*serving, return_exceptions=True)
 
             self._raise_first_wire_failure(started, outcomes)
@@ -457,7 +343,9 @@ class PolicyServer:
             logger.info('Server stopped by user')
         finally:
             self._loop, self._stop = None, None
-            self._manager.close()
+            if self._model is not None:
+                self._model.close()
+                self._model = None
 
     def shutdown(self):
         """Ask a running ``serve`` to end, from any thread. A server that is not serving ignores it."""
@@ -481,16 +369,17 @@ def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
 
 @cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
 def serve(
+    model: cfn.Config,
     pipeline: cfn.Config,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
 ):
-    """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
+    """The CLI entry point every vendor server exposes: bind ``model`` and ``pipeline``, and the commands are
+    configs of this.
 
-    Everything the served model is — codec, source, checkpoint — is reached through the pipeline
-    itself. GR00T selects checkpoints with ``--pipeline.source.model_source=...``; LeRobot and OpenPI
-    use ``--pipeline.source.checkpoints_dir=...``.
+    ``model`` names the one checkpoint the server loads: ``--model.checkpoints_dir=...`` for LeRobot and
+    OpenPI, ``--model.model_source=...`` for GR00T. ``pipeline`` is the rig-side stack and the server codec.
 
     Each wire carries the address it binds, and this binds what it is given::
 
@@ -501,5 +390,5 @@ def serve(
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
     Unset serves open.
     """
-    server = PolicyServer(pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
+    server = PolicyServer(model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
     server.serve([w for w in (websocket, grpc) if w is not None])

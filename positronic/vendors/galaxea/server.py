@@ -3,7 +3,6 @@
 import os
 import socket
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +12,10 @@ import pos3
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
@@ -59,7 +59,7 @@ class _BackendProcess:
         code = self._process.poll()
         return code is not None, code
 
-    def start(self, on_progress: Callable[[str], None] | None):
+    def start(self):
         # Refuse an occupied port before launching a second model into GPU memory.
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', self._port))
@@ -82,7 +82,7 @@ class _BackendProcess:
             cwd=self._root,
             env=env,
         )
-        wait_for_subprocess_ready(self._ready, self._crashed, 'Galaxea model', on_progress, max_wait=1800)
+        wait_for_subprocess_ready(self._ready, self._crashed, 'Galaxea model', max_wait=1800)
 
     def stop(self):
         if self._process is None:
@@ -145,52 +145,43 @@ class GalaxeaModel(Model):
         self._backend.stop()
 
 
-class GalaxeaSource(ModelSource):
-    """Load G0.5-DROID in its own Python 3.10 process and expose full-chunk inference."""
-
-    def __init__(
-        self,
-        checkpoint_path: str = '/galaxea/checkpoints/g05-droid/checkpoints/model_state_dict.pt',
-        galaxea_root: str = '/galaxea',
-        device: str = 'cuda',
-        backend_port: int = 9000,
-        infer_timeout: float = 120.0,
-    ):
-        self._checkpoint = Path(checkpoint_path)
-        self._root = Path(galaxea_root)
-        self._device = device
-        self._port = backend_port
-        self._timeout = infer_timeout
-
-    def get_models(self) -> list[str]:
-        return [protocol.MODEL_ID]
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model:
-        if model_id != protocol.MODEL_ID:
-            raise ValueError(f'Unknown Galaxea model: {model_id}')
-        backend = _BackendProcess(self._root, self._checkpoint, self._device, self._port)
-        try:
-            backend.start(on_progress)
-        except Exception:
-            backend.stop()
-            raise
-        return GalaxeaModel(
-            backend,
-            self._timeout,
-            {policy_keys.CHECKPOINT_PATH: str(self._checkpoint), 'usage': 'internal non-commercial evaluation only'},
-        )
+@cfn.config(
+    checkpoint_path='/galaxea/checkpoints/g05-droid/checkpoints/model_state_dict.pt',
+    galaxea_root='/galaxea',
+    device='cuda',
+    backend_port=9000,
+    infer_timeout=120.0,
+)
+def galaxea_model(
+    checkpoint_path: str, galaxea_root: str, device: str, backend_port: int, infer_timeout: float
+) -> Model:
+    """G0.5-DROID in its own Python 3.10 process, with full-chunk inference."""
+    backend = _BackendProcess(Path(galaxea_root), Path(checkpoint_path), device, backend_port)
+    try:
+        backend.start()
+    except Exception:
+        backend.stop()
+        raise
+    return GalaxeaModel(
+        backend,
+        infer_timeout,
+        {
+            offboard_keys.CHECKPOINT_ID: protocol.MODEL_ID,
+            policy_keys.CHECKPOINT_PATH: checkpoint_path,
+            'usage': 'internal non-commercial evaluation only',
+        },
+    )
 
 
-@cfn.config(codec=cfn.Config(codecs.DroidCodec), source=cfn.Config(GalaxeaSource))
-def pipeline(codec: codecs.DroidCodec, source: ModelSource, execution_steps: int = 16):
+@cfn.config(codec=cfn.Config(codecs.DroidCodec))
+def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
     return PolicyDeployment(
-        source,
         Sequential(PauseOnUnavailable(), ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
         codecs.droid(action=codec),
     )
 
 
-COMMANDS = {name: serve.override(pipeline=pipeline) for name in ('', 'serve', 'droid')}
+COMMANDS = {name: serve.override(model=galaxea_model, pipeline=pipeline) for name in ('', 'serve', 'droid')}
 
 
 if __name__ == '__main__':

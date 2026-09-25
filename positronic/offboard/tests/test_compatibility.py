@@ -16,7 +16,6 @@ from positronic.offboard import protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
-from positronic.offboard.tests.conftest import DictSource
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
@@ -240,7 +239,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
         else {'value': 10}
     )
 
-    async def v1_session(server, conn, model_id):
+    async def v1_session(server, conn):
         await conn.send(protocol.serialise({'status': 'ready', 'meta': {'local_stack': declared, 'action_fps': 10}}))
         try:
             while True:
@@ -252,10 +251,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
             disconnected.set()
 
     monkeypatch.setattr(PolicyServer, '_serve_session', v1_session)
-    served = start_server(
-        PolicyDeployment(DictSource({'default': make_mock_model([], {})}), ChunkedSchedule(fps=10)),
-        grpc=transport == 'grpc',
-    )
+    served = start_server(make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
     address = served.ws()[1] if transport == 'websocket' else served.grpc()[1]
     now = [1_000_000_000]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
@@ -281,7 +277,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
 def test_unknown_protocol_closes_before_any_request(start_server, make_mock_model, monkeypatch):
     monkeypatch.setattr(protocol, 'CURRENT_VERSION', 99)
     model = make_mock_model([], {})
-    served = start_server(PolicyDeployment(DictSource({'default': model}), ChunkedSchedule(fps=10)))
+    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)))
     with pytest.raises(ValueError, match='Unsupported policy protocol version 99'):
         InferenceClient(*served.ws()).new_session()
     model.assert_not_called()

@@ -1,7 +1,6 @@
-"""Model loading and policy deployment configuration for the inference server."""
+"""The model an inference server loads, and the policy deployment it serves the model through."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,33 +27,10 @@ class Model(ABC):
         return None
 
 
-class ModelSource(ABC):
-    """Configuration that discovers and loads models; loaded resources belong to the returned model."""
-
-    @abstractmethod
-    def get_models(self) -> list[str]:
-        """Available IDs, oldest first. The default resolver selects the last entry."""
-
-    def resolve(self, model_id: str | None) -> str:
-        models = self.get_models()
-        if model_id is None:
-            return models[-1]
-        if model_id not in models:
-            raise ValueError(f'Unknown model {model_id!r}. Available: {models}')
-        return model_id
-
-    @abstractmethod
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Model: ...
-
-    def __eq__(self, other):
-        return type(self) is type(other) and self.__dict__ == other.__dict__
-
-
 @dataclass
 class PolicyDeployment:
-    """A model source, a client stack of processors and codecs, and an optional server codec."""
+    """A client stack of processors and codecs, and an optional server codec, which a session may retune."""
 
-    source: ModelSource
     local: Policy
     codec: Codec | None = None
     compress_images: bool = False

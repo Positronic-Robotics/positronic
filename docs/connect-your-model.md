@@ -88,8 +88,8 @@ A `Codec` converts observations and actions, and prepares the same features for
 training. `Sequential` combines codecs and processors such as `ChunkedSchedule`.
 The [Codecs Guide](codecs.md) lists the available conversions.
 
-A server loads callable `Model` objects through a `ModelSource`. A `PolicyDeployment`
-packages that source with the client processor stack and an optional server codec.
+A server builds one callable `Model` at launch. A `PolicyDeployment` holds the client
+processor stack and an optional server codec, which a session may retune.
 `RemotePolicy` opens a session and builds the declared stack around the remote call.
 
 ## The wire format
@@ -164,14 +164,15 @@ To connect a custom model you implement this protocol. The full low-level spec â
 
 ### Models and deployments
 
-Implement `Model` and `ModelSource`, then pass a deployment to `PolicyServer`:
+Implement `Model`, then pass a function that builds it and a deployment to `PolicyServer`:
 
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_wire import ServedHostPort
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
@@ -189,22 +190,12 @@ class MyModel(Model):
         ]
 
     def meta(self):
-        return {'type': 'my_model'}
+        return {'type': 'my_model', offboard_keys.CHECKPOINT_ID: 'default'}
 
 
-class MySource(ModelSource):
-    def get_models(self):
-        return ['default']
-
-    def load(self, model_id, on_progress=None):
-        return MyModel(load_my_weights())  # supply your checkpoint loader
-
-
-deployment = PolicyDeployment(
-    source=MySource(),
-    local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)),
-)
-server = PolicyServer(deployment)
+deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
+# The server builds the model once, when it starts; supply your checkpoint loader.
+server = PolicyServer(lambda: MyModel(load_my_weights()), deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
@@ -216,9 +207,10 @@ belong in `local`, where they can mix with processors. For example,
 `compress_images=True` on the deployment enables JPEG transport compression.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
-The server calls `load` off the event loop and forwards progress messages during
-slow downloads or subprocess startup. The loaded model owns those resources and
-releases them in `close()`. See the OpenPI and GR00T adapters for examples.
+The server builds the model off the event loop, before any wire binds. A slow
+download or subprocess startup writes its progress to the server log. The model
+owns those resources and releases them in `close()`. See the OpenPI and GR00T
+adapters for examples.
 
 The server supplies `session_id` on every call. A stateless model may ignore it;
 a stateful model must keep episodes separate or reject another active owner.
