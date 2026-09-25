@@ -170,9 +170,9 @@ docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
 
 The server exposes the following endpoints:
 
-**GET `/api/v1/models`**
-- Returns the checkpoint the server serves
-- Response: `{"models": ["2000"]}`
+**GET `/api/v1/ready`**
+- Returns the server's state and the checkpoint it serves
+- Response: `{"status": "ready", "checkpoint_id": "2000", ...}`
 
 **WebSocket `/api/v1/session`**
 - Session with the checkpoint the server serves: `--model.checkpoint`, else the latest
@@ -227,7 +227,7 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 **Solutions:**
 1. Verify server is running with `--service-ports` flag (exposes port 8000)
 2. Check firewall settings allow connections on port 8000
-3. Try `curl http://localhost:8000/api/v1/models` to verify server is responsive
+3. Try `curl http://localhost:8000/api/v1/ready` to verify server is responsive
 4. Check server logs for startup errors
 
 ### Checkpoint not found

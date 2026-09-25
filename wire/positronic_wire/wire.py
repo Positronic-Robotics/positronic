@@ -1,6 +1,7 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries a protocol's frames as opaque bytes and reads none of them. Nothing here reads a URL:
+A wire carries a protocol's frames as opaque bytes and reads none of them, and encodes a control call
+itself. Nothing here reads a URL:
 a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
 spells whatever its library takes.
 """
@@ -10,15 +11,33 @@ import dataclasses
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Generic, NamedTuple, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The model route under the HTTP API, and the key it answers the server's one checkpoint under.
-MODELS_ROUTE = 'models'
-MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
-MODELS_KEY = 'models'
+
+
+class ControlCall(NamedTuple):
+    """A call beside the session, and how each wire spells it.
+
+    ``ready`` asks what the server can do now, and ``warm`` asks it to warm, naming the run's task under
+    ``positronic.keys.TASK``. Both answer one ``positronic.offboard.protocol.Readiness`` record, and
+    neither opens a session.
+    """
+
+    name: str
+    http_method: str
+    grpc_method: str
+
+    @property
+    def http_path(self) -> str:
+        return f'{API_PATH}/{self.name}'
+
+
+READY = ControlCall('ready', 'GET', 'Ready')
+WARM = ControlCall('warm', 'POST', 'Warm')
+CONTROL_CALLS = (READY, WARM)
 
 
 def bracket_ipv6(host: str) -> str:
@@ -88,6 +107,10 @@ class PeerDisconnected(Exception):
     """The peer ended the session."""
 
 
+class ControlCallUnsupported(Exception):
+    """The server answers sessions but not this control call."""
+
+
 class Refusal(Enum):
     """What a refused connect says about the server."""
 
@@ -132,6 +155,23 @@ class ClientWire(abc.ABC, Generic[AddressT]):
     @abc.abstractmethod
     def dial(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> 'ClientConnection':
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
+
+    @abc.abstractmethod
+    def call(
+        self,
+        address: AddressT,
+        control_call: ControlCall,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        """What the server on ``address`` answers ``control_call`` with, outside any session.
+
+        ``payload`` and the answer are plain data, and each wire encodes them its own way. Each wire says
+        what ``timeout`` bounds: the whole call, or each phase its transport times. Raises
+        ``ControlCallUnsupported`` where the server serves sessions but not this control call, and
+        ``ConnectRefused`` where it answers nothing.
+        """
 
     @abc.abstractmethod
     def probe(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:

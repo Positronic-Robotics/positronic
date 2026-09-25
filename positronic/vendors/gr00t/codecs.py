@@ -1,6 +1,7 @@
 """DROID observations and joint-position actions for GR00T."""
 
 from functools import partial
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -25,6 +26,9 @@ from positronic.policy.codec import (
     lerobot_action,
     lerobot_image,
     lerobot_vector,
+    warm_image,
+    warm_pose,
+    warm_vector,
 )
 from positronic.vendors import gr00t
 
@@ -52,11 +56,24 @@ class DroidCodec(Codec):
     def _encode_image(frame):
         return image.resize_with_pad_per_frame(*gr00t.IMAGE_SIZE, Image.Resampling.BILINEAR, np.asarray(frame))
 
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries, under the names this codec reads."""
+        frame = warm_image(*gr00t.IMAGE_SIZE)
+        return {
+            keys.TASK: task,
+            **dict.fromkeys(self.image_mappings.values(), frame),
+            keys.EE_POSE: warm_pose(),
+            keys.GRIP: warm_vector(1),
+            keys.JOINTS: warm_vector(gr00t.STATE_DIMS[gr00t.JOINT_POSITION]),
+        }
+
     def encode(self, inputs: dict) -> dict:
         state = {
             gr00t.EE_POSE: self._encode_pose(inputs[keys.EE_POSE]),
             gr00t.GRIP: np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(1),
-            gr00t.JOINT_POSITION: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(7),
+            gr00t.JOINT_POSITION: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(
+                gr00t.STATE_DIMS[gr00t.JOINT_POSITION]
+            ),
         }
         return {
             gr00t.VIDEO: {
@@ -69,7 +86,8 @@ class DroidCodec(Codec):
     def _decode_single(self, data: dict) -> dict:
         return {
             keys.ROBOT_COMMAND: command.JointPosition(
-                positions=np.asarray(data[gr00t.JOINT_POSITION]).reshape(7), mode=DROID_IMPEDANCE
+                positions=np.asarray(data[gr00t.JOINT_POSITION]).reshape(gr00t.STATE_DIMS[gr00t.JOINT_POSITION]),
+                mode=DROID_IMPEDANCE,
             ),
             keys.TARGET_GRIP: np.asarray(data[gr00t.GRIP]).item(),
         }

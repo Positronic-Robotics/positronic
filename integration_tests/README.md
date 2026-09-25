@@ -43,7 +43,12 @@ In another terminal, forward the endpoint:
 ssh -N -L 18024:127.0.0.1:18024 notebook
 ```
 
-The server is ready when `curl --fail http://localhost:18024/api/v1/models` returns the served checkpoint.
+The server is ready when this check succeeds. It reads `status` from `/api/v1/ready`, not the HTTP code:
+
+```bash
+curl -fsS http://localhost:18024/api/v1/ready | python3 -c 'import json, sys; sys.exit(json.load(sys.stdin)["status"] != "ready")'
+```
+
 The eval client and MuJoCo run locally, with a working renderer; model prediction runs on the server.
 A local server can instead be started with the same Compose service and `--service-ports`.
 

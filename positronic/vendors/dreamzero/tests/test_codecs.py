@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.vendors.dreamzero import codecs, roboarena
 from positronic.vendors.dreamzero.codecs import DreamZeroObservationCodec
 
 
@@ -81,3 +82,12 @@ class TestDreamZeroObservationCodec:
         result = codec.encode(sample_inputs)
 
         assert result['observation/wrist_image_left'].shape == (176, 320, 3)
+
+
+def test_observation_warms_at_the_widths_it_declares():
+    obs = DreamZeroObservationCodec().warm_observation('fold the towel')
+
+    assert obs is not None
+    assert obs[roboarena.PROMPT] == 'fold the towel'
+    assert obs[roboarena.JOINT_POSITION].shape == (codecs.NUM_JOINTS,)
+    assert obs[roboarena.WRIST_IMAGE].shape == (codecs.IMAGE_HEIGHT, codecs.IMAGE_WIDTH, 3)

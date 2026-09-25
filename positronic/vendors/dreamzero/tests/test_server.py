@@ -9,7 +9,7 @@ from positronic_wire import wire
 pytest.importorskip('huggingface_hub')
 
 from positronic.offboard import keys as offboard_keys  # noqa: E402
-from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
+from positronic.vendors.dreamzero import codecs, roboarena, server  # noqa: E402
 from positronic.vendors.dreamzero.server import (  # noqa: E402
     _checkpoint_id,
     _experiment_name,
@@ -124,6 +124,21 @@ def test_warmup_observation_follows_the_cameras_the_server_announced():
     }
     # The announcement gives the resolution height-first, the way an image array is shaped.
     assert obs[roboarena.WRIST_IMAGE].shape == (176, 320, 3)
+
+
+def test_the_load_warm_and_the_control_call_warm_send_one_joint_width(monkeypatch):
+    """The codec owns the arm's width, and the load-time warm reads it from there."""
+    monkeypatch.setattr(codecs, 'NUM_JOINTS', 6)
+    announced = {
+        roboarena.RESOLUTION: (176, 320),
+        roboarena.NEEDS_WRIST_CAMERA: False,
+        roboarena.NUM_EXTERIOR_CAMERAS: 0,
+        roboarena.NEEDS_STEREO_CAMERA: False,
+    }
+
+    obs = _warm_observation(announced, 'session-1')
+
+    assert obs[roboarena.JOINT_POSITION].shape == (codecs.NUM_JOINTS,)
 
 
 def test_warmup_observation_drops_a_camera_the_server_does_not_want():

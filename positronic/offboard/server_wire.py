@@ -8,7 +8,7 @@ import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from fastapi import APIRouter
+from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
 from . import keys
@@ -73,12 +73,15 @@ class ServerConnection(abc.ABC):
 # What a wire hands the server for each session it accepts.
 SessionHandler = Callable[[ServerConnection], Awaitable[None]]
 
+# What a wire hands the server for one control call: the call, and the payload the caller sent.
+ControlCallHandler = Callable[[wire.ControlCall, Mapping[str, Any]], Awaitable[Mapping[str, Any]]]
+
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
 Authorized = Callable[[Mapping[str, str]], bool]
 
 
 class Wire(abc.ABC):
-    """One transport that sessions arrive on.
+    """One transport that sessions and control calls arrive on.
 
     A wire refuses an unauthorized peer before the session opens.
     """
@@ -89,12 +92,8 @@ class Wire(abc.ABC):
         """Where this wire serves, known once ``start`` returns: a bound port, or the socket path."""
 
     @abc.abstractmethod
-    async def start(self, session: SessionHandler, authorized: Authorized, api: APIRouter) -> None:
-        """Bind, and give every accepted session to ``session``.
-
-        ``api`` is the server's own HTTP routes, the model route among them. A wire whose
-        transport carries HTTP serves them beside its sessions; one that does not ignores them, and
-        says so.
+    async def start(self, session: SessionHandler, control_calls: ControlCallHandler, authorized: Authorized) -> None:
+        """Bind, and give every accepted session to ``session`` and every control call to ``control_calls``.
 
         Raises when the address is taken: a port another process holds, or a socket path a live
         server is already serving on.

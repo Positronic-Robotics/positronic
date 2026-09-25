@@ -10,7 +10,15 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.base import ARGS, NAME, VERSION
-from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
+from positronic.policy.codec import (
+    LEROBOT_FEATURES,
+    Codec,
+    StateFeature,
+    lerobot_image,
+    lerobot_vector,
+    warm_image,
+    warm_input_of,
+)
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
 # shares a value with ``keys.TASK`` by vocabulary, not by contract: that one names the prompt on the way in.
@@ -21,7 +29,8 @@ class ObservationCodec(Codec):
     """Configurable observation encoder that uses the same keys for training and inference.
 
     Args:
-        state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
+        state: mapping from output state key to an ordered dict of {episode_key: StateFeature} to concatenate.
+            A field is a bare width, or ``pose_feature()`` for one that holds a pose.
         images: mapping from output image name to tuple (input_key, (width, height)).
         task_field: output key carrying the language prompt at inference.
     """
@@ -30,11 +39,14 @@ class ObservationCodec(Codec):
 
     def __init__(
         self,
-        state: dict[str, dict[str, int]],
+        state: dict[str, dict[str, StateFeature]],
         images: dict[str, tuple[str, tuple[int, int]]],
         task_field: str = TASK_FIELD,
     ):
-        self._state = state
+        self._state = {
+            name: {key: warm_input_of(declared) for key, declared in features.items()}
+            for name, features in state.items()
+        }
         self._image_configs = images
         self._task_field = task_field
 
@@ -43,9 +55,8 @@ class ObservationCodec(Codec):
         self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
 
         lerobot_features: dict[str, Any] = {}
-        for name, features in state.items():
-            if isinstance(features, dict):
-                lerobot_features[name] = lerobot_vector(sum(features.values()), list(features.keys()))
+        for name, features in self._state.items():
+            lerobot_features[name] = lerobot_vector(sum(len(warm) for warm in features.values()), list(features))
         for name, (_, (w, h)) in images.items():
             lerobot_features[name] = lerobot_image(w, h)
         self._training_meta = {LEROBOT_FEATURES: lerobot_features}
@@ -60,6 +71,15 @@ class ObservationCodec(Codec):
 
     def _decode_single(self, data: dict) -> dict:
         return {}
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries: the value each configured field declares, under that field's key."""
+        inputs: dict[str, Any] = {keys.TASK: task}
+        for input_key, (width, height) in self._image_configs.values():
+            inputs[input_key] = warm_image(width, height)
+        for features in self._state.values():
+            inputs.update({name: warm.copy() for name, warm in features.items()})
+        return inputs
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
@@ -98,10 +118,12 @@ class ObservationCodec(Codec):
         return Derive(meta=self._training_meta, **self._derive_transforms)
 
     def to_spec(self):
-        # Normalized to lists so the spec is identical before and after a wire round-trip.
+        # Widths and lists, so the spec compares equal after a wire round-trip. Only a serving codec warms,
+        # so the warm input stays here.
+        state = {name: {key: len(warm) for key, warm in features.items()} for name, features in self._state.items()}
         images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field},
+            ARGS: {'state': state, 'images': images, 'task_field': self._task_field},
         }

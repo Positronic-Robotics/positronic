@@ -36,6 +36,8 @@ server side.
   construction, so there is no TLS member beside it.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
+- `ready` and `warm` are control calls beside the session: routes under `/api/v1` on the WebSocket
+  wire, and the `Ready` and `Warm` methods of the same gRPC service. Both carry JSON.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
   `positronic-session-query` and `authorization` metadata.
 - Take the gRPC wire wherever it reaches. Python's WebSocket stack spends about 30 ms per
@@ -50,8 +52,8 @@ server side.
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route. It answers on the address the WebSocket wire binds: a port, or a
-Unix socket. The gRPC port carries sessions alone.
+The control calls answer as HTTP routes on the address the WebSocket wire binds, a port or a Unix
+socket, and as unary calls on the gRPC port.
 
 ### Authentication
 
@@ -65,21 +67,53 @@ carries the header, and `positronic.cfg.policy.authed_remote` fills it in from t
 
 ### Endpoints
 
-#### `GET /api/v1/models`
-Returns the ID of the one checkpoint the server serves. The route answers only after the model loads,
-so a probe can read it to find a ready server.
+#### `GET /api/v1/ready`
 
-**Example Request:**
+Returns the server's state, without a session.
+
 ```bash
-curl http://localhost:8000/api/v1/models
+curl http://localhost:8000/api/v1/ready
 ```
 
 **Response:**
 ```json
 {
-  "models": ["30000"]
+  "status": "ready",
+  "message": "Serving checkpoint 30000",
+  "checkpoint_id": "30000",
+  "inferences": 4,
+  "timing": {"served_ms": 41.2, "infer_ms": 38.9, "model_ms": 37.1},
+  "positronic_version": "0.2.1"
 }
 ```
+
+`status` is one of `ready`, `loading`, `waiting` and `error`. The server loads its checkpoint before it
+binds its port, so it answers `ready`, or `error` after a failed warm.
+
+`inferences` is the number of inferences the loaded checkpoint has answered. `timing` holds the phases
+of the last one, with the keys of a session's `timing` block.
+
+#### `POST /api/v1/warm`
+
+Runs one inference on the loaded checkpoint, so that the first scored episode is not the first
+inference. The body names the task.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/warm -d '{"task": "pick up the red cube"}'
+```
+
+The call returns the `ready` record at once and does not wait for the warm. Poll `/api/v1/ready` until
+`inferences` increases. A call while a warm runs starts no second warm.
+
+The warm observation is `Codec.warm_inputs(task)` of the deployment's server codec, encoded by that
+codec. A deployment whose codec declares no warm inputs runs nothing. A warm that raises sets `status`
+to `error`, with the exception as `message`, until the checkpoint answers an inference.
+
+#### A server without the control calls
+
+It answers `404` on HTTP and `UNIMPLEMENTED` on gRPC, and the client raises
+`wire.ControlCallUnsupported`. On a `404` the client also probes the session route. If no session
+server answers there, no positronic server is at the address, and the client raises `wire.ConnectRefused`.
 
 #### `/api/v1/session`
 Establishes an inference session with the server's model. The server loads one checkpoint at startup:
@@ -354,8 +388,7 @@ wires = [
 server.serve(wires)
 ```
 
-`serve` hands every wire the HTTP routes it owns; a wire whose transport carries HTTP answers them
-beside its sessions, and the gRPC wire, whose port carries sessions alone, does not. A wire names
+`serve` hands every wire the session handler and the control-call handler. A wire names
 where it bound in its `served_address` property: `ServedHostPort` for a host and a port — a wire
 asked for port 0 binds any free one, and `ws.served_address.port` is the port it took — or
 `ServedUnixSocket` for a socket path, which has no port at all.
@@ -394,6 +427,10 @@ session = client.new_session()
 meta = session.metadata
 action = session.infer(observation)
 ```
+
+`readiness()` returns the `ready` record. `warm(task)` starts a warm, and `warm(task, wait_deadline=...)`
+also polls until `inferences` increases or `status` becomes `error`. Both raise
+`wire.ControlCallUnsupported` on a server without the control calls.
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server

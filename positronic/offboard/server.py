@@ -12,15 +12,15 @@ from contextlib import contextmanager
 from functools import partial
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
 import configuronic as cfn
-from fastapi import APIRouter, Depends, Header, HTTPException
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
-from positronic import telemetry
+from positronic import keys, telemetry
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
@@ -29,6 +29,8 @@ from . import grpc_wire, protocol, server_wire, websocket_wire
 from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
 
 logger = logging.getLogger(__name__)
+
+POSITRONIC_VERSION = _pkg_version('positronic')
 
 
 def _literal_value(raw: str) -> Any:
@@ -116,8 +118,14 @@ class PolicyServer:
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
 
+        # The ``ready`` call answers from these.
+        self._inferences = 0
+        self._last_timing: Mapping[str, float] = MappingProxyType({})
+        self._warm_failure: str | None = None
+
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
+        self._warms_in_flight = 0
         self._last_activity = time.monotonic()
         # Backend calls run in a worker thread, so the event loop keeps servicing other connections, but are
         # serialized here: sessions may share one backend client, which concurrent calls would corrupt.
@@ -126,6 +134,7 @@ class PolicyServer:
         # Set while ``serve`` runs; ``shutdown`` reaches the loop from another thread.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
+        self._warming: asyncio.Task | None = None
 
         # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
         # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
@@ -133,15 +142,6 @@ class PolicyServer:
         if auth_token is not None and not (auth_token and all('!' <= c <= '~' for c in auth_token)):
             raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
-
-        self._api = APIRouter()
-        # TODO: positronic#754 removes this route; `/api/v1/ready` replaces it as the readiness check.
-        self._api.get(wire.MODELS_PATH, dependencies=[Depends(self._require_http_auth)])(self.get_models)
-
-    @property
-    def api(self) -> APIRouter:
-        """The server's own HTTP routes: the model route, which answers the one checkpoint this server serves."""
-        return self._api
 
     def _token_matches(self, authorization: str | None) -> bool:
         if self._auth_token is None:
@@ -156,14 +156,90 @@ class PolicyServer:
         """Whether the session headers carry the bearer token this server gates on."""
         return self._token_matches(headers.get(AUTH_HEADER.lower()))
 
-    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
-        if not self._token_matches(authorization):
-            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+    def _record_inference(self, timing: Mapping[str, float]) -> None:
+        """Count one inference the checkpoint answered, and keep its timing. It clears a failed warm: the
+        checkpoint has just served."""
+        self._inferences += 1
+        self._last_timing = MappingProxyType(dict(timing))
+        self._warm_failure = None
 
-    async def get_models(self) -> dict:
-        assert self._model is not None, 'The route answered before the model loaded'
-        checkpoint_id = self._model.meta().get(offboard_keys.CHECKPOINT_ID)
-        return {wire.MODELS_KEY: [] if checkpoint_id is None else [checkpoint_id]}
+    def readiness(self) -> protocol.Readiness:
+        """What this server can do now. A failed warm answers `error`, so a caller does not launch against it."""
+        model = self._model
+        assert model is not None, 'A control call arrived before the model loaded'
+        checkpoint_id = model.meta().get(offboard_keys.CHECKPOINT_ID)
+        if self._warm_failure is not None:
+            status, message = protocol.ServerStatus.ERROR, self._warm_failure
+        else:
+            status, message = protocol.ServerStatus.READY, f'Serving checkpoint {checkpoint_id}'
+        return protocol.Readiness(
+            status=status,
+            message=message,
+            checkpoint_id=checkpoint_id,
+            inferences=self._inferences,
+            timing=dict(self._last_timing),
+            positronic_version=POSITRONIC_VERSION,
+        )
+
+    async def _answer_control_call(
+        self, control_call: wire.ControlCall, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Answer one control call with the readiness record. ``WARM`` starts a warm and does not wait for it."""
+        if control_call == wire.WARM:
+            self._last_activity = time.monotonic()
+            self._start_warming(str(payload.get(keys.TASK) or ''))
+        return self.readiness().model_dump(mode='json')
+
+    def _start_warming(self, task: str) -> None:
+        """Start a warm in the background, unless one is already running."""
+        if self._warming is None or self._warming.done():
+            self._warming = asyncio.create_task(self._warm(task))
+
+    async def _warm(self, task: str) -> None:
+        """The task a ``WARM`` call starts. Nothing awaits it, so it records a failure rather than raising it."""
+        # Activity: a cold first inference can outlast the idle timeout, and the watchdog would stop the server.
+        self._warms_in_flight += 1
+        try:
+            await self._warm_loaded_checkpoint(task)
+        except Exception as e:
+            failure = f'Warming failed: {e}'
+            logger.error(failure, exc_info=True)
+            # Broad: every backend raises its own class. The checkpoint stays loaded, and `ready` answers `error`.
+            self._warm_failure = failure
+        finally:
+            self._warms_in_flight = max(0, self._warms_in_flight - 1)
+            self._last_activity = time.monotonic()
+
+    async def _warm_loaded_checkpoint(self, task: str) -> None:
+        """Run one inference on the loaded checkpoint before the first scored episode."""
+        model = self._model
+        assert model is not None, 'A warm started before the model loaded'
+        codec = self._pipeline.codec
+        obs = codec.warm_inputs(task) if codec is not None else None
+        if obs is None:
+            logger.info('This pipeline builds no warm observation; the checkpoint warms at load alone')
+            return
+        # The session lock: two concurrent calls on one backend client corrupt each other.
+        async with self._infer_lock:
+            timing = await asyncio.to_thread(self._warm_once, model, obs)
+        self._record_inference(timing)
+        logger.info(f'Warmed in {timing[protocol.TIMING_SERVED]:.0f}ms')
+
+    def _warm_once(self, model: Model, obs: dict[str, Any]) -> dict[str, float]:
+        """One inference through the server codec, in its own session and timed as a served one. A session
+        makes the same call, so the warm compiles the input that a scored episode sends."""
+        session_id = uuid4().hex
+        infer = telemetry.traced(protocol.MODEL_CALL)(partial(model, session_id=session_id))
+        codec = self._pipeline.codec
+        if codec is not None:
+            infer = codec.wrap(infer)
+        timing = _ServedTiming()
+        try:
+            with timing.phase(protocol.TIMING_INFER):
+                timing.infer(infer, obs)
+            return timing.report()
+        finally:
+            model.end_session(session_id)
 
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -209,7 +285,9 @@ class PolicyServer:
                             raise
                 finally:
                     self._infer_lock.release()
-                answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
+                served = timing.report()
+                answer = serialise({protocol.RESULT: actions, protocol.TIMING: served})
+                self._record_inference(served)
                 await conn.send(answer)
             except wire.PeerDisconnected:
                 raise
@@ -234,7 +312,7 @@ class PolicyServer:
                 **pipeline.local.meta(),
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
-                offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
+                offboard_keys.POSITRONIC_VERSION: POSITRONIC_VERSION,
             }
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
@@ -277,7 +355,7 @@ class PolicyServer:
         poll = min(timeout_s, 30)
         while True:
             await asyncio.sleep(poll)
-            if self._active_sessions > 0:
+            if self._active_sessions > 0 or self._warms_in_flight > 0:
                 continue
             idle = time.monotonic() - self._last_activity
             if idle >= timeout_s:
@@ -316,7 +394,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized, self.api)
+                    await w.start(self._serve_session, self._answer_control_call, self._authorized)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:

@@ -1,8 +1,12 @@
+import asyncio
 from types import MappingProxyType
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
+from fastapi import WebSocket
 from positronic_wire import websocket, wire
+from starlette.websockets import WebSocketState
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -14,6 +18,7 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
 from positronic.utils.serialization import encode_jpeg
@@ -50,6 +55,30 @@ def test_connections_reuse_the_loaded_model(inference_server, mock_model):
             session.close()
     assert mock_model.call_count == 2
     mock_model.close.assert_not_called()
+
+
+def _server_connection(state: WebSocketState) -> websocket_wire.WebsocketServerConnection:
+    scope = {'type': 'websocket', 'path': wire.SESSION_PATH, 'headers': [], 'client': ('10.0.0.1', 4321)}
+    socket = WebSocket(scope, receive=AsyncMock(), send=AsyncMock())
+    socket.application_state = state
+    return websocket_wire.WebsocketServerConnection(socket, server_wire.ServedHostPort('localhost', 8000))
+
+
+def test_a_send_after_the_session_closed_says_the_peer_is_gone():
+    conn = _server_connection(WebSocketState.DISCONNECTED)
+
+    with pytest.raises(wire.PeerDisconnected):
+        asyncio.run(conn.send(b'a frame nobody is there to read'))
+
+
+def test_a_send_on_a_live_session_goes_out():
+    conn = _server_connection(WebSocketState.CONNECTED)
+    sent = AsyncMock()
+    conn._websocket.send_bytes = sent
+
+    asyncio.run(conn.send(b'a frame'))
+
+    sent.assert_awaited_once_with(b'a frame')
 
 
 def test_wire_serialisation_accepts_mappingproxy():

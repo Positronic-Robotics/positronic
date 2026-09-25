@@ -7,7 +7,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy.codec import Codec
+from positronic.policy.codec import Codec, warm_image, warm_vector
 from positronic.vendors import molmoact2
 
 
@@ -36,6 +36,16 @@ class MolmoAct2ObservationCodec(Codec):
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
         return frame
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries, at the size the model tiles to."""
+        frame = warm_image(*molmoact2.IMAGE_SIZE)
+        return {
+            keys.TASK: task,
+            **dict.fromkeys(self._cameras, frame),
+            self._joint_key: warm_vector(molmoact2.NUM_JOINTS),
+            self._grip_key: warm_vector(1),
+        }
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joints = np.asarray(inputs[self._joint_key], dtype=np.float32).reshape(-1)

@@ -42,8 +42,8 @@ is reached through the pipeline
 [`server.py`](./server.py). Sanity-check once warm:
 
 ```bash
-curl http://localhost:8000/api/v1/models
-# {"models": ["MolmoAct2-DROID"]}
+curl http://localhost:8000/api/v1/ready
+# {"status": "ready", "checkpoint_id": "MolmoAct2-DROID", ...}
 ```
 
 ## Run inference

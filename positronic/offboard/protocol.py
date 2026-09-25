@@ -12,6 +12,7 @@ from typing import Any
 
 import msgpack
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 from positronic import keys
 from positronic.drivers.roboarm import command
@@ -79,6 +80,24 @@ class ServerStatus(StrEnum):
     WAITING = 'waiting'
     LOADING = 'loading'
     ERROR = 'error'
+
+
+class Readiness(BaseModel):
+    """What a server says about itself outside any session, true only at the moment it answers.
+
+    The field names are the wire keys. ``model_validate`` raises ``ValidationError``, a ``ValueError``, on
+    a status this protocol does not name. A field the peer omits takes its default.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: ServerStatus
+    message: str = ''
+    checkpoint_id: str | None = None
+    # Every inference on the loaded checkpoint, served or warm.
+    inferences: int = 0
+    timing: dict[str, float] = Field(default_factory=dict)
+    positronic_version: str | None = None
 
 
 _CMD = b'__cmd__'
