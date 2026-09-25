@@ -162,7 +162,7 @@ The `openpi-server-8001` service is a second server on the same machine, on host
 ```bash
 docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
   -v ~/checkpoints:/checkpoints openpi-server-8001 ee \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v2/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 ```
 
