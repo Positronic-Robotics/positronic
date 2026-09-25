@@ -21,6 +21,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
@@ -149,7 +150,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock))
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), runtime, policy_run)
+        step = partial(harness._step, Task('test', None), runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -667,6 +668,38 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
+def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
+    class Record(Policy):
+        def meta(self):
+            return {'config.name': 'record', 'config.status': 'initial'}
+
+        def run(self, runtime):
+            events = runtime.metadata.setdefault('events', [])
+            runtime.metadata['config'] = {'status': 'active'}
+            try:
+                yield
+                events.append('started')
+                while True:
+                    yield Step({}, runtime.time_ns + 100_000_000)
+            finally:
+                events.append('closed')
+
+    h = episode_harness
+    policy = Record()
+    h.observation.emit(0)
+    for _ in range(2):
+        answer = h.caller(Rollout(Task('move', None), policy, tmp_path))
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        next(h.loop)
+        assert answer.done()
+        meta = h.records.values[-1][1].static_data
+        assert meta['inference.policy.config.name'] == 'record'
+        assert meta['inference.policy.config.status'] == 'active'
+        assert meta['inference.policy.events'] == ['started']
+
+
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     h = episode_harness
     task = Task('move', 0.01, prepare_args={RESET: 'home', eval_keys.SCENE: 42})
@@ -765,6 +798,59 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
         assert flush.parent_id == episode.span_id
 
 
+def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-steps'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(13_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+    read_key = telemetry_keys.ATTR_STEP_READ_MS_PREFIX + POSITION
+    convert_key = telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + POSITION
+    durations = (
+        telemetry_keys.ATTR_STEP_OBSERVE_MS,
+        telemetry_keys.ATTR_STEP_POLICY_MS,
+        telemetry_keys.ATTR_STEP_EMIT_MS,
+    )
+    for step in (first, second):
+        assert step.parent_id == episode.span_id
+        assert all(step.attrs[key] >= 0 for key in (*durations, read_key))
+    assert telemetry_keys.ATTR_STEP_LATE_MS not in first.attrs
+    assert second.attrs[telemetry_keys.ATTR_STEP_LATE_MS] == pytest.approx(3.0)
+    assert convert_key in first.attrs and convert_key not in second.attrs
+    policy_spans = [s for s in spans if s.name == telemetry.component_name(EveryTenMs())]
+    assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
+
+
+def test_a_step_without_an_observation_records_only_the_observe_values(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-missing-observation'):
+        h.caller(Rollout(Task('move', None), Hold(), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    steps = [s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP]
+    assert steps
+    for step in steps:
+        assert telemetry_keys.ATTR_STEP_OBSERVE_MS in step.attrs
+        assert telemetry_keys.ATTR_STEP_POLICY_MS not in step.attrs
+        assert telemetry_keys.ATTR_STEP_EMIT_MS not in step.attrs
+
+
 def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
     h = episode_harness
     started, release = threading.Event(), threading.Event()
@@ -849,6 +935,27 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert 2 in np.diff(list(positions.values()))
 
 
+def test_recorder_refuses_an_encoder_this_host_cannot_run():
+    class AbsentEncoder(LibavEncoder):
+        def ensure_available(self) -> None:
+            raise RuntimeError('no such encoder here')
+
+    with pimm.World(virtual_time=True) as world:
+        motion = Motion()
+        embodiment = Embodiment(
+            descriptor='recording-test',
+            observations={POSITION: Observation(motion.position, None)},
+            commands={MOTOR: Command(motion.command, None)},
+            prepare_handlers={},
+            static_meta={},
+            meta_source=None,
+            simulated=True,
+            video_encoder=AbsentEncoder(),
+        )
+        with pytest.raises(RuntimeError, match='no such encoder here'):
+            wire.wire_embodiment(world, Harness(embodiment), embodiment, TimeMode.MESSAGE)
+
+
 def test_cartesian_delta_wire_roundtrip():
     delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
     frame = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.5])))
@@ -926,7 +1033,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), runtime, run) == expected_ns
+        assert h.harness._step(Task('test', None), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
@@ -959,7 +1066,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), runtime, run)
+            harness._step(Task('move', None), runtime, run, None)
         finally:
             runtime.close()
             run.close()

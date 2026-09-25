@@ -1,217 +1,114 @@
-"""Version 1 stack semantics executed by the processor runtime.
+"""Build the stack that a protocol v1 server declares from v2 processors.
 
-V1 layers exchange whole timestamped trajectories. Cancellation clears scheduling and history,
-and discards an outstanding inference result after reading it. Only this adapter interprets those
-trajectories; the harness receives ordinary Steps.
+The offboard README states the translation and what the client refuses.
 """
 
+import logging
 import time
-from abc import abstractmethod
-from collections import deque
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Any, cast
+from collections.abc import Callable, Generator, Mapping
+from typing import Any, overload
 
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import ARGS, NAME, VERSION, Answer, Obs, Policy, PolicyRun, Runtime, Step
+from positronic.policy.base import ARGS, NAME, SEQ, VERSION, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codec import Codec
-from positronic.policy.layers import _arms_available, _StackBuffer
+from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
+from positronic.policy.spec import from_spec
 
 TIMESTAMP = 'timestamp'
-OBS_TIME_NS = 'obs_time_ns'
 WALL_TIME_NS = 'wall_time_ns'
+ACTION_TIMESTAMP = 'action_timestamp'
+ACTION_HORIZON = 'action_horizon'
+V1_FPS_ARG = 'fps'
+V1_HORIZON_SEC_ARG = 'horizon_sec'
+V1_LAYERS_UPGRADED_IN_PLACE = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_NAME)
+V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 
-Trajectory = list[dict[str, Any]] | None
-
-
-@dataclass
-class _Call:
-    send: Callable[[Obs], Trajectory]
-    cancel: Callable[[], None]
-
-
-class _LayerV1(Policy):
-    @abstractmethod
-    def bind(self, runtime: Runtime, inner: _Call) -> _Call:
-        raise NotImplementedError
-
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Any]) -> PolicyRun:
-        yield from StackV1(self).run(runtime, infer)
-
-    def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+logger = logging.getLogger(__name__)
 
 
-class StopOnFaultV1(_LayerV1):
-    WIRE_NAME = 'stop_on_fault'
+class StampObservationTimes(Policy):
+    """Add the control clock's ``obs_time_ns`` and the wall clock's ``wall_time_ns``, which a v1 server reads."""
 
-    def bind(self, runtime: Runtime, inner: _Call) -> _Call:
-        def send(obs: Obs) -> Trajectory:
-            if _arms_available(obs):
-                return inner.send(obs)
-            inner.cancel()
-            return []
-
-        return _Call(send, inner.cancel)
-
-
-class ChunkedScheduleV1(_LayerV1):
-    WIRE_NAME = 'chunked_schedule'
-
-    def bind(self, runtime: Runtime, inner: _Call) -> _Call:
-        end_ns: int | None = None
-
-        def send(obs: Obs) -> Trajectory:
-            nonlocal end_ns
-            if end_ns is not None and obs[OBS_TIME_NS] < end_ns:
-                return None
-            result = inner.send(obs)
-            if result is not None:
-                anchor = runtime.time_ns / 1e9
-                result = [{**action, TIMESTAMP: anchor + action.get(TIMESTAMP, 0.0)} for action in result]
-                end_ns = round(result[-1][TIMESTAMP] * 1e9) if result else None
-            return result
-
-        def cancel() -> None:
-            nonlocal end_ns
-            end_ns = None
-            inner.cancel()
-
-        return _Call(send, cancel)
-
-
-class TemporalStackV1(_LayerV1):
-    WIRE_NAME = 'temporal_stack'
-
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True):
-        self._keys, self._offsets_sec, self._pad_start = tuple(keys), tuple(offsets_sec), pad_start
-        if not pad_start and 0.0 not in offsets_sec:
-            raise ValueError('pad_start=False requires a current-frame offset of 0.0')
-
-    def bind(self, runtime: Runtime, inner: _Call) -> _Call:
-        buffer = _StackBuffer(self._offsets_sec, self._pad_start)
-
-        def send(obs: Obs) -> Trajectory:
-            now = obs[OBS_TIME_NS] / 1e9
-            buffer.append(now, {key: obs[key] for key in self._keys})
-            return inner.send({**obs, **buffer.sample(now)})
-
-        def cancel() -> None:
-            buffer.reset()
-            inner.cancel()
-
-        return _Call(send, cancel)
-
-    def to_spec(self) -> dict[str, Any]:
-        return {
-            **super().to_spec(),
-            ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
-        }
-
-
-class StackV1(Sequential):
-    def __init__(self, first, *rest):
-        components = tuple(
-            child for part in (first, *rest) for child in (part._components if isinstance(part, StackV1) else (part,))
-        )
-        if not all(isinstance(part, (_LayerV1, Codec)) for part in components):
-            raise ValueError('V1 trajectory layers cannot be mixed with Step processors; upgrade the server stack')
-        super().__init__(components[0], *components[1:])
-
-    @staticmethod
-    def _inference(runtime: Runtime, infer: Callable[[Obs], Any]) -> _Call:
-        answer: Answer[Any] | None = None
-        cancelled = False
-
-        def send(obs: Obs) -> Trajectory:
-            nonlocal answer, cancelled
-            if answer is None:
-                answer = runtime.submit(infer, obs)
-                return None
-            if not answer.done():
-                return None
-            completed, discard = answer, cancelled
-            answer, cancelled = None, False
-            result = completed.result()
-            if discard:
-                return None
-            return [dict(result)] if isinstance(result, Mapping) else result
-
-        def cancel() -> None:
-            nonlocal cancelled
-            cancelled = answer is not None
-
-        return _Call(send, cancel)
-
-    def run(self, runtime: Runtime, *dependencies: Any) -> PolicyRun:
-        (infer,) = dependencies
-        call = self._inference(runtime, infer)
-        for component in reversed(self._components):
-            if isinstance(component, _LayerV1):
-                call = component.bind(runtime, call)
-            else:
-                call = _Call(cast(Codec, component).wrap(call.send), call.cancel)
-        trajectory: deque[dict[str, Any]] = deque()
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
         while True:
-            now_ns = runtime.time_ns
-            result = call.send({**obs, OBS_TIME_NS: now_ns, WALL_TIME_NS: time.time_ns()})
-            if result is not None:
-                trajectory = deque(result)
-            commands = {}
-            while trajectory and round(trajectory[0].get(TIMESTAMP, 0.0) * 1e9) <= now_ns:
-                commands.update({key: value for key, value in trajectory.popleft().items() if key != TIMESTAMP})
-            resume_at_ns = round(trajectory[0][TIMESTAMP] * 1e9) if trajectory else now_ns
-            obs = yield Step(commands, resume_at_ns)
+            stamped = {**obs, policy_keys.OBS_TIME_NS: runtime.time_ns, WALL_TIME_NS: time.time_ns()}
+            obs = yield inner.send(stamped)
 
 
-class ActionTimestampV1(Codec):
-    WIRE_NAME = 'action_timestamp'
+class ChunkFromV1Answer(Codec):
+    """Turn a v1 answer into a chunk: ``None`` becomes no rows, a single row one row, and timestamps and the end row go.
 
-    def __init__(self, *, fps: float):
-        self._fps = fps
-        self._dt = 1.0 / fps
+    It wraps the call itself, because ``Codec.wrap`` does not decode ``None``.
+    """
 
-    def encode(self, data):
+    @overload
+    def wrap(self, function: Callable[[dict], Any]) -> Callable[[Obs], Any]: ...
+
+    @overload
+    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+
+    def wrap(
+        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any]
+    ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        if isinstance(function, Generator):
+            return super().wrap(function)
+        infer = function
+
+        def answer_or_empty_chunk(obs: dict) -> Any:
+            answer = infer(obs)
+            return [] if answer is None else answer
+
+        return super().wrap(answer_or_empty_chunk)
+
+    def encode(self, data: dict) -> dict:
         return data
 
-    def decode(self, data):
-        if isinstance(data, list):
-            stamped = [{**action, TIMESTAMP: i * self._dt} for i, action in enumerate(data)]
-            if stamped:
-                stamped.append({TIMESTAMP: len(stamped) * self._dt})
-            return stamped
-        return {**data, TIMESTAMP: 0}
-
-    @property
-    def meta(self):
-        return {policy_keys.ACTION_FPS: self._fps}
-
-    def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'fps': self._fps}}
+    def decode(self, data: Any) -> list[dict[str, Any]]:
+        rows = [data] if isinstance(data, Mapping) else data
+        return [{key: row[key] for key in row if key != TIMESTAMP} for row in rows if set(row) != {TIMESTAMP}]
 
 
-class ActionHorizonV1(Codec):
-    WIRE_NAME = 'action_horizon'
+def _unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
+    if SEQ in node:
+        return [part for child in node[SEQ] for part in _unnest_seq(child)]
+    return [node]
 
-    def __init__(self, horizon_sec: float):
-        self._horizon_sec = horizon_sec
 
-    def encode(self, data):
-        return data
+def _is_v1(part: dict[str, Any], name: str) -> bool:
+    return part.get(NAME) == name and part.get(VERSION, 1) == 1
 
-    def decode(self, data):
-        if not isinstance(data, list):
-            return data
-        kept = [action for action in data if action.get(TIMESTAMP, 0.0) < self._horizon_sec]
-        if len(kept) < len(data):
-            kept.append({TIMESTAMP: self._horizon_sec})
-        return kept
 
-    @property
-    def meta(self):
-        return {policy_keys.ACTION_HORIZON_SEC: self._horizon_sec}
+def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Processor[Obs, Any]:
+    """Build the stack a protocol v1 server declares, from its spec and its handshake metadata."""
+    timing: dict[str, float] = {}
+    parts: list[dict[str, Any]] = []
+    for part in _unnest_seq(node):
+        if _is_v1(part, ACTION_TIMESTAMP):
+            timing[ChunkedSchedule.FPS_ARG] = part[ARGS][V1_FPS_ARG]
+        elif _is_v1(part, ACTION_HORIZON):
+            timing[ChunkedSchedule.HORIZON_SEC_ARG] = part[ARGS][V1_HORIZON_SEC_ARG]
+        elif part.get(VERSION, 1) == 1 and part.get(NAME) in V1_LAYERS_UPGRADED_IN_PLACE:
+            parts.append({**part, VERSION: 2})
+        else:
+            parts.append(part)
+    if ChunkedSchedule.FPS_ARG not in timing:
+        if policy_keys.ACTION_FPS not in server_meta:
+            logger.warning(
+                'The v1 server declares no action_timestamp and sends no action_fps; the client assumes %s '
+                'actions per second. Rebuild the server on current positronic so that it declares its rate.',
+                V1_SERVER_DEFAULT_ACTION_FPS,
+            )
+        timing[ChunkedSchedule.FPS_ARG] = server_meta.get(policy_keys.ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
+    if ChunkedSchedule.HORIZON_SEC_ARG not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
+        timing[ChunkedSchedule.HORIZON_SEC_ARG] = server_meta[policy_keys.ACTION_HORIZON_SEC]
 
-    def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'horizon_sec': self._horizon_sec}}
+    schedule = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: timing}
+    positions = [i for i, part in enumerate(parts) if _is_v1(part, ChunkedSchedule.WIRE_NAME)]
+    if positions:
+        parts[positions[0]] = schedule
+    else:
+        layers = [i for i, part in enumerate(parts) if part.get(NAME) in V1_LAYERS_UPGRADED_IN_PLACE]
+        parts.insert(layers[-1] + 1 if layers else 0, schedule)
+    return Sequential(StampObservationTimes(), from_spec({SEQ: parts}), ChunkFromV1Answer())

@@ -16,8 +16,7 @@ from positronic.utils import flatten_dict
 from positronic.utils.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 
 from .base import Policy, PolicyRun, Processor, Runtime
-from .codec import Codec
-from .compatibility import StackV1
+from .compatibility import from_v1_spec
 from .spec import from_spec
 
 
@@ -66,9 +65,10 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
     declared = meta.get(offboard_keys.LOCAL_STACK)
     if declared is None:
         raise ValueError('Server declares no client processor stack')
-    stack = from_spec(declared)
-    if protocol_version is ProtocolVersion.V1 and isinstance(stack, Codec):
-        stack = StackV1(stack)
+    if protocol_version is ProtocolVersion.V1:
+        stack = from_v1_spec(declared, meta)
+    else:
+        stack = from_spec(declared)
     if not isinstance(stack, Processor):
         raise ValueError('The declared client stack must be a processor')
     return stack

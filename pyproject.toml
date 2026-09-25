@@ -119,6 +119,13 @@ telemetry = [
     "opentelemetry-exporter-otlp-json-file>=0.65b0",
     "opentelemetry-sdk>=1.42",
 ]
+llm = [
+    "pillow",
+    "pydantic-ai-slim>=1.107.1,<2",
+]
+llm-openai = ["positronic[llm]", "pydantic-ai-slim[openai]"]
+llm-anthropic = ["positronic[llm]", "pydantic-ai-slim[anthropic]"]
+llm-google = ["positronic[llm]", "pydantic-ai-slim[google]"]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
 # An extra has to be named on every invocation, and one command that forgets uninstalls the tools the

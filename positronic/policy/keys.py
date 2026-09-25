@@ -1,4 +1,4 @@
-"""The keys of what a policy reports about itself, and where the harness records them."""
+"""Shared policy metadata and observation field names."""
 
 # What a policy reports about itself through its ``meta``; a remote policy nests the server's meta under
 # ``SERVER``, and the harness records the result under ``POLICY_META``. ``TYPE`` names the policy at the top
@@ -15,3 +15,5 @@ SERVER = 'server'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
+
+OBS_TIME_NS = 'obs_time_ns'

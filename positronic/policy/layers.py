@@ -15,7 +15,7 @@ Describe a local stack without creating episode state::
 """
 
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -94,6 +94,8 @@ class ChunkedSchedule(Policy):
 
     WIRE_NAME = 'chunked_schedule'
     WIRE_VERSION = 2
+    FPS_ARG = 'fps'
+    HORIZON_SEC_ARG = 'horizon_sec'
 
     def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
         if not isfinite(fps) or fps <= 0:
@@ -143,10 +145,32 @@ class ChunkedSchedule(Policy):
         return meta
 
     def to_spec(self) -> dict[str, Any]:
-        args = {'fps': self._fps}
+        args = {self.FPS_ARG: self._fps}
         if self._horizon_sec is not None:
-            args['horizon_sec'] = self._horizon_sec
+            args[self.HORIZON_SEC_ARG] = self._horizon_sec
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+
+class _StackedObs(Mapping[str, Any]):
+    """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
+
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
+        self._obs = obs
+        self._picked = picked
+        self._stacks: dict[str, np.ndarray] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in self._picked[0]:
+            return self._obs[key]
+        if key not in self._stacks:
+            self._stacks[key] = np.stack([entry[key] for entry in self._picked])
+        return self._stacks[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._obs)
+
+    def __len__(self) -> int:
+        return len(self._obs)
 
 
 class _StackBuffer:
@@ -155,11 +179,11 @@ class _StackBuffer:
     ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new
     entry but skips one byte-identical to the previous — a source slower than the control loop repeats
     its value, and carry-over sampling reuses the stored one — then drops entries before the oldest
-    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a stack holding, for
-    each offset, the latest value at or before that time — carry-over, never the future. Offsets that
-    precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
-    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
-    ``len(offsets_sec)`` as history accumulates).
+    sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
+    with a stack holding, for each offset, the latest value at or before that time — carry-over, never
+    the future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``,
+    a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1
+    to ``len(offsets_sec)`` as history accumulates).
     """
 
     def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
@@ -178,13 +202,12 @@ class _StackBuffer:
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
 
-    def sample(self, now: float) -> dict[str, np.ndarray]:
+    def sample(self, now: float, obs: Obs) -> Obs:
         times = np.array([t for t, _ in self._entries])
         targets = [now + off for off in self._offsets_sec]
         if not self._pad_start:
             targets = [t for t in targets if t >= times[0]]
-        picked = [self._entries[self._at_or_before(times, t)][1] for t in targets]
-        return {k: np.stack([entry[k] for entry in picked]) for k in picked[0]}
+        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][1] for t in targets])
 
     @staticmethod
     def _at_or_before(times: np.ndarray, target: float) -> int:
@@ -199,7 +222,8 @@ class TemporalStack(Processor[Obs, OutputT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     Every sent observation records the selected channels on the runtime's clock, then passes the stacked
-    observations to ``inner`` and yields its result. Offsets are ascending seconds relative to now.
+    observations to ``inner`` and yields its result. A stack is built when ``inner`` first reads its key, so
+    a call that reads none builds none. Offsets are ascending seconds relative to now.
     Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
@@ -224,7 +248,7 @@ class TemporalStack(Processor[Obs, OutputT]):
         while True:
             now_sec = runtime.time_ns / 1e9
             buffer.append(now_sec, {k: obs[k] for k in self._keys})
-            obs = yield inner.send({**obs, **buffer.sample(now_sec)})
+            obs = yield inner.send(buffer.sample(now_sec, obs))
 
     def to_spec(self) -> dict[str, Any]:
         return {

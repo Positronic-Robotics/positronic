@@ -193,10 +193,8 @@ The client selects the exact registered implementation; it never substitutes a n
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-V1 stack support includes timestamped chunks, timing codecs, and cancellation of pending results
-on robot faults. Its adapter emits ordinary policy steps, subject to the harness's polling bounds
-and immediate command delivery. V1 trajectory processors and v2 Step processors have different
-output contracts and cannot share a sequence; unchanged v1 codecs compose with v2 processors.
+The client runs a protocol v1 server's stack on the current processors. A new server uses
+protocol v2 and the current components.
 
 Published versions have three states in the protocol and component registries:
 
