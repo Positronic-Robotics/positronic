@@ -111,7 +111,6 @@ def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
 
     sent = payloads[0]
     for camera in CAMERAS:
-        # Four frames, not the 25 the flags default to; 176 high, not the 288 their bound would give.
         assert sent[camera].shape == (len(DECLARED_OFFSETS_SEC), DECLARED_HEIGHT, 312, 3)
     assert sent[keys.EE_POSE].shape == (len(DECLARED_OFFSETS_SEC), 7)
     assert len(rows) == len(payloads)
