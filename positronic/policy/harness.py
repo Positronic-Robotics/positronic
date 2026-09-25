@@ -144,7 +144,7 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
-    def _read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
+    def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
@@ -188,7 +188,7 @@ class Harness(pimm.ControlSystem):
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
                 observe_started_ns = time.perf_counter_ns()
-                obs = self._read_obs(task, step_ms)
+                obs = self.read_obs(task, step_ms)
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:

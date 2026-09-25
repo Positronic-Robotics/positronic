@@ -117,14 +117,12 @@ def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> It
     period_ns = int(1e9 / rate_hz)
     with pimm.World(virtual_time=True) as world:
         harness = Harness(recorded)
-        feeds = {}
-        for name, receiver in harness.observations.items():
-            feeds[name], pipe = world.local_pipe()
-            receiver._bind(pipe)
+        feeds = {name: world.pair(receiver) for name, receiver in harness.observations.items()}
+        world.start(harness)  # binds the feeds; nothing runs the harness loop, the replay calls `read_obs`
         for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
             for name, feed in feeds.items():
                 feed.emit({signal[len(name) :]: episode.signals[signal].time[ts][0] for signal in columns[name]})
-            obs = harness._read_obs(task, {})
+            obs = harness.read_obs(task, {})
             assert obs is not None, 'every channel was just fed'
             yield ts, obs
 
