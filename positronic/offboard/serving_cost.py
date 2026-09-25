@@ -14,8 +14,8 @@ Usage
     ... --server_wire=websocket_unix --server_address=@positronic.cfg.policy.socket_address \
         --server_address.uds=<socket>     # a server on this machine
     ... --compress_images=False           # loopback only: send raw stacks instead of per-frame JPEG
-    ... --frames=25 --rate_hz=15 --width=1024 --height=288 --out=rows.json
-    ... --chunk_rows=24                   # actions per reply; must equal a named server's chunk length
+    ... --frames=<n> --rate_hz=<hz> --width=<px> --height=<px> --out=rows.json
+    ... --chunk_rows=<n>                  # actions per reply; must equal a named server's chunk length
 """
 
 import contextlib
@@ -191,9 +191,8 @@ def against_server(
     """A session on the named server, running the stack and wire settings that server declares.
 
     ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), which dials
-    ``address``. ``headers`` carries the credential a served endpoint asks for; a run that
-    names none sends none, so ``--server_address`` cannot hand a token to a host the operator did not
-    mean to authenticate to.
+    ``address``. ``headers`` carries the credential a served endpoint asks for; with none, the session
+    sends no token.
     """
     client_wire = registry.client_wire(wire_name)
     session = InferenceClient(client_wire, address, headers=headers).new_session()

@@ -29,8 +29,7 @@ from positronic.policy.sequential import Sequential
 
 CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 
-# A stack shaped like the one a video-conditioned server declares: four strided frames per camera,
-# bounded well under what this probe's own flags default to.
+# A stack shaped like the one a video-conditioned server declares: four strided frames per camera.
 DECLARED_OFFSETS_SEC = (-23 / 15, -16 / 15, -8 / 15, 0.0)
 DECLARED_WIDTH, DECLARED_HEIGHT = 320, 176
 
@@ -94,7 +93,6 @@ def test_a_captured_payload_carries_one_stack_per_stacked_key():
 
 
 def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
-    """A raw stack the server would close the socket on stops the probe with the flags that shrink it."""
     session = MagicMock()
     oversized = {'cam': np.zeros((1, 3000, 3000, 3), dtype=np.uint8)}
     with pytest.raises(ValueError, match='message limit'):
@@ -103,7 +101,6 @@ def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
 
 
 def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
-    """The probe sends what the server's handshake declares, not what its own flags would build."""
     served = start_server(_declared_deployment())
 
     with against_server('websocket', served.ws()[1]) as measured:
@@ -161,7 +158,7 @@ def _sent(episode, embodiment):
 
 
 def test_the_wire_carries_what_the_embodiment_observes_and_nothing_else_the_episode_records(tmp_path):
-    """A rig sends its declared observations, the task and its descriptor; statics and commands stay home."""
+    """A rig sends its declared observations, the task and its descriptor; statics and commands are not sent."""
     episode = _droid_episode(tmp_path / 'episode', (*CAMERAS, keys.EXTERIOR_IMAGE_2))
 
     sent = _sent(episode, droid_fake)
@@ -195,7 +192,7 @@ def test_a_channel_the_episode_does_not_record_is_named(tmp_path):
 
 
 def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_server, monkeypatch):
-    """`AUTH_TOKEN` is the operator's credential for one endpoint, not for every host `--server_host` dials."""
+    """A session opened without `headers` sends no token, even when `AUTH_TOKEN` is set."""
     token = 'a-token-for-another-endpoint'
     monkeypatch.setenv(AUTH_TOKEN_ENV, token)
     served = start_server(_declared_deployment(), auth_token=token)
