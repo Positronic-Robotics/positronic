@@ -47,10 +47,7 @@ droid = pipeline
 droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
 # The checkpoint predicts 30 steps at 30 Hz; the upstream YAM example executes the first 25 of them.
 yam_bimanual = pipeline.override(
-    codec=molmoact2_codecs.yam_bimanual,
-    fps=30.0,
-    horizon_sec=25 / 30,
-    compress_images=True,
+    codec=molmoact2_codecs.yam_bimanual, fps=30.0, horizon_sec=25 / 30, compress_images=True
 )
 yam_bimanual_model = molmoact2_model.override(
     hf_repo=BIMANUAL_YAM_HF_REPO, norm_tag='yam_dual_molmoact2', state_dim=BIMANUAL_YAM_STATE_DIM
