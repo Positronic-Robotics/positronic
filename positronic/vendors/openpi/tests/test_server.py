@@ -9,7 +9,7 @@ from positronic.vendors.openpi.server import PREALLOCATE_ENV, OpenpiSubprocess  
 
 def _subprocess_env(monkeypatch) -> dict[str, str]:
     """The environment ``start`` gives the openpi subprocess."""
-    monkeypatch.setattr(OpenpiSubprocess, '_wait_for_ready', lambda self, on_progress: None)
+    monkeypatch.setattr(OpenpiSubprocess, '_wait_for_ready', lambda self: None)
     with mock.patch('subprocess.Popen') as popen:
         OpenpiSubprocess(checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_positronic_lowmem').start()
     return popen.call_args.kwargs['env']
