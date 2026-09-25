@@ -152,7 +152,7 @@ The server starts its OpenPI subprocess with `XLA_PYTHON_CLIENT_PREALLOCATE=fals
 demand. JAX otherwise takes ~75% of the device at its first use, and a second server on that GPU then fails
 with `RESOURCE_EXHAUSTED` while `nvidia-smi` reports the device almost free.
 
-With no preallocation, `XLA_PYTHON_CLIENT_MEM_FRACTION` is a hard cap on what one server allocates. Set it
+`XLA_PYTHON_CLIENT_MEM_FRACTION` caps what one server allocates when preallocation is off. Set it
 per container when you co-host N policies. Leave it unset for one policy: a cap that is too low makes a large
 model fail with the same `RESOURCE_EXHAUSTED`. Three policies held 30.4 GB together on an 80 GB H100 with
 `XLA_PYTHON_CLIENT_MEM_FRACTION=.25`.
