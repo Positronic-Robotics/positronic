@@ -8,7 +8,7 @@ installable on its own, with `grpcio` and `websockets` as its only dependencies.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.7.0"
+uv add "positronic-wire==0.9.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -36,7 +36,7 @@ serves it, and this package holds the client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`), `MODELS_KEY`, the key the model route answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`), the control calls `ControlCall`, `READY`, `WARM` and `CONTROL_CALLS`, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `ControlCallUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The wire sends no headers, because another party runs its server |
@@ -69,7 +69,14 @@ leaves out on the members that carry one.
   a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
-  frame the server announces itself with. The protocol carries no other readiness.
+  frame the server announces itself with.
+- `call(address, control_call, payload, headers, timeout)` — sends one `ControlCall` (`READY` or
+  `WARM`) outside a session and returns the JSON answer. The websocket members send it to
+  `control_call.http_path`, and `timeout` bounds each phase: the connect, each read and each write. A
+  whole call can take longer than `timeout`. The gRPC members call `control_call.grpc_method` on
+  `SERVICE`, and `timeout` bounds the whole call. `call` raises `ControlCallUnsupported` where the
+  server does not serve the call, and `ConnectRefused` where the server answers nothing. `roboarena`
+  always raises `ControlCallUnsupported`.
 
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
 

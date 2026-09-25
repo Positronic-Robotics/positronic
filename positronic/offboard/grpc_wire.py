@@ -1,11 +1,12 @@
-"""The server side of the gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames."""
+"""The server side of the gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames,
+and one unary call per control call."""
 
+import json
 import logging
 from collections.abc import AsyncIterator, Mapping
 
 import grpc
 import grpc.aio
-from fastapi import APIRouter
 from positronic_wire import wire
 from positronic_wire.grpc import (
     MESSAGE_SIZE_OPTIONS,
@@ -91,7 +92,7 @@ def _server_options() -> list[tuple[str, int]]:
 
 
 class GrpcWire(server_wire.Wire):
-    """The gRPC wire: sessions on a port of their own, one bidirectional stream each.
+    """The gRPC wire: sessions on a port of their own, one bidirectional stream each, and the control calls beside them.
 
     ``served_address`` is the host and the port it binds; a port of 0 binds any free one. The port is
     plaintext, and a TLS edge in front of it serves an authenticated endpoint.
@@ -108,10 +109,12 @@ class GrpcWire(server_wire.Wire):
         return self._served_address
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        control_calls: server_wire.ControlCallHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
-        """Bind the gRPC port. ``api`` goes unserved: this port carries sessions alone. A server that
-        answers the model route serves an HTTP-capable wire beside this one."""
+        """Bind the gRPC port, which carries sessions and the control calls."""
 
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
@@ -129,9 +132,19 @@ class GrpcWire(server_wire.Wire):
                 logger.error(f'Failed gRPC session: {e}', exc_info=True)
                 await context.abort(grpc.StatusCode.INTERNAL, str(e))
 
+        def control_call_method(control_call: wire.ControlCall) -> grpc.RpcMethodHandler:
+            async def answer_one(payload: bytes, context: grpc.aio.ServicerContext) -> bytes:
+                if not authorized(_headers(context)):
+                    await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
+                answer = await control_calls(control_call, json.loads(payload) if payload else {})
+                return json.dumps(dict(answer)).encode()
+
+            return grpc.unary_unary_rpc_method_handler(answer_one, request_deserializer=None, response_serializer=None)
+
         handler = grpc.stream_stream_rpc_method_handler(serve_one, request_deserializer=None, response_serializer=None)
         server = grpc.aio.server(options=_server_options())
-        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
+        methods = {METHOD: handler, **{call.grpc_method: control_call_method(call) for call in wire.CONTROL_CALLS}}
+        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, methods),))
         bound = server.add_insecure_port(target(self._binds.host, self._binds.port))
         if bound == 0:
             # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.

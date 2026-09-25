@@ -115,7 +115,7 @@ to the host and its Compose network must remain within the authorized corporate 
 With a remote Docker context, set `CACHE_ROOT` to the cache owner's home directory
 on that host. At startup the server loads `g05-droid` by launching
 [backend.py](backend.py) on the container's private `127.0.0.1:9000` endpoint.
-The HTTP API, including `/api/v1/models`, becomes available after the model is ready.
+`/api/v1/ready` answers `"status": "ready"` once the model is ready.
 Unloading the policy stops the child process. Each request runs fresh inference and returns
 the full chunk. The first request can include model compilation latency; set
 `--model.infer_timeout=300` if needed.

@@ -1,6 +1,5 @@
 import asyncio
 import errno
-import json
 import logging
 import os
 import pathlib
@@ -11,28 +10,32 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import configuronic as cfn
 import pytest
-from fastapi import APIRouter
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
+from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
+from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
+from positronic import keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
-from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
+from positronic.offboard.client import WARM_WAIT_POLL_SEC, ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.offboard.tests.conftest import Served
+from positronic.offboard.tests.conftest import WARM_PROMPT_FIELD, Served, warm_pipeline
 from positronic.policy import Codec
 from positronic.policy.base import ARGS
+from positronic.policy.codec import BinarizeGripInference, FlipGrip
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.observation import ObservationCodec
 from positronic.policy.sequential import Sequential
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
@@ -58,7 +61,10 @@ class _FailingWire(server_wire.Wire):
         return server_wire.ServedHostPort('localhost', 0)
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        control_calls: server_wire.ControlCallHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
         pass
 
@@ -78,7 +84,10 @@ class _UnbindableWire(server_wire.Wire):
         raise AssertionError('it never bound')
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        control_calls: server_wire.ControlCallHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
         raise OSError('that port is taken')
 
@@ -171,10 +180,9 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
             sock.close()
 
 
-def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_model):
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took():
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
-    asyncio.run(bound.start(MagicMock(), lambda _headers: True, server.api))
+    asyncio.run(bound.start(MagicMock(), MagicMock(), lambda _headers: True))
     try:
         assert len(bound._sockets) == 1
         assert _bound_port(bound) == bound._sockets[0].getsockname()[1] != 0
@@ -259,13 +267,6 @@ def test_a_session_route_that_names_a_checkpoint_is_refused(stub_server):
     host, port, *_ = stub_server
     with pytest.raises(InvalidStatus):
         connect(f'ws://{host}:{port}{wire.SESSION_PATH}/other').close()
-
-
-def test_the_model_route_answers_the_served_checkpoint(stub_server):
-    """Probes read this route to tell that a server has loaded its model."""
-    host, port, *_ = stub_server
-    with urllib.request.urlopen(f'http://{host}:{port}{wire.MODELS_PATH}', timeout=5.0) as answer:
-        assert json.loads(answer.read()) == {wire.MODELS_KEY: ['stub']}
 
 
 def test_a_client_that_leaves_mid_inference_is_a_lost_peer_not_an_error(stub_server, caplog):
@@ -393,7 +394,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
 
 @pytest.fixture
 def unix_stub_server(start_server, socket_path, make_mock_model) -> tuple[Served, MagicMock]:
-    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', offboard_keys.CHECKPOINT_ID: 'stub'})
     served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), uds=socket_path)
     return served, policy
 
@@ -419,6 +420,15 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
         policy.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
+
+
+def test_the_control_calls_answer_over_a_unix_socket(unix_stub_server):
+    served, _policy = unix_stub_server
+
+    state = InferenceClient(*served.unix()).readiness()
+
+    assert state.status is protocol.ServerStatus.READY
+    assert state.checkpoint_id == 'stub'
 
 
 @pytest.mark.parametrize('client_closes', [True, False])
@@ -883,7 +893,7 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
-            b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'
+            b'GET /api/v1/ready HTTP/1.1\r\nHost: localhost\r\n'
             b'Authorization: Bearer t\xf6ken\r\nConnection: close\r\n\r\n'
         )
         status = sock.recv(64).split(b' ')[1]
@@ -930,3 +940,269 @@ def test_a_shutdown_during_the_load_ends_the_server_once_it_loads(make_mock_mode
 
     serving.join(timeout=10.0)
     assert not serving.is_alive(), 'the shutdown asked for during the load was lost'
+
+
+def test_a_shutdown_during_a_warm_closes_the_model_after_the_warm_inference(start_server, make_mock_model):
+    held, running = threading.Event(), threading.Event()
+    model = make_mock_model([], {'model_name': 'stub'})
+    model.side_effect = lambda obs, *, session_id: running.set() or held.wait(timeout=10.0) and [{'action': [1]}]
+    closed, closed_while_running = threading.Event(), []
+    model.close.side_effect = lambda: closed_while_running.append(not held.is_set()) or closed.set()
+    served = start_server(model, warm_pipeline())
+    InferenceClient(*served.ws()).warm('stack the cubes')
+    assert running.wait(timeout=5), 'the warm never reached the model'
+    served.server.shutdown()
+    time.sleep(0.5)
+    held.set()
+    assert closed.wait(timeout=10), 'the shutdown never closed the model'
+    assert closed_while_running == [False], 'the model closed while the warm inference still ran on it'
+
+
+def _ws_client(host: str, port: int) -> InferenceClient:
+    return InferenceClient(
+        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    )
+
+
+class _MarkingCodec(Codec):
+    """A server codec beside the observation encoder, which marks what it encodes."""
+
+    MARK = 'seen_by_the_server_codec'
+
+    def encode(self, data):
+        return {**data, self.MARK: True}
+
+    def _decode_single(self, data):
+        return data
+
+
+def _warmed(client: InferenceClient, timeout: float = 10.0) -> protocol.Readiness:
+    """The record once the server has answered an inference."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = client.readiness()
+        if state.inferences > 0:
+            return state
+        time.sleep(0.05)
+    raise AssertionError('the server answered no inference')
+
+
+WARM_REFUSAL = 'the backend refused the observation'
+
+
+def _warm_failed(client: InferenceClient, timeout: float = 10.0) -> protocol.Readiness:
+    """The record once a failed warm has reached it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = client.readiness()
+        if state.status is protocol.ServerStatus.ERROR:
+            return state
+        time.sleep(0.05)
+    raise AssertionError('the failed warm never reached the readiness record')
+
+
+def _held_model(make_mock_model, held: threading.Event) -> MagicMock:
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    model.side_effect = lambda obs, *, session_id: held.wait(timeout=10.0) and [{'action': [1]}]
+    return model
+
+
+class TestControlCalls:
+    def test_a_served_server_reports_its_checkpoint_and_no_inferences(self, stub_server):
+        host, port, _server, _policy = stub_server
+        state = _ws_client(host, port).readiness()
+        assert state.status is protocol.ServerStatus.READY
+        assert state.checkpoint_id == 'stub'
+        assert state.inferences == 0, 'a loaded checkpoint that answered nothing is cold'
+        assert state.positronic_version
+
+    def test_an_answered_observation_moves_the_count_and_brings_back_what_it_cost(self, stub_server):
+        host, port, _server, _policy = stub_server
+        client = _ws_client(host, port)
+        session = client.new_session()
+        try:
+            session.infer({'obs': 'data'})
+        finally:
+            session.close()
+        state = client.readiness()
+        assert state.inferences == 1
+        assert state.timing[protocol.TIMING_SERVED] >= 0
+
+    def test_warm_runs_one_inference_on_the_observation_the_codec_builds(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        started = client.warm('pick up the red cube')
+        assert started.inferences == 0, 'warm reports the state it answers in, not the state it will reach'
+        assert _warmed(client).inferences == 1
+        model.assert_called_once_with({WARM_PROMPT_FIELD: 'pick up the red cube'}, session_id=ANY)
+        model.end_session.assert_called_once()
+
+    def test_a_warm_that_raised_answers_error_in_place_of_ready(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        model.side_effect = RuntimeError(WARM_REFUSAL)
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        assert client.warm('pick up the red cube').status is protocol.ServerStatus.READY, (
+            'warm reports the state it answers in, not the state it will reach'
+        )
+        failed = _warm_failed(client)
+        assert WARM_REFUSAL in failed.message
+        assert failed.inferences == 0, 'a warm that raised answered no inference'
+
+    def test_a_wait_on_a_warm_that_raised_ends_with_its_error(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        model.side_effect = RuntimeError(WARM_REFUSAL)
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+
+        started = time.monotonic()
+        answered = client.warm('pick up the red cube', wait_deadline=30.0)
+
+        assert answered.status is protocol.ServerStatus.ERROR
+        assert WARM_REFUSAL in answered.message
+        assert time.monotonic() - started < 10.0, 'the wait ran on past the failed warm'
+
+    def test_an_inference_after_a_failed_warm_answers_ready_again(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        model.side_effect = RuntimeError(WARM_REFUSAL)
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        client.warm('pick up the red cube')
+        assert _warm_failed(client).status is protocol.ServerStatus.ERROR
+
+        model.side_effect = None
+        answered = client.warm('stack the cubes', wait_deadline=10.0)
+        assert answered.status is protocol.ServerStatus.READY
+        assert answered.inferences == 1
+
+    def test_warm_waits_for_the_count_when_asked_to(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+
+    def test_warm_waits_for_a_count_past_the_one_an_earlier_warm_left(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        assert client.warm('stack the cubes', wait_deadline=10.0).inferences == 1
+
+        held = threading.Event()
+        model.side_effect = lambda obs, *, session_id: held.wait(timeout=10.0) and [{'action': [1]}]
+        threading.Timer(0.3, held.set).start()
+        assert client.warm('pick up the red cube', wait_deadline=10.0).inferences == 2
+
+    def test_a_warm_in_flight_holds_off_the_idle_watchdog(self, start_server, make_mock_model):
+        held = threading.Event()
+        model = _held_model(make_mock_model, held)
+        client = InferenceClient(*start_server(model, warm_pipeline(), idle_timeout_min=_A_MOMENT_IDLE / 60).ws())
+        client.warm('stack the cubes')
+
+        time.sleep(_A_MOMENT_IDLE * 5)
+        assert client.readiness().status is protocol.ServerStatus.READY, 'the watchdog stopped a server mid-warm'
+        held.set()
+        assert _warmed(client).inferences == 1
+
+    def test_a_short_warm_deadline_is_not_overrun_by_the_poll_interval(self, stub_server):
+        host, port, _server, _policy = stub_server
+        client = _ws_client(host, port)
+
+        started = time.monotonic()
+        state = client.warm('stack the cubes', wait_deadline=0.3)
+        elapsed = time.monotonic() - started
+
+        assert state.inferences == 0, 'this deployment warms nothing, so the count never moves'
+        assert elapsed < WARM_WAIT_POLL_SEC, f'a 0.3s deadline waited {elapsed:.1f}s'
+
+    def test_a_warm_finds_the_observation_encoder_inside_a_composed_server_codec(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        codec = FlipGrip() | ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD)
+        client = InferenceClient(*start_server(model, PolicyDeployment(ChunkedSchedule(fps=10), codec)).ws())
+
+        assert client.warm('pick up the red cube', wait_deadline=10.0).inferences == 1
+        model.assert_called_once_with({WARM_PROMPT_FIELD: 'pick up the red cube'}, session_id=ANY)
+
+    def test_a_warm_runs_the_whole_server_codec(self, start_server, make_mock_model):
+        """A warm that skips a codec does not warm what the episode sends."""
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        codec = ObservationCodec(state={}, images={}, task_field=WARM_PROMPT_FIELD) | _MarkingCodec()
+        client = InferenceClient(*start_server(model, PolicyDeployment(ChunkedSchedule(fps=10), codec)).ws())
+
+        assert client.warm('pick up the red cube', wait_deadline=10.0).inferences == 1
+        model.assert_called_once_with(
+            {WARM_PROMPT_FIELD: 'pick up the red cube', _MarkingCodec.MARK: True}, session_id=ANY
+        )
+
+    def test_a_control_call_equal_to_warm_starts_a_warm(self, make_mock_model):
+        """A wire may hand over a ``ControlCall`` it rebuilt."""
+        model = make_mock_model([{'action': [1]}], {'model_name': 'stub'})
+        server = PolicyServer(lambda: model, warm_pipeline())
+        server._load()
+        rebuilt = wire.ControlCall(wire.WARM.name, wire.WARM.http_method, wire.WARM.grpc_method)
+        assert rebuilt is not wire.WARM, 'this test needs a ControlCall that is equal to WARM and not WARM'
+
+        async def answer():
+            await server._answer_control_call(rebuilt, {keys.TASK: 'stack the cubes'})
+            started = server._warming
+            assert started is not None, 'a value-equal WARM was dispatched as READY and started nothing'
+            await started
+
+        asyncio.run(answer())
+
+    def test_a_server_codec_that_encodes_no_observation_warms_nothing(self, start_server, make_mock_model):
+        model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        codec = BinarizeGripInference()
+        client = InferenceClient(*start_server(model, PolicyDeployment(ChunkedSchedule(fps=10), codec)).ws())
+        assert client.warm('stack the cubes').status is protocol.ServerStatus.READY
+        time.sleep(_A_MOMENT_IDLE)
+        assert client.readiness().inferences == 0
+        model.assert_not_called()
+
+    def test_a_deployment_with_no_server_codec_warms_nothing(self, stub_server):
+        host, port, _server, model = stub_server
+        client = _ws_client(host, port)
+        assert client.warm('stack the cubes').status is protocol.ServerStatus.READY
+        time.sleep(_A_MOMENT_IDLE)
+        assert client.readiness().inferences == 0
+        model.assert_not_called()
+
+    def test_a_second_warm_joins_the_one_already_running(self, start_server, make_mock_model):
+        held = threading.Event()
+        model = _held_model(make_mock_model, held)
+        client = InferenceClient(*start_server(model, warm_pipeline()).ws())
+        client.warm('stack the cubes')
+        client.warm('stack the cubes')
+        held.set()
+        assert _warmed(client).inferences == 1, 'the second call started a second warm'
+
+    def test_the_control_calls_take_the_token_that_gates_the_session(self, authed_endpoint):
+        endpoint, token = authed_endpoint
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient(*endpoint).readiness()
+        assert refused.value.refusal is wire.Refusal.FORBIDDEN
+        authed = InferenceClient(*endpoint, headers={AUTH_HEADER: bearer(token)})
+        assert authed.readiness().status is protocol.ServerStatus.READY
+
+    def test_a_404_where_a_session_server_answers_is_a_server_without_the_call(self, stub_server, monkeypatch):
+        host, port, _server, _policy = stub_server
+        monkeypatch.setattr(wire, 'READY', wire.ControlCall('no-such-call', 'GET', 'NoSuchCall'))
+        with pytest.raises(wire.ControlCallUnsupported):
+            _ws_client(host, port).readiness()
+
+    @pytest.mark.parametrize(
+        ('raised', 'refusal'),
+        [
+            (InvalidStatus(Response(404, 'Not Found', Headers())), wire.Refusal.FINAL),
+            (InvalidStatus(Response(503, 'Service Unavailable', Headers())), wire.Refusal.COLD),
+            (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.COLD),
+        ],
+    )
+    def test_a_404_where_no_session_server_answers_refuses_as_the_probe_reads_it(
+        self, stub_server, monkeypatch, raised, refusal
+    ):
+        """An address that serves something else answers 404 to the call and no upgrade to the probe."""
+        host, port, _server, _policy = stub_server
+        monkeypatch.setattr(wire, 'READY', wire.ControlCall('no-such-call', 'GET', 'NoSuchCall'))
+        monkeypatch.setattr(client_websocket.WebsocketClientWire, '_connect', MagicMock(side_effect=raised))
+        with pytest.raises(wire.ConnectRefused) as refused:
+            _ws_client(host, port).readiness()
+        assert refused.value.refusal is refusal
+
+    def test_every_control_call_the_protocol_declares_has_an_answer(self):
+        """A control call added here needs a branch in ``_answer_control_call``."""
+        assert wire.CONTROL_CALLS == (wire.READY, wire.WARM)

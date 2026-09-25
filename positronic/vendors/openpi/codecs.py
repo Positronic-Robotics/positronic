@@ -29,7 +29,18 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
+from positronic.policy.codec import (
+    ACTION,
+    LEROBOT_FEATURES,
+    Codec,
+    StateFeature,
+    lerobot_image,
+    lerobot_vector,
+    pose_feature,
+    warm_image,
+    warm_input_of,
+    warm_pose,
+)
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 from positronic.vendors import openpi
 
@@ -39,12 +50,13 @@ class ObservationCodec(Codec):
 
     def __init__(
         self,
-        state_features: dict[str, int],
+        state_features: dict[str, StateFeature],
         exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):
-        self._state_features = state_features
+        """``state_features`` maps each episode key to its width, or to ``pose_feature()`` for a pose."""
+        self._state_features = {key: warm_input_of(declared) for key, declared in state_features.items()}
         self._exterior_camera = exterior_camera
         self._wrist_camera = wrist_camera
         self._image_size = image_size
@@ -56,11 +68,11 @@ class ObservationCodec(Codec):
             keys.TASK: Get(keys.TASK, ''),
         }
 
-        state_dim = sum(state_features.values())
+        state_dim = sum(len(warm) for warm in self._state_features.values())
         w, h = image_size
         self._training_meta: dict[str, Any] = {
             LEROBOT_FEATURES: {
-                'observation.state': lerobot_vector(state_dim, list(state_features.keys())),
+                'observation.state': lerobot_vector(state_dim, list(self._state_features)),
                 'observation.images.left': lerobot_image(w, h),
                 'observation.images.side': lerobot_image(w, h),
             }
@@ -75,6 +87,16 @@ class ObservationCodec(Codec):
 
     def _decode_single(self, data: dict) -> dict:
         return {}
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries: the value each configured field declares, under that field's key."""
+        frame = warm_image(*self._image_size)
+        return {
+            keys.TASK: task,
+            self._wrist_camera: frame,
+            self._exterior_camera: frame,
+            **{key: warm.copy() for key, warm in self._state_features.items()},
+        }
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         state_parts: list[np.ndarray] = []
@@ -111,12 +133,14 @@ class ObservationCodec(Codec):
 
 
 @cfn.config(
-    state_features={keys.EE_POSE: 7, keys.GRIP: 1},
+    state_features={keys.EE_POSE: pose_feature(), keys.GRIP: 1},
     exterior_camera=keys.EXTERIOR_IMAGE,
     wrist_camera=keys.WRIST_IMAGE,
     image_size=(224, 224),
 )
-def observation(state_features: dict[str, int], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
+def observation(
+    state_features: dict[str, StateFeature], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]
+):
     """General OpenPI observation encoder with configurable state features."""
     return ObservationCodec(
         state_features=state_features, exterior_camera=exterior_camera, wrist_camera=wrist_camera, image_size=image_size
@@ -124,7 +148,7 @@ def observation(state_features: dict[str, int], exterior_camera: str, wrist_came
 
 
 ee_obs = observation
-ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP: 1, keys.JOINTS: 7})
+ee_joints_obs = observation.override(state_features={keys.EE_POSE: pose_feature(), keys.GRIP: 1, keys.JOINTS: 7})
 
 
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
@@ -236,6 +260,18 @@ class LiberoObservationCodec(Codec):
         if keys.TASK in inputs:
             obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries, under the names this codec reads."""
+        frame = warm_image(*self._image_size)
+        return {
+            keys.TASK: task,
+            self._wrist_camera: frame,
+            self._exterior_camera: frame,
+            keys.EE_POSE: warm_pose(),
+            # A closure scalar, which is what the env reports and ``_libero_state`` reads.
+            keys.GRIP: np.float32(0.0),
+        }
 
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
         ee_pose = np.asarray(inputs[keys.EE_POSE], dtype=float)

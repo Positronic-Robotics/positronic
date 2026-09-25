@@ -292,8 +292,8 @@ server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_T
 in [Authenticated inference](#authenticated-inference)):
 
 ```bash
-curl -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/models
-# → {"models": ["050000"]}
+curl -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/ready
+# → {"status": "ready", "checkpoint_id": "050000", ...}
 ```
 
 Run inference from your laptop or robot host with `positronic eval run`
@@ -329,7 +329,7 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 ## Authenticated inference
 
-The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
+The server validates `Authorization: Bearer <token>` on `/api/v1/ready`, `/api/v1/warm` and on both session
 wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
 of the printed gRPC host, on the `grpc_tls` wire, sends the same token, which `.authed_remote` carries as gRPC
 metadata. `serve.sh` injects the token from the

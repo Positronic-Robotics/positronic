@@ -3,10 +3,12 @@
 The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
 
+import json
 import queue
 import threading
 import time
 from collections.abc import Mapping
+from typing import Any
 
 import grpc
 from positronic_wire import wire
@@ -255,6 +257,35 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         channel = _ready_channel(self.channel(dialled), dialled, open_timeout)
         metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
+
+    def call(
+        self,
+        address: wire.HostPortAddress,
+        control_call: wire.ControlCall,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        """What the server answers ``control_call`` with, over a unary call on its own channel.
+
+        ``timeout`` bounds the whole call: the channel takes what it needs, and the call takes the rest.
+        """
+        dialled = target(address.host, address.port)
+        deadline = time.monotonic() + timeout
+        channel = _ready_channel(self.channel(dialled), dialled, timeout)
+        try:
+            unary = channel.unary_unary(
+                f'/{SERVICE}/{control_call.grpc_method}', request_serializer=None, response_deserializer=None
+            )
+            remaining = max(0.0, deadline - time.monotonic())
+            answer = unary(json.dumps(dict(payload)).encode(), metadata=_metadata(headers), timeout=remaining)
+        except grpc.RpcError as e:
+            if e.code() is grpc.StatusCode.UNIMPLEMENTED:
+                raise wire.ControlCallUnsupported(f'{dialled} serves sessions but not {control_call.name}') from e
+            raise wire.ConnectRefused(_refusal(e), f'{e} (calling {control_call.name} on {dialled})') from e
+        finally:
+            channel.close()
+        return json.loads(answer)
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float

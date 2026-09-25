@@ -9,7 +9,7 @@ from typing import Any
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.utils.versions import resolve_version
 
 from . import protocol
@@ -24,6 +24,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+DEFAULT_CONTROL_CALL_TIMEOUT_SEC = 30.0
+WARM_WAIT_POLL_SEC = 2.0
 
 
 class InferenceSession:
@@ -188,8 +190,8 @@ class InferenceClient:
 
     ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
-    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
-    round trip.
+    ``connect_deadline`` the retries until a cold backend answers, ``infer_timeout`` one inference
+    round trip, and ``control_call_timeout`` one ``ready`` or ``warm`` call.
     """
 
     def __init__(
@@ -201,6 +203,7 @@ class InferenceClient:
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        control_call_timeout: float = DEFAULT_CONTROL_CALL_TIMEOUT_SEC,
     ):
         if not isinstance(address, client_wire.ADDRESS):
             raise ValueError(
@@ -214,6 +217,7 @@ class InferenceClient:
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
+        self.control_call_timeout = control_call_timeout
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
@@ -246,8 +250,54 @@ class InferenceClient:
                 refusal, not_ready = wire.Refusal.COLD, e
             if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
+            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
+            backoff = min(backoff * 2, 30.0)
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
+
+    def readiness(self) -> protocol.Readiness:
+        """Return the server's state. Raises ``wire.ControlCallUnsupported`` where the server serves
+        sessions but not the control call."""
+        return self._readiness(self.control_call_timeout)
+
+    def _readiness(self, timeout: float) -> protocol.Readiness:
+        return protocol.Readiness.model_validate(self._wire.call(self._address, wire.READY, {}, self.headers, timeout))
+
+    def warm(self, task: str, wait_deadline: float = 0.0) -> protocol.Readiness:
+        """Start a warm on ``task`` and return the server's state from before the warm runs.
+
+        A ``wait_deadline`` above zero polls until ``inferences`` increases, ``status`` becomes ``error``,
+        or ``wait_deadline`` seconds pass, the starting call included. A session inference increases
+        ``inferences`` too. Raises ``wire.ControlCallUnsupported`` where the server does not serve the call.
+        """
+        payload = {keys.TASK: task}
+        if wait_deadline <= 0:
+            return protocol.Readiness.model_validate(
+                self._wire.call(self._address, wire.WARM, payload, self.headers, self.control_call_timeout)
+            )
+        deadline = time.monotonic() + wait_deadline
+        started = protocol.Readiness.model_validate(
+            self._wire.call(
+                self._address, wire.WARM, payload, self.headers, min(self.control_call_timeout, wait_deadline)
+            )
+        )
+        # A load resets the count, so the threshold holds only for the checkpoint it was read on.
+        count_to_pass, count_checkpoint = started.inferences, started.checkpoint_id
+        # The answer comes before the warm runs, so an error on it is an earlier warm's.
+        error_predates_this_warm = started.status is protocol.ServerStatus.ERROR
+        latest = started
+        while latest.inferences <= count_to_pass:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(WARM_WAIT_POLL_SEC, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            latest = self._readiness(min(self.control_call_timeout, remaining))
+            if latest.status is protocol.ServerStatus.ERROR and not error_predates_this_warm:
+                break
+            if latest.checkpoint_id != count_checkpoint:
+                count_to_pass, count_checkpoint = 0, latest.checkpoint_id
+        return latest

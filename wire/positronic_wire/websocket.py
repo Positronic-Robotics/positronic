@@ -1,14 +1,17 @@
 """The client side of the websocket wire."""
 
 import abc
+import json
 import os
 import socket
 import ssl
 import stat
+import time
 from collections.abc import Mapping
 from http import HTTPStatus
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from pathlib import Path
-from typing import ClassVar, Generic
+from typing import Any, ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
@@ -84,6 +87,75 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     def _connect(self, address: wire.AddressT, **settings) -> Connection:
         """One opened websocket on ``address``, however this wire reaches it."""
 
+    @abc.abstractmethod
+    def _api_connection(self, address: wire.AddressT, open_timeout: float) -> HTTPConnection:
+        """An unopened connection to the server's HTTP API, however this wire reaches it."""
+
+    def _exchange(
+        self,
+        address: wire.AddressT,
+        method: str,
+        path: str,
+        body: bytes | None,
+        headers: Mapping[str, str] | None,
+        phase_timeout: float,
+    ) -> tuple[int, bytes]:
+        """One HTTP request on the server's API, and its status and body.
+
+        Each phase the connection times takes the whole ``phase_timeout``: a share per phase refuses a call
+        that would have fitted.
+        """
+        where = f'{self.session_url(address)} ({method} {path})'
+        connection = self._api_connection(address, max(0.0, phase_timeout))
+        try:
+            connection.request(method, path, body=body, headers=dict(headers or {}))
+            answer = connection.getresponse()
+            return answer.status, answer.read()
+        except HTTPException as e:
+            # The connection opened and the exchange did not finish: a backend that is not ready.
+            raise wire.ConnectRefused(wire.Refusal.COLD, f'{e} (calling {where})') from e
+        except OSError as e:
+            raise wire.ConnectRefused(self._refusal(e, address), f'{e} (calling {where})') from e
+        finally:
+            connection.close()
+
+    def call(
+        self,
+        address: wire.AddressT,
+        control_call: wire.ControlCall,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        """What the server answers ``control_call`` with, over the HTTP API beside the session route.
+
+        The call carries JSON, so a person reads the answer with ``curl``. ``timeout`` bounds each phase the
+        connection times, not the whole call.
+        """
+        deadline = time.monotonic() + timeout
+        request_headers = dict(headers or {})
+        body = None
+        if payload:
+            body = json.dumps(dict(payload)).encode()
+            request_headers['Content-Type'] = 'application/json'
+        status, answer = self._exchange(
+            address, control_call.http_method, control_call.http_path, body, request_headers, timeout
+        )
+        where = f'{control_call.http_path} on {self.session_url(address)}'
+        if status == HTTPStatus.NOT_FOUND:
+            # A server too old for the call answers 404, and so does an address that serves something else.
+            refusal = self.probe(address, headers, max(0.0, deadline - time.monotonic()))
+            if refusal is None:
+                raise wire.ControlCallUnsupported(
+                    f'{where} answers 404; this server serves sessions but not {control_call.name}'
+                )
+            raise wire.ConnectRefused(refusal, f'{where} answers 404, and no session server answers there')
+        if status != HTTPStatus.OK:
+            # An HTTP route refuses a credential with 401, where the upgrade beside it refuses with 403.
+            refusal = wire.Refusal.FORBIDDEN if status == HTTPStatus.UNAUTHORIZED else _status_refusal(status)
+            raise wire.ConnectRefused(refusal, f'{where} answers {status}')
+        return json.loads(answer)
+
     def dial(
         self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float
     ) -> WebsocketClientConnection:
@@ -131,7 +203,7 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     NAME = 'websocket'
     ADDRESS = wire.HostPortAddress
     DEFAULT_PORT = 80
-    # The URL scheme this wire writes for a session.
+    # The URL scheme this wire writes for a session; ``_api_connection`` says how the API is reached.
     SCHEME = 'ws'
 
     def handshake_url(self, address: wire.HostPortAddress) -> str:
@@ -145,6 +217,9 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     def _connect(self, address: wire.HostPortAddress, **settings) -> Connection:
         return connect(self.handshake_url(address), **settings)
 
+    def _api_connection(self, address: wire.HostPortAddress, open_timeout: float) -> HTTPConnection:
+        return HTTPConnection(address.host, address.port, timeout=open_timeout)
+
 
 class WebsocketTlsClientWire(WebsocketClientWire):
     """The websocket wire over TLS: the same session behind an edge that terminates it."""
@@ -152,6 +227,32 @@ class WebsocketTlsClientWire(WebsocketClientWire):
     NAME = 'websocket_tls'
     DEFAULT_PORT = 443
     SCHEME = 'wss'
+
+    def _api_connection(self, address: wire.HostPortAddress, open_timeout: float) -> HTTPConnection:
+        # No context named: the connection verifies the edge against the system's own roots.
+        return HTTPSConnection(address.host, address.port, timeout=open_timeout)
+
+
+class _UnixHTTPConnection(HTTPConnection):
+    """An HTTP connection opened on a Unix socket rather than dialled on a host and a port.
+
+    ``HTTPConnection`` takes a host to write the ``Host`` header with; it resolves and dials nothing
+    here, because ``connect`` opens the socket itself.
+    """
+
+    def __init__(self, uds: Path, host: str, timeout: float):
+        super().__init__(host, timeout=timeout)
+        self._uds = uds
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect(str(self._uds))
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = sock
 
 
 class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
@@ -163,7 +264,7 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     NAME = 'websocket_unix'
     ADDRESS = wire.UnixSocketAddress
     SCHEME = 'ws'
-    # A socket names no authority, so the handshake carries this in place of one. The server
+    # A socket names no authority, so the handshake and the API carry this in place of one. The server
     # reads the route and ignores it, and no name is resolved: the connection is already open.
     STANDS_FOR_THE_SERVER = 'localhost'
 
@@ -176,6 +277,10 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
         """The socket and the route on it, as this wire names one session."""
         query = f'?{address.query}' if address.query else ''
         return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
+
+    def _api_connection(self, address: wire.UnixSocketAddress, open_timeout: float) -> HTTPConnection:
+        """The HTTP API answers on the session's own socket, beside the sessions."""
+        return _UnixHTTPConnection(address.uds, self.STANDS_FOR_THE_SERVER, timeout=open_timeout)
 
     @staticmethod
     def _a_retry_can_reach_it(uds: Path, raised: OSError) -> bool:

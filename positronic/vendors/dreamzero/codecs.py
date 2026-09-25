@@ -24,11 +24,14 @@ from positronic.policy.codec import (
     lerobot_action,
     lerobot_image,
     lerobot_vector,
+    warm_image,
+    warm_vector,
 )
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
+NUM_JOINTS = 7
 
 
 def _reshape_grip(values):
@@ -68,7 +71,7 @@ class DreamZeroObservationCodec(Codec):
 
         self._training_meta = {
             LEROBOT_FEATURES: {
-                'state.joint_position': lerobot_vector(7),
+                'state.joint_position': lerobot_vector(NUM_JOINTS),
                 'state.gripper_position': lerobot_vector(1),
                 'video.wrist_image_left': lerobot_image(w, h),
                 'video.exterior_image_1_left': lerobot_image(w, h),
@@ -76,7 +79,7 @@ class DreamZeroObservationCodec(Codec):
             },
             GR00T_MODALITY: {
                 'state': {
-                    'joint_position': {'start': 0, 'end': 7, 'original_key': 'state.joint_position'},
+                    'joint_position': {'start': 0, 'end': NUM_JOINTS, 'original_key': 'state.joint_position'},
                     'gripper_position': {'start': 0, 'end': 1, 'original_key': 'state.gripper_position'},
                 },
                 'video': {
@@ -111,6 +114,18 @@ class DreamZeroObservationCodec(Codec):
         if frame.ndim == 4:
             return np.stack([image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, f) for f in frame])
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
+
+    def warm_inputs(self, task: str) -> dict[str, Any]:
+        """The rig-side inputs a warm carries, under the names this codec reads."""
+        frame = warm_image(*self._image_size)
+        return {
+            keys.TASK: task,
+            self._wrist_camera: frame,
+            self._exterior_camera_1: frame,
+            self._exterior_camera_2: frame,
+            keys.JOINTS: warm_vector(NUM_JOINTS),
+            keys.GRIP: warm_vector(1),
+        }
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joint_pos = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
@@ -148,7 +163,7 @@ class DreamZeroActionCodec(Codec):
     ``JointPosition`` command + ``target_grip``.
     """
 
-    def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
+    def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = NUM_JOINTS):
         self._tgt_joints_key = tgt_joints_key
         self._tgt_grip_key = tgt_grip_key
         self._num_joints = num_joints
@@ -212,7 +227,7 @@ def dreamzero_obs(
     )
 
 
-@cfn.config(num_joints=7)
+@cfn.config(num_joints=NUM_JOINTS)
 def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
     """DreamZero action codec (GR00T split signals + flat inference decode)."""
     return DreamZeroActionCodec(tgt_joints_key=tgt_joints_key, tgt_grip_key=tgt_grip_key, num_joints=num_joints)
