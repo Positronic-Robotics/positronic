@@ -7,6 +7,7 @@ server declares in its handshake, or the one the flags below build for the loopb
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
         --dataset.path=<episode root> --requests=20
+    ... --embodiment=@positronic.cfg.embodiment.droid_3cam_fake   # the rig the episode was recorded on
     ... --server_address=@positronic.cfg.policy.network_address --server_address.host=<endpoint> \
         --server_address.port=443 --headers=@positronic.cfg.policy.bearer_headers   # a served endpoint
     ... --server_wire=websocket --server_address=@positronic.cfg.policy.network_address   # started by hand
@@ -22,6 +23,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -33,11 +35,14 @@ import pos3
 from positronic_wire import registry, wire
 from positronic_wire.websocket import WebsocketClientWire
 
+import pimm
 import positronic.cfg.ds
+import positronic.cfg.embodiment
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
+from positronic.eval import Embodiment, Observation, Task
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
@@ -46,6 +51,7 @@ from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.base import Obs, Policy, Processor
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import declared_stack, prepare_obs
 from positronic.policy.sequential import Sequential
@@ -88,23 +94,39 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
     )
 
 
-def observations(
-    episode: Episode, rate_hz: float, cameras: Sequence[str] | None = None
-) -> Iterator[tuple[int, dict[str, Any]]]:
-    """Replay time and observation for each sampled control tick.
+def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> Iterator[tuple[int, Obs]]:
+    """Replay time and the observation a rig of ``embodiment`` sends, for each sampled control tick.
 
-    Every signal the episode recorded goes in, so a declared stack finds whatever it asks for.
-    ``cameras`` keeps only those, for a flag-built stack: it stacks the cameras it was told about and
-    forwards the rest at full size, which the wire then carries.
+    The harness reads each channel the embodiment declares from the columns the episode recorded for it.
+    Those columns hold the serializer's output, so the channels here carry no serializer.
     """
+    columns = {
+        name: [signal for signal in episode.signals if signal == name or signal.startswith(f'{name}.')]
+        for name in embodiment.observations
+    }
+    unrecorded = sorted(name for name, recorded in columns.items() if not recorded)
+    if unrecorded:
+        raise ValueError(
+            f'{embodiment.descriptor or "the embodiment"} declares {unrecorded} and the episode does not record '
+            f'it; name the embodiment the episode was recorded on with --embodiment'
+        )
+    recorded = replace(
+        embodiment, observations={name: Observation(obs.source, None) for name, obs in embodiment.observations.items()}
+    )
+    task = Task(episode.static[keys.TASK], None)
     period_ns = int(1e9 / rate_hz)
-    for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
-        sample = dict(episode.time[ts])
-        if cameras is not None:
-            unasked = [key for key in sample if key.startswith(keys.IMAGE_PREFIX) and key not in cameras]
-            for key in unasked:
-                del sample[key]
-        yield ts, sample
+    with pimm.World(virtual_time=True) as world:
+        harness = Harness(recorded)
+        feeds = {}
+        for name, receiver in harness.observations.items():
+            feeds[name], pipe = world.local_pipe()
+            receiver._bind(pipe)
+        for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
+            for name, feed in feeds.items():
+                feed.emit({signal[len(name) :]: episode.signals[signal].time[ts][0] for signal in columns[name]})
+            obs = harness._read_obs(task, {})
+            assert obs is not None, 'every channel was just fed'
+            yield ts, obs
 
 
 def capture(
@@ -265,7 +287,7 @@ def report(rows: list[dict[str, float]]) -> str:
     rate_hz=15.0,
     width=1024,
     height=288,
-    cameras=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
+    embodiment=positronic.cfg.embodiment.droid_fake,
     chunk_rows=24,
     compress_images=True,
     out=None,
@@ -281,7 +303,7 @@ def main(
     rate_hz: float,
     width: int,
     height: int,
-    cameras: Sequence[str],
+    embodiment: Embodiment,
     chunk_rows: int,
     compress_images: bool,
     out: str | None,
@@ -294,16 +316,14 @@ def main(
     chosen = dataset[episode]
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
 
-    opened = (
-        against_server(server_wire, server_address, headers)
-        if server_address is not None
-        else against_loopback(rig_stack(cameras, frames, rate_hz, width, height), compress_images, chunk_rows)
-    )
+    if server_address is not None:
+        opened = against_server(server_wire, server_address, headers)
+    else:
+        cameras = [name for name in embodiment.observations if name.startswith(keys.IMAGE_PREFIX)]
+        opened = against_loopback(rig_stack(cameras, frames, rate_hz, width, height), compress_images, chunk_rows)
     with opened as measured:
         print(f'stack: {json.dumps(measured.stack.to_spec())}')
-        # The declared stack chooses for a named server; the flags do it here, so nothing unasked-for is sent.
-        selected = None if server_address is not None else cameras
-        payloads = capture(observations(chosen, rate_hz, selected), measured.stack, model, requests)
+        payloads = capture(observations(chosen, embodiment, rate_hz), measured.stack, model, requests)
         if not payloads:
             raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
         print(f'captured {len(payloads)} payload(s) off episode {episode}')

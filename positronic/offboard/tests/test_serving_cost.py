@@ -6,8 +6,10 @@ import pytest
 from positronic_wire import websocket, wire
 
 from positronic import keys
+from positronic.cfg.embodiment import droid_3cam_fake, droid_fake
 from positronic.cfg.policy import bearer_headers
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
 from positronic.offboard.server import AUTH_TOKEN_ENV
@@ -129,43 +131,67 @@ def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
             capture(gripless, measured.stack, _model(), requests=1)
 
 
-def test_every_signal_the_episode_records_reaches_the_stack(tmp_path):
-    """A declared stack can ask for a channel no whitelist here knows, and a drop reports a false absence."""
-    # A channel `positronic.keys` does not name.
-    suffixed = 'robot_state.left.q'
+def _droid_episode(path, cameras):
+    """A DROID recording: its observation columns, the commands the rig emitted, and the statics it carries."""
     period_ns = int(1e9 / 15.0)
-    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
+    with DiskEpisodeWriter(path) as writer:
         for tick in range(3):
             at = tick * period_ns
-            writer.append(suffixed, np.zeros(7), at)
+            writer.append(keys.JOINTS, np.zeros(7), at)
+            writer.append(keys.JOINT_VEL, np.zeros(7), at)
+            writer.append(keys.EE_POSE, np.zeros(7), at)
+            writer.append(keys.ROBOT_STATUS, 0, at)
             writer.append(keys.GRIP, 0.0, at)
-            writer.append(keys.WRIST_IMAGE, np.zeros((48, 64, 3), np.uint8), at)
-
-    handed = [obs for _, obs in observations(DiskEpisode(tmp_path / 'episode'), rate_hz=15.0)]
-
-    assert handed, 'the episode spans three ticks'
-    for obs in handed:
-        assert suffixed in obs, 'a suffixed state channel was dropped'
-        assert keys.GRIP in obs and keys.WRIST_IMAGE in obs
-
-
-def test_a_camera_the_flags_did_not_name_is_not_sent(tmp_path):
-    """A flag-built stack forwards an unstacked camera at full size, so the wire carries what nobody asked for."""
-    period_ns = int(1e9 / 15.0)
-    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
-        for tick in range(3):
-            at = tick * period_ns
-            for camera in (*CAMERAS, keys.EXTERIOR_IMAGE_2):
+            for camera in cameras:
                 writer.append(camera, np.zeros((48, 64, 3), np.uint8), at)
-            writer.append(keys.GRIP, 0.0, at)
+            writer.append(keys.TARGET_EE_POSE, np.zeros(7), at)
+            writer.append(keys.TARGET_GRIP, 0.0, at)
+        writer.set_static(keys.TASK, 'pick the spoon')
+        for static in (roboarm_keys.URDF, roboarm_keys.JOINT_NAMES, roboarm_keys.CONTROL_FRAME, roboarm_keys.GRIPPER):
+            writer.set_static(static, 'recorded')
+        writer.set_static('meshes', 'recorded')
+    return DiskEpisode(path)
 
-    episode = DiskEpisode(tmp_path / 'episode')
-    _, by_flags = next(iter(observations(episode, rate_hz=15.0, cameras=CAMERAS)))
-    _, declared = next(iter(observations(episode, rate_hz=15.0)))
 
-    assert keys.EXTERIOR_IMAGE_2 not in by_flags, 'a camera the flags did not name rode along to the wire'
-    assert all(camera in by_flags for camera in CAMERAS)
-    assert keys.EXTERIOR_IMAGE_2 in declared, 'a declared stack picks its own cameras, so every one is handed over'
+def _sent(episode, embodiment):
+    built = embodiment.instantiate()
+    cameras = [name for name in built.observations if name.startswith(keys.IMAGE_PREFIX)]
+    stack = rig_stack(cameras, frames=2, rate_hz=15.0, width=64, height=48)
+    return capture(observations(episode, built, rate_hz=15.0), stack, _model(), requests=1)[0]
+
+
+def test_the_wire_carries_what_the_embodiment_observes_and_nothing_else_the_episode_records(tmp_path):
+    """A rig sends its declared observations, the task and its descriptor; statics and commands stay home."""
+    episode = _droid_episode(tmp_path / 'episode', (*CAMERAS, keys.EXTERIOR_IMAGE_2))
+
+    sent = _sent(episode, droid_fake)
+
+    assert set(sent) == {
+        keys.JOINTS,
+        keys.JOINT_VEL,
+        keys.EE_POSE,
+        keys.ROBOT_STATUS,
+        keys.GRIP,
+        *CAMERAS,
+        keys.TASK,
+        keys.DESCRIPTOR,
+    }
+    assert sent[keys.TASK] == 'pick the spoon'
+
+
+def test_a_channel_the_embodiment_declares_beyond_two_cameras_reaches_the_stack(tmp_path):
+    episode = _droid_episode(tmp_path / 'episode', (*CAMERAS, keys.EXTERIOR_IMAGE_2))
+
+    sent = _sent(episode, droid_3cam_fake)
+
+    assert sent[keys.EXTERIOR_IMAGE_2].shape == (2, 48, 64, 3)
+
+
+def test_a_channel_the_episode_does_not_record_is_named(tmp_path):
+    episode = _droid_episode(tmp_path / 'episode', CAMERAS)
+
+    with pytest.raises(ValueError, match=keys.EXTERIOR_IMAGE_2):
+        _sent(episode, droid_3cam_fake)
 
 
 def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_server, monkeypatch):
