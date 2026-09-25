@@ -192,9 +192,10 @@ def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     clock.advance_to_ns(225_000_000)
     assert run.send({}) == Step({POSITION: 2, MOTOR: 3}, 300_000_000)
     run.close()
+    assert runtime.metadata[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 1
 
 
-def test_an_overrun_skips_all_but_the_last_due_row_and_counts_the_skip(execution):
+def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
     emitted = []
@@ -203,7 +204,7 @@ def test_an_overrun_skips_all_but_the_last_due_row_and_counts_the_skip(execution
         emitted.append(run.send({}).commands[MOTOR])
     run.close()
     assert emitted == [0, 1, 3, 4]
-    prefix = f'{eval_keys.SCHEDULE}.{MOTOR}'
+    prefix = eval_keys.SCHEDULE
     assert runtime.metadata == {
         f'{prefix}.{eval_keys.SCHEDULED}': 5,
         f'{prefix}.{eval_keys.EMITTED}': 4,
@@ -215,7 +216,7 @@ def test_an_overrun_skips_all_but_the_last_due_row_and_counts_the_skip(execution
     }
 
 
-def test_a_new_chunk_counts_the_due_rows_it_replaces_as_dropped(execution):
+def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
     emitted = []
@@ -224,7 +225,7 @@ def test_a_new_chunk_counts_the_due_rows_it_replaces_as_dropped(execution):
         emitted.append(run.send({}).commands[MOTOR])
     run.close()
     assert emitted == [0, 0]
-    prefix = f'{eval_keys.SCHEDULE}.{MOTOR}'
+    prefix = eval_keys.SCHEDULE
     assert runtime.metadata[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
     assert runtime.metadata[f'{prefix}.{eval_keys.EMITTED}'] == 2
     assert runtime.metadata[f'{prefix}.{eval_keys.DROPPED}'] == 4
@@ -232,7 +233,7 @@ def test_a_new_chunk_counts_the_due_rows_it_replaces_as_dropped(execution):
 
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
 def test_late_percentiles_match_numpy(execution, late_ms):
-    # The first row is due when the answer is read, so it is never late.
+    # The first waypoint is due when the answer is read, so it is never late.
     runtime, clock = execution
     chunk = [{MOTOR: i} for i in range(len(late_ms))]
     run = runtime.start(ChunkedSchedule(fps=1), lambda obs: chunk)
@@ -240,7 +241,7 @@ def test_late_percentiles_match_numpy(execution, late_ms):
         clock.advance_to_ns(index * 1_000_000_000 + late * 1_000_000)
         run.send({})
     run.close()
-    prefix = f'{eval_keys.SCHEDULE}.{MOTOR}'
+    prefix = eval_keys.SCHEDULE
     p50, p90 = np.percentile(late_ms, (50, 90))
     assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] == pytest.approx(p50)
     assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] == pytest.approx(p90)

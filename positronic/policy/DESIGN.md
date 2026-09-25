@@ -276,7 +276,7 @@ components' metadata. Processors write episode values into `runtime.metadata` on
 the control thread. The harness snapshots these values when the episode ends,
 before closing the runs. Episode values override definition values with the
 same flattened keys. Each episode gets a separate metadata mapping. The chunk
-schedule writes the rows it planned, emitted and dropped this way.
+schedule writes the waypoints it planned, emitted and dropped this way.
 
 ### Remote policies
 

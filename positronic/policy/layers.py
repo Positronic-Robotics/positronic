@@ -15,8 +15,8 @@ Describe a local stack without creating episode state::
 """
 
 from bisect import insort
-from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -84,69 +84,48 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class _ScheduleAccount:
-    """Per command channel: rows planned, emitted and dropped, how late each emitted row went out, and the
-    largest gap between two emits of one chunk. Each change is written into ``metadata`` at once.
+class _ScheduleStats:
+    """How the chunk schedule played its waypoints, written into ``metadata`` after each change.
 
-    A row is dropped when it came due and went out on no round: a later due row replaced it in the same
-    round, or a new chunk replaced it after its due time.
+    A round sends the commands of every due waypoint, and on each channel the last one wins. The due waypoints
+    before the last one count as dropped, also when one of their channels went out. So do the due waypoints
+    that a new chunk replaces.
     """
 
     def __init__(self, metadata: dict[str, Any]) -> None:
         self._metadata = metadata
-        self._planned: Counter[str] = Counter()
-        self._dropped: Counter[str] = Counter()
-        self._sorted_late_ns: defaultdict[str, list[int]] = defaultdict(list)
-        self._late_max_ns: Counter[str] = Counter()
-        self._gap_max_ns: Counter[str] = Counter()
-        self._chunk_emit_ns: dict[str, int] = {}
+        self._scheduled = 0
+        self._emitted = 0
+        self._sorted_late_ns: list[int] = []
+        self._gap_max_ns = 0
+        self._last_emit_ns: int | None = None
 
-    def plan(self, rows: Iterable[Commands]) -> None:
-        """Take a new chunk's rows. Rows of the chunk before it that are still due must go to ``drop`` first."""
-        self._chunk_emit_ns.clear()
-        planned: Counter[str] = Counter()
-        for row in rows:
-            planned.update(row.keys())
-        self._planned.update(planned)
-        self._write(planned)
+    def new_chunk(self, waypoints: int) -> None:
+        self._scheduled += waypoints
+        self._last_emit_ns = None
+        self._write(queued=waypoints)
 
-    def drop(self, rows: Iterable[Commands]) -> None:
-        dropped: Counter[str] = Counter()
-        for row in rows:
-            dropped.update(row.keys())
-        self._dropped.update(dropped)
-        self._write(dropped)
+    def emit(self, due_ns: int, now_ns: int, queued: int) -> None:
+        self._emitted += 1
+        insort(self._sorted_late_ns, now_ns - due_ns)
+        if self._last_emit_ns is not None:
+            self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
+        self._last_emit_ns = now_ns
+        self._write(queued)
 
-    def emit(self, due: Sequence[tuple[Commands, int]], now_ns: int) -> dict[str, Any]:
-        """The commands of the due ``(row, due_ns)`` rows: per channel, the last row wins and the rest drop."""
-        commands: dict[str, Any] = {}
-        due_ns_by_name: dict[str, int] = {}
-        for row, due_ns in due:
-            self._dropped.update(name for name in row if name in due_ns_by_name)
-            due_ns_by_name.update(dict.fromkeys(row, due_ns))
-            commands.update(row)
-        for name, due_ns in due_ns_by_name.items():
-            late_ns = now_ns - due_ns
-            insort(self._sorted_late_ns[name], late_ns)
-            self._late_max_ns[name] = max(self._late_max_ns[name], late_ns)
-            if name in self._chunk_emit_ns:
-                self._gap_max_ns[name] = max(self._gap_max_ns[name], now_ns - self._chunk_emit_ns[name])
-            self._chunk_emit_ns[name] = now_ns
-        self._write(due_ns_by_name)
-        return commands
-
-    def _write(self, names: Iterable[str]) -> None:
-        for name in names:
-            prefix = f'{eval_keys.SCHEDULE}.{name}'
-            late_ns = self._sorted_late_ns[name]
-            self._metadata[f'{prefix}.{eval_keys.SCHEDULED}'] = self._planned[name]
-            self._metadata[f'{prefix}.{eval_keys.EMITTED}'] = len(late_ns)
-            self._metadata[f'{prefix}.{eval_keys.DROPPED}'] = self._dropped[name]
-            if late_ns:
-                self._metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
-                self._metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
-                self._metadata[f'{prefix}.{eval_keys.LATE_MAX_MS}'] = self._late_max_ns[name] / 1e6
-                self._metadata[f'{prefix}.{eval_keys.GAP_MAX_MS}'] = self._gap_max_ns[name] / 1e6
+    def _write(self, queued: int) -> None:
+        values: dict[str, float] = {
+            eval_keys.SCHEDULED: self._scheduled,
+            eval_keys.EMITTED: self._emitted,
+            eval_keys.DROPPED: self._scheduled - self._emitted - queued,
+        }
+        if late_ns := self._sorted_late_ns:
+            values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
+            values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
+            values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
+            values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
+        for name, value in values.items():
+            self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
 
     @staticmethod
     def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
@@ -185,7 +164,7 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
-        account = _ScheduleAccount(runtime.metadata)
+        stats = _ScheduleStats(runtime.metadata)
         obs = yield
         try:
             while True:
@@ -198,18 +177,20 @@ class ChunkedSchedule(Policy):
                     if self._horizon_sec is not None:
                         duration_sec = min(duration_sec, self._horizon_sec)
                     end_ns = now_ns + round(duration_sec * 1e9)
-                    account.drop(row for row, due_ns in trajectory if due_ns <= now_ns)
                     trajectory = deque(
                         (waypoint, now_ns + round(i * period_sec * 1e9))
                         for i, waypoint in enumerate(chunk)
                         if i * period_sec < duration_sec
                     )
-                    account.plan(row for row, _ in trajectory)
+                    stats.new_chunk(len(trajectory))
 
-                due = []
+                commands: dict[str, Any] = {}
+                due_ns = None
                 while trajectory and trajectory[0][1] <= now_ns:
-                    due.append(trajectory.popleft())
-                commands = account.emit(due, now_ns)
+                    waypoint, due_ns = trajectory.popleft()
+                    commands.update(waypoint)
+                if due_ns is not None:
+                    stats.emit(due_ns, now_ns, queued=len(trajectory))
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)

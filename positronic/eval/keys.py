@@ -42,14 +42,14 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# How well the chunk schedule played its rows, per command channel. A run writes
-# f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}' into its metadata, and the episode records it under
-# ``policy.keys.POLICY_META``. ``DROPPED`` counts a row that came due and went out on no round.
+# How well the chunk schedule played its waypoints. A run writes f'{SCHEDULE}.{DROPPED}' into its metadata,
+# and the episode records it under ``policy.keys.POLICY_META``. ``DROPPED`` counts a due waypoint that a later
+# waypoint replaced.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
-# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk's rows.
+# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'

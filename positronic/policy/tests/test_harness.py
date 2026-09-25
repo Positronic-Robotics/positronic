@@ -934,7 +934,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
     assert 2 in np.diff(list(positions.values()))
-    schedule = f'{policy_keys.POLICY_META}.{eval_keys.SCHEDULE}.{MOTOR}'
+    schedule = f'{policy_keys.POLICY_META}.{eval_keys.SCHEDULE}'
     assert episode.static[f'{schedule}.{eval_keys.SCHEDULED}'] == 4
     assert episode.static[f'{schedule}.{eval_keys.EMITTED}'] == 3
     assert episode.static[f'{schedule}.{eval_keys.DROPPED}'] == 0
