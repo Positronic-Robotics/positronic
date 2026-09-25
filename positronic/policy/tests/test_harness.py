@@ -346,7 +346,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
         DsWriterCommandType.START_EPISODE,
         DsWriterCommandType.STOP_EPISODE,
         DsWriterCommandType.START_EPISODE,
-        DsWriterCommandType.STOP_EPISODE,
+        DsWriterCommandType.ABORT_EPISODE,
     ]
 
 
@@ -669,7 +669,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
-def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
+def test_run_metadata_overrides_definition_and_is_snapshotted_after_the_run_closes(episode_harness, tmp_path):
     class Record(Policy):
         def meta(self):
             return {'config.name': 'record', 'config.status': 'initial'}
@@ -698,7 +698,7 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
         meta = h.records.values[-1][1].static_data
         assert meta['inference.policy.config.name'] == 'record'
         assert meta['inference.policy.config.status'] == 'active'
-        assert meta['inference.policy.events'] == ['started']
+        assert meta['inference.policy.events'] == ['started', 'closed']
 
 
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
@@ -787,6 +787,8 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
                 pass
             h.world.request_stop()
             list(h.loop)
+    last_record = DsWriterCommandType.STOP_EPISODE if ending == 'done' else DsWriterCommandType.ABORT_EPISODE
+    assert h.records.values[-1][1].type is last_record
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     reset = next(s for s in spans if s.name == telemetry_keys.SPAN_RESET)
@@ -852,7 +854,7 @@ def test_a_step_without_an_observation_records_only_the_observe_values(episode_h
         assert telemetry_keys.ATTR_STEP_EMIT_MS not in step.attrs
 
 
-def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
+def test_shutdown_closes_the_policy_then_finishes_its_calls_then_releases_its_resources(episode_harness):
     h = episode_harness
     started, release = threading.Event(), threading.Event()
     order = []
@@ -871,6 +873,7 @@ def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
                     yield Step({}, runtime.time_ns + 1_000_000_000)
             finally:
                 order.append('policy closed')
+                runtime.at_close(lambda: order.append('resource released'))
 
     # A real rig can end its episode while a worker is still answering.
     h.embodiment.simulated = False
@@ -886,7 +889,7 @@ def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
     finally:
         release.set()
         releaser.join()
-    assert order == ['inference finished', 'policy closed']
+    assert order == ['policy closed', 'inference finished', 'resource released']
     with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
 

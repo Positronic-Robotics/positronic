@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial
@@ -108,6 +109,8 @@ class Executor(Runtime):
         self._tick_time_ns: int | None = None
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._answers: set[_UnchargedAnswer[Any]] = set()
+        self._at_close = ExitStack()
+        self._closed = False
 
     @property
     def time_ns(self) -> int:
@@ -191,8 +194,16 @@ class Executor(Runtime):
                 pending, timeout=min(delay_sec, remaining_sec), return_when=concurrent.futures.FIRST_COMPLETED
             )
 
+    def at_close(self, callback: Callable[[], None]) -> None:
+        """A callback given after ``close`` runs at once: no submitted call is left to wait for."""
+        if self._closed:
+            callback()
+        else:
+            self._at_close.callback(callback)
+
     def close(self) -> None:
-        """Cancel queued calls, drain running calls, and report failures whose results were never read."""
+        """Cancel queued calls, drain running calls, report failures whose results were never read, and run
+        the ``at_close`` callbacks."""
         self._pool.shutdown(wait=True, cancel_futures=True)
         for answer in self._answers:
             if answer.result_read or answer.call.cancelled():
@@ -201,3 +212,5 @@ class Executor(Runtime):
             if (exc := answer.call.exception()) is not None:
                 logging.error('A submitted function failed without its result being read: %s', exc)
         self._answers.clear()
+        self._closed = True
+        self._at_close.close()

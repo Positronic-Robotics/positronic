@@ -14,7 +14,6 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
-from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from math import isfinite
@@ -85,55 +84,44 @@ class PauseOnUnavailable(Policy):
 
 
 class _ScheduleStats:
-    """How the chunk schedule played its waypoints, written into ``metadata`` after each change.
+    """How the chunk schedule played its waypoints.
 
     A round sends the commands of every due waypoint, and on each channel the last one wins. The due waypoints
     before the last one count as dropped, also when one of their channels went out. So do the due waypoints
     that a new chunk replaces.
     """
 
-    def __init__(self, metadata: dict[str, Any]) -> None:
-        self._metadata = metadata
+    def __init__(self) -> None:
         self._scheduled = 0
-        self._emitted = 0
-        self._sorted_late_ns: list[int] = []
+        self._late_ns: list[int] = []
         self._gap_max_ns = 0
         self._last_emit_ns: int | None = None
 
     def new_chunk(self, waypoints: int) -> None:
         self._scheduled += waypoints
         self._last_emit_ns = None
-        self._write(queued=waypoints)
 
-    def emit(self, due_ns: int, now_ns: int, queued: int) -> None:
-        self._emitted += 1
-        insort(self._sorted_late_ns, now_ns - due_ns)
+    def emit(self, due_ns: int, now_ns: int) -> None:
+        self._late_ns.append(now_ns - due_ns)
         if self._last_emit_ns is not None:
             self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
         self._last_emit_ns = now_ns
-        self._write(queued)
 
-    def _write(self, queued: int) -> None:
+    def write(self, metadata: dict[str, Any], queued: int) -> None:
+        emitted = len(self._late_ns)
         values: dict[str, float] = {
             eval_keys.SCHEDULED: self._scheduled,
-            eval_keys.EMITTED: self._emitted,
-            eval_keys.DROPPED: self._scheduled - self._emitted - queued,
+            eval_keys.EMITTED: emitted,
+            eval_keys.DROPPED: self._scheduled - emitted - queued,
         }
-        if late_ns := self._sorted_late_ns:
-            values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
-            values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
-            values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
+        if self._late_ns:
+            p50, p90 = np.percentile(self._late_ns, (50, 90)) / 1e6
+            values[eval_keys.LATE_P50_MS] = float(p50)
+            values[eval_keys.LATE_P90_MS] = float(p90)
+            values[eval_keys.LATE_MAX_MS] = max(self._late_ns) / 1e6
             values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
         for name, value in values.items():
-            self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
-
-    @staticmethod
-    def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
-        """``np.percentile``'s linear interpolation, in constant time, because the control thread calls it per emit."""
-        position = fraction * (len(values) - 1)
-        low = int(position)
-        high = min(low + 1, len(values) - 1)
-        return values[low] + (values[high] - values[low]) * (position - low)
+            metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
 
 
 class ChunkedSchedule(Policy):
@@ -164,7 +152,7 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
-        stats = _ScheduleStats(runtime.metadata)
+        stats = _ScheduleStats()
         obs = yield
         try:
             while True:
@@ -190,13 +178,14 @@ class ChunkedSchedule(Policy):
                     waypoint, due_ns = trajectory.popleft()
                     commands.update(waypoint)
                 if due_ns is not None:
-                    stats.emit(due_ns, now_ns, queued=len(trajectory))
+                    stats.emit(due_ns, now_ns)
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:
                 answer.cancel()
+            stats.write(runtime.metadata, queued=len(trajectory))
 
     def meta(self) -> dict[str, Any]:
         meta = {policy_keys.ACTION_FPS: self._fps}
