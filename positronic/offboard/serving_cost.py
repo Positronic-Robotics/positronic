@@ -13,7 +13,8 @@ Usage
     ... --server_wire=websocket_unix --server_address=@positronic.cfg.policy.socket_address \
         --server_address.uds=<socket>     # a server on this machine
     ... --compress_images=False           # loopback only: send raw stacks instead of per-frame JPEG
-    ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
+    ... --frames=25 --rate_hz=15 --width=1024 --height=288 --out=rows.json
+    ... --chunk_rows=24                   # actions per reply; must equal a named server's chunk length
 """
 
 import contextlib
@@ -287,6 +288,7 @@ def main(
 ):
     # configuronic hands the CLI token through as a string.
     out_path = Path(out) if out is not None else None
+    # TODO: let the named server set the pace.
     model = partial(InstantChunk(chunk_rows), session_id=uuid4().hex)
 
     chosen = dataset[episode]
