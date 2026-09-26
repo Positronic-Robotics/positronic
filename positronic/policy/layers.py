@@ -14,6 +14,7 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
+from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from math import isfinite
@@ -112,7 +113,7 @@ class ChunkedSchedule(Policy):
         def __init__(self, metadata: dict[str, Any]) -> None:
             self._metadata = metadata
             self._scheduled = 0
-            self._late_ns: list[int] = []
+            self._sorted_late_ns: list[int] = []
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
 
@@ -124,27 +125,34 @@ class ChunkedSchedule(Policy):
                 self._scheduled += planned
                 self._last_emit_ns = None
             if due_ns is not None:
-                self._late_ns.append(now_ns - due_ns)
+                insort(self._sorted_late_ns, now_ns - due_ns)
                 if self._last_emit_ns is not None:
                     self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
                 self._last_emit_ns = now_ns
             self._write(queued)
 
         def _write(self, queued: int) -> None:
-            emitted = len(self._late_ns)
+            late_ns = self._sorted_late_ns
             values: dict[str, float] = {
                 eval_keys.SCHEDULED: self._scheduled,
-                eval_keys.EMITTED: emitted,
-                eval_keys.DROPPED: self._scheduled - emitted - queued,
+                eval_keys.EMITTED: len(late_ns),
+                eval_keys.DROPPED: self._scheduled - len(late_ns) - queued,
             }
-            if self._late_ns:
-                p50, p90 = np.percentile(self._late_ns, (50, 90)) / 1e6
-                values[eval_keys.LATE_P50_MS] = float(p50)
-                values[eval_keys.LATE_P90_MS] = float(p90)
-                values[eval_keys.LATE_MAX_MS] = max(self._late_ns) / 1e6
+            if late_ns:
+                values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
+                values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
+                values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
                 values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
             for name, value in values.items():
                 self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
+
+        @staticmethod
+        def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
+            """``np.percentile``'s linear interpolation in constant time: the control thread calls it each round."""
+            position = fraction * (len(values) - 1)
+            low = int(position)
+            high = min(low + 1, len(values) - 1)
+            return values[low] + (values[high] - values[low]) * (position - low)
 
     def __init__(self, fps: float, horizon_sec: float | None = None, record_stats: bool = True) -> None:
         if not isfinite(fps) or fps <= 0:
