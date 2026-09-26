@@ -141,7 +141,7 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "horizon_sec": 1.0}},
       {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
-    "compress_images": false,
+    "compress_images": true,
     "positronic_version": "0.2.1"
   }
 }
@@ -166,7 +166,7 @@ This metadata tells the client:
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the rig JPEG-encodes frames before
-  sending, for an endpoint behind a proxy with a message-size cap.
+  sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
