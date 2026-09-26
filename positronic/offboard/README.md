@@ -416,3 +416,5 @@ Every vendor ships a model config plus named pipelines and serves them through t
 - [Training Workflow](../../docs/training-workflow.md) - Starting inference servers
 - [Inference Guide](../../docs/inference.md) - Remote policy usage and patterns
 - [Model Selection](../../docs/model-selection.md) - Choosing between vendors
+- [Measuring where a round trip's time goes](measuring_latency.md) - Dividing a round trip between the
+  server, the link and the receiver
