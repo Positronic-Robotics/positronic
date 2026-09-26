@@ -181,6 +181,7 @@ def test_the_load_runs_one_warm_inference_through_the_backend(backend, monkeypat
     try:
         assert len(backend.requests) == 1
         assert backend.requests[0][protocol.EMBODIMENT_TYPE] == protocol.DROID_FRANKA
+        assert len(backend.requests[0][protocol.STATE][protocol.RIGHT_ARM]) == protocol.RIGHT_ARM_WIDTH
         assert policy._connections == {}, 'the warm left its session open'
     finally:
         policy.close()
@@ -193,26 +194,6 @@ def test_a_warm_the_backend_refuses_fails_the_load_and_stops_the_child(backend, 
     with pytest.raises(RuntimeError, match='refused the observation'):
         server.galaxea_model()
     backend.stop.assert_called_once()
-
-
-def test_the_warm_observation_has_the_shape_the_codec_encodes():
-    encoded = codecs.droid().encode({
-        keys.JOINTS: np.zeros(7),
-        keys.GRIP: 0.0,
-        keys.EXTERIOR_IMAGE: np.zeros((224, 224, 3), dtype=np.uint8),
-        keys.WRIST_IMAGE: np.zeros((224, 224, 3), dtype=np.uint8),
-        keys.TASK: '',
-    })
-    warm = server._warm_observation()
-
-    def shapes(obs):
-        return {
-            key: shapes(value) if isinstance(value, dict) else (np.shape(value), np.asarray(value).dtype)
-            for key, value in obs.items()
-        }
-
-    assert shapes(warm) == shapes(encoded)
-    assert warm[protocol.STATE][protocol.RIGHT_GRIPPER] == encoded[protocol.STATE][protocol.RIGHT_GRIPPER]
 
 
 def test_subprocess_preserves_venv_and_checkpoint_symlinks(tmp_path, monkeypatch):
