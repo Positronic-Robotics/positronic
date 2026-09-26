@@ -43,7 +43,7 @@ In another terminal, forward the endpoint:
 ssh -N -L 18024:127.0.0.1:18024 notebook
 ```
 
-The server is ready when `curl --fail http://localhost:18024/api/v1/models` returns the served checkpoint.
+The server is ready when `curl --fail -X POST http://localhost:18024/api/v1/keepalive` answers.
 The eval client and MuJoCo run locally, with a working renderer; model prediction runs on the server.
 A local server can instead be started with the same Compose service and `--service-ports`.
 

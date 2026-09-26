@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
+from starlette.websockets import WebSocketState
 
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import server_wire, websocket_wire
@@ -39,6 +40,8 @@ class _DummyWebSocket:
     def __init__(self):
         self.client = ('test', 0)
         self.query_params = QueryParams()
+        # Read by the wire to tell a closed session from a bug, as on starlette's own `WebSocket`.
+        self.application_state = WebSocketState.CONNECTED
         self.accept = AsyncMock()
         self._send_bytes = AsyncMock()
         self._close = AsyncMock()
@@ -50,6 +53,7 @@ class _DummyWebSocket:
         await self._send_bytes(payload)
 
     async def close(self, **kwargs):
+        self.application_state = WebSocketState.DISCONNECTED
         await self._close(**kwargs)
 
     def as_connection(self) -> websocket_wire.WebsocketServerConnection:

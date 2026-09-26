@@ -209,14 +209,15 @@ esac
 RESP=""
 CODE=""
 for i in $(seq 1 50); do
-  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" || true)
+  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -X POST -H "Authorization: Bearer $AUTH_TOKEN" \
+    "$SERVE_URL/api/v1/keepalive" || true)
   CODE=${OUT##*$'\n'}
   if [ "$CODE" = "200" ]; then RESP=${OUT%$'\n'*}; break; fi
   sleep 30
 done
 STATUS=0
 if [ "$CODE" = "200" ]; then
-  note "models: $RESP"
+  note "keepalive: $RESP"
   # That was an HTTP route. Sessions are WebSockets, and a managed ingress can carry the two differently,
   # so the endpoint answers the same assertions the suite otherwise makes against a server of its own.
   if POSITRONIC_ENDPOINT_WIRE=websocket_tls POSITRONIC_ENDPOINT_HOST="${SERVE_URL#https://}" \

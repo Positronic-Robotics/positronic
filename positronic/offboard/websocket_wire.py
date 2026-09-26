@@ -7,11 +7,12 @@ import os
 import socket
 import stat
 from contextlib import suppress
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 from starlette.websockets import WebSocketState
@@ -50,6 +51,9 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         return self._websocket.query_params
 
     async def send(self, message: bytes) -> None:
+        # starlette refuses a send after the close with a bare RuntimeError, which a caller reads as a bug.
+        if self._websocket.application_state is WebSocketState.DISCONNECTED:
+            raise wire.PeerDisconnected(f'The session on {self.peer} is closed')
         try:
             await self._websocket.send_bytes(message)
         except WebSocketDisconnect as e:
@@ -157,7 +161,7 @@ WS_IMPL = 'websockets-sansio'
 
 
 class WebsocketWire(server_wire.Wire):
-    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the API answers beside it.
+    """The websocket wire: a session upgrades on ``wire.SESSION_PATH``, and the keepalive route answers beside it.
 
     ``served_address`` is what this binds: a host and a port, or a Unix socket path. A socket file
     stays after ``stop``, where an unlink could take a path a successor has claimed.
@@ -185,7 +189,10 @@ class WebsocketWire(server_wire.Wire):
         return self._served_address
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        keepalive: server_wire.KeepaliveHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
         self._served = False
         binds = self._binds
@@ -201,8 +208,8 @@ class WebsocketWire(server_wire.Wire):
             bound_port = self._sockets[0].getsockname()[1]
             self._served_address = server_wire.ServedHostPort(host, bound_port)
         app = FastAPI()
-        app.include_router(api)
         self._route_sessions(app, session, authorized)
+        self._route_keepalive(app, keepalive, authorized)
         config = uvicorn.Config(
             app,
             host=host,
@@ -239,6 +246,21 @@ class WebsocketWire(server_wire.Wire):
                     await websocket.close()
 
         app.websocket(wire.SESSION_PATH, dependencies=[Depends(require_auth)])(serve_model)
+
+    @staticmethod
+    def _route_keepalive(
+        app: FastAPI, keepalive: server_wire.KeepaliveHandler, authorized: server_wire.Authorized
+    ) -> None:
+        """Answer ``POST wire.KEEPALIVE_PATH`` under the credential the session route takes."""
+
+        async def require_auth(request: Request) -> None:
+            if not authorized(request.headers):
+                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail='Invalid or missing bearer token')
+
+        async def answer() -> dict[str, int | None]:
+            return {wire.ALIVE_SECONDS: keepalive()}
+
+        app.post(wire.KEEPALIVE_PATH, dependencies=[Depends(require_auth)])(answer)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

@@ -1,7 +1,7 @@
 import asyncio
 import errno
-import json
 import logging
+import math
 import os
 import pathlib
 import socket
@@ -9,17 +9,17 @@ import stat
 import threading
 import time
 import urllib.parse
-import urllib.request
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import configuronic as cfn
 import pytest
-from fastapi import APIRouter
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
+from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
+from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
 from positronic.offboard import keys as offboard_keys
@@ -58,7 +58,10 @@ class _FailingWire(server_wire.Wire):
         return server_wire.ServedHostPort('localhost', 0)
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        keepalive: server_wire.KeepaliveHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
         pass
 
@@ -78,7 +81,10 @@ class _UnbindableWire(server_wire.Wire):
         raise AssertionError('it never bound')
 
     async def start(
-        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+        self,
+        session: server_wire.SessionHandler,
+        keepalive: server_wire.KeepaliveHandler,
+        authorized: server_wire.Authorized,
     ) -> None:
         raise OSError('that port is taken')
 
@@ -171,10 +177,9 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
             sock.close()
 
 
-def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took(make_mock_model):
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took():
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
-    asyncio.run(bound.start(MagicMock(), lambda _headers: True, server.api))
+    asyncio.run(bound.start(MagicMock(), MagicMock(), lambda _headers: True))
     try:
         assert len(bound._sockets) == 1
         assert _bound_port(bound) == bound._sockets[0].getsockname()[1] != 0
@@ -259,13 +264,6 @@ def test_a_session_route_that_names_a_checkpoint_is_refused(stub_server):
     host, port, *_ = stub_server
     with pytest.raises(InvalidStatus):
         connect(f'ws://{host}:{port}{wire.SESSION_PATH}/other').close()
-
-
-def test_the_model_route_answers_the_served_checkpoint(stub_server):
-    """Probes read this route to tell that a server has loaded its model."""
-    host, port, *_ = stub_server
-    with urllib.request.urlopen(f'http://{host}:{port}{wire.MODELS_PATH}', timeout=5.0) as answer:
-        assert json.loads(answer.read()) == {wire.MODELS_KEY: ['stub']}
 
 
 def test_a_client_that_leaves_mid_inference_is_a_lost_peer_not_an_error(stub_server, caplog):
@@ -883,7 +881,7 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
-            b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'
+            b'POST /api/v1/keepalive HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n'
             b'Authorization: Bearer t\xf6ken\r\nConnection: close\r\n\r\n'
         )
         status = sock.recv(64).split(b' ')[1]
@@ -930,3 +928,112 @@ def test_a_shutdown_during_the_load_ends_the_server_once_it_loads(make_mock_mode
 
     serving.join(timeout=10.0)
     assert not serving.is_alive(), 'the shutdown asked for during the load was lost'
+
+
+def _ws_client(host: str, port: int) -> InferenceClient:
+    return InferenceClient(
+        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    )
+
+
+class TestKeepalive:
+    def test_it_answers_the_seconds_the_idle_timeout_leaves(self, start_server, make_mock_model):
+        policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=2)
+        assert InferenceClient(*served.ws()).keepalive() == 120
+
+    def test_a_server_with_no_idle_timeout_answers_none(self, stub_server):
+        host, port, *_ = stub_server
+        assert _ws_client(host, port).keepalive() is None
+
+    def test_an_infinite_idle_timeout_answers_none(self, start_server, make_mock_model):
+        policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+        served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=math.inf)
+        assert InferenceClient(*served.ws()).keepalive() is None
+
+    def test_a_nan_idle_timeout_is_refused_at_construction(self, make_mock_model):
+        with pytest.raises(ValueError, match='nan'):
+            PolicyServer(
+                lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=math.nan
+            )
+
+    def test_it_holds_off_the_idle_timeout_as_a_session_does(self, make_mock_model):
+        server = PolicyServer(
+            lambda: make_mock_model([], {}),
+            PolicyDeployment(ChunkedSchedule(fps=10)),
+            idle_timeout_min=_A_MOMENT_IDLE / 60,
+        )
+        wire_ = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
+        ready = threading.Event()
+        serving = threading.Thread(target=server.serve, args=([wire_], ready.set), daemon=True)
+        serving.start()
+        assert ready.wait(timeout=10.0)
+        client = _ws_client('localhost', _bound_port(wire_))
+
+        held_until = time.monotonic() + _A_MOMENT_IDLE * 4
+        while time.monotonic() < held_until:
+            client.keepalive()
+            time.sleep(_A_MOMENT_IDLE / 5)
+        assert serving.is_alive(), 'the idle timeout stopped a server that kept answering keepalive calls'
+
+        serving.join(timeout=_A_MOMENT_IDLE * 20)
+        assert not serving.is_alive(), 'the server outlived its idle timeout once the keepalive calls stopped'
+
+    def test_it_answers_only_once_the_model_has_loaded(self, make_mock_model, socket_path):
+        source = _HeldBuild(make_mock_model([], {}))
+        server = PolicyServer(source, PolicyDeployment(ChunkedSchedule(fps=10)))
+        wire_ = websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(pathlib.Path(socket_path)))
+        ready = threading.Event()
+        serving = threading.Thread(target=server.serve, args=([wire_], ready.set), daemon=True)
+        serving.start()
+        try:
+            assert source.loading.wait(timeout=5.0)
+            client = InferenceClient(
+                client_websocket.WebsocketUnixClientWire(),
+                wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, ''),
+            )
+            with pytest.raises(wire.ConnectRefused):
+                client.keepalive()
+            source.release.set()
+            assert ready.wait(timeout=10.0)
+            assert client.keepalive() is None
+        finally:
+            source.release.set()
+            server.shutdown()
+            serving.join(timeout=10.0)
+
+    def test_it_answers_over_a_unix_socket(self, unix_stub_server):
+        served, _policy = unix_stub_server
+        assert InferenceClient(*served.unix()).keepalive() is None
+
+    def test_it_takes_the_token_that_gates_the_session(self, authed_endpoint):
+        endpoint, token = authed_endpoint
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient(*endpoint).keepalive()
+        assert refused.value.refusal is wire.Refusal.FORBIDDEN
+        InferenceClient(*endpoint, headers={AUTH_HEADER: bearer(token)}).keepalive()
+
+    def test_a_404_where_a_session_server_answers_is_a_server_without_the_call(self, stub_server, monkeypatch):
+        host, port, *_ = stub_server
+        monkeypatch.setattr(wire, 'KEEPALIVE_PATH', f'{wire.API_PATH}/no-such-call')
+        with pytest.raises(wire.KeepaliveUnsupported):
+            _ws_client(host, port).keepalive()
+
+    @pytest.mark.parametrize(
+        ('raised', 'refusal'),
+        [
+            (InvalidStatus(Response(404, 'Not Found', Headers())), wire.Refusal.FINAL),
+            (InvalidStatus(Response(503, 'Service Unavailable', Headers())), wire.Refusal.COLD),
+            (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.COLD),
+        ],
+    )
+    def test_a_404_where_no_session_server_answers_refuses_as_the_probe_reads_it(
+        self, stub_server, monkeypatch, raised, refusal
+    ):
+        """An address that serves something else answers 404 to the call and no upgrade to the probe."""
+        host, port, *_ = stub_server
+        monkeypatch.setattr(wire, 'KEEPALIVE_PATH', f'{wire.API_PATH}/no-such-call')
+        monkeypatch.setattr(client_websocket.WebsocketClientWire, '_connect', MagicMock(side_effect=raised))
+        with pytest.raises(wire.ConnectRefused) as refused:
+            _ws_client(host, port).keepalive()
+        assert refused.value.refusal is refusal

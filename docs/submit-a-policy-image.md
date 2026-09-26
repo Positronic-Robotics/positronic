@@ -107,7 +107,7 @@ uv run positronic eval run --eval=<eval> \
    exits, and the run fails with `policy_setup_crash`.
 4. It denies all network egress from the container for the whole run. Only the simulator can
    reach your container, on port 8000. A download at start hangs or fails.
-5. It waits for `GET /api/v1/models` to answer on port 8000. VM boot, the image pull and your
+5. It waits for `POST /api/v1/keepalive` to answer on port 8000. VM boot, the image pull and your
    server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
    to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
@@ -131,17 +131,17 @@ reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe
 not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
 albumentations prints a `UserWarning` about fetching its version; ignore it.
 
-On a machine with a GPU, serve it with the network denied and dial the models route from inside
+On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
 
 ```bash
 docker network create --internal noegress
 docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/models', headers={'Authorization': 'Bearer test'})).read())"
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
 ```
 
-The route answers `{"models": [...]}` with the token and `401` without it.
+The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed, and `401` without it.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:

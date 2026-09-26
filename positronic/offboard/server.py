@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import os
 import time
 from collections import Counter
@@ -16,7 +17,6 @@ from typing import Any
 from uuid import uuid4
 
 import configuronic as cfn
-from fastapi import APIRouter, Depends, Header, HTTPException
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
@@ -116,6 +116,8 @@ class PolicyServer:
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
 
+        if idle_timeout_min is not None and math.isnan(idle_timeout_min):
+            raise ValueError(f'idle_timeout_min must be a number of minutes, got {idle_timeout_min}')
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
@@ -134,15 +136,6 @@ class PolicyServer:
             raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
 
-        self._api = APIRouter()
-        # TODO: positronic#754 removes this route; `/api/v1/ready` replaces it as the readiness check.
-        self._api.get(wire.MODELS_PATH, dependencies=[Depends(self._require_http_auth)])(self.get_models)
-
-    @property
-    def api(self) -> APIRouter:
-        """The server's own HTTP routes: the model route, which answers the one checkpoint this server serves."""
-        return self._api
-
     def _token_matches(self, authorization: str | None) -> bool:
         if self._auth_token is None:
             return True
@@ -156,14 +149,18 @@ class PolicyServer:
         """Whether the session headers carry the bearer token this server gates on."""
         return self._token_matches(headers.get(AUTH_HEADER.lower()))
 
-    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
-        if not self._token_matches(authorization):
-            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+    def _idle_timeout_s(self) -> float | None:
+        """The idle time after which the server stops, or ``None`` where idling never stops it."""
+        if self.idle_timeout_min is None or not 0 < self.idle_timeout_min < math.inf:
+            return None
+        return self.idle_timeout_min * 60
 
-    async def get_models(self) -> dict:
-        assert self._model is not None, 'The route answered before the model loaded'
-        checkpoint_id = self._model.meta().get(offboard_keys.CHECKPOINT_ID)
-        return {wire.MODELS_KEY: [] if checkpoint_id is None else [checkpoint_id]}
+    def _keepalive(self) -> int | None:
+        """Reset the idle timer, as a session does. Returns the whole seconds the server stays alive after the
+        call, or ``None`` where idling never stops it."""
+        self._last_activity = time.monotonic()
+        timeout_s = self._idle_timeout_s()
+        return None if timeout_s is None else math.floor(timeout_s)
 
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
@@ -271,9 +268,9 @@ class PolicyServer:
             self._last_activity = time.monotonic()
 
     async def _idle_watchdog(self):
-        """Return once no session has touched the server for ``idle_timeout_min``."""
-        assert self.idle_timeout_min is not None
-        timeout_s = self.idle_timeout_min * 60
+        """Return once no session or keepalive call has touched the server for ``idle_timeout_min``."""
+        timeout_s = self._idle_timeout_s()
+        assert timeout_s is not None
         poll = min(timeout_s, 30)
         while True:
             await asyncio.sleep(poll)
@@ -316,7 +313,7 @@ class PolicyServer:
             ending: list[asyncio.Task] = []
             try:
                 for w in wires:
-                    await w.start(self._serve_session, self._authorized, self.api)
+                    await w.start(self._serve_session, self._keepalive, self._authorized)
                     started.append(w)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
@@ -324,7 +321,7 @@ class PolicyServer:
                 serving = [asyncio.create_task(w.serve()) for w in started]
                 # What else ends the server: a caller's ``shutdown``, and the idle timeout.
                 ending = [asyncio.create_task(self._stop.wait())]
-                if self.idle_timeout_min and self.idle_timeout_min > 0:
+                if self._idle_timeout_s() is not None:
                     ending.append(asyncio.create_task(self._idle_watchdog()))
                 await asyncio.wait(serving + ending, return_when=asyncio.FIRST_COMPLETED)
             finally:
