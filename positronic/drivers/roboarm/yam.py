@@ -1,16 +1,12 @@
-"""Driver for the real i2rt YAM arm — one CAN chain carrying six joints plus the gripper.
+"""Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-i2rt exposes joint-space position-PD with gravity compensation only (its own ~100 Hz control thread), so this
-driver solves FK/IK itself against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``DEFAULT_FRAME`` —
-the control frame the training data is expressed in. The upstream MJCF package is vendored whole
-(``scene.xml`` and meshes included); the driver itself loads only ``yam.xml``. The gripper is the chain's 7th
-DOF, normalized 0=closed/1=open — the inverse of positronic's grip convention — so grip values are inverted in
-both directions.
+i2rt gives joint-space position-PD only, so the driver solves FK/IK against the vendored MJCF
+(``assets/mujoco/i2rt_yam/yam.xml``) at ``DEFAULT_FRAME``. The chain reads the gripper as 0=closed/1=open,
+the inverse of positronic's grip, so the driver inverts it both ways.
 
-Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
-(``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, physical gripper
-polarity and joint-range check, mount pose survey (``base_pose``), teleop latency, and the arm going limp
-on close (``zero_torque_mode``).
+Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
+zero calibration, kp/kd gains, gripper polarity, joint ranges, the mount pose (``base_pose``), teleop latency,
+and the arm going limp on close (``zero_torque_mode``).
 """
 
 import contextlib
@@ -135,9 +131,8 @@ class _Kinematics:
 
     @staticmethod
     def _reach_postures(x: float, y: float) -> list[np.ndarray]:
-        """IK warm-start candidates for reaching toward arm-base-frame point (x, y): joint1 swung to the target's
-        azimuth, elbow folded down at two heights. The 6-DoF wrist gives LM no null space to escape bad basins,
-        so seeding near the goal is what makes limit-clamped IK reliable."""
+        """IK warm starts toward arm-base point (x, y): joint 1 at the target's azimuth, the elbow folded at two
+        heights. The 6-DoF wrist gives LM no null space, so a seed near the goal makes limit-clamped IK reliable."""
         az = np.arctan2(y, x)
         return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
 
