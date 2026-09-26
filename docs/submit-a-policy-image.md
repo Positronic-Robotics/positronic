@@ -131,7 +131,7 @@ reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe
 not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
 albumentations prints a `UserWarning` about fetching its version; ignore it.
 
-On a machine with a GPU, serve it with the network denied and dial the models route from inside
+On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
 
 ```bash
