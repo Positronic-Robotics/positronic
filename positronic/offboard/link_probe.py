@@ -49,8 +49,12 @@ HEADER_BYTES = struct.calcsize(HEADER)
 READ_BYTES = 256 * 1024
 
 
+def _frame(payload: bytes) -> bytes:
+    return struct.pack(HEADER, len(payload)) + payload
+
+
 def _send_framed(conn: socket.socket, payload: bytes) -> None:
-    conn.sendall(struct.pack(HEADER, len(payload)) + payload)
+    conn.sendall(_frame(payload))
 
 
 def _read_exactly(conn: socket.socket, count: int) -> bytes:
@@ -193,19 +197,21 @@ def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: st
     instead. Every other figure comes back from the sink.
     """
     out_path = None if out is None else Path(out)
-    # Random bytes, so no compression on the path shrinks what the wire carries.
-    payload = os.urandom(kib * 1024)
+    # Random bytes, so no compression on the path shrinks what the wire carries. Framed once, outside the
+    # timers: the copy into the frame grows with ``kib`` and is not the link.
+    frame = _frame(os.urandom(kib * 1024))
     rows = []
     with socket.create_connection((host, port), timeout=300.0) as conn:
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         print(f'source -> {host}:{port}, {kib} KiB x {transfers} (+{warmups} warm-up)', flush=True)
         for attempt in range(warmups + transfers):
             started = time.perf_counter_ns()
-            _send_framed(conn, payload)
+            conn.sendall(frame)
             written = time.perf_counter_ns()
             sndbuf = conn.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
-            reported = json.loads(_read_exactly(conn, struct.unpack(HEADER, _read_exactly(conn, HEADER_BYTES))[0]))
+            raw_report = _read_exactly(conn, struct.unpack(HEADER, _read_exactly(conn, HEADER_BYTES))[0])
             answered = time.perf_counter_ns()
+            reported = json.loads(raw_report)
             if attempt < warmups:
                 continue
             timeline = reported.pop('read_timeline')

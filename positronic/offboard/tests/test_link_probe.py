@@ -5,9 +5,13 @@ import socket
 import struct
 import sys
 import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from positronic.offboard import link_probe
 from positronic.offboard.link_probe import (
     HEADER,
     READ_BYTES,
@@ -19,6 +23,7 @@ from positronic.offboard.link_probe import (
     _ss_queues,
     network_facts,
     receive_one,
+    source,
 )
 
 
@@ -74,6 +79,51 @@ def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
     finally:
         sender.close()
         peer.join(timeout=5.0)
+
+
+STALL_S = 0.2
+
+
+class _SlowToFrame(bytes):
+    """A payload whose copy into a frame takes ``STALL_S``, so a timer around the copy shows it."""
+
+    def __radd__(self, header: bytes) -> bytes:
+        time.sleep(STALL_S)
+        return header + bytes(self)
+
+
+def _slow_loads(raw: bytes):
+    time.sleep(STALL_S)
+    return json.loads(raw)
+
+
+def _source_against_a_sink(tmp_path: Path, kib: int) -> list[dict]:
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    peer = threading.Thread(target=lambda: _serve_peer(listener.accept()[0], READ_BYTES, 0), daemon=True)
+    peer.start()
+    out = tmp_path / 'rows.json'
+    try:
+        source.override(host='127.0.0.1', port=port, kib=kib, transfers=2, warmups=0, out=str(out)).instantiate()
+    finally:
+        peer.join(timeout=5.0)
+        listener.close()
+    return json.loads(out.read_text())
+
+
+def test_write_ms_times_the_send_and_not_the_copy_into_the_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(link_probe.os, 'urandom', lambda count: _SlowToFrame(bytes(count)))
+    rows = _source_against_a_sink(tmp_path, kib=64)
+    assert [row['bytes'] for row in rows] == [64 * 1024] * 2
+    assert all(row['write_ms'] < STALL_S * 1000 for row in rows)
+
+
+def test_report_ms_times_the_report_and_not_its_decode(tmp_path, monkeypatch):
+    monkeypatch.setattr(link_probe, 'json', SimpleNamespace(loads=_slow_loads, dumps=json.dumps))
+    rows = _source_against_a_sink(tmp_path, kib=64)
+    assert all(row['report_ms'] < STALL_S * 1000 for row in rows)
 
 
 def _unread_connection(port_holder: list[int]) -> tuple[socket.socket, socket.socket, socket.socket]:
