@@ -1,8 +1,7 @@
 """Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-i2rt gives joint-space position-PD only, so the driver solves FK/IK against the vendored MJCF
-(``assets/mujoco/i2rt_yam/yam.xml``) at ``DEFAULT_FRAME``. The chain reads the gripper as 0=closed/1=open,
-the inverse of positronic's grip, so the driver inverts it both ways.
+The driver solves FK/IK against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``DEFAULT_FRAME``.
+The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
 zero calibration, kp/kd gains, gripper polarity, joint ranges, the mount pose (``base_pose``), teleop latency,
