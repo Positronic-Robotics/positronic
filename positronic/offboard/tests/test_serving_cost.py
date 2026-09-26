@@ -183,6 +183,26 @@ def test_a_channel_the_episode_does_not_record_is_named(tmp_path):
         _sent(episode, droid_3cam_fake)
 
 
+class _CountingEpisode(DiskEpisode):
+    reads = 0
+
+    @property
+    def signals(self):
+        type(self).reads += 1
+        return super().signals
+
+
+def test_the_replay_ticks_read_no_signal_mapping_from_the_episode(tmp_path):
+    _droid_episode(tmp_path / 'episode', (*CAMERAS, keys.EXTERIOR_IMAGE_2))
+    episode = _CountingEpisode(tmp_path / 'episode')
+    ticks = observations(episode, droid_fake.instantiate(), rate_hz=15.0)
+    next(ticks)
+    _CountingEpisode.reads = 0
+
+    assert list(ticks), 'the episode holds more than one tick'
+    assert _CountingEpisode.reads == 0
+
+
 def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_server, monkeypatch):
     """A session opened without `headers` sends no token, even when `AUTH_TOKEN` is set."""
     token = 'a-token-for-another-endpoint'

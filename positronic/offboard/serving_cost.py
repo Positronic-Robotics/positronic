@@ -87,8 +87,9 @@ def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> It
     The harness reads each channel the embodiment declares from the columns the episode recorded for it.
     Those columns hold the serializer's output, so the channels here carry no serializer.
     """
+    signals = episode.signals
     columns = {
-        name: [signal for signal in episode.signals if signal == name or signal.startswith(f'{name}.')]
+        name: [signal for signal in signals if signal == name or signal.startswith(f'{name}.')]
         for name in embodiment.observations
     }
     unrecorded = sorted(name for name, recorded in columns.items() if not recorded)
@@ -108,7 +109,7 @@ def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> It
         world.start(harness)  # binds the feeds; nothing runs the harness loop, the replay calls `read_obs`
         for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
             for name, feed in feeds.items():
-                feed.emit({signal[len(name) :]: episode.signals[signal].time[ts][0] for signal in columns[name]})
+                feed.emit({signal[len(name) :]: signals[signal].time[ts][0] for signal in columns[name]})
             obs = harness.read_obs(task, {})
             assert obs is not None, 'every channel was just fed'
             yield ts, obs
