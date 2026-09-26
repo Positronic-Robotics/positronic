@@ -124,10 +124,10 @@ ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Command]]
 class ShutdownPolicy(Enum):
     """How the runtime stops a control system."""
 
-    BEST_EFFORT = auto()  # Foreground loops stop at once; background processes get 90 seconds, then are terminated.
-    WAIT_FOR_COMPLETION = (
-        auto()
-    )  # Drain foreground loops; children ignore SIGINT and SIGTERM; the parent waits, never kills.
+    # A foreground loop stops at once. A background process gets 90 s, then is terminated.
+    BEST_EFFORT = auto()
+    # The World runs the shutdown to its end, with no timeout. A background process ignores SIGINT and SIGTERM.
+    WAIT_FOR_COMPLETION = auto()
 
 
 class ControlSystem(ABC):

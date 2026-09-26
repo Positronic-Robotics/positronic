@@ -21,11 +21,10 @@ DEFAULT_TUNING = yam.PARK_SETTLE
 
 
 class FakeYam(yam._FakeYam):
-    """A ``_FakeYam`` that can miss what it is asked for, the two ways a real chain does.
+    """A ``_FakeYam`` that misses its command the two ways a real chain does.
 
-    ``bias`` offsets every joint by a fixed amount, whatever it is asked for. ``gives_back`` is the fraction
-    of the way from ``floats_at`` to the command that the chain travels, so a correction lands only in part.
-    Joints 2 and 3 rest on their lower stops, which ``stops`` places; a command cannot push them past.
+    ``bias`` offsets every joint. ``gives_back`` is the fraction of the way from ``floats_at`` to the command
+    that the chain travels. ``stops`` places the lower stops of joints 2 and 3.
     """
 
     def __init__(self):
@@ -69,7 +68,7 @@ class Site(Enum):
     TARGET_GRIP_READ = ('target_grip', 'read')
 
 
-# The calls the driver makes after torque is released, outside the protected region by design.
+# Calls made after torque is released, outside the protected region.
 TEARDOWN_CALLS = {('vendor', 'zero_torque_mode'), ('vendor', 'close')}
 
 
@@ -85,7 +84,7 @@ class Watch:
         self.seen.add(call)
         if self.armed and self.site is not None and call == self.site.value:
             self.armed = self.persistent
-            # A fresh error per call when persistent: one object raised again grows its traceback each time.
+            # A fresh error per raise: raising one object again grows its traceback.
             raise type(self.error)(*self.error.args) if self.persistent else self.error
 
 
@@ -272,8 +271,7 @@ def test_startup_and_shutdown_preserve_the_gripper(rig):
     np.testing.assert_allclose(rig.vendor.released_at[0], np.append(PARK, 0.4), atol=0.005)
 
 
-# A chain on a real bench: a correction lands about two thirds of the way, and the chain floats 66 mrad
-# above its stops on the three joints that carry the arm's weight. It rests 23 mrad short of a plain park.
+# A bench chain: a correction lands about two thirds of the way, and joints 2-4 float 66 mrad above the stops.
 GIVES_BACK = 0.65
 FLOATS_AT = np.array([0.0, 0.066, 0.066, 0.066, 0.0, 0.0])
 MAX_CORRECTION = DEFAULT_TUNING.max_correction_rad
@@ -293,8 +291,7 @@ def test_parking_closes_a_steady_servo_gap_before_releasing(rig):
 
 
 def test_a_chain_that_gives_back_part_of_a_correction_still_lands_on_its_stops(rig):
-    """Corrections computed from the pose and the latest gap alone swing around 14 mrad on this chain and never
-    land; only corrections that add up close the gap before torque is cut."""
+    """Corrections from the latest gap alone oscillate by about 14 mrad on this chain and never land."""
     rig.raise_arm()
     rig.vendor.gives_back = GIVES_BACK
     rig.vendor.floats_at = FLOATS_AT
@@ -323,8 +320,8 @@ def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
 
 
 class NoisyReadings:
-    """Adds noise to the chain's readings: a velocity spike on every other read, and a joint 1 position that
-    alternates by ``wobble_rad``. The chain itself does not move."""
+    """Readings of a still chain, with a velocity spike on every other read and joint 1 alternating by
+    ``wobble_rad``."""
 
     def __init__(self, rig, monkeypatch, *, spike_rad_s=0.0, wobble_rad=0.0):
         self.read, self.spike_rad_s, self.wobble_rad, self.reads = (
@@ -345,7 +342,7 @@ class NoisyReadings:
 
 
 def test_velocity_spikes_at_rest_do_not_stop_a_park(monkeypatch):
-    """A real chain reports speed spikes of 0.1-0.3 rad/s while it holds its position; only position counts."""
+    """A real chain reports speed spikes of 0.1-0.3 rad/s at rest."""
     rig = Rig()
     rig.raise_arm()
     NoisyReadings(rig, monkeypatch, spike_rad_s=0.3)
@@ -486,7 +483,6 @@ def _until_answered(rig, answer, within_s=60.0):
 
 
 def test_a_blocking_move_opens_the_gripper_and_keeps_it_open(world, rig):
-    """A blocking move is the episode reset, so the next episode starts with the fingers open."""
     rig.raise_arm()
     rig.grip.push(0.8)
     rig.tick(0.5)
@@ -500,7 +496,7 @@ def test_a_blocking_move_opens_the_gripper_and_keeps_it_open(world, rig):
 
 
 def test_a_move_the_servo_holds_short_of_its_tolerance_settles_onto_its_target(world, rig):
-    """A servo that holds joint 3 short by 28.5 mrad, past the 20 mrad arrival tolerance, fails one ramp."""
+    """The servo holds joint 3 short by 28.5 mrad, past the 20 mrad tolerance."""
     rig.tick(4)
     rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
@@ -534,7 +530,6 @@ def test_a_blocking_move_is_paced_by_the_distance_it_travels(world, rig, monkeyp
 
 
 def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
-    """Only the park presses joints 2 and 3 onto their lower stops; a blocking move stops at the limit."""
     rig.tick(4)
     rig.vendor.bias = np.array([0.0, 0.03, 0.0, 0.0, 0.0, 0.0])
     near_the_stop = np.array([0.0, 0.01, 1.0, 0.0, 0.0, 0.0])
@@ -547,7 +542,6 @@ def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
 
 
 def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
-    """A policy's per-step command is its own: it goes to the chain as sent, whatever the servo holds."""
     rig.tick(4)
     rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
     rig.commands.push(command.JointPosition(RAISED))
@@ -775,7 +769,7 @@ def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
 
 
 class FakeMotorInterface:
-    """Stands for i2rt's single-motor CAN interface, the only thing that can disable a motor."""
+    """Stands for i2rt's single-motor CAN interface."""
 
     def __init__(self, vendor, refuses, **opened_with):
         self.vendor = vendor
@@ -966,7 +960,7 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
     raised_once = []
 
     def fail_hold(joint_pos):
-        # A fresh error after the first: one object raised again grows its traceback on every raise.
+        # A fresh error per raise: raising one object again grows its traceback.
         if raised_once:
             raise OSError(*error.args)
         raised_once.append(True)

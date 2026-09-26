@@ -475,7 +475,7 @@ def _exit_on_sigterm(signum, frame) -> None:
 
 
 def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
-    """Stop this child's World once its parent is gone, so the child runs its own shutdown and exits."""
+    """Stop this child's World once its parent is gone."""
 
     def watch() -> None:
         while not stop_event.is_set():
@@ -498,7 +498,7 @@ def _bg_wrapper(
     parent_pid: int,
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
-        # Ctrl-C or a SIGTERM stops the parent World; the device must complete its own shutdown before losing control.
+        # Stop only on the parent's stop event, so the device finishes its shutdown.
         for signum in _DEFERRED_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
     _stop_when_orphaned(stop_event, name, parent_pid)

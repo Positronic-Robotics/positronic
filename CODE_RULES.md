@@ -395,28 +395,20 @@ attempt.artifact_location = moved
 
 ### installation-constant
 
-Don't bake a value that differs between two installations of the same hardware into the code that uses
-it. Take it as configuration the instantiator supplies, defaulting to today's value, so a second
-installation runs the same code unmodified.
+Don't make a value that differs between two installations of the same hardware a constant. Take it as
+configuration, with today's value as the default.
 
-What varies is the line. A property of the model's DESIGN is shared by every unit of it — how many
-joints a chain has, that joint zero rests two of them on their lower stops, the field names a vendor's
-wire uses — and a constant is its right home. A property of one INSTALLATION differs between two benches
-holding that same model: a serial number, a device path, a mount pose, a calibration offset, a tolerance
-tuned to the residual one servo holds. Those are configuration.
+A property of the model is a constant: the joint count, the joints that rest on stops at zero, the field
+names of the vendor's wire. A property of one installation is configuration: a serial number, a device
+path, a mount pose, a calibration offset, a tolerance tuned to one servo.
 
-The test: someone with the same hardware and a different calibration must be able to use this code
-without editing it. Getting it wrong is quiet — the code does not refuse on the second bench; it runs
-and does the wrong thing somewhere far from the constant.
-
-Existing violations are grandfathered: this binds a value you add or touch. An existing one is not
-permission to add another.
+The test: a second installation with a different calibration runs the code with no edit.
 
 ```python
 # Bad — how far this servo sags is a property of one bench
 _PARK_MAX_CORRECTION_RAD = 0.05
 
-# Good — the default is the bench we measured; another instantiator passes its own
+# Good
 @dataclass(frozen=True)
 class SettleTuning:
     max_correction_rad: float = 0.05
