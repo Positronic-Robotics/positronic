@@ -1,15 +1,16 @@
 import logging
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-import httpx
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
+from positronic.utils.versions import resolve_version
 
 from . import protocol
 from .protocol import deserialise, serialise, typed_commands
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 # generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
-# One TCP/TLS handshake, and the retries until a cold backend answers.
+# One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
@@ -31,7 +32,7 @@ RECV_MS = 'recv_ms'
 
 
 class InferenceSession:
-    """One session over one open connection, whichever wire carries it."""
+    """One connection using the protocol declared by its server. Finish inference before closing it."""
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
@@ -43,7 +44,11 @@ class InferenceSession:
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
         self._infer_timeout = infer_timeout
-        self._metadata = self._handshake()
+        ready = self._handshake()
+        self._protocol = resolve_version(protocol.VERSIONS, ready.get(protocol.PROTOCOL_VERSION, 1), 'policy protocol')
+        self._metadata = ready[protocol.META]
+        self._session_id = ready[protocol.SESSION_ID] if self._protocol is protocol.ProtocolVersion.V2 else None
+        self._closed = False
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -61,7 +66,7 @@ class InferenceSession:
                     raise RuntimeError(f'Unexpected server response: {response}') from None
 
                 if status is protocol.ServerStatus.READY:
-                    return response[protocol.META]
+                    return response
                 if status is protocol.ServerStatus.ERROR:
                     raise RuntimeError('Server error: Unknown error')
 
@@ -75,6 +80,14 @@ class InferenceSession:
             ) from None
 
     @property
+    def protocol_version(self) -> protocol.ProtocolVersion:
+        return self._protocol
+
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
+
+    @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
@@ -85,53 +98,87 @@ class InferenceSession:
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
+        if self._closed:
+            raise wire.PeerDisconnected('The inference session is closed')
         self.served_timing = self.wire_timing = {}
-        serialised = serialise(obs)
+        request = (
+            obs
+            if self._protocol is protocol.ProtocolVersion.V1
+            else {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
+        )
+        serialised = serialise(request)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
         try:
-            self._conn.send(serialised)
-        finally:
-            # A send that raises gets timed too, so the span is recorded on the way out.
-            sent = time.time_ns()
-            telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
-        try:
-            received = self._conn.recv(timeout=self._infer_timeout)
+            try:
+                self._conn.send(serialised)
+            finally:
+                # A send that raises gets timed too, so the span is recorded on the way out.
+                sent = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+            try:
+                received = self._conn.recv(timeout=self._infer_timeout)
+            finally:
+                answered = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
             # reused — a subsequent ``infer`` fails loudly on the closed socket instead.
+            self._closed = True
             self._conn.close()
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
-        finally:
-            answered = time.time_ns()
-            telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
+        except wire.PeerDisconnected:
+            self._closed = True
+            self._conn.close()
+            raise
         self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
         response = deserialise(received)
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:
+            if response.get(protocol.STATUS) == protocol.ServerStatus.ERROR:
+                self._closed = True
+                self._conn.close()
             raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
         return typed_commands(response[protocol.RESULT])
 
-    def close(self):
-        logger.info('InferenceSession.close: %s', self._conn.close())
+    def close(self) -> None:
+        """End the server session and wait for its cleanup before closing the connection."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._protocol is protocol.ProtocolVersion.V1:
+            logger.info('InferenceSession.close: %s', self._conn.close())
+            return
+        message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
+        try:
+            # The server can acknowledge and close before the transport confirms the final write.
+            with suppress(wire.PeerDisconnected):
+                self._conn.send(serialise(message))
+            response = deserialise(self._conn.recv(timeout=self._infer_timeout))
+            if protocol.ERROR in response:
+                raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+            if response != message:
+                raise RuntimeError(f'Unexpected end-session response: {response}')
+        finally:
+            logger.info('InferenceSession.close: %s', self._conn.close())
 
 
-class _ConnectOutcome(Enum):
+class ConnectOutcome(Enum):
     RETRY = 'retry'
     SURFACE = 'surface'
 
 
-class _ConnectRetries:
-    """The retry policy over one ``new_session``'s connect attempts.
+class ConnectRetries:
+    """The retry policy over one run of refused connect attempts.
 
     A ``FORBIDDEN`` refusal means a cold backend or a refused credential, and gets ``MAX_FORBIDDEN_ATTEMPTS``
     attempts.
@@ -142,27 +189,28 @@ class _ConnectRetries:
     def __init__(self) -> None:
         self._forbidden_attempts = 0
 
-    def take(self, refusal: wire.Refusal) -> _ConnectOutcome:
+    def take(self, refusal: wire.Refusal) -> ConnectOutcome:
         """Spend a refused connect against the budget."""
         if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         else:
             again = refusal is wire.Refusal.COLD
-        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
+        return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
 
 
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
-    ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one TCP/TLS
-    handshake, ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one
-    inference round trip.
+    ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
+    handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
+    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
+    round trip.
     """
 
     def __init__(
         self,
-        client_wire: ClientWire,
+        client_wire: ClientWire[Any],
         address: wire.SessionAddress,
         *,
         headers: dict[str, str] | None = None,
@@ -170,10 +218,14 @@ class InferenceClient:
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
+        if not isinstance(address, client_wire.ADDRESS):
+            raise ValueError(
+                f'{client_wire.NAME} dials a {client_wire.ADDRESS.__name__}, and this is a '
+                f'{type(address).__name__}; build the address the wire names'
+            )
         self._wire = client_wire
         self._address = address
         self.session_url = client_wire.session_url(address)
-        self.api_url = client_wire.api_url(address)
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
@@ -182,7 +234,7 @@ class InferenceClient:
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
-        A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
+        A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._wire.dial(self._address, self.headers, self.open_timeout)
@@ -193,13 +245,13 @@ class InferenceClient:
             raise
 
     def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the URL names.
+        """Creates a new inference session on the server's model.
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
-        retries = _ConnectRetries()
+        retries = ConnectRetries()
         while True:
             try:
                 return self._open_session()
@@ -208,18 +260,10 @@ class InferenceClient:
             # A status handshake the server did not finish: a backend that is not ready.
             except (TimeoutError, wire.PeerDisconnected) as e:
                 refusal, not_ready = wire.Refusal.COLD, e
-            if retries.take(refusal) is _ConnectOutcome.SURFACE:
+            if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
-
-    def list_models(self) -> list[str]:
-        """List available models from the server."""
-        if self.api_url is None:
-            raise ValueError(f'{self.session_url} names a wire that carries sessions alone; list the models over HTTP')
-        response = httpx.get(f'{self.api_url}/{wire.MODELS_ROUTE}', headers=self.headers)
-        response.raise_for_status()
-        return response.json()['models']

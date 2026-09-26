@@ -1,8 +1,8 @@
 from types import MappingProxyType
-from unittest.mock import ANY
 
 import numpy as np
 import pytest
+from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -19,9 +19,10 @@ from positronic.offboard.protocol import deserialise, serialise, typed_commands
 from positronic.utils.serialization import encode_jpeg
 
 
-def test_inference_client_connect_and_infer(inference_server, mock_policy):
+def test_inference_client_connect_and_infer(inference_server, mock_model):
     """Test standard client connection and inference flow."""
-    client = InferenceClient(*inference_server.ws())
+    host, port = inference_server
+    client = InferenceClient(websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, ''))
 
     session = client.new_session()
     try:
@@ -33,56 +34,22 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_policy._mock_session.assert_called_with(obs, ANY)
+        mock_model.assert_called_with(obs, session_id=session.session_id)
     finally:
         session.close()
 
 
-def test_inference_client_new_session(inference_server, mock_policy):
-    """Test that starting a new session calls new_session on the policy."""
-    client = InferenceClient(*inference_server.ws())
-
-    # First session
-    session = client.new_session()
-    session.close()
-
-    # Second session
-    session = client.new_session()
-    session.close()
-
-    assert mock_policy.new_session.call_count == 2
-
-
-def test_session_url_selects_the_model(multi_policy_server):
-    served, policies = multi_policy_server
-
-    default_session = InferenceClient(*served.ws()).new_session()
-    try:
-        assert default_session.metadata['model_name'] == 'alpha'
-        action = default_session.infer({'obs': 'default'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        default_session.close()
-
-    alpha_session = InferenceClient(*served.ws(model='alpha')).new_session()
-    try:
-        assert alpha_session.metadata['model_name'] == 'alpha'
-        action = alpha_session.infer({'obs': 'alpha'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        alpha_session.close()
-
-    beta_session = InferenceClient(*served.ws(model='beta')).new_session()
-    try:
-        assert beta_session.metadata['model_name'] == 'beta'
-        action = beta_session.infer({'obs': 'beta'})
-        assert action['action_data'] == ['beta']
-    finally:
-        beta_session.close()
-
-    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'}, ANY)
-    policies['beta']._mock_session.assert_any_call({'obs': 'beta'}, ANY)
-    policies['alpha']._mock_session.assert_any_call({'obs': 'default'}, ANY)
+def test_connections_reuse_the_loaded_model(inference_server, mock_model):
+    host, port = inference_server
+    client = InferenceClient(websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, ''))
+    for index in range(2):
+        session = client.new_session()
+        try:
+            session.infer({'episode': index})
+        finally:
+            session.close()
+    assert mock_model.call_count == 2
+    mock_model.close.assert_not_called()
 
 
 def test_wire_serialisation_accepts_mappingproxy():
@@ -110,6 +77,12 @@ def test_jpeg_round_trips_single_image_and_stack():
     assert restored_stack.shape == (3, 16, 24, 3)
     # q90 JPEG on solid colors is near-lossless; this also verifies per-frame order is preserved.
     np.testing.assert_allclose(restored_stack, stack, atol=4)
+
+
+def test_a_lower_jpeg_quality_gives_smaller_frames():
+    image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    low, high = (len(serialise({keys.WRIST_IMAGE: encode_jpeg(image, quality)})) for quality in (30, 90))
+    assert low < high
 
 
 class TestCommandEnvelope:

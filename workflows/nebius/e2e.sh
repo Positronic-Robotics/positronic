@@ -116,7 +116,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   lerobot)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" lerobot expert_only \
@@ -124,7 +124,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
@@ -137,7 +137,7 @@ case "$VENDOR" in
     # The run trains in the rig's default frame, so the checkpoint declares no transform.
     SERVE_SUBCMD=(
       ee
-      --pipeline.source.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
+      --model.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
       --pipeline.ee_frame=None
     )
     ;;
@@ -147,7 +147,7 @@ case "$VENDOR" in
       "--output_path=$CKPT_DIR" \
       "--exp_name=$EXP_NAME" \
       --num_train_steps=200 --save_steps=100 2>&1)
-    SERVE_SUBCMD=(droid --pipeline.source.model_source="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(droid --model.model_source="$CKPT_DIR$EXP_NAME/")
     ;;
 esac
 echo "$TRAIN_OUT" >> "$LOG"

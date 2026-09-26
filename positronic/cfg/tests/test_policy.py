@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from positronic.cfg import policy as policy_cfg
 from positronic.cfg.policy import file_headers
 
 SECRET = 'ak-do-not-print-me'
@@ -47,3 +48,12 @@ def test_file_headers_refuses_what_is_not_a_header_set_without_quoting_it(tmp_pa
     assert SECRET not in str(excinfo.value)
     assert excinfo.value.__cause__ is None
     assert excinfo.value.__suppress_context__
+
+
+@pytest.mark.parametrize('name', ['remote', 'authed_remote', 'nebius_remote', 'file_authed_remote'])
+def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name):
+    """`--policy.address.host` overrides a nested config, so every policy config holds one to override."""
+    overridden = getattr(policy_cfg, name).override(**{'address.host': 'gpu-host', 'address.port': 443})
+
+    address = overridden.kwargs['address'].instantiate()
+    assert (address.host, address.port) == ('gpu-host', 443)

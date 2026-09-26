@@ -6,20 +6,35 @@ from datetime import UTC, datetime
 from typing import get_args
 
 import pytest
+from platform_client import config, eval_plan, requests
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
+    CameraVantage,
+    EndpointKind,
     ErrorCode,
     KeyStatus,
     OnExhausted,
+    Placement,
     QuotaSubject,
     ReasonCode,
     SubmissionStatus,
+    Wire,
 )
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
-from platform_client.eval_plan import Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.eval_plan import (
+    Clutter,
+    Endpoint,
+    EvalPlan,
+    HostPortAddress,
+    PrivateEval,
+    RoboarenaAddress,
+    TaskNode,
+    plan_of_image,
+)
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
+from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
@@ -42,15 +57,21 @@ from platform_client.responses import (
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    EndpointOutcome,
     EpisodeCounts,
     ErroredSubmissionView,
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
+    PlanOutcome,
     QuotaLimit,
     RankingRow,
     RankingsResponse,
     RegisterResponse,
+    ReplayLink,
+    ResolvedEndpoint,
+    ResolvedPlan,
+    ResolvedTask,
     RunningSubmissionView,
     RunSummary,
     Scores,
@@ -103,6 +124,7 @@ CREDITS = QuotaLimit(
 )
 
 ASK = EvalPlan.model_validate({
+    'request_type': {'type': 'private_eval', 'org': 'acme'},
     'tasks': [
         'eight-spoons-into-grey-tote',
         {
@@ -113,12 +135,23 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
-            'endpoints': ['baseline', {'name': 'ours', 'url': 'wss://ours.example/ws'}],
+            'endpoints': [
+                'baseline',
+                {
+                    'name': 'ours',
+                    'wire': 'grpc_tls',
+                    'address': {'host': 'ours.example', 'port': 443, 'path': '/api/v1/session'},
+                },
+            ],
         },
     ],
     'endpoints': [
-        {'name': 'baseline', 'url': 'wss://baseline.example/ws'},
-        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05'},
+        {
+            'name': 'baseline',
+            'wire': 'websocket_tls',
+            'address': {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session', 'query': 'mode=native'},
+        },
+        {'name': 'pi05', 'kind': 'served', 'provider': 'droid_cohost', 'spec': 'pi05', 'wire': 'websocket_unix'},
     ],
     'episodes_per_endpoint': 10,
     'cap_per_episode_sec': 180,
@@ -134,6 +167,36 @@ PLAN_OF_AN_IMAGE = plan_of_image(
 )
 
 SUBMISSION_VIEWS = TypeAdapter(SubmissionView)
+
+RESOLVED_TASK = ResolvedTask(
+    task_id=TaskRef('stack-the-cubes'),
+    endpoints=[
+        ResolvedEndpoint(
+            name='baseline',
+            kind=EndpointKind.remote,
+            wire=Wire.websocket_tls,
+            address=HostPortAddress(host='baseline.example', port=443, path='/api/v1/session', query='mode=native'),
+            episodes=2,
+        ),
+        ResolvedEndpoint(
+            name='pi05',
+            kind=EndpointKind.served,
+            wire=Wire.websocket_unix,
+            provider='droid_cohost',
+            spec='pi05',
+            episodes=1,
+        ),
+    ],
+    cap_per_episode_sec=90,
+    policy_preset='example_candidate',
+    tote_placement=Placement.left,
+    camera_vantage=CameraVantage.phail,
+    external_cameras={'side': Placement.right},
+    clutter=Clutter(count_min=2, count_max=6),
+    clutter_objects=['cup', 'sponge'],
+    episode_order=['pi05', 'baseline', 'baseline'],
+)
+RESOLVED = ResolvedPlan(episodes_total=3, tasks=[RESOLVED_TASK])
 
 MODELS: list[BaseModel] = [
     Scores(),
@@ -161,10 +224,12 @@ MODELS: list[BaseModel] = [
     ),
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
+    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], client='acme'),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
     ),
+    SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, resolved=RESOLVED),
     SubmissionListResponse(),
     SubmissionListResponse(
         submissions=[
@@ -179,6 +244,7 @@ MODELS: list[BaseModel] = [
         ]
     ),
     PendingSubmissionView(id=SUB, alias='demo', received_at=AT, queued_at=AT, queue_position=1),
+    PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1, resolved=RESOLVED),
     RunningSubmissionView(id=SUB, running_since=AT, stage='evaluating', stage_detail='task 2/10'),
     ErroredSubmissionView(id=SUB, reason_code=ReasonCode.policy_oom, reason='policy ran out of memory'),
     ErroredSubmissionView(
@@ -188,6 +254,20 @@ MODELS: list[BaseModel] = [
         artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
+    FinishedSubmissionView(
+        id=SUB,
+        artifacts=ArtifactRefs(result='s3://b/episodes/'),
+        replay=ReplayLink(url='https://viewer.example/v/token/', expires_at=AT),
+        outcome=PlanOutcome(endpoints=[EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3)]),
+        runs=[
+            RunSummary(
+                run_tag='blind_20260904-160621',
+                started_at=AT,
+                ended_at=AT,
+                episodes=EpisodeCounts(total=10, done=9, outstanding=1),
+            )
+        ],
+    ),
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
     RankingsResponse(
@@ -213,8 +293,9 @@ MODELS: list[BaseModel] = [
     ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.quota_exceeded, message='daily quota spent')),
     ASK,
     EvalPlan(
+        request_type=PrivateEval(org=OrgSlug('acme')),
         tasks=[TaskNode(task_id=TaskRef('stack-the-cubes'))],
-        endpoints=[Endpoint(name='a', url='wss://a.example/ws')],
+        endpoints=[Endpoint(name='a', wire=Wire.roboarena, address=RoboarenaAddress(host='a.example', port=8000))],
         episodes_per_endpoint=1,
     ),
     SubmissionListQuery(after=SUB, limit=50),
@@ -259,9 +340,23 @@ def test_ids_and_statuses_leave_as_wire_values():
     assert row['received_at'].startswith('2026-03-04T05:06:07')
 
 
+def test_every_model_built_from_input_declares_its_fields_and_hides_them_from_its_errors():
+    """A model added to one of these modules is held to `INPUT_MODEL_CONFIG` without an edit here."""
+    for module in (eval_plan, requests, config):
+        declared = [
+            member
+            for member in vars(module).values()
+            if isinstance(member, type) and issubclass(member, BaseModel) and member.__module__ == module.__name__
+        ]
+        assert declared, module.__name__
+        for model in declared:
+            assert model.model_config == INPUT_MODEL_CONFIG, f'{module.__name__}.{model.__name__}'
+
+
 def test_a_request_rejects_an_unknown_field():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({
+            'request_type': {'type': 'private_eval', 'org': 'acme'},
             'eval': 'fake.smoke',
             'evals': 'fake.smoke',  # a plausible typo of eval
         })
@@ -270,6 +365,7 @@ def test_a_request_rejects_an_unknown_field():
 def test_a_policy_image_the_registry_could_never_resolve_is_refused_here():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({
+            'request_type': {'type': 'private_eval', 'org': 'acme'},
             'eval': 'fake.smoke',
             # a digest separator with nothing behind it
             'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/policy@'}],
@@ -348,7 +444,11 @@ def test_an_id_reaches_the_query_string_in_its_hex_wire_form():
 
 def test_an_empty_transaction_key_is_a_client_bug_not_an_absent_one():
     with pytest.raises(ValidationError):
-        EvalPlan.model_validate({'eval': 'fake.smoke', 'transaction_key': ''})
+        EvalPlan.model_validate({
+            'request_type': {'type': 'nebius_competition'},
+            'eval': 'fake.smoke',
+            'transaction_key': '',
+        })
 
 
 @pytest.mark.parametrize(
@@ -393,12 +493,8 @@ def test_the_published_field_names_are_ones_every_variant_declares(variant: type
 
 
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():
-    # `submitting` is an internal state the union has no variant for; a gateway building a pending
-    # view from such a record must fail here rather than emit a tag no caller can route.
     with pytest.raises(ValidationError):
-        PendingSubmissionView(
-            id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.submitting
-        )
+        PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1, status=SubmissionStatus.running)
 
 
 def test_a_view_keeps_its_own_tag():
@@ -414,11 +510,10 @@ def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
         model, tag = get_args(variant)
         assert isinstance(tag, Tag)
         assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
-    # Every status a caller can see carries a variant. This catches one added without one;
-    # `submitting` is internal and INVALID is the unset sentinel.
-    internal = {SubmissionStatus.INVALID, SubmissionStatus.submitting}
+    # Every status carries a variant. This catches one added without one; INVALID is the unset
+    # sentinel and has no wire form.
     assert {get_args(variant)[1].tag for variant in variants} == {
-        slug_of(status) for status in SubmissionStatus if status not in internal
+        slug_of(status) for status in SubmissionStatus if status is not SubmissionStatus.INVALID
     }
 
 
@@ -644,18 +739,15 @@ def test_a_scale_of_zero_is_refused_at_the_boundary():
         QuotaLimit.model_validate(payload)
 
 
+@pytest.mark.parametrize('status', ['mirroring', 'submitting'])
 @pytest.mark.parametrize(
-    'model, payload',
-    [
-        (SubmissionCreateResponse, {'submission_id': 'ff', 'status': 'submitting'}),
-        (CancelResponse, {'status': 'submitting', 'refunded': False}),
-    ],
+    'model, field', [(SubmissionCreateResponse, {'submission_id': 'ff'}), (CancelResponse, {'refunded': False})]
 )
-def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel], payload: dict):
-    # The enum says the gateway reports `submitting` as `pending`; a payload carrying it is a
-    # gateway that forgot, refused here rather than left for every consumer to normalise.
+def test_a_platform_only_status_is_refused(model: type[BaseModel], field: dict, status: str):
+    # These are the platform's own states, spelled here because `SubmissionStatus` carries neither.
+    # `Slugged` reads its vocabulary off the members, so neither slug names a wire value.
     with pytest.raises(ValidationError):
-        model.model_validate(payload)
+        model.model_validate(field | {'status': status})
 
 
 @pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])
@@ -721,3 +813,50 @@ def test_an_artifacts_query_refuses_a_field_it_does_not_declare():
     # A typo'd narrowing would otherwise be dropped and list the whole submission.
     with pytest.raises(ValidationError):
         SubmissionArtifactsQuery.model_validate({'id': '1f', 'prefixx': 'episodes/'})
+
+
+def test_a_resolved_side_is_never_a_draw():
+    with pytest.raises(ValidationError, match='names no side'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'tote_placement': 'random'})
+    with pytest.raises(ValidationError, match='names no side'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'external_cameras': {'side': 'random'}})
+
+
+def test_a_resolved_side_may_state_the_piece_is_absent():
+    task = ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'tote_placement': 'none'})
+    assert task.tote_placement is Placement.none
+
+
+def test_the_episode_order_serves_each_endpoint_its_count():
+    with pytest.raises(ValidationError, match='orders 2 episodes'):
+        ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
+
+
+def test_a_resolved_endpoint_names_a_wire():
+    # A resolved endpoint is concrete: every kind names the wire its session runs over.
+    payload = RESOLVED_TASK.endpoints[0].model_dump(mode='json')
+    del payload['wire']
+    with pytest.raises(ValidationError):
+        ResolvedEndpoint.model_validate(payload)
+
+
+def test_the_resolved_total_is_the_sum_over_the_tasks():
+    assert RESOLVED.tasks[0].episodes == 3
+    with pytest.raises(ValidationError, match='episodes_total states 4'):
+        ResolvedPlan(episodes_total=4, tasks=[RESOLVED_TASK])
+
+
+def test_a_plan_outcome_totals_its_endpoints():
+    outcome = PlanOutcome(
+        endpoints=[
+            EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3),
+            EndpointOutcome(endpoint='b', kept=10, judged=10, succeeded=6),
+        ]
+    )
+    assert (outcome.kept, outcome.judged, outcome.succeeded) == (19, 14, 9)
+
+
+def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
+    """The fields are additive: a payload that carries none of them still validates."""
+    view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
+    assert view.replay is None and view.outcome is None

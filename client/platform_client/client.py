@@ -2,7 +2,8 @@
 
     with PlatformClient() as client:
         client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
-        client.create_submission(EvalPlan(tasks=..., endpoints=..., episodes_per_endpoint=...))
+        plan = EvalPlan(request_type=PrivateEval(org=...), tasks=..., endpoints=..., episodes_per_endpoint=...)
+        client.create_submission(plan)
 
 The platform is `base_url`, else `POSITRONIC_PLATFORM_URL`, else production; the key is `api_key`,
 else `POSITRONIC_PLATFORM_API_KEY`, else whatever `register` came back with. A non-2xx raises
@@ -21,7 +22,7 @@ from platform_client import routes
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
-from platform_client.eval_plan import EvalPlan
+from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.requests import (
     CancelRequest,
@@ -38,6 +39,7 @@ from platform_client.responses import (
     MeResponse,
     RankingsResponse,
     RegisterResponse,
+    ResolvedPlan,
     SubmissionCreateResponse,
     SubmissionListResponse,
     SubmissionView,
@@ -167,6 +169,10 @@ class PlatformClient:
         is refused `forbidden`."""
         return self._post(routes.SUBMISSIONS_CREATE, plan, SubmissionCreateResponse)
 
+    def resolve_plan(self, plan: EvalPlan) -> ResolvedPlan:
+        """The plan as it would run, with nothing filed."""
+        return self._post(routes.SUBMISSIONS_RESOLVE, plan, ResolvedPlan)
+
     def list_submissions(
         self, *, after: SubmissionId | None = None, limit: int | None = None
     ) -> SubmissionListResponse:
@@ -227,7 +233,8 @@ class PlatformClient:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
     def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
-        body = request.model_dump(mode='json')
+        # This dump reveals the registry password. Every other dump masks it.
+        body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
         return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
 
     def _send(

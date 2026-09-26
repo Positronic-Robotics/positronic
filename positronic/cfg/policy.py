@@ -3,8 +3,9 @@ import os
 from pathlib import Path
 
 import configuronic as cfn
+from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
+from positronic.offboard.protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
 from positronic.utils import nebius
 
@@ -24,7 +25,19 @@ def placeholder():
     )
 
 
-remote = cfn.Config(RemotePolicy, wire='websocket', host='localhost', port=8000)
+@cfn.config(host='localhost', port=8000, query='')
+def network_address(host: str, port: int, query: str) -> HostPortAddress:
+    """A session on a server reached over the network, as the network wires dial one."""
+    return HostPortAddress(host, port, SESSION_PATH, query)
+
+
+@cfn.config(query='')
+def socket_address(uds: str, query: str) -> UnixSocketAddress:
+    """A session on a server on this machine, as `websocket_unix` dials one."""
+    return UnixSocketAddress(Path(uds), SESSION_PATH, query)
+
+
+remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
 
 @cfn.config()
@@ -61,8 +74,8 @@ def file_headers(path: str) -> dict[str, str]:
     raise ValueError(f'{file}: {problem}') from None
 
 
-# The caller names the wire, the host and the port: a default would hand the credential to whatever host it
-# points at.
-authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
-nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
-file_authed_remote = cfn.Config(RemotePolicy, headers=file_headers)
+# The caller names the wire and the endpoint. `network_address` holds localhost, so a run that names no host
+# sends the credential to this machine and not to a stranger.
+authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
+nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
+file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)

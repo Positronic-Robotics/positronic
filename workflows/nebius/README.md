@@ -233,7 +233,7 @@ flow to your account directly via the API key — they aren't synced to S3.
 running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
 Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
 the contact address. The server listens on port 8000 for the WebSocket wire, and on port 9000 for
-the gRPC one, so the endpoint returns two URLs. `--grpc_port=<port>` moves the second one, and
+the gRPC one, so the endpoint returns two URLs. `--grpc.served_address.port=<port>` moves the second one, and
 `NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
 survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
 gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
@@ -264,23 +264,23 @@ Or against your own trained checkpoint:
 
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Use the vendor's source option to select the matching checkpoint (`model_source` for GR00T,
-`checkpoints_dir` for LeRobot and OpenPI):
+Use the vendor's model option to select the matching checkpoint (`--model.model_source` for GR00T,
+`--model.checkpoints_dir` for LeRobot and OpenPI):
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
 # --pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`
 bash workflows/nebius/serve.sh openpi my-openpi ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
   --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
-  --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+  --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
@@ -302,7 +302,7 @@ Run inference from your laptop or robot host with `positronic eval run`
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -345,7 +345,7 @@ export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
 
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -374,7 +374,7 @@ stays under it.
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.nebius_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -460,7 +460,7 @@ bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
   --policy=@positronic.cfg.policy.authed_remote \
-  --policy.wire=websocket_tls --policy.host=<endpoint-managed-host> --policy.port=443 \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 

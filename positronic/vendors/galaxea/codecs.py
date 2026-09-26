@@ -6,7 +6,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ActionTiming, Codec
+from positronic.policy.codec import Codec
 from positronic.vendors.galaxea import protocol
 
 
@@ -77,11 +77,4 @@ class DroidCodec(Codec):
         return result
 
 
-# Galaxea's own server re-observes every `action_steps` (`scripts/serve_policy.py`, default 16).
-STEPS_PER_OBSERVATION = 16
-
-
-@cfn.config(codec=cfn.Config(DroidCodec))
-def droid(codec: DroidCodec):
-    timing = ActionTiming(fps=codec.fps, horizon_sec=STEPS_PER_OBSERVATION / codec.fps)
-    return timing | codecs.droid_execution(action=codec)
+droid = codecs.droid_execution.override(action=cfn.Config(DroidCodec))

@@ -1,11 +1,11 @@
 """The server side of the gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames."""
 
 import logging
-import urllib.parse
 from collections.abc import AsyncIterator, Mapping
 
 import grpc
 import grpc.aio
+from fastapi import APIRouter
 from positronic_wire import wire
 from positronic_wire.grpc import (
     MESSAGE_SIZE_OPTIONS,
@@ -31,20 +31,20 @@ class GrpcServerConnection(server_wire.ServerConnection):
         requests: AsyncIterator[bytes],
         context: grpc.aio.ServicerContext,
         headers: Mapping[str, str],
-        endpoint: wire.Endpoint,
+        served_address: server_wire.ServedHostPort,
     ):
         self._requests = requests
         self._context = context
         self._headers = headers
-        self._endpoint = endpoint
+        self._served_address = served_address
 
     @property
     def peer(self) -> str:
         return self._context.peer()
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedHostPort:
+        return self._served_address
 
     @property
     def session_path(self) -> str:
@@ -90,42 +90,39 @@ def _server_options() -> list[tuple[str, int]]:
     ]
 
 
-def model_id_of(session_path: str) -> str | None:
-    """The model a session path names, or ``None`` for the model the server pinned."""
-    prefix = f'{wire.SESSION_PATH}/'
-    if session_path == wire.SESSION_PATH:
-        return None
-    if not session_path.startswith(prefix):
-        raise ValueError(f'Unexpected session path {session_path!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    return urllib.parse.unquote(session_path[len(prefix) :])
-
-
 class GrpcWire(server_wire.Wire):
     """The gRPC wire: sessions on a port of their own, one bidirectional stream each.
 
-    A ``port`` of 0 binds any free one. The port is plaintext; a TLS edge in front of it serves an
-    authenticated endpoint.
+    ``served_address`` is the host and the port it binds; a port of 0 binds any free one. The port is
+    plaintext, and a TLS edge in front of it serves an authenticated endpoint.
     """
 
-    def __init__(self, host: str, port: int):
-        self._host = host
-        self._port = port
+    def __init__(self, served_address: server_wire.ServedHostPort):
+        self._binds = served_address
         self._server: grpc.aio.Server | None = None
-        self._endpoint: wire.Endpoint | None = None
+        self._served_address: server_wire.ServedHostPort | None = None
 
     @property
-    def endpoint(self) -> wire.Endpoint:
-        assert self._endpoint is not None, 'The gRPC wire has not started'
-        return self._endpoint
+    def served_address(self) -> server_wire.ServedHostPort:
+        assert self._served_address is not None, 'The gRPC wire has not started'
+        return self._served_address
 
-    async def start(self, session: server_wire.SessionHandler, authorized: server_wire.Authorized) -> None:
+    async def start(
+        self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
+    ) -> None:
+        """Bind the gRPC port. ``api`` goes unserved: this port carries sessions alone. A server that
+        answers the model route serves an HTTP-capable wire beside this one."""
+
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):
                 await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
-            conn = GrpcServerConnection(requests, context, headers, self.endpoint)
+            conn = GrpcServerConnection(requests, context, headers, self.served_address)
+            if conn.session_path != wire.SESSION_PATH:
+                refusal = f'No session on {conn.session_path!r}; sessions open on {wire.SESSION_PATH}'
+                await context.abort(grpc.StatusCode.NOT_FOUND, refusal)
             try:
-                await session(conn, model_id_of(conn.session_path))
+                await session(conn)
             except Exception as e:
                 # The session reports its own errors over the stream. One that reaches here reaches the client
                 # as the status alone.
@@ -135,14 +132,14 @@ class GrpcWire(server_wire.Wire):
         handler = grpc.stream_stream_rpc_method_handler(serve_one, request_deserializer=None, response_serializer=None)
         server = grpc.aio.server(options=_server_options())
         server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(SERVICE, {METHOD: handler}),))
-        bound = server.add_insecure_port(target(self._host, self._port))
+        bound = server.add_insecure_port(target(self._binds.host, self._binds.port))
         if bound == 0:
             # gRPC reports a refused bind as port 0, and a server started on it accepts nothing and says nothing.
-            raise OSError(f'gRPC could not bind {target(self._host, self._port)}')
+            raise OSError(f'gRPC could not bind {target(self._binds.host, self._binds.port)}')
         self._server = server
-        self._endpoint = wire.Endpoint(self._host, bound)
+        self._served_address = server_wire.ServedHostPort(self._binds.host, bound)
         await server.start()
-        logger.info(f'gRPC sessions on {self._host}:{bound}')
+        logger.info(f'gRPC sessions on {self._binds.host}:{bound}')
 
     async def serve(self) -> None:
         assert self._server is not None, 'The gRPC wire has not started'

@@ -1,0 +1,13 @@
+# A plan for the lab rig: two endpoints make one blind sample.
+# `uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --org=<org>` files it for that org.
+tasks:
+  - eight-spoons-into-grey-tote
+endpoints:
+  - name: baseline
+    wire: websocket_tls
+    address: {host: baseline.example, port: 443, path: /api/v1/session}
+  - name: candidate
+    wire: grpc_tls
+    address: {host: candidate.example, port: 443, path: /api/v1/session}
+episodes_per_endpoint: 10
+cap_per_episode_sec: 180

@@ -3,9 +3,9 @@
 #
 # Usage
 #   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
-#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --pipeline.source.num_gpus=8
+#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --model.num_gpus=8
 #   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only ee \
-#     --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
+#     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
 #
 # The endpoint gets no public IP: Nebius fronts every HTTP container port with a
 # managed https:// URL, which is what this polls for and prints. The container
@@ -13,7 +13,7 @@
 # memory after the URL appears.
 #
 # The endpoint serves the websocket wire on 8000, and the gRPC wire on the port
-# `--grpc_port` names. The create declares the gRPC port as an ordinary HTTP port;
+# `--grpc.served_address.port` names. The create declares the gRPC port as an ordinary HTTP port;
 # a `/tcp` port gets a front gRPC refuses. The offboard README says what each
 # front does to a session.
 #
@@ -52,20 +52,20 @@ Examples:
 
   # Your own ACT checkpoint
   bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 
   # SmolVLA / lerobot 0.4.x checkpoint
   bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
   # OpenPI (ee_frame is the EE frame the checkpoint speaks; None means the rig's default)
   bash workflows/nebius/serve.sh openpi pi-server ee \
-    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
     --pipeline.ee_frame=None
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server droid \
-    --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+    --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
 fi
@@ -104,14 +104,28 @@ esac
 WS_PORT=8000
 
 # gRPC is the server's opt-in wire, so the endpoint declares its port only where one is served. A
-# caller's own --grpc_port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket wire alone.
+# caller's own --grpc.served_address.port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket
+# wire alone.
 ARGS=" $* "
 case "$ARGS" in
-  *" --grpc_port="*) GRPC_PORT=${ARGS#*--grpc_port=}; GRPC_PORT=${GRPC_PORT%% *} ;;
-  *" --grpc_port "*) GRPC_PORT=${ARGS#*--grpc_port }; GRPC_PORT=${GRPC_PORT%% *} ;;
+  *" --grpc.served_address.port="*|*" --grpc.served_address.port "*)
+    # configuronic takes a value after `=` or after a space, so every flag read here reads both.
+    GRPC_PORT=${ARGS#*--grpc.served_address.port}; GRPC_PORT=${GRPC_PORT#[= ]}; GRPC_PORT=${GRPC_PORT%% *}
+    # A port names the address of a wire, and the server serves no gRPC until `--grpc` names the
+    # wire itself. A port on its own would declare a container port nothing answers on.
+    case "$ARGS" in
+      *" --grpc="*|*" --grpc "*) ;;
+      *) set -- "$@" "--grpc=@positronic.offboard.server.grpc" ;;
+    esac
+    ;;
+  *" --grpc="*|*" --grpc "*)
+    # The caller named the gRPC wire and left its port at the wire's own default.
+    GRPC_PORT=8001 ;;
   *)
     GRPC_PORT=${NEBIUS_GRPC_PORT-9000}
-    if [ -n "$GRPC_PORT" ]; then set -- "$@" "--grpc_port=${GRPC_PORT}"; fi
+    if [ -n "$GRPC_PORT" ]; then
+      set -- "$@" "--grpc=@positronic.offboard.server.grpc" "--grpc.served_address.port=${GRPC_PORT}"
+    fi
     ;;
 esac
 
@@ -186,12 +200,12 @@ fi
 
 # The front terminates TLS on 443 for both wires, so a rig names the TLS member of each.
 GRPC_BANNER=""
-POLICY_ARGS="--policy.wire=websocket_tls --policy.host=${URL#https://} --policy.port=443"
+POLICY_ARGS="--policy.wire=websocket_tls --policy.address.host=${URL#https://} --policy.address.port=443"
 POLICY_NOTE="Point a rig at the websocket wire:"
 if [ -n "$GRPC_PORT" ]; then
   GRPC_BANNER="  gRPC host:     ${GRPC_HOST} (TLS, port 443)
 "
-  POLICY_ARGS="--policy.wire=grpc_tls --policy.host=${GRPC_HOST} --policy.port=443"
+  POLICY_ARGS="--policy.wire=grpc_tls --policy.address.host=${GRPC_HOST} --policy.address.port=443"
   POLICY_NOTE="Point a rig at either wire; through this front an 846 KiB observation
 round-trips in about 6 ms over gRPC and about 60 ms over the websocket:"
 fi

@@ -33,8 +33,8 @@ class EnvAdapter(ABC):
         """
 
     @abstractmethod
-    def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
-        """The latest per-channel command messages -> the raw action the env steps.
+    def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
+        """The latest command per channel -> the raw action the env steps; ``None`` where nothing is new.
 
         A channel delivers a command only when one comes due, so the adapter owns what happens in between —
         e.g. hold the last commanded value, the absolute-mode invariant.
@@ -104,14 +104,13 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 
 
 class WireCommandAdapter(EnvAdapter):
-    """An adapter whose action is the shared wire payload ``{'command': <tagged dict>, 'grip': float}``.
+    """An adapter whose action is one wire payload per command channel.
 
     The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
-    arrives and fires a relative delta once, and flattens the held arm command (a pose as ``[t(3), R(9)]``,
-    joint positions, or per-step joint deltas) plus the gripper closure into one payload.
-    All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
-    the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
-    around it) and keep the task, observation and terminal mappings to themselves.
+    arrives and fires a relative delta once. All action *encoding* — how the tagged command becomes the env's
+    native action — stays server-side with the env's own model. Subclasses implement ``_reset_token`` (the
+    base clears the per-trial command state around it) and keep the task, observation and terminal mappings
+    to themselves.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
@@ -132,19 +131,20 @@ class WireCommandAdapter(EnvAdapter):
     def _reset_token(self, params: dict[str, Any]) -> Any:
         """The trial's params -> the env's opaque reset token; the command state is already cleared."""
 
-    def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
+    def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
         for name, msg in commands.items():
-            if msg.updated:
+            if msg is not None and msg.updated:
                 self._held[name] = msg.data
+        return {name: self._channel_payload(name) for name in commands}
+
+    def _channel_payload(self, name: str) -> Any:
+        if not keys.is_robot_command(name):
+            return float(self._held.get(name, 0.0))
         # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
         # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
         # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
         # one step the arm holds its measured pose.
-        cmd = self._held.get(keys.ROBOT_COMMAND)
+        cmd = self._held.get(name)
         if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
-            self._held.pop(keys.ROBOT_COMMAND)
-        grip = float(self._held.get(keys.TARGET_GRIP, 0.0))
-        return {
-            protocol.ACTION_COMMAND: _wire_command(_in_env_control_frame(cmd, self.env_control_frame)),
-            protocol.ACTION_GRIP: grip,
-        }
+            self._held.pop(name)
+        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame))

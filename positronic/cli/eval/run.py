@@ -16,12 +16,11 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
-from positronic.cli.eval.plan import file_plan, given, plan_from_flags, plan_source, read_plan, refusing_a_second_source
+from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy import Policy
-from positronic.policy.executor import blocking
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -71,10 +70,8 @@ class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
 
-    It makes the plan on its first turn, not when it is built. It opens a session per task, and asks for the
-    episode that runs it, recording into ``output_path`` — the whole plan lands in one. One task is in flight
-    at a time: the next is asked for only when the previous episode's terminal comes back, so the plan never
-    overlaps two episodes, and each session opens on a model the last episode has let go of.
+    It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
+    policy run and cleanup; every episode records into ``output_path``.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
@@ -86,15 +83,12 @@ class TaskDriver(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
             rollout = Rollout(task, self._policy, self._output_path)
-            try:
-                answer = self.perform_task(rollout)
-                while not answer.done():
-                    if should_stop.value:
-                        return
-                    yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-                answer.result()  # raises if the episode failed
-            finally:
-                rollout.close()
+            answer = self.perform_task(rollout)
+            while not answer.done():
+                if should_stop.value:
+                    return
+                yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
+            answer.result()  # raises if the episode failed
         # Let the recorder commit the final episode before this return brings the world down.
         yield pimm.Sleep(0.5)
 
@@ -112,8 +106,8 @@ def run_world(
     Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
     differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
     person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
-    runner wires nothing of it but that call. The driver brings the policy and the output path: it opens the
-    session each episode runs on, and names where each episode records. ``record`` off keeps the recorder
+    runner wires nothing of it but that call. The driver brings the policy definition and the output path.
+    ``record`` off keeps the recorder
     out of the world, so a run that writes nothing costs the producers nothing. ``done`` is what ends an
     episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
@@ -205,8 +199,7 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
 def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False):
     """Run an unattended sweep: a driver walks each eval's tasks, rebuilding the World per eval.
 
-    ``main`` owns the policy lifetime: it warms the policy once up front and closes it once after the last
-    World, so a multi-eval sweep reuses one live policy across the rebuilds.
+    A sweep reuses the policy definition; each harness owns its episode's runtime and generator.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
@@ -216,30 +209,21 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    # A handshake returns only once the model is loaded, so this pays the cold start here, not in episode 1.
-    # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session — an
-    # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
-    # The session runs no inference, but a session that serves its model on a runtime needs one to open.
-    blocking(policy).new_session().close()
-
-    try:
-        with scoped_env_var(ENV_TELEMETRY_DIR):
-            output_path = prepare_output_dir(output_dir)
-            with timed_pass(output_path, timing, policy):
-                for ev in evals:
-                    driver = TaskDriver(ev.tasks, policy, output_path)
-                    run_world(
-                        ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done
-                    )
-    finally:
-        policy.close()
+    # Reading remote metadata waits for model loading and warmup, keeping startup outside the timed sweep.
+    policy.meta()
+    with scoped_env_var(ENV_TELEMETRY_DIR):
+        output_path = prepare_output_dir(output_dir)
+        with timed_pass(output_path, timing, policy):
+            for ev in evals:
+                driver = TaskDriver(ev.tasks, policy, output_path)
+                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
 
 
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """Stop on an argument the chosen place of `run` cannot honour.
 
-    Dropping one silently hands back a run the caller believes they shaped. `--episodes=0` is asked
+    Dropping one silently hands back a run the caller believes they shaped. `--alias=''` is asked
     for, and this run has no such flag to refuse it as a value.
     """
     asked = sorted(flag for flag, value in inapplicable.items() if given(value))
@@ -247,41 +231,9 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
 
 
-def _file_for_the_rig(
-    eval: object,
-    source: Path | None,
-    rig_only: dict[str, object],
-    platform_url: str | None,
-    *,
-    policy_url: object,
-    tasks: object,
-    episodes: int | None,
-    cap: int | None,
-    preset: str | None,
-    transaction_key: str | None,
-    alias: str | None,
-) -> SubmissionCreateResponse:
-    """File the plan a file states, else the plan the flags state."""
-    if source is not None:
-        refusing_a_second_source(source, rig_only)
-        return file_plan(read_plan(source, transaction_key, alias), platform_url)
-    if eval is not None:
-        raise SystemExit(f'--eval={eval!r} names an eval: the rig runs a plan, from --from-file or from the flags')
-    plan = plan_from_flags(
-        policy_url=policy_url,
-        tasks=tasks,
-        episodes=episodes,
-        cap=cap,
-        preset=preset,
-        transaction_key=transaction_key,
-        alias=alias,
-    )
-    return file_plan(plan, platform_url)
-
-
 # The policy flag chooses where the eval runs.
 _NO_POLICY_NAMED = (
-    '--policy is required to run here; --policy-image runs it on the platform, and --policy-url on the rig'
+    '--policy is required to run here; --policy-image runs it on the platform, and --from-file on the rig'
 )
 
 
@@ -299,25 +251,25 @@ def run(
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
-    policy_url: str | list[str] | None = None,
-    tasks: str | list[str] | None = None,
-    episodes: int | None = None,
-    cap: int | None = None,
-    preset: str | None = None,
     from_file: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
+    org: str | None = None,
+    registry_username: str | None = None,
+    registry_password_file: str | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
-    eval of that NAME on the embodiment the eval names — a name the platform offers, not a
-    config, since the platform owns the evals it offers. ``--policy-url`` files an eval plan for the
-    lab rig: the tasks (``--tasks``) and the count per endpoint (``--episodes``), or the whole plan
-    in a file (``--from-file``). Two or more ``--policy-url`` make one blind sample. A filed run —
-    the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads;
-    a run here answers the dataset it wrote.
+    eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
+    since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
+    as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
+    organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
+    with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
+    the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a
+    run here answers the dataset it wrote. ``--registry-username`` and ``--registry-password-file``
+    open a registry that serves ``--policy-image`` to no anonymous caller.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -328,13 +280,13 @@ def run(
     if policy is not None and policy_image is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
-    # Only a switch does: `--episodes=False` stays a value, and is refused like `--episodes=0`.
+    # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
         '--output-dir': output_dir,
         '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
     }
-    rig_only = {'--policy-url': policy_url, '--tasks': tasks, '--episodes': episodes, '--cap': cap, '--preset': preset}
+    platform_only = {'--registry-username': registry_username, '--registry-password-file': registry_password_file}
     source = plan_source(eval, from_file)
 
     if isinstance(eval, Eval) or policy is not None:
@@ -344,7 +296,8 @@ def run(
                 '--transaction-key': transaction_key,
                 '--platform-url': platform_url,
                 '--from-file': from_file,
-                **rig_only,
+                '--org': org,
+                **platform_only,
             },
             'local',
         )
@@ -358,28 +311,25 @@ def run(
 
     if policy_image is not None:
         # The platform owns its own trial sweep, its own output and its own telemetry.
-        _refuse({**local_only, '--from-file': from_file, **rig_only}, 'platform')
+        _refuse({**local_only, '--from-file': from_file}, 'platform')
         if not isinstance(eval, str):
             raise SystemExit(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
             )
-        return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
-
-    if source is not None or any(given(value) for value in rig_only.values()):
-        # The rig records under the client's own prefix, so it has no output of its own to name.
-        _refuse(local_only, 'rig')
-        return _file_for_the_rig(
+        return submit(
             eval,
-            source,
-            rig_only,
-            platform_url,
-            policy_url=policy_url,
-            tasks=tasks,
-            episodes=episodes,
-            cap=cap,
-            preset=preset,
-            transaction_key=transaction_key,
+            policy_image,
             alias=alias,
+            transaction_key=transaction_key,
+            platform_url=platform_url,
+            org=org,
+            registry_username=registry_username,
+            registry_password_file=registry_password_file,
         )
+
+    if source is not None:
+        # The rig records under the client's own prefix, so it has no output of its own to name.
+        _refuse({**local_only, **platform_only}, 'rig')
+        return file_plan(read_plan(source, transaction_key, alias, org), platform_url)
 
     raise SystemExit(_NO_POLICY_NAMED)

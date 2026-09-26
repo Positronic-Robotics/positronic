@@ -92,9 +92,9 @@ class Serializers:
     def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
         return {
             keys.STATUS_SUFFIX: state.status,
-            '.q': state.q,
-            '.dq': state.dq,
-            '.ee_pose': Serializers.transform_3d(state.ee_pose),
+            keys.JOINTS_SUFFIX: state.q,
+            keys.JOINT_VEL_SUFFIX: state.dq,
+            keys.EE_POSE_SUFFIX: Serializers.transform_3d(state.ee_pose),
         }
 
     @staticmethod
@@ -122,7 +122,7 @@ class Serializers:
         entries: dict[str, np.ndarray | int]
         match command:
             case CartesianPosition(pose):
-                entries = {'.pose': Serializers.transform_3d(pose)}
+                entries = {keys.POSE_SUFFIX: Serializers.transform_3d(pose)}
             case CartesianDelta(delta, frame):
                 entries = {
                     '.pose_delta': Serializers.transform_3d(delta),

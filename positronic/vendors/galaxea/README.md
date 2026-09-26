@@ -35,13 +35,12 @@ openness, while Positronic and DROID's robot interface represent closure.
 See upstream [`DroidLerobotDataset._slice_meta_feature`](https://github.com/OpenGalaxea/GalaxeaVLA/blob/89f2322b4ad016e192437adc1a2c253b05bab246/src/g05/data/droid/droid_lerobot_dataset.py#L319).
 
 Galaxea's processor performs image resizing, state normalization, and action
-denormalization. There is no gripper conversion on the robot client. Every step
-receives its 15 Hz timestamp. `ActionHorizon` then keeps the steps inside the
-16-step open loop and closes the chunk at that boundary, so Positronic's
-`ChunkedSchedule` asks for a new prediction after 16 steps. A chunk of 16 steps or
-fewer passes through with its own end-of-chunk timestamp.
-The backend has no per-episode action cache; closing or cancelling a session
-cannot carry cached actions into another episode.
+denormalization. The server returns full chunks with decoded joint and gripper
+commands. The client `ChunkedSchedule` executes up to `execution_steps` actions
+(default 16), at `codec.fps` (default 15 Hz), before requesting another chunk.
+That same frequency is sent to the model as an observation field. Short chunks
+execute completely. The backend has no per-episode action cache; each server
+session owns and closes its backend connection.
 
 ## Docker setup
 
@@ -104,7 +103,7 @@ inside `checkpoints/g05-droid/`. Start the server on the GPU host:
 
 ```bash
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml \
-  run --rm --service-ports --use-aliases galaxea-server --port=8000
+  run --rm --service-ports --use-aliases galaxea-server --websocket.served_address.port=8000
 ```
 
 The published API binds to `127.0.0.1:8000` on the Docker host. Use Docker Engine
@@ -119,7 +118,7 @@ on that host. At startup the server loads `g05-droid` by launching
 The HTTP API, including `/api/v1/models`, becomes available after the model is ready.
 Unloading the policy stops the child process. Each request runs fresh inference and returns
 the full chunk. The first request can include model compilation latency; set
-`--pipeline.source.infer_timeout=300` if needed.
+`--model.infer_timeout=300` if needed.
 
 The `droid` pipeline places the vendor codec after the remote boundary, so existing
 clients use `.remote` without Galaxea dependencies. For a source installation,
@@ -130,9 +129,9 @@ the server in the Positronic environment with an explicit localhost bind:
 
 ```bash
 uv run --locked python -m positronic.vendors.galaxea.server \
-  --host=127.0.0.1 --port=8000 \
-  --pipeline.source.galaxea_root=/path/to/GalaxeaVLA \
-  --pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
+  --websocket.served_address.host=127.0.0.1 --websocket.served_address.port=8000 \
+  --model.galaxea_root=/path/to/GalaxeaVLA \
+  --model.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
 ```
 
 For DROID clients on another machine, forward the API through SSH to the GPU host
@@ -148,7 +147,7 @@ localhost URL works for clients running directly on the GPU host:
 
 ```bash
 uv run --locked positronic eval run --eval=.real.droid.pick_place \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --output_dir=/path/to/evaluation-recordings
 ```
 
@@ -162,7 +161,7 @@ Use a unique output directory for each run:
 ```bash
 IMAGE_TAG=latest docker compose -f docker/docker-compose.yml run --rm robolab-eval \
   --eval=.sim.robolab.banana_in_bowl --eval.trial_count=1 \
-  --policy=.remote --policy.host=galaxea-server --policy.port=8000 \
+  --policy=.remote --policy.address.host=galaxea-server --policy.address.port=8000 \
   --output_dir=s3://inference/tmp/galaxea-robolab/<run-id>/
 ```
 

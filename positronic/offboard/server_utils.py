@@ -1,8 +1,6 @@
-"""Sync helpers for ``ModelSource.load`` implementations.
+"""Sync helpers a model's build runs: a long download, a subprocess boot, a first inference.
 
-``load`` runs in a worker thread while the connected client sits in the session handshake with a
-30s per-message timeout; these helpers pump ``on_progress`` every few seconds so long downloads,
-subprocess boots and first inferences keep that handshake alive.
+Each logs how long it has run every few seconds, so a load that takes minutes shows in the server log.
 """
 
 import logging
@@ -10,23 +8,23 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
-from positronic.policy import Policy
-from positronic.policy.executor import blocking
+from positronic.offboard.spec import Model
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_LOG_INTERVAL_S = 5.0
 
-def run_with_progress(fn: Callable[[], Any], description: str, on_progress: Callable[[str], None] | None) -> Any:
-    """Run blocking ``fn``, reporting ``description`` with elapsed time every few seconds."""
-    if on_progress is None:
-        return fn()
+
+def run_with_progress(fn: Callable[[], Any], description: str) -> Any:
+    """Run blocking ``fn``, logging ``description`` with elapsed time every few seconds."""
     done = threading.Event()
     start = time.monotonic()
 
     def tick():
-        while not done.wait(5.0):
-            on_progress(f'{description}... ({time.monotonic() - start:.0f}s elapsed)')
+        while not done.wait(PROGRESS_LOG_INTERVAL_S):
+            logger.info(f'{description}... ({time.monotonic() - start:.0f}s elapsed)')
 
     ticker = threading.Thread(target=tick, daemon=True)
     ticker.start()
@@ -37,27 +35,25 @@ def run_with_progress(fn: Callable[[], Any], description: str, on_progress: Call
         ticker.join()
 
 
-def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], None] | None = None) -> None:
+def warmup(policy: Model, obs: dict[str, Any]) -> None:
     """Run one inference through ``policy``, so a backend's first-call cost is paid before it serves.
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    session = blocking(policy).new_session()
+    session_id = uuid4().hex
     try:
-        run_with_progress(lambda: session(obs, time.time_ns()), 'Running warmup inference', on_progress)
+        run_with_progress(lambda: policy(obs, session_id=session_id), 'Running warmup inference')
     finally:
-        session.close()
+        policy.end_session(session_id)
 
 
 def wait_for_subprocess_ready(
     check_ready: Callable[[], bool],
     check_crashed: Callable[[], tuple[bool, int | None]],
     description: str,
-    on_progress: Callable[[str], None] | None = None,
     max_wait: float = 300.0,
-    update_interval: float = 5.0,
 ) -> None:
-    """Poll a subprocess until ready, reporting progress so long boots don't starve the client handshake."""
+    """Poll a subprocess until ready, logging how long it has run."""
     start = time.monotonic()
     last_update = start
     while time.monotonic() - start < max_wait:
@@ -67,8 +63,8 @@ def wait_for_subprocess_ready(
         if check_ready():
             logger.info(f'{description} ready after {time.monotonic() - start:.0f}s')
             return
-        if on_progress is not None and time.monotonic() - last_update >= update_interval:
-            on_progress(f'Starting {description}... ({time.monotonic() - start:.0f}s elapsed)')
+        if time.monotonic() - last_update >= PROGRESS_LOG_INTERVAL_S:
+            logger.info(f'Starting {description}... ({time.monotonic() - start:.0f}s elapsed)')
             last_update = time.monotonic()
         time.sleep(1.0)
     raise RuntimeError(f'{description} did not become ready within {max_wait}s')

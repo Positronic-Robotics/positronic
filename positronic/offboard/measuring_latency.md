@@ -15,7 +15,7 @@ loaded, so a session cut short still holds its results.
 | `link_probe sink` | when the first byte landed, when the last one did, and every read between |
 | `link_probe source` | how long this end's own write took to return |
 | `link_probe watch` | the receive queue over the transfer |
-| `serving_cost --server_host` | one round trip, divided by the phases the server reports |
+| `serving_cost --server_address` | one round trip, divided by the phases the server reports |
 
 `link_probe` carries no policy and no model. `serving_cost` needs a served handshake, so it runs last.
 
@@ -108,10 +108,14 @@ undrained receiver shows up in `send_ms` on one and in `recv_ms` on the other.
 $PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served.jsonl
 
 uv run --locked python -m positronic.offboard.serving_cost \
-    --dataset.path=$EPISODE --server_host=$SERVER --server_wire=websocket_tls \
+    --dataset.path=$EPISODE --server_wire=websocket_tls \
+    --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
+    --server_address.port=443 --headers=@positronic.cfg.policy.bearer_headers \
     --requests=20 --out=served-ws.json
 uv run --locked python -m positronic.offboard.serving_cost \
-    --dataset.path=$EPISODE --server_host=$SERVER --server_wire=grpc --server_port=9000 \
+    --dataset.path=$EPISODE --server_wire=grpc \
+    --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
+    --server_address.port=9000 --headers=@positronic.cfg.policy.bearer_headers \
     --requests=20 --out=served-grpc.json
 ```
 

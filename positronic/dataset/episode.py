@@ -16,6 +16,8 @@ META_PATH = 'path'
 META_UID = 'uid'
 # When the episode was opened, in the meta of both the episode and the writer that made it.
 META_CREATED_TS_NS = 'created_ts_ns'
+# The video encoder spec, under the ``writer`` entry of the episode meta.
+META_WRITER_VIDEO_ENCODER = 'video_encoder'
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 

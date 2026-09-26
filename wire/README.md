@@ -1,40 +1,45 @@
 # positronic-wire
 
-The client side of the two transports a Positronic inference session runs over, and the facts both
-ends of a wire share. It is one distribution, installable on its own, with `grpcio` and
-`websockets` as its only dependencies.
+The client side of the transports a Positronic inference session runs over: websockets, gRPC, and a
+partner's own protocol. It carries the facts both ends of a wire share. It is one distribution,
+installable on its own, with `grpcio` and `websockets` as its only dependencies.
 
 > **Alpha, under rapid development.** Names and behaviour change without notice, and nothing here is
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.1.0"
+uv add "positronic-wire==0.7.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
 The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit.
 
-`positronic_wire` never imports `positronic`. `positronic` depends on it: the server side of each
-wire, in `positronic.offboard`, imports the facts from here, and `InferenceClient` dials through
-the wires here.
+`positronic_wire` never imports `positronic`. `positronic` depends on it: each server side in
+`positronic.offboard` imports the facts from here, and `InferenceClient` dials through the wires
+here.
 
 ## What a wire is
 
-A wire is one transport that carries the `positronic.offboard.protocol` frames as opaque bytes. It
-has two ends. The client end dials a session and probes a server; the server end accepts sessions
-and refuses an unauthorized peer. Everything specific to a transport — the library, its exception
-types, its status codes, its metadata keys, the path a probe asks for, the URL scheme it writes —
-lives inside that transport's wire classes. Code outside a wire speaks to every transport through
-one interface and reads one answer. A wire over TLS is a member of its own, so no caller holds a
-`secure` flag, and nothing anywhere reads a transport off a URL scheme: a caller names the wire.
+A wire is one transport that carries a protocol's frames as opaque bytes. It has two ends. The
+client end dials a session and probes a server; the server end accepts sessions and refuses an
+unauthorized peer. Everything specific to a transport — the library, its exception types, its
+status codes, its metadata keys, the path a probe asks for, the URL scheme it writes — lives inside
+that transport's wire classes. Code outside a wire speaks to every transport through one interface
+and reads one answer. A wire over TLS is a member of its own, so no caller holds a `secure` flag,
+and nothing anywhere reads a transport off a URL scheme: a caller names the wire.
+
+Most wires here carry the `positronic.offboard.protocol` frames, and `positronic.offboard` serves
+their other end. `roboarena` is the exception: it carries a partner's own protocol, the partner
+serves it, and this package holds the client end alone.
 
 ## The package boundary
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_PATH`) and `session_path(model)`, `MAX_MESSAGE_BYTES`, `SessionAddress(host, port, path, query)`, `Endpoint`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
-| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketClientConnection` |
-| `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, and the call both ends agree on: `SERVICE`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`), `MODELS_KEY`, the key the model route answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
+| `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The wire sends no headers, because another party runs its server |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
@@ -44,14 +49,15 @@ needs.
 
 ## The client interface
 
-`ClientWire` has two facts and four verbs. `NAME` is what a caller selects it by: `websocket`,
-`websocket_tls`, `grpc`, `grpc_tls`. `DEFAULT_PORT` is the port a URL leaves out.
+A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
+`roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
+leaves out on the members that carry one.
 
-- `session_url(address)` — the session as this wire spells it, for the dial and for the log. The
-  websocket members write `ws://` or `wss://`, because their library takes a URL; the gRPC members
-  write `host:port`, because theirs takes a target.
-- `api_url(address)` — the server's HTTP API beside this wire (`http://` or `https://`), or `None`
-  where the wire's port carries sessions alone.
+- `session_url(address)` — the session as this wire names it, for a log and for an error. The
+  websocket members write `ws://` or `wss://`, `websocket_unix` writes `ws+unix://`, and the gRPC
+  members write `host:port`, and `roboarena` writes the root it dials. What a wire dials is its own:
+  `websocket`, `websocket_tls` and `roboarena` dial this spelling, and the others dial a socket or a
+  target instead.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
@@ -62,11 +68,43 @@ needs.
   server answers; a `Refusal` says why none did, in the terms `dial` uses, `FORBIDDEN` among them for
   a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
-  which a server that is up answers `UNIMPLEMENTED`.
+  which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
+  frame the server announces itself with. The protocol carries no other readiness.
 
-`registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries. A
-`SessionAddress` is `host`, `port`, `path` (`session_path(model)`) and `query`, as written; a
-caller that records an endpoint records those four and the wire's name, never a URL.
+`registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
+
+**Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
+type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
+`HostPortAddress` — `host`, `port`, `path` (`SESSION_PATH`), `query`, as written.
+`websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
+`RoboarenaAddress` — `host` and `port`. A record that names an endpoint carries the wire's name and
+that wire's fields, never a URL, and no address carries a field a wire ignores.
+
+`uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
+the network. The address refuses a relative path when it is built, because a relative one names a
+different socket to each caller. It names no host and no port, because a socket has neither: the
+handshake carries `localhost` as a stand-in the server never resolves. A socket is same-machine by
+construction, so no TLS member sits beside it. An absent path is `COLD`: the client cannot tell a
+misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A refusal
+from a socket a server is restarting on is `COLD` too. A path holding something that is not a
+socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed
+out or was reset reached the socket, so the server rather than the path was not ready, and it reads
+`COLD` as it does on a port.
+
+`roboarena` is a partner's own protocol: msgpack frames on a websocket at the bare root of a port the
+partner publishes. The server closes any other path, and it routes on a key inside each frame, so the
+address names no route and no query. It publishes no default port either, so every address states one.
+The server announces its configuration as the first frame of every connection: `dial` leaves that frame
+for the caller's codec, and `probe` reads it and closes. A port that accepts a connection and announces
+nothing is a backend still starting, so it reads `COLD`. The server reports a failure in a text frame
+and serves nothing more on that connection, so `recv` and `probe` raise `TextAnswer`, which carries the
+text: a retry does not change it. The protocol names no URL scheme and the port is plain, so no TLS
+member sits beside this wire; a partner who terminates TLS in front of it refuses a handshake in the
+terms the websocket members already read.
+
+Typing carries the split: a wire handed the other wire's address is a type error at the call site.
+`registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
+before it dials, and names both in the refusal.
 
 ## What each consumer pays
 
@@ -94,9 +132,9 @@ one symbol here, and the set of wires is `registry.CLIENT_WIRES`. A literal spel
 in another repository drifts the day either side edits it, and nothing reports the drift; an
 imported symbol cannot.
 
-A scheme table disappears with them. A record that names an endpoint carries the wire's name, the
-host, the port, the model and the query as five fields, so no reader of the record derives a
-transport, a TLS setting or a default port from the spelling of a URL.
+A scheme table disappears with them. A record that names an endpoint carries the wire's name and the
+fields that wire's address declares, so no reader of the record derives a transport, a TLS setting or
+a default port from the spelling of a URL.
 
 The port a server serves a wire on, and the server flag that names it, stay literals where they are
 spelled: they are a deployment's configuration, not wire facts. A test in the consumer that installs
@@ -128,18 +166,19 @@ raise a constant naming the version that first dialled it.
 A consumer moves onto the wire in this order, each step green on its own:
 
 1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
-   local copies, the tables keyed by scheme, and every read of a URL scheme. An endpoint record
-   names its wire, host, port, model and query. Report the registry's names in the deploy handshake
-   and retire any per-transport version floor.
+   local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
+   names its wire, then that wire's address** — the fields `ClientWire.ADDRESS` declares, which differ
+   per wire. Report the registry's names in the deploy handshake and retire any per-transport version
+   floor.
 2. Replace the transport-specific dial with `probe`, and the exception-name match with
    `isinstance(raised, (wire.ConnectRefused, wire.PeerDisconnected, TimeoutError))`.
-3. Move the consumer's own transports — a partner's wire, a socket-path address — into their own
-   `ClientWire` subclasses, registered by name beside the wire's own.
+3. Move the consumer's own transports into their own `ClientWire` subclasses, each declaring the
+   address it dials, registered by name beside the wire's own.
 4. Deploy the pinned side at the commit that carries the wire, then the checkout side.
 
 ## What is not shared
 
-- The server side of each wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
+- The server side of each offboard wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
 - The session protocol and the policy stack, which shape an observation and need `numpy` and the
   codecs. A consumer that warms an endpoint with a real observation runs that in an environment
   carrying `positronic`.

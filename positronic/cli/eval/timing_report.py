@@ -442,7 +442,13 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
     reset_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RESET)
     env_step_s = sum(_dur_s(k) for k in kids if k.name == SPAN_ENV_STEP)
     record_io_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RECORD_IO)
-    infer_ms = [_dur_s(k) * 1000.0 for k in kids if k.name == SPAN_POLICY_INFER]
+    infer_ms = []
+    pending = list(kids)
+    while pending:
+        child = pending.pop()
+        if child.name == SPAN_POLICY_INFER:
+            infer_ms.append(_dur_s(child) * 1000.0)
+        pending.extend(children.get(child.span_id, []))
     materialize_s = sum(
         _dur_s(child)
         for k in kids

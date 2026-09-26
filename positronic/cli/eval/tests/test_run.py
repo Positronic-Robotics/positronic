@@ -3,6 +3,7 @@ import os
 import sys
 from contextlib import contextmanager
 from functools import partial
+from itertools import islice
 from types import SimpleNamespace
 from typing import cast
 
@@ -15,10 +16,9 @@ from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy import Policy, Session
+from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
-from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
 def _eval(simulated: bool) -> Eval:
@@ -33,16 +33,12 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
 
 
 class _IdlePolicy(Policy):
-    """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
+    """A policy that asks for regular calls without emitting commands."""
 
-    def __init__(self):
-        self.observations: list[dict] = []
-
-    def new_session(self, *_args, **_kwargs) -> Session:
-        return IdleSession(self)
-
-    def close(self):
-        pass
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        while True:
+            yield Step({}, runtime.time_ns + 100_000_000)
 
 
 @pytest.mark.timeout(30.0)
@@ -86,7 +82,8 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         world.connect(driver.perform_task, stub.perform_task)
-        drive_scheduler(world.start([driver, stub]), steps=200)
+        for _ in islice(world.start([driver, stub]), 200):
+            pass
 
     assert stub.asked == tasks
 

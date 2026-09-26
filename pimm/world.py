@@ -577,8 +577,8 @@ class World:
 
         The timeline is integer nanoseconds (the resolution recorded timestamps use), so
         a ``Sleep`` advances at least one nanosecond and distinct instants never round to
-        the same recorded timestamp — loops sleeping the same duration land on the exact
-        same instant instead of drifting sub-nanosecond apart.
+        the same recorded timestamp. Each sleep starts when its loop yields; on a wall
+        clock, work done before yielding shifts that loop's next wake-up.
 
         In a virtual-time world the world owns the clock and advances it here, so
         simulated time runs as fast as the machine allows. In a wall-clock world time
@@ -602,7 +602,6 @@ class World:
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
 
         while ready:
-            now_ns = self._clock.now_ns()
             carried = []  # loops that yield; they run again at the next instant
             finished = False
             for i in sorted(ready):
@@ -615,7 +614,7 @@ class World:
                 if isinstance(command, Yield):
                     carried.append(i)
                 else:
-                    heapq.heappush(pq, (now_ns + max(1, round(command.seconds * 1e9)), i))
+                    heapq.heappush(pq, (self._clock.now_ns() + max(1, round(command.seconds * 1e9)), i))
 
             # A pending sleep (this round or earlier) or a finishing loop is progress toward the clock
             # advancing; an all-yield round with neither stalls it. Persistent stalling means no loop is
@@ -631,7 +630,7 @@ class World:
                 )
 
             # The next instant is the nearest future wake, or now if only carried loops remain.
-            target_ns = pq[0][0] if pq else now_ns
+            target_ns = pq[0][0] if pq else self._clock.now_ns()
             ready = carried
             while pq and pq[0][0] <= target_ns:
                 ready.append(heapq.heappop(pq)[1])

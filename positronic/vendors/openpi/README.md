@@ -22,8 +22,8 @@ OpenPI supports multiple codecs for different use cases:
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
-- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
-- **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
+- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and the client scheduler executes DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
+- **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and the client scheduler executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 Both DROID codecs execute each chunk under DROID's impedance gains (`codecs.droid_execution`; see [Control mode](../../../docs/codecs.md#control-mode)).
 
@@ -105,15 +105,15 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 ```bash
 # Default pipeline (ee codec). `--pipeline.ee_frame=None` says the checkpoint speaks the rig's `default`
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
-# Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
+# Pretrained DROID model (pi05_droid) — preset model (public checkpoint + config) and pipeline (codec)
 docker compose run --rm --service-ports openpi-server droid
 
 # DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
@@ -133,80 +133,62 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - subcommand: Named policy pipeline (`serve` is `ee`). Picks the server-side codec and, for `droid` /
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
-- `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
+- `--model.checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
   (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
   `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
-- `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
-- `--port`: (Optional) Port to serve on (default: 8000)
-- `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
-- `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
+- `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
+- `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
+- `--websocket.served_address.port`: (Optional) WebSocket wire port (default: 8000)
+- `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=<path>`: (Optional) bind the
+  WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
+- `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
+- `--model.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
+
+### Serving More Than One Policy On One GPU
+
+The server starts its OpenPI subprocess with `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so JAX allocates on
+demand. JAX otherwise takes ~75% of the device at its first use, and a second server on that GPU then fails
+with `RESOURCE_EXHAUSTED` while `nvidia-smi` reports the device almost free.
+
+`XLA_PYTHON_CLIENT_MEM_FRACTION` caps what one server allocates when preallocation is off. Set it
+per container when you co-host N policies. Leave it unset for one policy: a cap that is too low makes a large
+model fail with the same `RESOURCE_EXHAUSTED`. Three policies held 30.4 GB together on an 80 GB H100 with
+`XLA_PYTHON_CLIENT_MEM_FRACTION=.25`.
+
+The `openpi-server-8001` service is a second server on the same machine, on host port 8001:
+
+```bash
+docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
+  -v ~/checkpoints:/checkpoints openpi-server-8001 ee \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --pipeline.ee_frame=None
+```
 
 ### API Endpoints
 
 The server exposes the following endpoints:
 
 **GET `/api/v1/models`**
-- Returns list of available checkpoints
-- Response: `{"models": ["checkpoint-1000", "checkpoint-2000", ...]}`
+- Returns the checkpoint the server serves
+- Response: `{"models": ["2000"]}`
 
 **WebSocket `/api/v1/session`**
-- Default session (uses latest checkpoint)
+- Session with the checkpoint the server serves: `--model.checkpoint`, else the latest
 - Sends metadata on connection, then enters inference loop
 - Client sends serialized observations, server responds with serialized actions
 
-**WebSocket `/api/v1/session/{checkpoint_id}`**
-- Session with specific checkpoint
-- Same protocol as default session
-
 **Session parameters:** query params on the session URL tune the serving pipeline per session — each key
-is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?codec.fps=10`. Values must
-be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
+is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
+be JSON literals; the model is fixed at launch, and a session param cannot reach it. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
-1. Client connects to WebSocket
-2. Server may stream `{'status': 'loading', ...}` updates while it downloads and starts the subprocess, then sends `{'status': 'ready', 'meta': {...}}` (checkpoint info, codec metadata)
-3. For each inference step:
-   - Client sends: serialized observation dict
-   - Server responds: `{'result': [<action_dict>, ...]}` (a **list** of action dicts) or `{'error': error_message}`
-
-### Example Client Connection
-
-```python
-from websockets.sync.client import connect
-from positronic.offboard.protocol import serialise, deserialise
-
-# Connect to server
-ws = connect('ws://localhost:8000/api/v1/session')
-
-# Status handshake: the server streams 'loading' updates while it downloads the
-# checkpoint and starts the OpenPI subprocess. Read messages until it is ready.
-while True:
-    message = deserialise(ws.recv())
-    if message.get('status') == 'ready':
-        meta = message['meta']
-        break
-    if message.get('status') in ('loading', 'waiting'):
-        print(f"Server status: {message.get('message', message['status'])}")
-        continue
-    raise RuntimeError(f"Unexpected server response: {message}")
-
-print(f"Connected to checkpoint: {meta['checkpoint_id']}")
-
-# Send observation and receive actions
-observation = {
-    'robot_state.ee_pose': [0.1, 0.2, 0.3, 0, 0, 0, 1],
-    'grip': [0.5],
-    'image.wrist': wrist_image,
-    'image.exterior': exterior_image,
-}
-ws.send(serialise(observation))
-response = deserialise(ws.recv())
-actions = response['result']  # list of action dicts (one per action in the chunk)
-```
+`RemotePolicy` handles the handshake, session ID, inference requests, and session cleanup.
+For a low-level client, use `InferenceClient` and `InferenceSession` as described in the
+[offboard protocol](../../offboard/README.md). The session must end after its outstanding
+calls finish. Inference replies contain full action chunks.
 
 ## 5. Run Inference
 
@@ -216,12 +198,13 @@ To evaluate the policy, run the inference client locally using the unified `.rem
 ```bash
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
-  --policy.host=vm-h100 --policy.port=8000 \
+  --policy.address.host=vm-h100 --policy.address.port=8000 \
   --eval.timeout=20 \
   --output_dir=~/datasets/inference_logs
 ```
 
-- `--policy.host` and `--policy.port`: the inference server; `--policy.wire=websocket_tls` behind a TLS front.
+- `--policy.address.host` and `--policy.address.port`: the inference server; `--policy.wire=websocket_tls`
+  behind a TLS front.
 
 A `droid` server emits `JointDelta` commands; the driver applies each to the live joints.
 
@@ -249,20 +232,19 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 
 ### Checkpoint not found
 
-**Problem:** Server returns "Checkpoint not found" error
+**Problem:** Server fails at startup: it finds no checkpoint, or cannot download the one it names
 
 **Solutions:**
-1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
-3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
-4. If using specific checkpoint, verify the checkpoint ID exists
+1. Verify the `--model.checkpoints_dir` path is correct (should end with experiment directory)
+2. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
+3. If using `--model.checkpoint`, verify the checkpoint ID exists
 
 ### Checkpoint directory one level too deep
 
 **Problem:** Server exits with "No checkpoint found in `<dir>`: it is a single checkpoint, not a checkpoints directory"
 
 **Solutions:**
-1. `--pipeline.source.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
+1. `--model.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
    subdirectories — drop the trailing checkpoint number from the path
 2. A directory holding `_CHECKPOINT_METADATA`, `assets`, `params` and `train_state` is one checkpoint; its
    parent is the experiment directory

@@ -2,22 +2,72 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import os
+import re
+from pathlib import Path
+
 import pytest
-from platform_client.enums import EndpointKind, Placement
-from platform_client.eval_plan import _ENDPOINT_MAY_STATE, Endpoint, EvalPlan, TaskNode, plan_of_image
+from platform_client.enums import EndpointKind, Placement, RequestType, Wire
+from platform_client.eval_plan import (
+    _ENDPOINT_OVERRIDES,
+    _PER_TASK_ONLY,
+    ADDRESS_OF_WIRE,
+    REVEAL_REGISTRY_PASSWORD,
+    SESSION_ROUTE,
+    Cascade,
+    Endpoint,
+    EvalPlan,
+    Host,
+    HostPortAddress,
+    NebiusCompetition,
+    Port,
+    PrivateEval,
+    RegistryCredential,
+    RegistryCredentialFile,
+    RoboarenaAddress,
+    SessionPath,
+    SessionQuery,
+    SocketPath,
+    TaskNode,
+    UnixSocketAddress,
+    credential_from_file,
+    password_from_file,
+    plan_of_image,
+    plan_with_passwords_read,
+)
 from platform_client.evals import EvalRef
+from platform_client.ids import OrgSlug
 from platform_client.policy_images import PolicyImage
+from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
-from pydantic import ValidationError
+from positronic_wire import registry, wire
+from pydantic import TypeAdapter, ValidationError
 
 SPOONS = 'eight-spoons-into-grey-tote'
 MUG = 'marker-in-mug'
-BASELINE = {'name': 'baseline', 'url': 'wss://baseline.example/ws'}
-CANDIDATE = {'name': 'candidate', 'url': 'wss://candidate.example/ws'}
+PRIVATE = {'type': 'private_eval', 'org': 'acme'}
+SESSION = SESSION_ROUTE
+
+
+def remote(name: str, **over) -> dict:
+    """A remote entry on the websocket wire, at ``name``'s own host."""
+    address = {'host': f'{name}.example', 'port': 8000, 'path': SESSION}
+    return {'name': name, 'wire': 'websocket', 'address': address, **over}
+
+
+BASELINE = remote('baseline')
+CANDIDATE = remote('candidate')
 
 
 def a_plan(**over) -> EvalPlan:
-    fields = {'tasks': [SPOONS], 'endpoints': [BASELINE, CANDIDATE], 'episodes_per_endpoint': 10}
+    fields = {
+        'request_type': PRIVATE,
+        'tasks': [SPOONS],
+        'endpoints': [BASELINE, CANDIDATE],
+        'episodes_per_endpoint': 10,
+    }
     return EvalPlan.model_validate({**fields, **over})
 
 
@@ -66,7 +116,7 @@ def test_a_plan_names_a_task():
 
 def test_a_plan_states_a_count():
     with pytest.raises(ValidationError, match='states episodes_per_endpoint'):
-        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE]})
+        EvalPlan.model_validate({'request_type': PRIVATE, 'tasks': [SPOONS], 'endpoints': [BASELINE]})
 
 
 def test_a_task_label_names_a_plan_endpoint():
@@ -79,18 +129,12 @@ def test_an_endpoint_overrides_only_its_count():
         a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
 
 
-def test_a_served_endpoint_names_its_spec_and_no_url():
-    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid'})
-    assert served.names_a_locator and served.provider is None
+def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
+    served = Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid', 'wire': 'grpc'})
+    assert served.names_a_locator and served.provider is None and served.wire is Wire.grpc
     assert Endpoint.model_validate({'name': 'pi05', 'kind': 'served'}).names_a_locator is False
-    with pytest.raises(ValidationError, match='names a url'):
-        Endpoint.model_validate({
-            'name': 'pi05',
-            'kind': 'served',
-            'provider': 'cohost',
-            'spec': 's',
-            'url': 'wss://x/ws',
-        })
+    with pytest.raises(ValidationError, match='the platform records the address it serves at'):
+        Endpoint.model_validate({**remote('pi05'), 'kind': 'served', 'provider': 'cohost', 'spec': 's'})
 
 
 def test_an_endpoint_states_only_a_locator_and_its_own_count():
@@ -111,9 +155,30 @@ def test_an_endpoint_reads_back_from_its_own_dump():
     assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
 
 
-def test_the_fields_an_endpoint_may_state_are_fields_it_declares():
-    # A name here the model does not carry would let the per-task field of that name through.
-    assert _ENDPOINT_MAY_STATE <= set(Endpoint.model_fields)
+A_PER_TASK_VALUE = {
+    'cap_per_episode_sec': 60,
+    'policy_preset': 'other',
+    'tote_placement': 'left',
+    'camera_vantage': 'phail',
+    'external_cameras': {'side': 'left'},
+    'clutter': {'count_min': 1, 'count_max': 2},
+}
+
+
+def test_an_endpoint_refuses_every_per_task_property():
+    """An endpoint refuses every property of `Cascade` but the count. The equality assert keeps
+    `A_PER_TASK_VALUE` complete, so a field added to `Cascade` fails here until it has a value."""
+    assert _ENDPOINT_OVERRIDES in Cascade.model_fields
+    assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
+    # A field of `Endpoint` itself does not cascade, so it is never per task.
+    assert not _PER_TASK_ONLY & (set(Endpoint.model_fields) - set(Cascade.model_fields))
+    for name, value in A_PER_TASK_VALUE.items():
+        with pytest.raises(ValidationError, match='per-task properties'):
+            Endpoint.model_validate({**BASELINE, name: value})
+
+
+def test_an_endpoint_states_the_one_property_it_overrides():
+    assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
 
 
 def test_a_scene_is_flat_on_every_level():
@@ -157,17 +222,10 @@ def test_an_endpoint_count_wins_and_one_without_takes_the_nearest_level():
             {
                 'task_id': 'b',
                 'episodes_per_endpoint': 5,
-                'endpoints': [
-                    'bare',
-                    {'name': 'two', 'url': 'wss://two.example/ws', 'episodes_per_endpoint': 2},
-                    {'name': 'five', 'url': 'wss://five.example/ws'},
-                ],
+                'endpoints': ['bare', remote('two', episodes_per_endpoint=2), remote('five')],
             },
         ],
-        endpoints=[
-            {'name': 'own', 'url': 'wss://own.example/ws', 'episodes_per_endpoint': 3},
-            {'name': 'bare', 'url': 'wss://bare.example/ws'},
-        ],
+        endpoints=[remote('own', episodes_per_endpoint=3), remote('bare')],
     )
     first, second = plan.tasks
     assert [plan.episodes_on(first, entry) for entry in plan.task_endpoints(first)] == [3, 10]
@@ -182,16 +240,28 @@ def test_a_remote_endpoint_names_no_bring_up():
     with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
         Endpoint(name='baseline', provider='droid_cohost')
     with pytest.raises(ValidationError, match='only a served or an image endpoint carries'):
-        Endpoint(name='baseline', image=PolicyImage('org/policy:v1'))
+        Endpoint(name='baseline', wire=Wire.websocket, image=PolicyImage('org/policy:v1'))
 
 
-def test_an_image_endpoint_names_the_image_and_nothing_else():
-    entry = Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/policy@sha256:abc'))
-    assert entry.names_a_locator and entry.url is None
+def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
+    entry = Endpoint(
+        name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')
+    )
+    assert entry.names_a_locator and entry.address is None
     with pytest.raises(ValidationError, match='the platform runs the image'):
-        Endpoint(name='policy', kind=EndpointKind.image, image=PolicyImage('org/p:v1'), url='wss://h/ws')
+        Endpoint.model_validate({**BASELINE, 'kind': 'image', 'image': 'org/p:v1'})
     with pytest.raises(ValidationError, match='only an image endpoint carries'):
-        Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', image=PolicyImage('org/p:v1'))
+        Endpoint(name='policy', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, image=PolicyImage('org/p:v1'))
+
+
+def test_an_image_endpoint_refuses_any_wire_but_the_websocket():
+    with pytest.raises(ValidationError, match='an image endpoint takes the websocket wire'):
+        Endpoint.model_validate({'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'grpc'})
+
+
+def test_an_image_endpoint_on_the_websocket_wire_is_accepted():
+    entry = Endpoint.model_validate({'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'})
+    assert entry.wire is Wire.websocket
 
 
 def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
@@ -199,7 +269,7 @@ def test_a_plan_of_an_image_names_the_eval_and_states_no_task():
     # neither.
     plan = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'), alias='demo')
     assert plan.names_an_eval and not plan.tasks and plan.episodes_per_endpoint is None
-    assert [entry.image for entry in plan.endpoints] == ['org/policy@sha256:abc']
+    assert [(entry.image, entry.wire) for entry in plan.endpoints] == [('org/policy@sha256:abc', Wire.websocket)]
     assert plan.alias == 'demo'
     assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
 
@@ -208,25 +278,178 @@ def test_a_plan_takes_its_tasks_from_itself_or_from_an_eval_and_not_from_both():
     with pytest.raises(ValidationError, match='it takes its tasks from one'):
         a_plan(eval='robolab.public_subset')
     with pytest.raises(ValidationError, match='names at least one task, or the eval'):
-        EvalPlan.model_validate({'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
-
-
-def test_an_endpoint_url_names_a_host():
-    """An address with no host reaches nothing. Without this check it counts as a locator, and the
-    platform refuses the plan only after it is filed."""
-    with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='baseline', url='/ws')
-    with pytest.raises(ValidationError, match='no host'):
-        Endpoint(name='baseline', url='baseline.example/ws')
+        EvalPlan.model_validate({'request_type': PRIVATE, 'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
 
 
 @pytest.mark.parametrize(
-    'url', ['wss://baseline.example/ws', 'https://baseline.example/ws', 'http://localhost:8080/ws']
+    ('wire', 'address', 'dialled'),
+    [
+        ('websocket_tls', {'host': 'h.example', 'port': 443, 'path': SESSION, 'query': 'mode=native'}, HostPortAddress),
+        ('grpc', {'host': '::1', 'port': 50051, 'path': SESSION}, HostPortAddress),
+        ('websocket_unix', {'uds': '/run/policy.sock', 'path': SESSION}, UnixSocketAddress),
+        ('roboarena', {'host': 'h.example', 'port': 8000}, RoboarenaAddress),
+    ],
 )
-def test_an_absolute_endpoint_url_is_left_alone(url: str):
-    """The platform judges the scheme, and it dials wss:// and https:// alike, so the client refuses
-    only an address with no host."""
-    assert Endpoint(name='baseline', url=url).url == url
+def test_a_remote_endpoint_names_its_wire_then_the_fields_that_wire_dials(wire: str, address: dict, dialled: type):
+    entry = Endpoint.model_validate({'name': 'baseline', 'wire': wire, 'address': address})
+    assert type(entry.address) is dialled
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+
+
+def test_a_url_is_refused_with_the_fields_to_write_instead():
+    with pytest.raises(
+        ValidationError, match=r'names a url.*websocket: host, port, path, query.*roboarena: host, port'
+    ):
+        Endpoint.model_validate({'name': 'baseline', 'url': 'wss://baseline.example/ws'})
+
+
+def test_an_address_carries_the_fields_its_wire_dials_and_no_other():
+    with pytest.raises(
+        ValidationError, match='roboarena wire, which dials host, port; the address carries host, port, path'
+    ):
+        Endpoint.model_validate(remote('baseline', wire='roboarena'))
+    with pytest.raises(
+        ValidationError, match='grpc wire, which dials host, port, path, query; the address carries host, port'
+    ):
+        Endpoint.model_validate({'name': 'baseline', 'wire': 'grpc', 'address': {'host': 'h', 'port': 1}})
+    with pytest.raises(ValidationError, match='which dials host, port, path, query; the address carries uds'):
+        Endpoint(name='baseline', wire=Wire.grpc, address=UnixSocketAddress(uds=Path('/run/p.sock'), path=SESSION))
+
+
+def test_an_endpoint_that_runs_a_policy_names_its_wire():
+    with pytest.raises(ValidationError, match='names no wire; name one of websocket, websocket_tls'):
+        Endpoint.model_validate({'name': 'baseline', 'address': BASELINE['address']})
+    with pytest.raises(ValidationError, match='names no wire'):
+        Endpoint.model_validate({'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid'})
+    with pytest.raises(ValidationError, match='names no wire'):
+        Endpoint.model_validate(IMAGE_ENDPOINT[0] | {'wire': None})
+    with pytest.raises(ValidationError, match='names a wire and nothing that runs on it'):
+        Endpoint.model_validate({'name': 'baseline', 'wire': 'grpc'})
+
+
+# The address field grammar in the client README, row by row. `None` marks an accepted value.
+NO_HOSTNAME = 'is no hostname and no IP address'
+FRAGMENT = 'carries `#`, which starts a URL fragment: write it as `%23`'
+NOT_VISIBLE = 'holds a space or a character outside visible ASCII: percent-encode it'
+
+
+def assert_field(field_type: object, value: object, refused: str | None) -> None:
+    adapter = TypeAdapter(field_type)
+    if refused is None:
+        assert adapter.validate_python(value) == value
+    else:
+        with pytest.raises(ValidationError, match=re.escape(refused)):
+            adapter.validate_python(value)
+
+
+@pytest.mark.parametrize(
+    ('host', 'refused'),
+    [
+        ('baseline.example', None),
+        ('baseline.example.', None),
+        ('localhost', None),
+        ('policy_server', None),
+        ('10.0.0.1', None),
+        ('::1', None),
+        ('2001:db8::1', None),
+        ('', NO_HOSTNAME),
+        ('wss://baseline.example', NO_HOSTNAME),
+        ('baseline.example/ws', NO_HOSTNAME),
+        ('baseline.example:443', NO_HOSTNAME),
+        ('[::1]', NO_HOSTNAME),
+        ('[::1]:443', NO_HOSTNAME),
+        ('user@baseline.example', NO_HOSTNAME),
+        ('baseline.example?x=1', NO_HOSTNAME),
+        ('baseline.example#x', NO_HOSTNAME),
+        ('baseline example', NO_HOSTNAME),
+        ('baseline..example', NO_HOSTNAME),
+        ('.baseline.example', NO_HOSTNAME),
+        ('bücher.example', NO_HOSTNAME),
+        ('fe80::1%eth0', 'carries an IPv6 zone index'),
+    ],
+)
+def test_a_host_is_a_hostname_or_an_ip_address_alone(host: str, refused: str | None):
+    assert_field(Host, host, refused)
+
+
+@pytest.mark.parametrize(
+    ('port', 'refused'),
+    [
+        (1, None),
+        (443, None),
+        (65535, None),
+        (0, 'greater than or equal to 1'),
+        (65536, 'less than or equal to 65535'),
+        ('https', 'valid integer'),
+    ],
+)
+def test_a_port_is_an_integer_from_1_to_65535(port: object, refused: str | None):
+    assert_field(Port, port, refused)
+
+
+@pytest.mark.parametrize(
+    ('path', 'refused'),
+    [
+        (SESSION, None),
+        (f'{SESSION}/org/model', 'is not the session route'),
+        (f'{SESSION}/10000', 'is not the session route'),
+        (f'{SESSION}/', 'is not the session route'),
+        ('/', 'is not the session route'),
+        ('', 'is not the session route'),
+        ('api/v1/session', 'is not the session route'),
+        ('wss://h/ws', 'is not the session route'),
+        (f'{SESSION}?fps=10', 'write the params in `query`'),
+    ],
+)
+def test_a_path_is_the_one_session_route(path: str, refused: str | None):
+    assert_field(SessionPath, path, refused)
+
+
+def test_the_session_route_is_the_one_the_server_serves():
+    assert SESSION_ROUTE == wire.SESSION_PATH
+
+
+@pytest.mark.parametrize(
+    ('query', 'refused'),
+    [
+        ('', None),
+        ('mode=native', None),
+        ('codec.fps=10&pad=false', None),
+        ('name="s3"', None),
+        ('offsets=[-0.5,0.0]', None),
+        ('mode=native%23debug', None),
+        ('?mode=native', 'starts with `?`: write the params alone'),
+        ('mode=native#debug', FRAGMENT),
+        ('offsets=[-0.5, 0.0]', NOT_VISIBLE),
+        ('name=é', NOT_VISIBLE),
+        ('a=1\nb=2', NOT_VISIBLE),
+    ],
+)
+def test_a_query_is_the_bare_params_in_visible_ascii(query: str, refused: str | None):
+    assert_field(SessionQuery, query, refused)
+
+
+@pytest.mark.parametrize(
+    ('uds', 'refused'),
+    [
+        (Path('/run/policy.sock'), None),
+        (Path('/tmp/a policy#1.sock'), None),
+        (Path('policy.sock'), 'relative socket path'),
+        (Path('/run/p\0.sock'), 'holds a NUL byte'),
+    ],
+)
+def test_a_socket_path_is_absolute_and_holds_no_nul(uds: Path, refused: str | None):
+    assert_field(SocketPath, uds, refused)
+
+
+def test_each_wire_dials_the_fields_its_registry_member_declares():
+    # A field the platform client carries and the wire does not is one a caller writes and no dial reads.
+    declared = {}
+    for name, member in registry.CLIENT_WIRES.items():
+        assert dataclasses.is_dataclass(member.ADDRESS)
+        declared[name] = [field.name for field in dataclasses.fields(member.ADDRESS)]
+    carried = {slug_of(wire): list(address.model_fields) for wire, address in ADDRESS_OF_WIRE.items()}
+    assert carried == declared
 
 
 @pytest.mark.parametrize('entry', [{'name': 'bare'}, {'name': 'bare', 'kind': 'served'}])
@@ -237,7 +460,7 @@ def test_a_plan_endpoint_states_where_its_policy_comes_from(entry: dict):
 
 def test_an_endpoint_says_whether_it_names_a_locator():
     assert Endpoint(name='baseline').names_a_locator is False
-    assert Endpoint(name='baseline', url='wss://x/ws').names_a_locator is True
+    assert Endpoint.model_validate(BASELINE).names_a_locator is True
 
 
 def test_a_plan_names_each_endpoint_once():
@@ -261,7 +484,7 @@ def test_a_task_endpoint_naming_no_locator_names_one_the_plan_defines():
     with pytest.raises(ValidationError, match='name no endpoint the plan defines'):
         a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['elsewhere']}])
     # An entry that carries its own address needs no definition.
-    a_plan(endpoints=[], tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'elsewhere', 'url': 'wss://x/ws'}]}])
+    a_plan(endpoints=[], tasks=[{'task_id': SPOONS, 'endpoints': [remote('elsewhere')]}])
 
 
 def test_every_task_runs_on_at_least_one_endpoint():
@@ -271,16 +494,16 @@ def test_every_task_runs_on_at_least_one_endpoint():
         TaskNode.model_validate({'task_id': SPOONS, 'endpoints': []})
 
 
-IMAGE_ENDPOINT = [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}]
+IMAGE_ENDPOINT = [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}]
 
 
 def test_a_plan_naming_an_eval_states_the_policy_that_runs_it():
     # The catalogue supplies a named eval's tasks, so `tasks` is empty and every check that iterates
     # them reads nothing. Without this the plan files with no policy at all.
     with pytest.raises(ValidationError, match='defines no endpoint'):
-        EvalPlan.model_validate({'eval': 'robolab.public_subset'})
+        EvalPlan.model_validate({'request_type': PRIVATE, 'eval': 'robolab.public_subset'})
     # One plan-level endpoint is enough, which is the shape `plan_of_image` builds.
-    EvalPlan.model_validate({'eval': 'robolab.public_subset', 'endpoints': IMAGE_ENDPOINT})
+    EvalPlan.model_validate({'request_type': PRIVATE, 'eval': 'robolab.public_subset', 'endpoints': IMAGE_ENDPOINT})
 
 
 def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_it():
@@ -288,6 +511,7 @@ def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_i
     # it is checked there rather than through a task the plan does not have.
     with pytest.raises(ValidationError, match='over its own ceiling'):
         EvalPlan.model_validate({
+            'request_type': PRIVATE,
             'eval': 'robolab.public_subset',
             'endpoints': IMAGE_ENDPOINT,
             'cap_per_episode_sec': 120,
@@ -295,6 +519,7 @@ def test_the_plan_own_cap_is_checked_against_the_ceiling_with_no_task_to_carry_i
         })
     # A cap under the ceiling passes, and a task's own override is still checked.
     EvalPlan.model_validate({
+        'request_type': PRIVATE,
         'eval': 'robolab.public_subset',
         'endpoints': IMAGE_ENDPOINT,
         'cap_per_episode_sec': 90,
@@ -316,6 +541,298 @@ def test_a_clutter_draw_needs_a_range():
         a_plan(clutter={'count_min': 8, 'count_max': 4})
 
 
-def test_a_malformed_url_is_a_validation_error():
-    with pytest.raises(ValidationError, match='is not a URL'):
-        Endpoint.model_validate({'name': 'bad', 'url': 'http://host:bad'})
+# No assertion below may find this value in a rendering of a plan.
+A_PASSWORD = 'the-registry-password'
+
+
+@pytest.fixture
+def password_file(tmp_path: Path) -> Path:
+    """The file a caller names. It ends in a newline, as one written with `echo` does."""
+    path = tmp_path / 'registry-password'
+    path.write_text(f'{A_PASSWORD}\n')
+    return path
+
+
+@pytest.fixture
+def credential(password_file: Path) -> dict:
+    """What a request carries. A caller states the file, and `credential_from_file` reads it."""
+    return {'username': 'a-reader', 'password': password_from_file(password_file)}
+
+
+def an_image_endpoint(**over) -> dict:
+    return {'name': 'policy', 'kind': 'image', 'wire': 'websocket', 'image': 'org/policy:v1', **over}
+
+
+def a_plan_with(credential: dict) -> EvalPlan:
+    return EvalPlan.model_validate({
+        'request_type': PRIVATE,
+        'eval': 'robolab.public_subset',
+        'endpoints': [an_image_endpoint(image_credential=credential)],
+    })
+
+
+def test_an_image_endpoint_carries_a_credential_for_a_private_registry(credential: dict):
+    endpoint = Endpoint.model_validate(an_image_endpoint(image_credential=credential))
+    assert endpoint.image_credential is not None
+    assert endpoint.image_credential.username == 'a-reader'
+    assert endpoint.image_credential.plaintext_password() == A_PASSWORD
+
+
+def test_an_entry_that_names_no_image_may_state_no_credential(credential: dict):
+    with pytest.raises(ValidationError, match='names no image'):
+        Endpoint.model_validate(remote('remote', image_credential=credential))
+    with pytest.raises(ValidationError, match='names no image'):
+        Endpoint.model_validate({'name': 'policy', 'image_credential': credential})
+
+
+def test_a_per_task_entry_states_a_credential_for_the_image_it_names(credential: dict):
+    assert 'image_credential' not in _PER_TASK_ONLY
+    plan = EvalPlan.model_validate({
+        'request_type': PRIVATE,
+        'tasks': [{'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=credential)]}],
+        'episodes_per_endpoint': 4,
+    })
+    entry = plan.tasks[0].endpoints[0] if plan.tasks[0].endpoints else None
+    assert entry is not None and entry.image_credential is not None
+
+
+def test_no_rendering_of_a_plan_carries_the_password(credential: dict):
+    plan = a_plan_with(credential)
+    assert A_PASSWORD not in repr(plan)
+    assert A_PASSWORD not in str(plan)
+    assert A_PASSWORD not in plan.model_dump_json()
+    assert A_PASSWORD not in str(plan.model_dump())
+    assert A_PASSWORD not in str(plan.model_dump(mode='json'))
+
+
+def test_an_empty_half_of_a_credential_is_refused(credential: dict):
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(an_image_endpoint(image_credential={**credential, 'username': ''}))
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(an_image_endpoint(image_credential={'username': 'a-reader', 'password': ''}))
+
+
+def test_a_password_file_naming_no_such_file_is_refused(tmp_path: Path):
+    with pytest.raises(ValueError, match='names no file'):
+        password_from_file(tmp_path / 'never-written')
+
+
+def test_a_password_file_naming_a_directory_is_refused(tmp_path: Path):
+    with pytest.raises(ValueError, match='names no file'):
+        password_from_file(tmp_path)
+
+
+def test_an_empty_password_file_is_refused(tmp_path: Path):
+    empty = tmp_path / 'registry-password'
+    empty.write_text('')
+    with pytest.raises(ValueError, match='holds no password'):
+        password_from_file(empty)
+
+
+def test_a_password_file_of_only_whitespace_is_refused(tmp_path: Path):
+    blank = tmp_path / 'registry-password'
+    blank.write_text('  \n')
+    with pytest.raises(ValueError, match='holds no password'):
+        password_from_file(blank)
+
+
+# Root reads and searches past every mode bit, so a mode cannot refuse it.
+runs_as_root = pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root ignores file modes')
+
+
+@runs_as_root
+def test_a_password_file_nothing_may_read_is_refused(tmp_path: Path):
+    unreadable = tmp_path / 'registry-password'
+    unreadable.write_text('a-password\n')
+    unreadable.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match='cannot be read'):
+            password_from_file(unreadable)
+    finally:
+        unreadable.chmod(0o600)
+
+
+@runs_as_root
+def test_a_password_file_in_a_directory_nothing_may_search_is_refused(tmp_path: Path):
+    closed = tmp_path / 'closed'
+    closed.mkdir()
+    (closed / 'registry-password').write_text('a-password\n')
+    closed.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match='cannot be read'):
+            password_from_file(closed / 'registry-password')
+    finally:
+        closed.chmod(0o700)
+
+
+def test_the_password_keeps_the_spaces_at_its_own_edges(tmp_path: Path):
+    padded = tmp_path / 'registry-password'
+    padded.write_text('  a password with edges  \n')
+    assert password_from_file(padded) == '  a password with edges  '
+
+
+def test_a_file_with_no_trailing_newline_is_the_password_whole(tmp_path: Path):
+    bare = tmp_path / 'registry-password'
+    bare.write_text('no-newline-here')
+    assert password_from_file(bare) == 'no-newline-here'
+
+
+def test_a_windows_line_ending_goes_with_the_newline(tmp_path: Path):
+    written_on_windows = tmp_path / 'registry-password'
+    written_on_windows.write_bytes(b'a-password\r\n')
+    assert password_from_file(written_on_windows) == 'a-password'
+
+
+def test_a_tilde_path_is_read_from_the_home_it_names(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    (tmp_path / 'registry-password').write_text(f'{A_PASSWORD}\n')
+    assert password_from_file(Path('~/registry-password')) == A_PASSWORD
+
+
+def test_a_tilde_naming_no_user_is_refused():
+    with pytest.raises(ValueError, match='names no home directory'):
+        password_from_file(Path('~no-such-user-on-this-machine/registry-password'))
+
+
+def test_a_request_refuses_a_credential_that_names_a_file(password_file: Path):
+    # The gateway validates the request model, so it never opens a path a caller sends.
+    with pytest.raises(ValidationError, match='password_file'):
+        a_plan_with({'username': 'a-reader', 'password_file': str(password_file)})
+
+
+def a_plan_file_with(credential: dict, *, on_task: dict | None = None) -> EvalPlan[RegistryCredentialFile]:
+    task = (
+        SPOONS if on_task is None else {'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=on_task)]}
+    )
+    return EvalPlan[RegistryCredentialFile].model_validate({
+        'request_type': PRIVATE,
+        'tasks': [task],
+        'endpoints': [an_image_endpoint(image_credential=credential)],
+        'episodes_per_endpoint': 2,
+    })
+
+
+@pytest.mark.parametrize('stated', [[], 1])
+def test_a_plan_file_refuses_a_password_file_that_is_no_path(stated: object):
+    with pytest.raises(ValidationError, match=r'image_credential\.password_file'):
+        a_plan_file_with({'username': 'a-reader', 'password_file': stated})
+
+
+def test_a_plan_file_refuses_a_password_it_states():
+    with pytest.raises(ValidationError, match=r'image_credential\.password\n'):
+        a_plan_file_with({'username': 'a-reader', 'password': A_PASSWORD})
+
+
+def test_each_password_file_of_a_plan_is_read_into_its_credential(tmp_path: Path, password_file: Path):
+    on_task = tmp_path / 'task-password'
+    on_task.write_text('the-task-password\n')
+    stated = a_plan_file_with(
+        {'username': 'a-reader', 'password_file': str(password_file)},
+        on_task={'username': 'a-reader', 'password_file': str(on_task)},
+    )
+
+    plan = plan_with_passwords_read(stated)
+
+    task_endpoints = plan.tasks[0].endpoints
+    assert task_endpoints is not None
+    read = [plan.endpoints[0].image_credential, task_endpoints[0].image_credential]
+    assert all(isinstance(credential, RegistryCredential) for credential in read)
+    assert [credential.plaintext_password() for credential in read if credential is not None] == [
+        A_PASSWORD,
+        'the-task-password',
+    ]
+    assert plan.model_fields_set == stated.model_fields_set
+
+
+def test_a_password_file_that_is_not_there_is_refused_at_its_credential(tmp_path: Path, password_file: Path):
+    stated = a_plan_file_with(
+        {'username': 'a-reader', 'password_file': str(password_file)},
+        on_task={'username': 'a-reader', 'password_file': str(tmp_path / 'never-written')},
+    )
+    with pytest.raises(ValidationError, match=r'tasks\.0\.endpoints\.0\.image_credential\.password') as caught:
+        plan_with_passwords_read(stated)
+    assert A_PASSWORD not in str(caught.value)
+
+
+def test_plan_of_image_carries_the_credential_onto_its_one_endpoint(password_file: Path):
+    plan = plan_of_image(
+        PolicyImage('org/policy:v1'),
+        EvalRef('robolab.public_subset'),
+        credential=credential_from_file('a-reader', password_file),
+    )
+    read = plan.endpoints[0].image_credential
+    assert read is not None
+    assert read.plaintext_password() == A_PASSWORD
+
+
+def test_a_refused_endpoint_reports_no_password(credential: dict):
+    with pytest.raises(ValidationError) as caught:
+        Endpoint.model_validate(an_image_endpoint(spec='pi05-droid', image_credential=credential))
+    error = caught.value
+    assert A_PASSWORD not in str(error)
+    assert A_PASSWORD not in repr(error)
+    # The message survives the hidden input.
+    assert 'the platform runs the image' in str(error)
+
+
+def test_a_refused_plan_reports_no_password(credential: dict):
+    with pytest.raises(ValidationError) as caught:
+        EvalPlan.model_validate({
+            'request_type': PRIVATE,
+            'eval': 'robolab.public_subset',
+            'endpoints': [an_image_endpoint(spec='pi05-droid', image_credential=credential)],
+        })
+    error = caught.value
+    assert A_PASSWORD not in str(error)
+    assert A_PASSWORD not in repr(error)
+    assert 'endpoints.0' in str(error)
+
+
+def test_a_python_dump_of_a_plan_holds_no_password(credential: dict):
+    assert A_PASSWORD not in str(a_plan_with(credential).model_dump())
+
+
+def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
+    """The platform validates a request as an `EvalPlan`, so what the send path dumps must be a plan
+    this model accepts."""
+    plan = a_plan_with(credential)
+    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+
+    received = EvalPlan.model_validate(sent)
+
+    read = received.endpoints[0].image_credential
+    assert read is not None
+    assert read.plaintext_password() == A_PASSWORD
+
+
+def test_only_the_send_path_serialises_the_password_as_itself(credential: dict):
+    """The `REVEAL_REGISTRY_PASSWORD` context dumps the password as plaintext; every other dump
+    masks it."""
+    plan = a_plan_with(credential)
+    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+    assert sent['endpoints'][0]['image_credential'] == {'username': 'a-reader', 'password': A_PASSWORD}
+    assert A_PASSWORD not in json.dumps(plan.model_dump(mode='json'))
+    assert A_PASSWORD not in plan.model_dump_json()
+
+
+def test_a_plan_states_its_request_type():
+    with pytest.raises(ValidationError, match='request_type'):
+        EvalPlan.model_validate({'tasks': [SPOONS], 'endpoints': [BASELINE], 'episodes_per_endpoint': 1})
+    plan = a_plan()
+    assert isinstance(plan.request_type, PrivateEval) and plan.request_type.org == 'acme'
+    assert plan.request_type.kind is RequestType.private_eval
+    assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
+
+
+def test_a_competition_plan_names_an_eval_and_states_no_tasks():
+    with pytest.raises(ValidationError, match='nebius_competition plan names an eval'):
+        a_plan(request_type={'type': 'nebius_competition'})
+    with pytest.raises(ValidationError, match='org'):
+        a_plan(request_type={'type': 'nebius_competition', 'org': 'acme'})
+
+
+def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
+    image = PolicyImage('org/policy:v1')
+    assert isinstance(plan_of_image(image, EvalRef('molmo.x')).request_type, NebiusCompetition)
+    private = plan_of_image(image, EvalRef('molmo.x'), org=OrgSlug('acme')).request_type
+    assert isinstance(private, PrivateEval) and private.org == 'acme'

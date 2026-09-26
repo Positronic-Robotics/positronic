@@ -181,30 +181,30 @@ Start an inference server that exposes a unified API over a WebSocket or a gRPC 
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --port=8000
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --websocket.served_address.port=8000
 ```
 
 **LeRobot Server (ACT — lerobot 0.3.3):**
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --port=8000
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --websocket.served_address.port=8000
 ```
 
 **GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
-  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
+  --model.model_source=/data/checkpoints/experiment_v1/
 ```
 
 **OpenPI Server:**
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 ```
 
@@ -213,28 +213,29 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
-| `--pipeline.source.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
-| `--pipeline.source.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
-| `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
+| `--model.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
+| `--model.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
+| `--model.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
 | `--pipeline.ee_frame` | OpenPI only: the EE frame the checkpoint speaks, relative to the rig's `default` | `None` |
-| `--port` | Server port | `8000` (default) |
-| `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
+| `--websocket.served_address.port` | WebSocket wire port | `8000` (default) |
+| `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` (default, binds to all interfaces) |
+| `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket, which takes `.uds` and names no host and no port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 
-The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params in the client's `--policy.query` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
+The subcommand picks the model and the pipeline. `--model.<path>` reaches anywhere inside the model and `--pipeline.<path>` anywhere inside the pipeline, so every value the server is built from has exactly one name. The `--pipeline` paths are also the per-session query params in the client's `--policy.address.query` (see the [Inference Guide](inference.md)). The model is fixed at launch.
 
 ### Checking Server Status
 
 ```bash
-# List available checkpoints
+# The checkpoint the server serves
 curl http://localhost:8000/api/v1/models
 
 # Example response:
-# {"models": ["10000", "20000", "30000"]}
+# {"models": ["30000"]}
 ```
 
 ### Long Model Loading
 
-GR00T and OpenPI servers can take 120-300s to load on first startup (model download + weight loading). The server sends periodic status updates to prevent WebSocket keepalive timeouts.
+GR00T and OpenPI servers can take 120-300s to load on first startup (model download + weight loading). The server loads before it opens its port, and logs the load progress. `/api/v1/models` answers once the model is ready.
 
 ## Step 4: Run Inference
 
@@ -266,7 +267,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ &
+  --model.checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ &
 
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \

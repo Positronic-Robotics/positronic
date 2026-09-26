@@ -4,7 +4,7 @@ from positronic import keys
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.libero import keys as libero_keys
 from positronic.simulator.libero.adapter import LiberoAdapter
 from positronic.simulator.libero.launcher import serve_libero
@@ -51,7 +51,7 @@ def _libero_eval(
     # LIBERO drives the same Franka Panda as the native sim, so recordings carry the same model (URDF + meshes +
     # joint names + control frame) for the 3D viewer and offline IK, supplied here since the 3.10 server can't
     # import positronic to emit it via ``robot_meta``.
-    embodiment = remote_franka_embodiment(
+    embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}

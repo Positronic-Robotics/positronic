@@ -13,18 +13,18 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import (
     ACTION,
     GR00T_MODALITY,
     LEROBOT_FEATURES,
-    ActionHorizon,
-    ActionTimestamp,
     BinarizeGripInference,
     ChangeEEFrame,
     Codec,
+    Metadata,
     lerobot_action,
     lerobot_image,
-    lerobot_state,
+    lerobot_vector,
 )
 from positronic.vendors import gr00t
 
@@ -114,7 +114,7 @@ class DroidCodec(Codec):
                 },
             },
             LEROBOT_FEATURES: {
-                **{name: lerobot_state(gr00t.STATE_DIMS[name]) for name in state_encoders},
+                **{name: lerobot_vector(gr00t.STATE_DIMS[name]) for name in state_encoders},
                 **{name: lerobot_image(*gr00t.IMAGE_SIZE) for name in self.image_mappings},
                 ACTION: lerobot_action(start),
             },
@@ -138,17 +138,12 @@ class DroidCodec(Codec):
 
 @cfn.config(
     image_mappings={gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE},
-    fps=15.0,
-    execution_horizon=15,
     ee_frame=models.DROID_EE_FRAME,
 )
-def droid(image_mappings: dict[str, str], fps: float, execution_horizon: int, ee_frame: geom.Transform3D):
-    """DROID's image, frame, gripper and 15 Hz joint-control conventions."""
-    if fps <= 0 or not 1 <= execution_horizon <= 40:
-        raise ValueError('fps must be positive and execution_horizon must be between 1 and 40')
+def droid(image_mappings: dict[str, str], ee_frame: geom.Transform3D, training_fps: float = 15.0):
+    """DROID data conversion and training cadence metadata."""
     return (
-        ActionHorizon(execution_horizon / fps)
-        | ActionTimestamp(fps=fps)
+        Metadata({policy_keys.ACTION_FPS: training_fps})
         | BinarizeGripInference()
         | ChangeEEFrame(ee_frame)
         | DroidCodec(image_mappings)

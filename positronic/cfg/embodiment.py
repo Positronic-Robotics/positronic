@@ -3,6 +3,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -38,10 +39,19 @@ def droid(robot_arm, gripper, cameras):
 
 
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
+# DROID with no device behind it, for code that reads the embodiment's contract on a box without the vendor packages.
+droid_fake = droid.override(
+    robot_arm=positronic.cfg.hardware.roboarm.franka_fake,
+    gripper=positronic.cfg.hardware.gripper.robotiq_fake,
+    cameras=positronic.cfg.hardware.camera.droid_fake,
+)
+droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
-def yam(robot_arm, cameras):
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
+)
+def yam(robot_arm, cameras, video_encoder):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -62,6 +72,7 @@ def yam(robot_arm, cameras):
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 
@@ -76,8 +87,9 @@ def yam(robot_arm, cameras):
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras, video_encoder):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
@@ -119,6 +131,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         meta_source=arms['left'].robot_meta,
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 

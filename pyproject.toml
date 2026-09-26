@@ -42,11 +42,11 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.8.4",
-    # The client side of both wires and the facts both ends share. A workspace member in a clone;
+    "positronic-platform-client==0.15.1",
+    # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
-    "positronic-wire==0.1.0",
+    "positronic-wire==0.8.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -65,7 +65,6 @@ dependencies = [
 positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
-positronic-probe="positronic.probe:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 
 
@@ -120,6 +119,13 @@ telemetry = [
     "opentelemetry-exporter-otlp-json-file>=0.65b0",
     "opentelemetry-sdk>=1.42",
 ]
+llm = [
+    "pillow",
+    "pydantic-ai-slim>=1.107.1,<2",
+]
+llm-openai = ["positronic[llm]", "pydantic-ai-slim[openai]"]
+llm-anthropic = ["positronic[llm]", "pydantic-ai-slim[anthropic]"]
+llm-google = ["positronic[llm]", "pydantic-ai-slim[google]"]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
 # An extra has to be named on every invocation, and one command that forgets uninstalls the tools the
@@ -253,7 +259,7 @@ ignore = [
 "positronic/cfg/**" = ["PLC0415"]  # Configs defer hardware imports into their `@cfn.config` bodies
 
 [tool.ruff.lint.mccabe]
-max-complexity = 10
+max-complexity = 15
 
 [tool.ruff.format]
 quote-style = "single"

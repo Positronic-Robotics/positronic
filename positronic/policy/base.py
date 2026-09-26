@@ -1,23 +1,33 @@
+"""Reusable processors, their episode generators, and the runtime that serves them."""
+
 from __future__ import annotations
 
-import re
-import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, ClassVar
+from collections.abc import Callable, Generator, Mapping
+from functools import cached_property, partial
+from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
-# Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
+from attr import dataclass
+from typing_extensions import TypeAliasType
+
+from positronic import telemetry
+
+# Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
 PAR = 'par'
+NAME = 'name'
+ARGS = 'args'
+VERSION = 'version'
 
 
 class NotAnswered(RuntimeError):
     """The call has not answered yet. A read of an ``Answer`` raises this rather than waiting."""
 
 
-class Answer(ABC):
+T = TypeVar('T')
+
+
+class Answer(ABC, Generic[T]):
     """The caller's handle on one call.
 
     pimm has an ``Answer`` of the same shape. The two are not interchangeable.
@@ -27,263 +37,128 @@ class Answer(ABC):
     def done(self) -> bool: ...
 
     @abstractmethod
-    def result(self) -> Any:
+    def result(self) -> T:
         """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
 
+    def cancel(self):
+        """Cancel the call if anything can be cancelled."""
+        pass
 
-# A call to an ``Fn`` starts the work and returns at once.
-Fn = Callable[..., Answer]
+
+Obs = Mapping[str, Any]
+Commands = Mapping[str, Any]
+
+
+@dataclass
+class Step:
+    """Commands to emit now and the next requested call time.
+
+    Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
+    """
+
+    # TODO: Allow selecting which answers can wake the policy early, alongside its time deadline.
+    commands: Commands
+    resume_at_ns: int
+
+
+P = ParamSpec('P')
+InputT = TypeVar('InputT')
+OutputT = TypeVar('OutputT')
+
+ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, None], type_params=(InputT, OutputT))
 
 
 class Runtime(ABC):
-    """What the framework offers one session. Every session gets its own.
+    """What the framework offers one episode. Every episode gets its own.
 
-    Closed before the session it serves: a call still in flight is using what that session holds.
+    At episode shutdown, drain submitted work before closing live generators whose resources it may use.
     """
 
-    @property
-    @abstractmethod
-    def fns(self) -> Mapping[str, Fn]:
-        """The policy's functions, under the names it declared them by."""
-
-
-class Session(ABC):
-    """Per-episode inference session. Created by ``Policy.new_session()``.
-
-    Sessions hold per-episode state (trajectory buffers, latency tracking, etc.)
-    and are the primary interface for running inference. Call the session like
-    a function to get actions::
-
-        session = policy.new_session(context)
-        trajectory = session(obs, time_ns)
-
-    **Plain-data contract**: sessions accept and return only plain data
-    (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
-
-    **Return contract**: ``list[dict] | None``. ``None`` means "no new
-    trajectory, keep executing the current one" — what a scheduling layer
-    answers while its chunk plays, and what a session answers while the
-    function it asked is still in flight.
-    An empty list means "stop whatever is executing now". A non-empty list is
-    a new trajectory. Single-action returns must be wrapped into a 1-element
-    list by the producer.
-    """
-
-    @abstractmethod
-    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-        """Predict actions for the given observation, without waiting: heavy work belongs in
-        ``Policy.functions``.
-
-        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
-        """
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        """What this session reports about its model and its episode."""
+    @cached_property
+    def metadata(self) -> dict[str, Any]:
+        """Episode metadata written on the control thread, overriding definition values at recording time."""
         return {}
 
-    def cancel(self):
-        """Drop any in-flight trajectory state. Layers that buffer/schedule a
-        trajectory (e.g. ``ChunkedSchedule``) should reset so the next call
-        triggers a fresh inference. Override and propagate via ``super().cancel()``.
-        """
-        return None
-
-    def close(self):
-        """End this session and release per-episode resources."""
-        return None
-
-
-class DelegatingSession(Session):
-    """Session that delegates all methods to an inner session. Subclass and override what you need."""
-
-    def __init__(self, inner: Session):
-        self._inner = inner
-
-    def __call__(self, obs, time_ns):
-        return self._inner(obs, time_ns)
+    @property
+    @abstractmethod
+    def time_ns(self) -> int:
+        """The current time in nanoseconds."""
+        pass
 
     @property
-    def meta(self):
-        return self._inner.meta
+    @abstractmethod
+    def tick(self) -> int:
+        """The current tick number."""
+        pass
 
-    def cancel(self):
-        self._inner.cancel()
-
-    def close(self):
-        self._inner.close()
-
-
-# One timed session call: the name it is timed as, and its start and end on ``time.time_ns``. Whoever owns
-# the figures binds one with ``timings_to``; unbound, a timed call writes nothing.
-TimingSink = Callable[[str, int, int], None]
-_timing_sink: ContextVar[TimingSink | None] = ContextVar('timing_sink', default=None)
-
-
-@contextmanager
-def timings_to(sink: TimingSink) -> Iterator[None]:
-    token = _timing_sink.set(sink)
-    try:
-        yield
-    finally:
-        _timing_sink.reset(token)
-
-
-class TimedSession(DelegatingSession):
-    """``inner`` with each call's start and end sent to the bound ``TimingSink`` under ``name``."""
-
-    def __init__(self, inner: Session, name: str):
-        super().__init__(inner)
-        self._name = name
-
-    def __call__(self, obs, time_ns):
-        sink = _timing_sink.get()
-        if sink is None:
-            return self._inner(obs, time_ns)
-        started = time.time_ns()
+    @staticmethod
+    def _timed_run(run: ProcessorRun[InputT, OutputT], name: str) -> ProcessorRun[InputT, OutputT]:
+        """Time each resumption, leaving no span active while the generator is suspended."""
+        result = None
         try:
-            return self._inner(obs, time_ns)
+            while True:
+                try:
+                    value = yield result
+                except GeneratorExit:
+                    raise
+                except BaseException as exc:
+                    resume = partial(run.throw, exc)
+                else:
+                    resume = partial(run.send, value)
+                with telemetry.span(name):
+                    try:
+                        result = resume()
+                    except StopIteration:
+                        return
         finally:
-            sink(self._name, started, time.time_ns())
+            run.close()
 
+    def start(
+        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT]:
+        """Create and prime an episode generator. The caller owns its closure.
 
-class Policy(ABC):
-    """Factory for inference sessions.
-
-    A Policy holds shared resources (model weights, connections) and creates
-    per-episode ``Session`` instances. One Policy can serve multiple robots
-    by creating independent sessions.
-    """
+        Bind telemetry before starting processors; timing wrappers are selected at startup.
+        """
+        run = processor.run(self, *args, **kwargs)
+        initial = next(run)
+        if initial is not None:
+            run.close()
+            raise AssertionError('a processor must yield None before receiving its first input')
+        if not telemetry.enabled():
+            return run
+        timed = self._timed_run(run, telemetry.component_name(processor))
+        next(timed)
+        return timed
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None, rt: Runtime | None = None) -> Session:
-        """Create a new inference session for an episode.
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
 
-        Args:
-            context: The episode's task description.
-            rt: This session's runtime, serving ``functions``. ``None`` only where no caller supplied one.
-                A session that needs one refuses to open without it.
-        """
 
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        """The work this policy runs off the session's thread, by name. The framework serves it as ``rt.fns``."""
+class Processor(ABC, Generic[InputT, OutputT]):
+    """A reusable computation definition with typed inputs and outputs.
+
+    Constructors hold configuration. Each ``run`` creates one episode's generator, keeping mutable
+    episode state in its locals. ``Runtime.start`` advances it to its first yield, which must be
+    ``None``, after which ``send(input)`` returns one output. Dependencies are supplied live and already
+    primed when they are generators. Whoever starts a generator owns its closure.
+    """
+
+    # A receiver resolves this name through its registry of installed processor classes.
+    WIRE_NAME: ClassVar[str]
+    WIRE_VERSION: ClassVar[int] = 1
+
+    @abstractmethod
+    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
+
+    def meta(self) -> dict[str, Any]:
+        """Model and configuration metadata shared across episodes."""
         return {}
 
-    def close(self):  # noqa: B027
-        """Release shared resources (model weights, connections, etc.)."""
-
-
-class DelegatingPolicy(Policy):
-    """Policy that delegates all methods to an inner policy. Subclass and override what you need."""
-
-    def __init__(self, inner: Policy):
-        self._inner = inner
-
-    def new_session(self, context=None, rt=None):
-        return self._inner.new_session(context, rt)
-
-    @property
-    def functions(self):
-        return self._inner.functions
-
-    def close(self):
-        self._inner.close()
-
-
-class Layer:
-    """Recipe for wrapping a session, fixed at configuration time and applied to a policy via ``wrap()``.
-
-    Layers may be stateful, may control flow (skip the inner call), and have no
-    training-time dual. They compose with ``|`` (sequential, left is outermost).
-    Unlike Codecs, they do NOT support ``&`` (parallel).
-
-    ``|`` works across types: ``layer | layer``, ``layer | codec``, and
-    ``codec | layer`` all produce a Layer pipeline that ``wrap(policy)``
-    applies right-to-left::
-
-        pipeline = TemporalStack(...) | ChunkedSchedule() | codec
-        wrapped = pipeline.wrap(RemotePolicy(...))
-
-    **Extension points**: subclasses override *one* of ``make_session`` (the
-    common case — transform one session's ``__call__``) or ``wrap`` (for
-    policy-level state across sessions, like composition).
-    """
-
-    def wrap(self, policy: Policy) -> Policy:
-        """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``."""
-        return _LayerPolicy(policy, self)
-
-    def make_session(self, inner: Session) -> Session:
-        """Make this layer's session around ``inner``."""
-        raise NotImplementedError('Override make_session or wrap')
-
-    # The name this layer travels under, set by every deliverable subclass. ``WIRE_LAYERS`` is keyed by
-    # it, so the name is written once and both sides of the wire read the same attribute.
-    WIRE_NAME: ClassVar[str]
-
     def to_spec(self) -> dict[str, Any]:
-        """Plain-data wire spec of this layer, for a server's local-stack declaration.
-
-        Only layers registered in ``positronic.policy.spec.WIRE_LAYERS`` are deliverable to a rig.
-        The spec is ``{'name': WIRE_NAME}`` plus ``{'args': {...}}`` when the layer takes any;
-        ``args`` are constructor keywords, since the rig rebuilds by calling the constructor with them.
-        """
-        raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
-
-    def __or__(self, other: Layer) -> Layer:
-        if isinstance(other, Layer):
-            return _ComposedLayer((*self._layers(), *other._layers()))
-        return NotImplemented
-
-    # Used for flattening nested | compositions into a single _ComposedLayer
-    def _layers(self) -> tuple:
-        return (self,)
+        """A versioned component declaration with plain-data arguments."""
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
 
-def _layer_name(layer: Layer) -> str:
-    wire_name = getattr(type(layer), 'WIRE_NAME', None)
-    return wire_name or re.sub(r'(?<!^)(?=[A-Z])', '_', type(layer).__name__.lstrip('_')).lower()
-
-
-def _layer_names_beneath(policy: Policy) -> Iterator[str]:
-    while isinstance(policy, DelegatingPolicy):
-        if isinstance(policy, _LayerPolicy):
-            yield policy.layer_name
-        policy = policy._inner
-
-
-class _LayerPolicy(DelegatingPolicy):
-    """Policy produced by ``Layer.wrap()``. Its sessions are timed as the layer's name.
-
-    The name is ``WIRE_NAME``, else the class name in snake case, with an ordinal when a layer of the same
-    name sits beneath: the second ``temporal_stack`` from the inside is ``temporal_stack_2``.
-    """
-
-    def __init__(self, inner: Policy, layer: Layer):
-        super().__init__(inner)
-        self._layer = layer
-        self.layer_name = _layer_name(layer)
-        repeats = sum(1 for name in _layer_names_beneath(inner) if name == self.layer_name)
-        self.timed_as = self.layer_name if repeats == 0 else f'{self.layer_name}_{repeats + 1}'
-
-    def new_session(self, context=None, rt=None):
-        return TimedSession(self._layer.make_session(self._inner.new_session(context, rt)), self.timed_as)
-
-
-class _ComposedLayer(Layer):
-    """Composed pipeline of layers. Applies right-to-left."""
-
-    def __init__(self, components: tuple):
-        self._components = components
-
-    def wrap(self, policy: Policy) -> Policy:
-        for component in reversed(self._components):
-            policy = component.wrap(policy)
-        return policy
-
-    def to_spec(self) -> dict[str, Any]:
-        return {SEQ: [component.to_spec() for component in self._components]}
-
-    def _layers(self) -> tuple:
-        return self._components
+Policy = Processor[Obs, Step]
+PolicyRun = ProcessorRun[Obs, Step]

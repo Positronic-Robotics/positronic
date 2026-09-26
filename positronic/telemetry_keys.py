@@ -26,9 +26,8 @@ SPAN_MATERIALIZE = 'materialize'
 SPAN_POLICY_INFER = 'policy.infer'
 SPAN_RECORD_IO = 'record.io'
 
-# The rig-side stack between the harness and the wire. `policy.call` opens on every control tick,
-# including the ones a scheduling layer answers without inferring.
-SPAN_POLICY_CALL = 'policy.call'
+# Work submitted to a worker; its parent is the processor call that submitted it.
+SPAN_POLICY_SUBMIT = 'policy.submit'
 SPAN_POLICY_ENCODE = 'policy.encode'
 SPAN_POLICY_PREPARE = 'policy.prepare'
 SPAN_WIRE_SEND = 'wire.send'
@@ -47,13 +46,20 @@ ATTR_SERVED_PREFIX = 'served.'
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
-# Whether a `policy.call` came back with a trajectory. The tick that STARTS a round trip answers False
-# too, that trip being asynchronous; it is the tick carrying a `policy.encode`.
-ATTR_POLICY_ANSWERED = 'policy.answered'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
+
+# One harness step and its durations in milliseconds. docs/telemetry.md defines each value.
+SPAN_HARNESS_STEP = 'harness.step'
+ATTR_STEP_LATE_MS = 'step.late_ms'
+ATTR_STEP_OBSERVE_MS = 'step.observe_ms'
+ATTR_STEP_POLICY_MS = 'step.policy_ms'
+ATTR_STEP_EMIT_MS = 'step.emit_ms'
+# The signal's name follows each prefix.
+ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
+ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
 
 # One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
 # came due and went out on no round.
