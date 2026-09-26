@@ -913,19 +913,21 @@ class World:
         self._protected_foreground_loops.append(loop)
         while True:
             errors: list[BaseException] = []
-            command = None
+            step: tuple[Command] | None = None
             with self._defer_signals(errors):
                 try:
-                    command = next(loop, None)
+                    step = (next(loop),)
+                except StopIteration:
+                    pass
                 except BaseException as exc:
                     errors.append(exc)
             if len(errors) == 1:
                 raise errors[0]
             if errors:
                 raise BaseExceptionGroup('Foreground step failed', errors)
-            if command is None:
+            if step is None:
                 return
-            yield command
+            yield step[0]
 
     def _bind_multiprocess_connections(self, connections) -> None:
         grouped_mp_connections = defaultdict(list)

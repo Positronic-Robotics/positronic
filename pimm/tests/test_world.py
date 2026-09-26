@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from functools import partial
 from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
@@ -16,6 +17,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from pimm.core import (
+    Command,
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
@@ -1893,3 +1895,17 @@ def test_sigterm_during_foreground_step_preserves_protected_shutdown(stop_before
             world.run([device, Finisher(2)])
     assert closed == [device]
     assert signal.getsignal(signal.SIGTERM) is previous
+
+
+class YieldsNone(ControlSystem):
+    def __init__(self, policy):
+        self.shutdown_policy = policy
+
+    def run(self, should_stop, clock) -> Iterator[Command]:
+        yield None  # pyright: ignore[reportReturnType]
+
+
+@pytest.mark.parametrize('policy', list(ShutdownPolicy))
+def test_a_foreground_loop_that_yields_none_fails_under_either_policy(policy):
+    with World() as world, pytest.raises(AttributeError):
+        world.run([YieldsNone(policy)])
