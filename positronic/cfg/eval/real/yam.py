@@ -3,6 +3,7 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 
+from positronic import keys
 from positronic.cfg.embodiment import yam_bimanual
 from positronic.cfg.hardware.roboarm import YAM_NOMINAL_JOINTS
 from positronic.drivers.roboarm import command
@@ -13,7 +14,7 @@ from positronic.eval import keys as eval_keys
 def _bimanual_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
     """Each trial moves both arms to the nominal pose with the grippers open. A person sets the scene."""
     start = {
-        f'{eval_keys.ARM}.{side}': command.JointPosition(np.asarray(YAM_NOMINAL_JOINTS)) for side in ('left', 'right')
+        f'{eval_keys.ARM}.{side}': command.JointPosition(np.asarray(YAM_NOMINAL_JOINTS)) for side in keys.BIMANUAL_ARMS
     }
     return [
         Task(

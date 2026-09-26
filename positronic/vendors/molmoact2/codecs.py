@@ -66,13 +66,12 @@ droid = codecs.compose.override(
 droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})
 
 
-# The two arms of a bimanual YAM, in the order the BimanualYAM checkpoint packs them into its 14-D vectors.
-YAM_ARMS = ('left', 'right')
+# The BimanualYAM checkpoint packs 6 joints and a gripper width per arm, left arm first, into its 14-D vectors.
 YAM_JOINTS = 6
 
 
-def _to_vendor_grip(grip: np.ndarray) -> np.ndarray:
-    """Positronic grip (0 open, 1 closed) to the i2rt gripper width (1 open, 0 closed) the checkpoint speaks."""
+def _invert_grip(grip: np.ndarray) -> np.ndarray:
+    """Swap Positronic grip (0 open, 1 closed) and the i2rt gripper width (1 open, 0 closed). It is its own inverse."""
     return 1.0 - grip
 
 
@@ -86,17 +85,17 @@ class MolmoAct2BimanualObservationCodec(Codec):
     def __init__(
         self,
         top_camera: str = keys.EXTERIOR_IMAGE,
-        left_camera: str = f'{keys.IMAGE_PREFIX}wrist_left',
-        right_camera: str = f'{keys.IMAGE_PREFIX}wrist_right',
+        left_camera: str = keys.WRIST_LEFT_IMAGE,
+        right_camera: str = keys.WRIST_RIGHT_IMAGE,
     ):
         self._cameras = (top_camera, left_camera, right_camera)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         state = []
-        for arm in YAM_ARMS:
+        for arm in keys.BIMANUAL_ARMS:
             joints = np.asarray(inputs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'])
             grip = np.asarray(inputs[keys.arm_channel(keys.GRIP, arm)], dtype=np.float32).reshape(-1)
-            state.extend([joints.reshape(-1), _to_vendor_grip(grip)])
+            state.extend([joints.reshape(-1), _invert_grip(grip)])
         return {
             molmoact2.IMAGES: [_image(k, inputs) for k in self._cameras],
             molmoact2.STATE: np.concatenate(state).astype(np.float32),
@@ -110,13 +109,13 @@ class BimanualJointsAction(Codec):
     def _decode_single(self, data: dict) -> dict:
         vector = np.asarray(data[ACTION], dtype=np.float64)
         width = YAM_JOINTS + 1
-        if vector.shape[-1] != width * len(YAM_ARMS):
-            raise ValueError(f'Expected a {width * len(YAM_ARMS)}-D action, got {vector.shape[-1]}')
+        if vector.shape[-1] != width * len(keys.BIMANUAL_ARMS):
+            raise ValueError(f'Expected a {width * len(keys.BIMANUAL_ARMS)}-D action, got {vector.shape[-1]}')
         out: dict[str, Any] = {}
-        for i, arm in enumerate(YAM_ARMS):
+        for i, arm in enumerate(keys.BIMANUAL_ARMS):
             arm_vector = vector[i * width : (i + 1) * width]
             out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=arm_vector[:YAM_JOINTS])
-            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(_to_vendor_grip(arm_vector[YAM_JOINTS]))
+            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(_invert_grip(arm_vector[YAM_JOINTS]))
         return out
 
 
