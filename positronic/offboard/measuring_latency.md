@@ -21,14 +21,15 @@ loaded, so a session cut short still holds its results.
 
 ## What you need
 
-- A shell **in the receiver's network namespace**. A container has its own, and the host's readings do
-  not describe it. Where the server's image cannot run the probe, join a second container to its
-  namespace instead: `docker run --network container:<server> <image> python -m
-  positronic.offboard.link_probe watch --port=8000`.
+- One GPU host with Docker, which the client reaches directly on ports 8000, 9000, 9100, 9101 and 9102.
+- A shell on that host, and a shell **in the receiver's network namespace**. A container has its own,
+  and the host's readings do not describe it. `docker exec -it link-probe-server bash` opens one. Where
+  the server's image cannot run the probe, join a second container to its namespace instead: `docker
+  run --network container:link-probe-server <image> python -m positronic.offboard.link_probe watch
+  --port=8000`.
 - A recorded episode of the rig the server serves, for `serving_cost`.
-- The endpoint's bearer token in `AUTH_TOKEN`, for a gated server.
 
-Set these once:
+Set these once in each shell:
 
 ```bash
 SERVER=<host the server runs on>      # as the client reaches it
@@ -38,9 +39,21 @@ PROBE="uv run --locked python -m positronic.offboard.link_probe"
 
 ## 1. Bring up the box and the container
 
-Start the server as [docs/inference.md](../../docs/inference.md) describes, or submit an endpoint with
-[workflows/nebius/serve.sh](../../workflows/nebius/serve.sh). The model load starts here and takes tens
-of minutes. Do not wait for it: steps 2 and 3 run while it loads.
+Start one of the servers that [docs/inference.md](../../docs/inference.md) names, on the host. Keep its
+subcommand and model flags, and add the container name, the probe ports and a gRPC wire on 9000:
+
+```bash
+cd docker && docker compose run --rm --service-ports --name link-probe-server \
+    -p 9000:9000 -p 9100:9100 -p 9102:9102 <server> <subcommand> <model flags> \
+    --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=9000
+```
+
+`--service-ports` publishes the websocket on 8000. The container gets no `AUTH_TOKEN`, so the server
+serves open and the client sends no token. A server that binds 9000 itself, such as `dreamzero-server`,
+cannot serve gRPC there.
+
+The model load starts here and takes tens of minutes. Do not wait for it: steps 2 and 3 run while it
+loads.
 
 ## 2. Read the namespace, on both sides
 
@@ -90,7 +103,9 @@ And raise a reader that competes for the interpreter, as a busy model does to th
 reads for it:
 
 ```bash
+# in the container
 $PROBE sink --port=9102 --busy_threads=$(nproc)
+# from the client
 $PROBE source --host=$SERVER --port=9102 --kib=750 --transfers=10
 ```
 
@@ -112,15 +127,13 @@ $PROBE watch --port=9000 --interval_ms=20 --seconds=300 --out=recvq-served-grpc.
 
 # from the client, while the watchers run
 uv run --locked python -m positronic.offboard.serving_cost \
-    --dataset.path=$EPISODE --server_wire=websocket_tls \
+    --dataset.path=$EPISODE --server_wire=websocket \
     --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
-    --server_address.port=443 --headers=@positronic.cfg.policy.bearer_headers \
-    --requests=20 --out=served-ws.json
+    --server_address.port=8000 --requests=20 --out=served-ws.json
 uv run --locked python -m positronic.offboard.serving_cost \
     --dataset.path=$EPISODE --server_wire=grpc \
     --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
-    --server_address.port=9000 --headers=@positronic.cfg.policy.bearer_headers \
-    --requests=20 --out=served-grpc.json
+    --server_address.port=9000 --requests=20 --out=served-grpc.json
 
 # in the receiver's namespace, after both runs: let the watchers finish and write their files
 wait
@@ -169,8 +182,14 @@ Run each of these only where the readings above point at it:
 
 ## 7. Tear down, and verify it is gone
 
-`workflows/nebius/stop.sh` deletes an endpoint. List the provider's resources afterwards and read the
-count, because a stopped container is not a deleted box and a deleted box can leave its disk.
+```bash
+docker stop link-probe-server                      # on the host; --rm then removes the container
+docker ps -a --filter name=link-probe-server       # prints no container
+```
+
+A stopped container is not a deleted box. If the host was created for this session, delete it with its
+provider, then list the provider's resources and read the count, because a deleted box can leave its
+disk.
 
 ## What a local rehearsal cannot tell you
 
