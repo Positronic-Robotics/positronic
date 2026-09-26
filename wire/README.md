@@ -134,7 +134,7 @@ matching library exception names over the raised type's bases has to list `grpc.
 `websockets.*` and `httpx.*`; `dial` raises one `ConnectRefused` for all of them, so `isinstance`
 answers.
 
-A copied fact disappears too. The gRPC probe path, the session route and the models route are each
+A copied fact disappears too. The gRPC probe path, the session route and the keepalive route are each
 one symbol here, and the set of wires is `registry.CLIENT_WIRES`. A literal spelled a second time
 in another repository drifts the day either side edits it, and nothing reports the drift; an
 imported symbol cannot.

@@ -1,4 +1,4 @@
-"""The client side of the gRPC wire, and the call both ends of it agree on.
+"""The client side of the gRPC wire, and the calls both ends of it agree on.
 
 The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
@@ -237,7 +237,7 @@ def _ready_channel(channel: grpc.Channel, target: str, open_timeout: float) -> g
 
 
 class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
-    """The client side of the gRPC wire, whose port carries sessions alone. The channel is plaintext."""
+    """The client side of the gRPC wire. Its port carries sessions and the keepalive call. The channel is plaintext."""
 
     NAME = 'grpc'
     ADDRESS = wire.HostPortAddress
