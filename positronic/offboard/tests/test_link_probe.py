@@ -163,6 +163,21 @@ def test_one_transfer_summarises_as_itself():
     assert _numeric_summary([{'write_ms': 4.0}]).splitlines()[1].split()[1:] == ['4.0', '4.0', '4.0']
 
 
+def test_a_rate_that_one_transfer_lacks_summarises_over_the_transfers_that_have_it():
+    rows = [{'mib_per_sec': 1.0}, {'mib_per_sec': None}, {'mib_per_sec': 3.0}]
+    assert _numeric_summary(rows).splitlines()[1].split() == ['mib_per_sec', '2.0', '2.9', '3.0']
+
+
+def test_a_rate_that_the_first_transfer_lacks_is_still_summarised():
+    rows = [{'write_ms': 1.0, 'mib_per_sec': None}, {'write_ms': 2.0, 'mib_per_sec': 4.0}]
+    assert _numeric_summary(rows).splitlines()[2].split() == ['mib_per_sec', '4.0', '4.0', '4.0']
+
+
+def test_a_rate_that_no_transfer_has_is_not_summarised():
+    rows = [{'write_ms': 1.0, 'mib_per_sec': None}, {'write_ms': 2.0, 'mib_per_sec': None}]
+    assert 'mib_per_sec' not in _numeric_summary(rows)
+
+
 def test_a_missing_ss_falls_back_to_the_kernel_table(monkeypatch, caplog):
     """A reader that cannot run must name itself at the start, not read as an empty queue per sample."""
     monkeypatch.setenv('PATH', '')

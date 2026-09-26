@@ -170,12 +170,12 @@ def sink(host: str, port: int, read_bytes: int, busy_threads: int):
 
 
 def _numeric_summary(rows: list[dict[str, Any]]) -> str:
-    """Median, p95 and max of every numeric column in ``rows``, one column per line."""
-    columns = [name for name, value in rows[0].items() if isinstance(value, int | float)]
+    """Median, p95 and max of every numeric column in ``rows``, over the rows that carry a number there."""
+    columns = list(dict.fromkeys(name for row in rows for name, value in row.items() if isinstance(value, int | float)))
     width = max(len(name) for name in columns)
     lines = [f'{"":<{width}}  {"median":>10}  {"p95":>10}  {"max":>10}']
     for name in columns:
-        values = [float(row[name]) for row in rows]
+        values = [float(row[name]) for row in rows if isinstance(row.get(name), int | float)]
         # Linear interpolation, as `numpy.percentile` computes it for `serving_cost`.
         p95 = statistics.quantiles(values, n=20, method='inclusive')[18] if len(values) > 1 else values[0]
         lines.append(f'{name:<{width}}  {statistics.median(values):10.1f}  {p95:10.1f}  {max(values):10.1f}')
