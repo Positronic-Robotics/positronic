@@ -71,8 +71,7 @@ ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, N
 class Runtime(ABC):
     """What the framework offers one episode. Every episode gets its own.
 
-    At episode shutdown, close the live generators first; they do not wait for their submitted calls. Then
-    close the runtime: it finishes the submitted calls and runs the ``at_close`` callbacks.
+    At episode shutdown, drain submitted work before closing live generators whose resources it may use.
     """
 
     @cached_property
@@ -134,10 +133,6 @@ class Runtime(ABC):
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
-
-    @abstractmethod
-    def at_close(self, callback: Callable[[], None]) -> None:
-        """Call ``callback`` when the runtime closes, after its submitted calls finish. Later ones run first."""
 
 
 class Processor(ABC, Generic[InputT, OutputT]):

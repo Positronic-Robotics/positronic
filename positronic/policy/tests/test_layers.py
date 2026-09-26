@@ -202,9 +202,9 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
     for now in (0, 100_000_000, 350_000_000, 400_000_000):
         clock.advance_to_ns(now)
         emitted.append(run.send({}).commands[MOTOR])
-    run.close()
     assert emitted == [0, 1, 3, 4]
     prefix = eval_keys.SCHEDULE
+    # The harness reads the metadata before it closes the run.
     assert runtime.metadata == {
         f'{prefix}.{eval_keys.SCHEDULED}': 5,
         f'{prefix}.{eval_keys.EMITTED}': 4,
@@ -214,6 +214,17 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
         f'{prefix}.{eval_keys.LATE_MAX_MS}': 50.0,
         f'{prefix}.{eval_keys.GAP_MAX_MS}': 250.0,
     }
+    run.close()
+
+
+def test_a_schedule_without_stats_writes_no_metadata(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: [{MOTOR: i} for i in range(5)])
+    for now in (0, 100_000_000, 350_000_000):
+        clock.advance_to_ns(now)
+        run.send({})
+    run.close()
+    assert runtime.metadata == {}
 
 
 def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
@@ -436,6 +447,7 @@ class TestRestrictImageSize:
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        ChunkedSchedule(fps=10, record_stats=False),
         ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],

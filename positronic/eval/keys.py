@@ -42,9 +42,8 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# How well the chunk schedule played its waypoints. A run writes f'{SCHEDULE}.{DROPPED}' into its metadata,
-# and the episode records it under ``policy.keys.POLICY_META``. ``DROPPED`` counts a due waypoint that a later
-# waypoint replaced.
+# The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
+# ``DROPPED`` counts a due waypoint that a later waypoint replaced.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'

@@ -617,7 +617,6 @@ def test_invalid_declaration_fails_before_inference_and_closes_connection(runtim
     with pytest.raises(ValueError):
         runtime.start(policy)
     session.infer.assert_not_called()
-    runtime.close()
     session.close.assert_called_once()
 
 
@@ -646,8 +645,8 @@ def test_stack_failure_finishes_active_inference_before_closing_session(runtime)
     finally:
         release.set()
         releaser.cancel()
-        run.close()
         runtime.close()
+        run.close()
     assert order == ['inference finished', 'session closed']
 
 

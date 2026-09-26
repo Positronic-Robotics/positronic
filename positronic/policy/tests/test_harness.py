@@ -669,7 +669,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
-def test_run_metadata_overrides_definition_and_is_snapshotted_after_the_run_closes(episode_harness, tmp_path):
+def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
     class Record(Policy):
         def meta(self):
             return {'config.name': 'record', 'config.status': 'initial'}
@@ -698,7 +698,7 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_after_the_run_clos
         meta = h.records.values[-1][1].static_data
         assert meta['inference.policy.config.name'] == 'record'
         assert meta['inference.policy.config.status'] == 'active'
-        assert meta['inference.policy.events'] == ['started', 'closed']
+        assert meta['inference.policy.events'] == ['started']
 
 
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
@@ -852,7 +852,7 @@ def test_a_step_without_an_observation_records_only_the_observe_values(episode_h
         assert telemetry_keys.ATTR_STEP_EMIT_MS not in step.attrs
 
 
-def test_shutdown_closes_the_policy_then_finishes_its_calls_then_releases_its_resources(episode_harness):
+def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
     h = episode_harness
     started, release = threading.Event(), threading.Event()
     order = []
@@ -871,7 +871,6 @@ def test_shutdown_closes_the_policy_then_finishes_its_calls_then_releases_its_re
                     yield Step({}, runtime.time_ns + 1_000_000_000)
             finally:
                 order.append('policy closed')
-                runtime.at_close(lambda: order.append('resource released'))
 
     # A real rig can end its episode while a worker is still answering.
     h.embodiment.simulated = False
@@ -887,7 +886,7 @@ def test_shutdown_closes_the_policy_then_finishes_its_calls_then_releases_its_re
     finally:
         release.set()
         releaser.join()
-    assert order == ['policy closed', 'inference finished', 'resource released']
+    assert order == ['inference finished', 'policy closed']
     with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
 

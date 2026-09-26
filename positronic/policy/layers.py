@@ -83,47 +83,6 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class _ScheduleStats:
-    """How the chunk schedule played its waypoints.
-
-    A round sends the commands of every due waypoint, and on each channel the last one wins. The due waypoints
-    before the last one count as dropped, also when one of their channels went out. So do the due waypoints
-    that a new chunk replaces.
-    """
-
-    def __init__(self) -> None:
-        self._scheduled = 0
-        self._late_ns: list[int] = []
-        self._gap_max_ns = 0
-        self._last_emit_ns: int | None = None
-
-    def new_chunk(self, waypoints: int) -> None:
-        self._scheduled += waypoints
-        self._last_emit_ns = None
-
-    def emit(self, due_ns: int, now_ns: int) -> None:
-        self._late_ns.append(now_ns - due_ns)
-        if self._last_emit_ns is not None:
-            self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
-        self._last_emit_ns = now_ns
-
-    def write(self, metadata: dict[str, Any], queued: int) -> None:
-        emitted = len(self._late_ns)
-        values: dict[str, float] = {
-            eval_keys.SCHEDULED: self._scheduled,
-            eval_keys.EMITTED: emitted,
-            eval_keys.DROPPED: self._scheduled - emitted - queued,
-        }
-        if self._late_ns:
-            p50, p90 = np.percentile(self._late_ns, (50, 90)) / 1e6
-            values[eval_keys.LATE_P50_MS] = float(p50)
-            values[eval_keys.LATE_P90_MS] = float(p90)
-            values[eval_keys.LATE_MAX_MS] = max(self._late_ns) / 1e6
-            values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
-        for name, value in values.items():
-            metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
-
-
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -132,31 +91,81 @@ class ChunkedSchedule(Policy):
     A chunk of K commands covers K periods, including the final command's execution period.
     ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
     At most one call is pending, and another starts when the current chunk's duration ends.
+    With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
+    episode metadata.
     """
 
     WIRE_NAME = 'chunked_schedule'
     WIRE_VERSION = 2
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
+    RECORD_STATS_ARG = 'record_stats'
 
-    def __init__(self, fps: float, horizon_sec: float | None = None) -> None:
+    class _Stats:
+        """How the schedule played its waypoints.
+
+        A round sends the commands of every due waypoint, and on each channel the last one wins. The due
+        waypoints before the last one count as dropped, also when one of their channels went out. So do the due
+        waypoints that a new chunk replaces.
+        """
+
+        def __init__(self, metadata: dict[str, Any]) -> None:
+            self._metadata = metadata
+            self._scheduled = 0
+            self._late_ns: list[int] = []
+            self._gap_max_ns = 0
+            self._last_emit_ns: int | None = None
+
+        def count_round(self, planned: int | None, due_ns: int | None, now_ns: int, queued: int) -> None:
+            """Count the ``planned`` waypoints of a new chunk and the one emitted at ``now_ns``, if any."""
+            if planned is None and due_ns is None:
+                return
+            if planned is not None:
+                self._scheduled += planned
+                self._last_emit_ns = None
+            if due_ns is not None:
+                self._late_ns.append(now_ns - due_ns)
+                if self._last_emit_ns is not None:
+                    self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
+                self._last_emit_ns = now_ns
+            self._write(queued)
+
+        def _write(self, queued: int) -> None:
+            emitted = len(self._late_ns)
+            values: dict[str, float] = {
+                eval_keys.SCHEDULED: self._scheduled,
+                eval_keys.EMITTED: emitted,
+                eval_keys.DROPPED: self._scheduled - emitted - queued,
+            }
+            if self._late_ns:
+                p50, p90 = np.percentile(self._late_ns, (50, 90)) / 1e6
+                values[eval_keys.LATE_P50_MS] = float(p50)
+                values[eval_keys.LATE_P90_MS] = float(p90)
+                values[eval_keys.LATE_MAX_MS] = max(self._late_ns) / 1e6
+                values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
+            for name, value in values.items():
+                self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
+
+    def __init__(self, fps: float, horizon_sec: float | None = None, record_stats: bool = True) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
             raise ValueError('horizon_sec must be finite and positive')
         self._fps = fps
         self._horizon_sec = horizon_sec
+        self._record_stats = record_stats
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         period_sec = 1 / self._fps
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
-        stats = _ScheduleStats()
+        stats = self._Stats(runtime.metadata) if self._record_stats else None
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
+                planned = None
                 if answer is None and now_ns >= end_ns:
                     answer = runtime.submit(infer, obs)
                 if answer is not None and answer.done():
@@ -170,22 +179,21 @@ class ChunkedSchedule(Policy):
                         for i, waypoint in enumerate(chunk)
                         if i * period_sec < duration_sec
                     )
-                    stats.new_chunk(len(trajectory))
+                    planned = len(trajectory)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
                 while trajectory and trajectory[0][1] <= now_ns:
                     waypoint, due_ns = trajectory.popleft()
                     commands.update(waypoint)
-                if due_ns is not None:
-                    stats.emit(due_ns, now_ns)
+                if stats is not None:
+                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:
                 answer.cancel()
-            stats.write(runtime.metadata, queued=len(trajectory))
 
     def meta(self) -> dict[str, Any]:
         meta = {policy_keys.ACTION_FPS: self._fps}
@@ -194,9 +202,11 @@ class ChunkedSchedule(Policy):
         return meta
 
     def to_spec(self) -> dict[str, Any]:
-        args = {self.FPS_ARG: self._fps}
+        args: dict[str, Any] = {self.FPS_ARG: self._fps}
         if self._horizon_sec is not None:
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
+        if not self._record_stats:
+            args[self.RECORD_STATS_ARG] = False
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
