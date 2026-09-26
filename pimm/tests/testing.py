@@ -47,6 +47,24 @@ class Passive(ControlSystem):
             yield Sleep(0.001)
 
 
+class ExitRecorder(ControlSystem):
+    """A control system that runs until stopped and records in `events` how its loop ends.
+
+    It appends 'stopped' when it sees `should_stop`, and 'closed' when its loop ends by any path.
+    """
+
+    def __init__(self, events: list[str]):
+        self._events = events
+
+    def run(self, should_stop, clock):
+        try:
+            while not should_stop.value:
+                yield Sleep(0.001)
+            self._events.append('stopped')
+        finally:
+            self._events.append('closed')
+
+
 class FakeCall(Call[Req, Res], Generic[Req, Res]):
     """A call answered by hand, recording the one answer it is allowed."""
 

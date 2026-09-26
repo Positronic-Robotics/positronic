@@ -10,7 +10,8 @@ import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import ExitStack
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -49,6 +50,9 @@ Res = TypeVar('Res')
 # Far above any real cooperative burst, reached near-instantly by a true hang (loops yielding forever
 # with no sleeper).
 _STALL_WARNING_ROUNDS = 100_000
+
+# Wall clock, not the world's: a virtual clock can stand still or run far ahead of the time a caller waits.
+_WALL_SEC_FOR_PEERS_TO_STOP_AFTER_A_RAISE = 30.0
 
 
 class TransportMode(IntEnum):
@@ -585,10 +589,14 @@ class World:
         passes on its own; the yielded ``Sleep`` is the wait the caller honours so each
         loop keeps its real rate (a ``Yield`` means "no wait, run again now").
 
-        When a loop finishes (``StopIteration``) the stop event is set so the others can
-        observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
-        control system finishing sets the same event (``_bg_wrapper``), so any control system —
-        background or foreground — ending by returning, raising or being interrupted stops the world.
+        When a loop finishes, by a return or by an ``Exception``, the stop event is set so the others
+        can observe ``should_stop`` and exit. The iterator ends once no loop is left, and then raises
+        the first error again. After a raise, the others get ``_WALL_SEC_FOR_PEERS_TO_STOP_AFTER_A_RAISE``
+        to exit; the iterator closes each loop that still runs after that time. Any other
+        ``BaseException``, such as ``KeyboardInterrupt``, ends the iterator at once, and the iterator
+        closes each loop that is still suspended. A BACKGROUND control system finishing sets the same
+        event (``_bg_wrapper``), so any control system — background or foreground — ending by
+        returning, raising or being interrupted stops the world.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
         A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
@@ -597,9 +605,18 @@ class World:
         a stall (a hang in virtual time, a busy-spin on a wall clock) that ``interleave`` warns about.
         """
         iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
+        with ExitStack() as teardown:
+            for loop_iter in iters:
+                if isinstance(loop_iter, Generator):
+                    teardown.callback(loop_iter.close)
+            yield from self._schedule(iters)
+
+    def _schedule(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
+        first_error: Exception | None = None
+        peers_stop_by: float | None = None  # time.monotonic() deadline, set by the first error
 
         while ready:
             carried = []  # loops that yield; they run again at the next instant
@@ -608,13 +625,31 @@ class World:
                 try:
                     command = next(iters[i])
                 except StopIteration:
+                    command = None
+                except Exception as error:
+                    command = None
+                    if first_error is None:
+                        logger.error('A control loop raised %r; stopping the other loops', error)
+                        first_error = error
+                        peers_stop_by = time.monotonic() + _WALL_SEC_FOR_PEERS_TO_STOP_AFTER_A_RAISE
+                    else:
+                        # The world already stops for the first error, and the caller gets that one.
+                        logger.error('A control loop raised while the world was stopping', exc_info=True)
+                if command is None:
                     self.request_stop()
                     finished = True
-                    continue
-                if isinstance(command, Yield):
+                elif isinstance(command, Yield):
                     carried.append(i)
                 else:
                     heapq.heappush(pq, (self._clock.now_ns() + max(1, round(command.seconds * 1e9)), i))
+
+            if peers_stop_by is not None and time.monotonic() >= peers_stop_by:
+                logger.error(
+                    '%d control loop(s) still run %.0f s after a loop raised; closing them',
+                    len(carried) + len(pq),
+                    _WALL_SEC_FOR_PEERS_TO_STOP_AFTER_A_RAISE,
+                )
+                break
 
             # A pending sleep (this round or earlier) or a finishing loop is progress toward the clock
             # advancing; an all-yield round with neither stalls it. Persistent stalling means no loop is
@@ -640,6 +675,9 @@ class World:
             wait_ns = max(0, target_ns - self._clock.now_ns())
             self._advance_to(target_ns)
             yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
+
+        if first_error is not None:
+            raise first_error
 
     def connect(
         self,

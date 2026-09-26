@@ -25,7 +25,7 @@ from pimm.core import (
 )
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
-from pimm.tests.testing import MockClock
+from pimm.tests.testing import ExitRecorder, MockClock
 from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
 
 
@@ -811,6 +811,61 @@ class TestWorldInterleave:
                 list(world.interleave(failing_loop))
 
             assert 'before_exception' in execution_order
+
+    def test_a_failing_loop_stops_the_others_before_its_error_reaches_the_caller(self):
+        events = []
+
+        def failing_loop(stop_reader, clock):
+            yield Sleep(0.01)
+            raise ValueError('Test exception')
+
+        with World(virtual_time=True) as world:
+            try:
+                list(world.interleave(ExitRecorder(events).run, failing_loop))
+            except ValueError:
+                events.append('raised')
+
+        assert events == ['stopped', 'closed', 'raised']
+
+    def test_a_loop_that_ignores_the_stop_is_closed_after_the_grace_period(self, monkeypatch):
+        monkeypatch.setattr('pimm.world._WALL_SEC_FOR_PEERS_TO_STOP_AFTER_A_RAISE', 0.05)
+        events = []
+
+        def ignoring_loop(stop_reader, clock):
+            try:
+                while True:
+                    yield Sleep(0.01)
+            finally:
+                events.append('closed')
+
+        def failing_loop(stop_reader, clock):
+            yield Sleep(0.01)
+            raise ValueError('Test exception')
+
+        started = time.monotonic()
+        with World(virtual_time=True) as world:
+            try:
+                list(world.interleave(ignoring_loop, failing_loop))
+            except ValueError:
+                events.append('raised')
+
+        assert events == ['closed', 'raised']
+        assert time.monotonic() - started >= 0.05
+
+    def test_an_interrupt_closes_the_others_at_once(self):
+        events = []
+
+        def interrupted_loop(stop_reader, clock):
+            yield Sleep(0.01)
+            raise KeyboardInterrupt
+
+        with World(virtual_time=True) as world:
+            try:
+                list(world.interleave(ExitRecorder(events).run, interrupted_loop))
+            except KeyboardInterrupt:
+                events.append('raised')
+
+        assert events == ['closed', 'raised']
 
     def test_interleave_stop_behavior(self):
         """Test stop event behavior: early stopping and completion detection."""
