@@ -137,8 +137,8 @@ under it compares to one. `round_trip_ms - pack_ms - served_ms` is the link and 
 
 Run these two whatever the readings say.
 
-**A sink during a real inference.** Run step 3's sink in the container, and drive it from the client
-while step 5's requests run:
+**A sink during a real inference.** Run step 3's sink in the container. Repeat one of step 5's
+`serving_cost` runs, and from a second terminal on the client drive the sink while it runs:
 
 ```bash
 $PROBE source --host=$SERVER --port=9100 --kib=750 --transfers=10 --out=into-container-serving.json
