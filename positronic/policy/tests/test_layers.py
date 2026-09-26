@@ -204,7 +204,6 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
         emitted.append(run.send({}).commands[MOTOR])
     assert emitted == [0, 1, 3, 4]
     prefix = eval_keys.SCHEDULE
-    # The harness reads the metadata before it closes the run.
     assert runtime.metadata == {
         f'{prefix}.{eval_keys.SCHEDULED}': 5,
         f'{prefix}.{eval_keys.EMITTED}': 4,

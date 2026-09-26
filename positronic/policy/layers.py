@@ -106,8 +106,8 @@ class ChunkedSchedule(Policy):
         """How the schedule played its waypoints.
 
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
-        waypoints before the last one count as dropped, also when one of their channels went out. So do the due
-        waypoints that a new chunk replaces.
+        waypoints before the last one count as dropped, also when one of their channels went out. The due
+        waypoints that a new chunk replaces count as dropped too.
         """
 
         def __init__(self, metadata: dict[str, Any]) -> None:
