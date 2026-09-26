@@ -37,6 +37,11 @@ def arm_channel(channel: str, arm: str | None) -> str:
     return channel if arm is None else f'{channel}.{arm}'
 
 
+# The arms of a two-arm embodiment, left first.
+LEFT_ARM, RIGHT_ARM = 'left', 'right'
+BIMANUAL_ARMS = (LEFT_ARM, RIGHT_ARM)
+
+
 # The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
 # suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
 ROBOT_STATE = 'robot_state'
@@ -52,5 +57,7 @@ DESCRIPTOR = 'descriptor'
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
+WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
+WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
