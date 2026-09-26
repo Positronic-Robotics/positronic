@@ -1,5 +1,6 @@
 """Unversioned server contracts, exact component selection, and deprecation at connection time."""
 
+import asyncio
 import logging
 import threading
 from concurrent.futures import Future
@@ -228,6 +229,7 @@ def test_v1_answer_without_rows_sends_no_commands_and_asks_again(controlled_runt
 def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, monkeypatch, transport, scheduled):
     observations = []
     disconnected = threading.Event()
+    first_sent = threading.Event()
     declared = (
         {'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}
         if scheduled
@@ -246,6 +248,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
                 observation = protocol.deserialise(await conn.receive())
                 assert 'session_id' not in observation
                 observations.append(observation)
+                await asyncio.to_thread(first_sent.wait, 5)  # the first send returns before the answer lands
                 await conn.send(protocol.serialise({'result': actions}))
         except wire.PeerDisconnected:
             disconnected.set()
@@ -258,6 +261,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     run = runtime.start(RemotePolicy(transport, address))
     try:
         first = run.send({'image': np.array([1, 2])})
+        first_sent.set()
         assert isinstance(first, Step) and first.commands == {}
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
         assert run.send({'image': np.array([1, 2])}) == Step({'value': 10}, 1_100_000_000)
