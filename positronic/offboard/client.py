@@ -25,6 +25,11 @@ DEFAULT_INFER_TIMEOUT = 180.0
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
+# What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
+# cost the two minus ``served_ms``, because the server's own span sits inside the second one.
+SEND_MS = 'send_ms'
+RECV_MS = 'recv_ms'
+
 
 class InferenceSession:
     """One connection using the protocol declared by its server. Finish inference before closing it."""
@@ -33,6 +38,8 @@ class InferenceSession:
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
     # still carries it.
     served_timing: Mapping[str, float] = MappingProxyType({})
+    # This client's own halves of the last round trip, under ``SEND_MS`` and ``RECV_MS``.
+    wire_timing: Mapping[str, float] = MappingProxyType({})
 
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
@@ -93,7 +100,7 @@ class InferenceSession:
         """
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
-        self.served_timing = {}
+        self.served_timing = self.wire_timing = {}
         request = (
             obs
             if self._protocol is protocol.ProtocolVersion.V1
@@ -104,11 +111,19 @@ class InferenceSession:
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        send_started = time.time_ns()
         try:
-            with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
+            try:
                 self._conn.send(serialised)
-            with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
+            finally:
+                # A send that raises gets timed too, so the span is recorded on the way out.
+                sent = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+            try:
                 received = self._conn.recv(timeout=self._infer_timeout)
+            finally:
+                answered = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -122,6 +137,7 @@ class InferenceSession:
             self._closed = True
             self._conn.close()
             raise
+        self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
         response = deserialise(received)
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)

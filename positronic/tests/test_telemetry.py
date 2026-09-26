@@ -132,6 +132,13 @@ def test_timing_sink_without_exporter_reports_failures_and_restores_scope(monkey
     assert timings == [('inner', 0, 10), ('outer', 0, 10)]
 
 
+def test_a_span_recorded_with_explicit_bounds_reaches_the_timing_sink():
+    timings = []
+    with telemetry.timings_to(lambda *args: timings.append(args)):
+        telemetry.record_span('wire.send', 3, 7)
+    assert timings == [('wire.send', 3, 7)]
+
+
 def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
     """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial param
     holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""

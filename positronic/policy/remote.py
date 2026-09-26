@@ -60,6 +60,20 @@ def round_trip(
             telemetry.set_attrs(span, **served)
 
 
+def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
+    """The client stack a server's handshake declares, in the form ``protocol_version`` runs."""
+    declared = meta.get(offboard_keys.LOCAL_STACK)
+    if declared is None:
+        raise ValueError('Server declares no client processor stack')
+    if protocol_version is ProtocolVersion.V1:
+        stack = from_v1_spec(declared, meta)
+    else:
+        stack = from_spec(declared)
+    if not isinstance(stack, Processor):
+        raise ValueError('The declared client stack must be a processor')
+    return stack
+
+
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
@@ -103,15 +117,7 @@ class RemotePolicy(Policy):
         try:
             meta = session.metadata
             self._server_meta = dict(meta)
-            declared = meta.get(offboard_keys.LOCAL_STACK)
-            if declared is None:
-                raise ValueError('Server declares no client processor stack')
-            if session.protocol_version is ProtocolVersion.V1:
-                stack = from_v1_spec(declared, meta)
-            else:
-                stack = from_spec(declared)
-            if not isinstance(stack, Processor):
-                raise ValueError('The declared client stack must be a processor')
+            stack = declared_stack(meta, session.protocol_version)
             compress_images = bool(meta.get(offboard_keys.COMPRESS_IMAGES))
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:

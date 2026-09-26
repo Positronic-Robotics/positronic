@@ -1,47 +1,59 @@
-"""What one inference costs the serving path itself, with no model behind it.
+"""Where one inference's time goes, divided by the phases the server reports.
 
-Replays a recorded episode against a real ``PolicyServer`` on loopback whose model answers a fixed
-chunk instantly, so every millisecond reported is serving cost, divided by the phases the server
-reports. The default stack is the one the rig's client builds: 25 frames of two cameras and the
-arm's pose, bounded to 1024x288, JPEG-encoded per frame and re-queried every 24 rows. A vendor's
-served pipeline may sample fewer frames at a smaller bound; the flags below set any other load.
+Replays a recorded episode against a server and reports what each round trip cost beside what the
+server says it spent. Each run prints the stack it sent through: the one the ``--server_address``
+server declares in its handshake, or the one the flags below build for the loopback server.
 
 Usage
     uv run --locked python -m positronic.offboard.serving_cost \\
         --dataset.path=<episode root> --requests=20
-    ... --compress_images=False           # send raw stacks instead of per-frame JPEG
-    ... --frames=25 --rate_hz=15 --width=1024 --height=288 --chunk_rows=24 --out=rows.json
+    ... --embodiment=@positronic.cfg.embodiment.droid_3cam_fake   # the rig the episode was recorded on
+    ... --server_address=@positronic.cfg.policy.network_address --server_address.host=<endpoint> \
+        --server_address.port=443 --headers=@positronic.cfg.policy.bearer_headers   # a served endpoint
+    ... --server_wire=websocket --server_address=@positronic.cfg.policy.network_address   # started by hand
+    ... --server_wire=websocket_unix --server_address=@positronic.cfg.policy.socket_address \
+        --server_address.uds=<socket>     # a server on this machine
+    ... --compress_images=False           # loopback only: send raw stacks instead of per-frame JPEG
+    ... --frames=<n> --rate_hz=<hz> --width=<px> --height=<px> --out=rows.json
+    ... --chunk_rows=<n>                  # actions per reply; must equal a named server's chunk length
 """
 
+import contextlib
 import json
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import configuronic as cfn
 import numpy as np
 import pos3
-from positronic_wire import wire
+from positronic_wire import registry, wire
 from positronic_wire.websocket import WebsocketClientWire
 
+import pimm
 import positronic.cfg.ds
+import positronic.cfg.embodiment
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
+from positronic.eval import Embodiment, Observation, Task
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.policy.base import Obs, Policy
+from positronic.policy.base import Obs, Policy, Processor
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
-from positronic.policy.remote import prepare_obs
+from positronic.policy.remote import declared_stack, prepare_obs
 from positronic.policy.sequential import Sequential
 
 
@@ -69,24 +81,42 @@ def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, h
     )
 
 
-# What a rig observation carries beside its cameras. The episode holds much more — the arm's URDF, its
-# meshes, every recorded command — and none of that crosses the wire.
-STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP, keys.ROBOT_STATUS)
+def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> Iterator[tuple[int, Obs]]:
+    """Replay time and the observation a rig of ``embodiment`` sends, for each sampled control tick.
 
-
-def observations(episode: Episode, cameras: Sequence[str], rate_hz: float) -> Iterator[tuple[int, Obs]]:
-    """Replay time and observation for each sampled control tick."""
+    The harness reads each channel the embodiment declares from the columns the episode recorded for it.
+    Those columns hold the serializer's output, so the channels here carry no serializer.
+    """
+    signals = episode.signals
+    columns = {
+        name: [signal for signal in signals if signal == name or signal.startswith(f'{name}.')]
+        for name in embodiment.observations
+    }
+    unrecorded = sorted(name for name, recorded in columns.items() if not recorded)
+    if unrecorded:
+        raise ValueError(
+            f'{embodiment.descriptor or "the embodiment"} declares {unrecorded} and the episode does not record '
+            f'it; name the embodiment the episode was recorded on with --embodiment'
+        )
+    recorded = replace(
+        embodiment, observations={name: Observation(obs.source, None) for name, obs in embodiment.observations.items()}
+    )
+    task = Task(episode.static[keys.TASK], None)
     period_ns = int(1e9 / rate_hz)
-    for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
-        sample = episode.time[ts]
-        obs = {key: sample[key] for key in (*STATE_KEYS, *cameras) if key in sample}
-        if keys.TASK in sample:
-            obs[keys.TASK] = sample[keys.TASK]
-        yield ts, obs
+    with pimm.World(virtual_time=True) as world:
+        harness = Harness(recorded)
+        feeds = {name: world.pair(receiver) for name, receiver in harness.observations.items()}
+        world.start(harness)  # binds the feeds; nothing runs the harness loop, the replay calls `read_obs`
+        for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
+            for name, feed in feeds.items():
+                feed.emit({signal[len(name) :]: signals[signal].time[ts][0] for signal in columns[name]})
+            obs = harness.read_obs(task, {})
+            assert obs is not None, 'every channel was just fed'
+            yield ts, obs
 
 
 def capture(
-    ticks: Iterable[tuple[int, Obs]], stack: Policy, model: Callable[[Obs], Any], requests: int
+    ticks: Iterable[tuple[int, Obs]], stack: Processor, model: Callable[[Obs], Any], requests: int
 ) -> list[dict[str, Any]]:
     """Run the rig-side stack over ``ticks`` and collect the first ``requests`` payloads it sends."""
     sent: list[dict[str, Any]] = []
@@ -108,6 +138,11 @@ def capture(
                     run.send(obs)
             if len(sent) >= requests:
                 break
+    except KeyError as missing:
+        raise ValueError(
+            f'the stack asks for {missing.args[0]!r} and the episode does not record it, so this episode '
+            f'cannot stand in for what the rig sends; replay one recorded on the rig the server serves'
+        ) from missing
     finally:
         runtime.close()
         run.close()
@@ -128,8 +163,59 @@ def serve(model: Model, pipeline: PolicyDeployment) -> tuple[PolicyServer, threa
     return server, thread, served.port
 
 
+class Measured(NamedTuple):
+    """What one run measures: an open session, the stack its requests cross, and the wire's own setting."""
+
+    session: InferenceSession
+    stack: Processor
+    compress_images: bool
+    target: str
+
+
+@contextlib.contextmanager
+def against_server(
+    wire_name: str, address: wire.SessionAddress, headers: dict[str, str] | None = None
+) -> Iterator[Measured]:
+    """A session on the named server, running the stack and wire settings that server declares.
+
+    ``wire_name`` selects the transport (``positronic_wire.registry.CLIENT_WIRES``), which dials
+    ``address``. ``headers`` carries the credential a served endpoint asks for; with none, the session
+    sends no token.
+    """
+    client_wire = registry.client_wire(wire_name)
+    session = InferenceClient(client_wire, address, headers=headers).new_session()
+    try:
+        meta = session.metadata
+        stack = declared_stack(meta, session.protocol_version)
+        target = client_wire.session_url(address)
+        yield Measured(session, stack, bool(meta.get(offboard_keys.COMPRESS_IMAGES)), target)
+    finally:
+        session.close()
+
+
+@contextlib.contextmanager
+def against_loopback(stack: Policy, compress_images: bool, chunk_rows: int) -> Iterator[Measured]:
+    """A session on a server this process starts, serving a ``chunk_rows`` instant model behind ``stack``."""
+    server, thread, port = serve(InstantChunk(chunk_rows), PolicyDeployment(stack, compress_images=compress_images))
+    try:
+        client_wire = WebsocketClientWire()
+        address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')
+        session = InferenceClient(client_wire, address).new_session()
+        try:
+            yield Measured(session, stack, compress_images, f'{client_wire.session_url(address)} (no model behind it)')
+        finally:
+            session.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=10.0)
+
+
 def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_images: bool) -> list[dict[str, float]]:
-    """Send each payload, and report what its round trip cost beside what the server reports spending."""
+    """Send each payload, and report what its round trip cost beside what the server reports spending.
+
+    One run tells an uplink the receiver would not drain from a wait the server spent inside its own
+    span: the session's own ``send_ms``/``recv_ms`` ride along.
+    """
     rows = []
     for obs in payloads:
         started = time.perf_counter()
@@ -154,6 +240,7 @@ def replay(session: InferenceSession, payloads: list[dict[str, Any]], compress_i
             'prepare_ms': (encoded - started) * 1000.0,
             'pack_ms': pack_ms,
             'round_trip_ms': round_trip_ms,
+            **dict(session.wire_timing),
             **served,
             # What the round trip spends outside the server's own span: the socket both ways, the server's
             # receive and encode around it, and this client's decode.
@@ -178,11 +265,14 @@ def report(rows: list[dict[str, float]]) -> str:
     dataset=positronic.cfg.ds.local,
     episode=0,
     requests=20,
+    server_address=None,
+    server_wire='websocket_tls',
+    headers=None,
     frames=25,
     rate_hz=15.0,
     width=1024,
     height=288,
-    cameras=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
+    embodiment=positronic.cfg.embodiment.droid_fake,
     chunk_rows=24,
     compress_images=True,
     out=None,
@@ -191,43 +281,44 @@ def main(
     dataset: Dataset,
     episode: int,
     requests: int,
+    server_address: wire.SessionAddress | None,
+    server_wire: str,
+    headers: dict[str, str] | None,
     frames: int,
     rate_hz: float,
     width: int,
     height: int,
-    cameras: Sequence[str],
+    embodiment: Embodiment,
     chunk_rows: int,
     compress_images: bool,
     out: str | None,
 ):
     # configuronic hands the CLI token through as a string.
     out_path = Path(out) if out is not None else None
-    model = InstantChunk(chunk_rows)
-    stack = rig_stack(cameras, frames, rate_hz, width, height)
+    # TODO: let the named server set the pace.
+    model = partial(InstantChunk(chunk_rows), session_id=uuid4().hex)
 
     chosen = dataset[episode]
     assert isinstance(chosen, Episode), 'name one episode, not a slice of them'
-    payloads = capture(observations(chosen, cameras, rate_hz), stack, partial(model, session_id=uuid4().hex), requests)
-    if not payloads:
-        raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
-    print(f'captured {len(payloads)} payload(s) off episode {episode}')
 
-    server, thread, port = serve(model, PolicyDeployment(stack, compress_images=compress_images))
-    try:
-        address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')
-        session = InferenceClient(WebsocketClientWire(), address).new_session()
-        try:
-            replay(session, payloads[:1], compress_images)  # warm up, so no first touch is timed
-            rows = replay(session, payloads, compress_images)
-        finally:
-            session.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=10.0)
+    if server_address is not None:
+        opened = against_server(server_wire, server_address, headers)
+    else:
+        cameras = [name for name in embodiment.observations if name.startswith(keys.IMAGE_PREFIX)]
+        opened = against_loopback(rig_stack(cameras, frames, rate_hz, width, height), compress_images, chunk_rows)
+    with opened as measured:
+        print(f'stack: {json.dumps(measured.stack.to_spec())}')
+        payloads = capture(observations(chosen, embodiment, rate_hz), measured.stack, model, requests)
+        if not payloads:
+            raise ValueError(f'episode {episode} is shorter than one {chunk_rows}-row chunk; nothing was sent')
+        print(f'captured {len(payloads)} payload(s) off episode {episode}')
+        replay(measured.session, payloads[:1], measured.compress_images)  # warm up, so no first touch is timed
+        rows = replay(measured.session, payloads, measured.compress_images)
 
+    source = 'declared by the server' if server_address is not None else 'built from the flags'
     print(
-        f'\n{len(rows)} requests, {frames} frames x {len(cameras)} cameras, bound {width}x{height}, '
-        f'compress_images={compress_images}, no model behind the server\n'
+        f'\n{len(rows)} requests against {measured.target}, stack {source}, '
+        f'compress_images={measured.compress_images}\n'
     )
     print(report(rows))
     if out_path is not None:

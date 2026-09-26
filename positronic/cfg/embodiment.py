@@ -39,6 +39,13 @@ def droid(robot_arm, gripper, cameras):
 
 
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
+# DROID with no device behind it, for code that reads the embodiment's contract on a box without the vendor packages.
+droid_fake = droid.override(
+    robot_arm=positronic.cfg.hardware.roboarm.franka_fake,
+    gripper=positronic.cfg.hardware.gripper.robotiq_fake,
+    cameras=positronic.cfg.hardware.camera.droid_fake,
+)
+droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
 @cfn.config(
