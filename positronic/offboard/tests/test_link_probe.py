@@ -81,20 +81,37 @@ def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
         peer.join(timeout=5.0)
 
 
+@pytest.mark.parametrize(
+    'sent',
+    [struct.pack(HEADER, 0), struct.pack(HEADER, 100) + b'x' * 10],
+    ids=['no bytes declared', 'closed inside a transfer'],
+)
+def test_a_peer_that_breaks_a_transfer_is_logged_as_an_error(sent, caplog):
+    sender, receiver = socket.socketpair()
+    sender.sendall(sent)
+    sender.shutdown(socket.SHUT_WR)
+    try:
+        with caplog.at_level(logging.ERROR):
+            _serve_peer(receiver, READ_BYTES, 0)
+    finally:
+        sender.close()
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+def test_a_peer_that_closes_between_transfers_is_not_an_error(caplog):
+    sender, receiver = socket.socketpair()
+    sender.sendall(_framed(b'x' * 100))
+    sender.shutdown(socket.SHUT_WR)
+    try:
+        with caplog.at_level(logging.ERROR):
+            _serve_peer(receiver, READ_BYTES, 0)
+        assert json.loads(_read_reply(sender))['bytes'] == 100
+    finally:
+        sender.close()
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
 STALL_S = 0.2
-
-
-class _SlowToFrame(bytes):
-    """A payload whose copy into a frame takes ``STALL_S``, so a timer around the copy shows it."""
-
-    def __radd__(self, header: bytes) -> bytes:
-        time.sleep(STALL_S)
-        return header + bytes(self)
-
-
-def _slow_loads(raw: bytes):
-    time.sleep(STALL_S)
-    return json.loads(raw)
 
 
 def _source_against_a_sink(tmp_path: Path, kib: int) -> list[dict]:
@@ -113,11 +130,24 @@ def _source_against_a_sink(tmp_path: Path, kib: int) -> list[dict]:
     return json.loads(out.read_text())
 
 
+class _SlowToFrame(bytes):
+    """A payload whose copy into a frame takes ``STALL_S``, so a timer around the copy shows it."""
+
+    def __radd__(self, header: bytes) -> bytes:
+        time.sleep(STALL_S)
+        return header + bytes(self)
+
+
 def test_write_ms_times_the_send_and_not_the_copy_into_the_frame(tmp_path, monkeypatch):
     monkeypatch.setattr(link_probe.os, 'urandom', lambda count: _SlowToFrame(bytes(count)))
     rows = _source_against_a_sink(tmp_path, kib=64)
     assert [row['bytes'] for row in rows] == [64 * 1024] * 2
     assert all(row['write_ms'] < STALL_S * 1000 for row in rows)
+
+
+def _slow_loads(raw: bytes):
+    time.sleep(STALL_S)
+    return json.loads(raw)
 
 
 def test_report_ms_times_the_report_and_not_its_decode(tmp_path, monkeypatch):

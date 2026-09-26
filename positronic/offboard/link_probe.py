@@ -53,10 +53,6 @@ def _frame(payload: bytes) -> bytes:
     return struct.pack(HEADER, len(payload)) + payload
 
 
-def _send_framed(conn: socket.socket, payload: bytes) -> None:
-    conn.sendall(_frame(payload))
-
-
 def _read_exactly(conn: socket.socket, count: int) -> bytes:
     chunks = []
     remaining = count
@@ -106,11 +102,12 @@ def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
 def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None:
     """Read transfers off one connection until the peer goes, reporting each back to its sender."""
     try:
-        while True:
+        # A peer that closes between transfers has finished; one that closes inside a transfer has failed.
+        while conn.recv(1, socket.MSG_PEEK):
             report = receive_one(conn, read_bytes)
             report['read_bytes'] = read_bytes
             report['busy_threads'] = busy_threads
-            _send_framed(conn, json.dumps(report).encode())
+            conn.sendall(_frame(json.dumps(report).encode()))
             # One read has no span, so it has no rate.
             rate = 'no rate' if report['mib_per_sec'] is None else f'{report["mib_per_sec"]:.1f} MiB/s'
             print(
@@ -118,8 +115,10 @@ def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None
                 f'{report["reads"]} read(s), {rate}',
                 flush=True,
             )
+        print('  peer closed', flush=True)
     except (ConnectionError, OSError, ValueError) as e:
-        print(f'  peer gone: {e}', flush=True)
+        # One peer's broken transfer says nothing about the next peer, so the sink serves on.
+        logger.error('peer broke a transfer: %s; serving the next peer', e)
     finally:
         conn.close()
 

@@ -23,16 +23,17 @@ loaded, so a session cut short still holds its results.
 
 - One GPU host with Docker, which the client reaches directly on ports 8000, 9000, 9100, 9101 and 9102.
 - A shell on that host, and a shell **in the receiver's network namespace**. A container has its own,
-  and the host's readings do not describe it. `docker exec -it link-probe-server bash` opens one. Where
-  the server's image cannot run the probe, join a second container to its namespace instead: `docker
-  run --network container:link-probe-server <image> python -m positronic.offboard.link_probe watch
-  --port=8000`.
+  and the host's readings do not describe it. `docker exec -it link-probe-server bash` opens one, and
+  steps 3 and 5 use two at a time. Where the server's image cannot run the probe, join a second
+  container to its namespace instead: `docker run --network container:link-probe-server <image> python
+  -m positronic.offboard.link_probe watch --port=8000`.
 - A recorded episode of the rig the server serves, for `serving_cost`.
 
 Set these once in each shell:
 
 ```bash
 SERVER=<host the server runs on>      # as the client reaches it
+CLIENT=<address of the client>        # as the server sees it
 EPISODE=<dataset path>                 # one recorded episode
 PROBE="uv run --locked python -m positronic.offboard.link_probe"
 ```
@@ -59,7 +60,7 @@ loads.
 
 ```bash
 $PROBE facts --peer=$SERVER          # on the client
-$PROBE facts                          # in the container
+$PROBE facts --peer=$CLIENT          # in the container
 ```
 
 Record the MTU of the interface each side sends through, both namespaces, `tcp_rmem` and `rmem_max`.
@@ -70,17 +71,19 @@ sender rather than falling behind quietly.
 ## 3. Measure the read, before the model is up
 
 Start a sink in the container and a second one on the host, on different ports. The same client drives
-both, so the two differ only by the path into the container.
+both, so the two differ only by the path into the container. Each sink serves until you stop it with
+Ctrl-C, so give each one a shell of its own. The watcher samples for 120 seconds: start it in a second
+container shell, then run both sources from the client before it ends.
 
 ```bash
-# in the container
+# container shell 1
 $PROBE sink --port=9100
-# on the host
+# host shell
 $PROBE sink --port=9101
-# in the receiver's namespace, beside the sink under test
+# container shell 2, beside the sink under test
 $PROBE watch --port=9100 --interval_ms=20 --seconds=120 --out=recvq-container.jsonl
 
-# from the client, against each
+# from the client, while the watcher runs, against each sink
 $PROBE source --host=$SERVER --port=9100 --kib=750 --transfers=10 --out=into-container.json
 $PROBE source --host=$SERVER --port=9101 --kib=750 --transfers=10 --out=into-host.json
 ```
@@ -103,7 +106,7 @@ And raise a reader that competes for the interpreter, as a busy model does to th
 reads for it:
 
 ```bash
-# in the container
+# container shell 2; stop it with Ctrl-C after the source ends, because its threads load every core
 $PROBE sink --port=9102 --busy_threads=$(nproc)
 # from the client
 $PROBE source --host=$SERVER --port=9102 --kib=750 --transfers=10
@@ -183,7 +186,8 @@ Run each of these only where the readings above point at it:
 ## 7. Tear down, and verify it is gone
 
 ```bash
-docker stop link-probe-server                      # on the host; --rm then removes the container
+# on the host: stop the host sink from step 3 with Ctrl-C, then
+docker stop link-probe-server                      # --rm then removes the container
 docker ps -a --filter name=link-probe-server       # prints no container
 ```
 
