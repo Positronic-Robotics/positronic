@@ -319,22 +319,6 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
         print(f'per-sample rows -> {out_path}')
 
 
-# `SIOCGIFADDR` from <linux/sockios.h>: the IPv4 address of one interface.
-SIOCGIFADDR = 0x8915
-
-
-def _ipv4_address(name: str) -> str | None:
-    """The IPv4 address of interface ``name``, or ``None`` where it carries none."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as query:
-        try:
-            answer = fcntl.ioctl(query.fileno(), SIOCGIFADDR, struct.pack('256s', name.encode()[:15]))
-        except OSError as e:
-            if e.errno == errno.EADDRNOTAVAIL:
-                return None
-            raise
-    return socket.inet_ntoa(answer[20:24])
-
-
 def _read_kernel_value(path: Path) -> str | None:
     """One ``/proc`` or ``/sys`` value, or ``None`` where this kernel has no such file.
 
@@ -355,12 +339,24 @@ def network_facts(peer: str | None) -> dict[str, Any]:
     """
     if sys.platform != 'linux':
         raise OSError(f'facts reads /sys and /proc, which {sys.platform} does not have; run it on Linux')
+
+    def ipv4_address(name: str) -> str | None:
+        # `SIOCGIFADDR` from <linux/sockios.h>. An interface with no IPv4 address answers EADDRNOTAVAIL.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as query:
+            try:
+                answer = fcntl.ioctl(query.fileno(), 0x8915, struct.pack('256s', name.encode()[:15]))
+            except OSError as e:
+                if e.errno == errno.EADDRNOTAVAIL:
+                    return None
+                raise
+        return socket.inet_ntoa(answer[20:24])
+
     interfaces = {}
     for entry in sorted(Path('/sys/class/net').iterdir()):
         interfaces[entry.name] = {
             'mtu': _read_kernel_value(entry / 'mtu'),
             'operstate': _read_kernel_value(entry / 'operstate'),
-            'ipv4': _ipv4_address(entry.name),
+            'ipv4': ipv4_address(entry.name),
         }
     facts: dict[str, Any] = {
         'net_namespace': Path('/proc/self/ns/net').readlink().name,
