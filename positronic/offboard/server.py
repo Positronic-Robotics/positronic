@@ -116,6 +116,8 @@ class PolicyServer:
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
 
+        if idle_timeout_min is not None and math.isnan(idle_timeout_min):
+            raise ValueError(f'idle_timeout_min must be a number of minutes, got {idle_timeout_min}')
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
@@ -149,7 +151,7 @@ class PolicyServer:
 
     def _idle_timeout_s(self) -> float | None:
         """The idle time after which the server stops, or ``None`` where idling never stops it."""
-        if not self.idle_timeout_min or self.idle_timeout_min <= 0:
+        if self.idle_timeout_min is None or not 0 < self.idle_timeout_min < math.inf:
             return None
         return self.idle_timeout_min * 60
 
