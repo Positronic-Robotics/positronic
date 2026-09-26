@@ -99,6 +99,27 @@ def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
     }
 
 
+def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None:
+    """Read transfers off one connection until the peer goes, reporting each back to its sender."""
+    try:
+        while True:
+            report = receive_one(conn, read_bytes)
+            report['read_bytes'] = read_bytes
+            report['busy_threads'] = busy_threads
+            _send_framed(conn, json.dumps(report).encode())
+            # One read has no span, so it has no rate.
+            rate = 'no rate' if report['mib_per_sec'] is None else f'{report["mib_per_sec"]:.1f} MiB/s'
+            print(
+                f'  {report["bytes"] / 1024:.0f} KiB in {report["read_span_ms"]:.1f} ms over '
+                f'{report["reads"]} read(s), {rate}',
+                flush=True,
+            )
+    except (ConnectionError, OSError, ValueError) as e:
+        print(f'  peer gone: {e}', flush=True)
+    finally:
+        conn.close()
+
+
 class GilHog:
     """Threads spinning in Python, so the reader competes for the interpreter while it reads.
 
@@ -120,27 +141,6 @@ class GilHog:
         self._stop.set()
         for thread in self._threads:
             thread.join(timeout=1.0)
-
-
-def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None:
-    """Read transfers off one connection until the peer goes, reporting each back to its sender."""
-    try:
-        while True:
-            report = receive_one(conn, read_bytes)
-            report['read_bytes'] = read_bytes
-            report['busy_threads'] = busy_threads
-            _send_framed(conn, json.dumps(report).encode())
-            # One read has no span, so it has no rate.
-            rate = 'no rate' if report['mib_per_sec'] is None else f'{report["mib_per_sec"]:.1f} MiB/s'
-            print(
-                f'  {report["bytes"] / 1024:.0f} KiB in {report["read_span_ms"]:.1f} ms over '
-                f'{report["reads"]} read(s), {rate}',
-                flush=True,
-            )
-    except (ConnectionError, OSError, ValueError) as e:
-        print(f'  peer gone: {e}', flush=True)
-    finally:
-        conn.close()
 
 
 @cfn.config(host='0.0.0.0', port=9100, read_bytes=READ_BYTES, busy_threads=0)
@@ -319,18 +319,6 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
         print(f'per-sample rows -> {out_path}')
 
 
-def _read_kernel_value(path: Path) -> str | None:
-    """One ``/proc`` or ``/sys`` value, or ``None`` where this kernel has no such file.
-
-    Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
-    namespace, and this tool reports those.
-    """
-    try:
-        return path.read_text().strip()
-    except FileNotFoundError:
-        return None
-
-
 # `SIOCGIFADDR` from <linux/sockios.h>: the IPv4 address of one interface.
 SIOCGIFADDR = 0x8915
 
@@ -345,6 +333,18 @@ def _ipv4_address(name: str) -> str | None:
                 return None
             raise
     return socket.inet_ntoa(answer[20:24])
+
+
+def _read_kernel_value(path: Path) -> str | None:
+    """One ``/proc`` or ``/sys`` value, or ``None`` where this kernel has no such file.
+
+    Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
+    namespace, and this tool reports those.
+    """
+    try:
+        return path.read_text().strip()
+    except FileNotFoundError:
+        return None
 
 
 def network_facts(peer: str | None) -> dict[str, Any]:

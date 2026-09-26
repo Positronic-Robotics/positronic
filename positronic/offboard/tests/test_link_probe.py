@@ -54,6 +54,11 @@ def test_a_transfer_of_no_bytes_is_refused_rather_than_timed():
         receiver.close()
 
 
+def _read_reply(conn: socket.socket) -> bytes:
+    declared = struct.unpack(HEADER, conn.recv(struct.calcsize(HEADER), socket.MSG_WAITALL))[0]
+    return conn.recv(declared, socket.MSG_WAITALL)
+
+
 def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
     """One read has no span and so no rate; the sink must report it and serve the next transfer."""
     sender, receiver = socket.socketpair()
@@ -69,11 +74,6 @@ def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
     finally:
         sender.close()
         peer.join(timeout=5.0)
-
-
-def _read_reply(conn: socket.socket) -> bytes:
-    declared = struct.unpack(HEADER, conn.recv(struct.calcsize(HEADER), socket.MSG_WAITALL))[0]
-    return conn.recv(declared, socket.MSG_WAITALL)
 
 
 def _unread_connection(port_holder: list[int]) -> tuple[socket.socket, socket.socket, socket.socket]:

@@ -106,10 +106,11 @@ websocket `send` returns once the bytes are written, and a gRPC `send` returns b
 undrained receiver shows up in `send_ms` on one and in `recv_ms` on the other.
 
 ```bash
-# in the receiver's namespace, one watcher per wire, over both runs
-$PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served-ws.jsonl
-$PROBE watch --port=9000 --interval_ms=20 --seconds=300 --out=recvq-served-grpc.jsonl
+# in the receiver's namespace: one watcher per wire, both in the background, over both runs
+$PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served-ws.jsonl &
+$PROBE watch --port=9000 --interval_ms=20 --seconds=300 --out=recvq-served-grpc.jsonl &
 
+# from the client, while the watchers run
 uv run --locked python -m positronic.offboard.serving_cost \
     --dataset.path=$EPISODE --server_wire=websocket_tls \
     --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
@@ -120,6 +121,9 @@ uv run --locked python -m positronic.offboard.serving_cost \
     --server_address=@positronic.cfg.policy.network_address --server_address.host=$SERVER \
     --server_address.port=9000 --headers=@positronic.cfg.policy.bearer_headers \
     --requests=20 --out=served-grpc.json
+
+# in the receiver's namespace, after both runs: let the watchers finish and write their files
+wait
 ```
 
 Each run prints the stack it rebuilt from the handshake. Read it: the rig sends that.
