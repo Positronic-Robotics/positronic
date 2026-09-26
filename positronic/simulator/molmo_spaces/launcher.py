@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
-from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.env_server.launcher import SERVER_DEPS, ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.molmo_spaces import mapping
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
@@ -29,9 +29,6 @@ _MOLMO_CONSTRAINTS = Path(__file__).parent / 'molmo_constraints.txt'
 # MolmoSpaces requires Python 3.11. Filament benchmarks need the alternative mujoco-filament extra.
 _MOLMO_PYTHON = '3.11'
 _MOLMO_EXTRA = 'mujoco'
-
-# The isolated env server requires these independently of MolmoSpaces' dependencies.
-_WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
 
 
 @contextmanager
@@ -52,7 +49,7 @@ def ensure_molmo_venv() -> Path:
             subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
         # uv sync also resolves upstream's unused curobo extra, which requires CUDA to build.
         subprocess.run(
-            ['uv', 'pip', 'install', '-c', str(_MOLMO_CONSTRAINTS), '-e', f'.[{_MOLMO_EXTRA}]', *_WIRE_DEPS],
+            ['uv', 'pip', 'install', '-c', str(_MOLMO_CONSTRAINTS), '-e', f'.[{_MOLMO_EXTRA}]', *SERVER_DEPS],
             cwd=str(src),
             env={**os.environ, 'VIRTUAL_ENV': str(venv)},
             check=True,

@@ -77,8 +77,8 @@ def yam(robot_arm, cameras, video_encoder):
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
-        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
-        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
     video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )

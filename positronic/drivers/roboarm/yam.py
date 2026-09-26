@@ -24,24 +24,17 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
-from .models import DEFAULT_FRAME
-
-# i2rt lives in the `yam` extra, which the type-check environment does not install.
-with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
-    from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
+from .models import DEFAULT_FRAME, YAM_JOINT_NAMES, bundled_yam_model
 
 logger = logging.getLogger(__name__)
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
-_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
@@ -61,6 +54,10 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
 
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
+    # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
+    with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
+        from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from i2rt.robots.utils import GripperType  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
 
 
@@ -114,9 +111,9 @@ class _Kinematics:
         self._data = mj.MjData(self._model)
         site = mj.mjtObj.mjOBJ_SITE
         self._site_id = mj.mj_name2id(self._model, site, DEFAULT_FRAME)
-        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
-        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
+        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
+        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
+        ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
         self._lower, self._upper = ranges[:, 0], ranges[:, 1]
 
     def fk(self, q: np.ndarray) -> geom.Transform3D:
@@ -361,12 +358,7 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with _opened(self._connect, self._channel, self._sim) as vendor:
             chain = self._chain(vendor, should_stop, clock)
-            meta = {
-                'robot': 'i2rt_yam',
-                roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
-                roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            }
-            self.robot_meta.emit(meta)
+            self.robot_meta.emit(bundled_yam_model())
 
             q_target, grip_target = yield from chain.park(0.0)  # nothing has asked for a grip yet
 
