@@ -199,6 +199,6 @@ disk.
 
 Every probe here runs on one box over loopback, which is worth doing before the window and proves the
 commands work. It does not reproduce the reading: loopback buffers absorb a 750 KiB payload whole, so a
-reader that stalls shows up in `read_span_ms` and never in `write_ms`. A link with a smaller
-bandwidth-delay product pushes the same stall back to the sender, and only a reading taken at both
-ends divides it.
+reader that stalls never shows up in `write_ms`. A reader that starts late shows up in `report_ms`, and
+one that stalls between its reads shows up in `read_span_ms`. A link with a smaller bandwidth-delay
+product pushes the same stall back to the sender, and only a reading taken at both ends divides it.
