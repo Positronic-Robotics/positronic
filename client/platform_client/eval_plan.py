@@ -101,12 +101,17 @@ def _no_fragment_and_visible_ascii(field: str, value: str) -> str:
     return value
 
 
+# `SESSION_PATH` in `positronic_wire.wire`, which this package does not import.
+SESSION_ROUTE = '/api/v1/session'
+
+
 def _a_session_path(path: str) -> str:
-    if not path.startswith('/'):
-        raise ValueError(f'path {path!r} is no session route: write the route alone, from its leading `/`')
-    if '?' in path:
-        raise ValueError(f'path {path!r} carries `?`: write the params in `query`')
-    return _no_fragment_and_visible_ascii('path', path)
+    if path != SESSION_ROUTE:
+        raise ValueError(
+            f'path {path!r} is not the session route {SESSION_ROUTE!r}: a server serves one checkpoint, '
+            'and the route names none; write the params in `query`'
+        )
+    return path
 
 
 def _a_bare_query(query: str) -> str:
@@ -126,7 +131,6 @@ def _an_absolute_path(uds: Path) -> Path:
 
 Host = Annotated[str, AfterValidator(_a_bare_host)]
 Port = Annotated[int, Field(ge=1, le=65535)]
-# `session_path(model)` in `positronic_wire.wire`: the route a session on one model opens on.
 SessionPath = Annotated[str, AfterValidator(_a_session_path)]
 # The session params as written: the server reads each value as a JSON literal.
 SessionQuery = Annotated[str, AfterValidator(_a_bare_query)]

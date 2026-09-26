@@ -184,15 +184,15 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 # Get <ckpt-dir> from the vendor's server.py preset or `aws s3 ls` under the S3
 # convention — not memorized.
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-  --pipeline.source.checkpoints_dir=<ckpt-dir>
+  --model.checkpoints_dir=<ckpt-dir>
 
 # openpi's ee pipeline also needs the EE frame the checkpoint speaks; None means the rig's default.
 bash workflows/nebius/serve.sh openpi pi-server ee \
-  --pipeline.source.checkpoints_dir=<ckpt-dir> \
+  --model.checkpoints_dir=<ckpt-dir> \
   --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
-  --pipeline.source.checkpoints_dir=<ckpt-dir>
+  --model.checkpoints_dir=<ckpt-dir>
 ```
 
 Load the token once per shell, then sanity-check the endpoint once warm:
@@ -259,7 +259,7 @@ Run from `docker/`. Set `CACHE_ROOT=/home/<user>` when targeting a remote
 context from a Mac (the `${HOME}` volume path differs). `--service-ports`
 exposes the WebSocket API on port 8000. Servers take a subcommand: a pipeline
 name (`ee`, `ee_rot6d`, …) with a custom
-`--pipeline.source.checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …)
+`--model.checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …)
 that already has one bound — check the vendor's `server.py` for both lists.
 
 ```bash
@@ -269,11 +269,11 @@ CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always 
 
 # Custom checkpoint
 CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
-  --service-ports lerobot-server ee --pipeline.source.checkpoints_dir=<ckpt-dir>
+  --service-ports lerobot-server ee --model.checkpoints_dir=<ckpt-dir>
 
 # GR00T inference — codec subcommand required
 CACHE_ROOT=/home/<user> docker --context notebook compose run --rm --pull always \
-  --service-ports groot-server ee_rot6d --pipeline.source.checkpoints_dir=<ckpt-dir>
+  --service-ports groot-server ee_rot6d --model.checkpoints_dir=<ckpt-dir>
 ```
 
 Run detached with `-d` for a background server; `docker --context <ctx> ps` /

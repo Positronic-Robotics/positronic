@@ -118,7 +118,7 @@ on that host. At startup the server loads `g05-droid` by launching
 The HTTP API, including `/api/v1/models`, becomes available after the model is ready.
 Unloading the policy stops the child process. Each request runs fresh inference and returns
 the full chunk. The first request can include model compilation latency; set
-`--pipeline.source.infer_timeout=300` if needed.
+`--model.infer_timeout=300` if needed.
 
 The `droid` pipeline places the vendor codec after the remote boundary, so existing
 clients use `.remote` without Galaxea dependencies. For a source installation,
@@ -130,8 +130,8 @@ the server in the Positronic environment with an explicit localhost bind:
 ```bash
 uv run --locked python -m positronic.vendors.galaxea.server \
   --websocket.served_address.host=127.0.0.1 --websocket.served_address.port=8000 \
-  --pipeline.source.galaxea_root=/path/to/GalaxeaVLA \
-  --pipeline.source.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
+  --model.galaxea_root=/path/to/GalaxeaVLA \
+  --model.checkpoint_path=/path/to/GalaxeaVLA/checkpoints/g05-droid/checkpoints/model_state_dict.pt
 ```
 
 For DROID clients on another machine, forward the API through SSH to the GPU host

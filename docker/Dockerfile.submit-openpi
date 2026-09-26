@@ -53,4 +53,4 @@ EXPOSE 8000
 # `exec` makes the server pid 1, so it receives the stop signal.
 ENTRYPOINT ["/bin/sh", "-c", \
   "exec /positronic/.venv/bin/python -m positronic.vendors.openpi.server droid_jointpos \
-   --pipeline.source.checkpoints_dir=\"$CHECKPOINTS_DIR\" \"$@\"", "--"]
+   --model.checkpoints_dir=\"$CHECKPOINTS_DIR\" \"$@\"", "--"]

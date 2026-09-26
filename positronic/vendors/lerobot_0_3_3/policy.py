@@ -101,7 +101,7 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     register_all()
 
     checkpoints_dir = checkpoints_dir.rstrip('/') + f'/{CHECKPOINTS_DIR}'
-    checkpoint = resolve_checkpoint(checkpoints_dir, checkpoint, None)
+    checkpoint = resolve_checkpoint(checkpoints_dir, checkpoint)
     checkpoint_dir = f'{checkpoints_dir}/{checkpoint}/{PRETRAINED_MODEL_DIR}/'
     policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_dir), strict=True)
     if n_action_steps is not None:

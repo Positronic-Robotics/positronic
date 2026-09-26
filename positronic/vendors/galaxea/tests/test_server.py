@@ -136,7 +136,6 @@ def test_inference_timeout_closes_connection():
 def test_vendor_codec_stays_on_server_side():
     pipeline = server.pipeline()
     local, remote_half = pipeline.local, pipeline.codec
-    assert isinstance(pipeline.source, server.GalaxeaSource)
     assert remote_half is not None
     assert 'DroidCodec' not in str(local.to_spec())
     assert (
@@ -156,19 +155,17 @@ def test_model_load_failure_stops_child(monkeypatch):
     backend.start.side_effect = RuntimeError('model failed to load')
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
     with pytest.raises(RuntimeError, match='model failed to load'):
-        server.GalaxeaSource().load(protocol.MODEL_ID)
+        server.galaxea_model()
     backend.stop.assert_called_once()
 
 
 def test_loaded_policy_metadata_and_cleanup(tmp_path, monkeypatch):
     backend = Mock()
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
-    progress = Mock()
     checkpoint = tmp_path / 'model_state_dict.pt'
-    source = server.GalaxeaSource(checkpoint_path=str(checkpoint))
-    policy = source.load(protocol.MODEL_ID, progress)
+    policy = server.galaxea_model(checkpoint_path=str(checkpoint))
     assert policy.meta()[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
-    backend.start.assert_called_once_with(progress)
+    backend.start.assert_called_once_with()
     backend.stop.assert_not_called()
     policy.close()
     backend.stop.assert_called_once()
@@ -188,7 +185,7 @@ def test_subprocess_preserves_venv_and_checkpoint_symlinks(tmp_path, monkeypatch
     monkeypatch.setattr(server.subprocess, 'Popen', popen)
     monkeypatch.setattr(server, 'wait_for_subprocess_ready', Mock())
     backend = server._BackendProcess(tmp_path, checkpoint, 'cuda', 0)
-    backend.start(None)
+    backend.start()
     command = popen.call_args.args[0]
     assert command[0] == str(interpreter)
     assert command[command.index('--checkpoint') + 1] == str(checkpoint)

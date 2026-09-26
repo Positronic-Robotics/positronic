@@ -47,7 +47,7 @@ from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs, Policy, Processor
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
@@ -67,19 +67,6 @@ class InstantChunk(Model):
 
     def __call__(self, obs, *, session_id: str):
         return self.chunk
-
-
-class InstantSource(ModelSource):
-    """Load the probe's fixed-size action chunk."""
-
-    def __init__(self, rows: int):
-        self._rows = rows
-
-    def get_models(self) -> list[str]:
-        return ['instant']
-
-    def load(self, model_id: str, on_progress=None) -> Model:
-        return InstantChunk(self._rows)
 
 
 def rig_stack(cameras: Sequence[str], frames: int, rate_hz: float, width: int, height: int) -> Policy:
@@ -161,9 +148,9 @@ def capture(
     return sent
 
 
-def serve(pipeline) -> tuple[PolicyServer, threading.Thread, int]:
-    """Serve ``pipeline`` on a free loopback port, and hand back what stops it."""
-    server = PolicyServer(pipeline)
+def serve(model: Model, pipeline: PolicyDeployment) -> tuple[PolicyServer, threading.Thread, int]:
+    """Serve ``model`` through ``pipeline`` on a free loopback port, and hand back what stops it."""
+    server = PolicyServer(lambda: model, pipeline)
     ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
     ready = threading.Event()
     thread = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
@@ -208,7 +195,7 @@ def against_server(
 @contextlib.contextmanager
 def against_loopback(stack: Policy, compress_images: bool, chunk_rows: int) -> Iterator[Measured]:
     """A session on a server this process starts, serving a ``chunk_rows`` instant model behind ``stack``."""
-    server, thread, port = serve(PolicyDeployment(InstantSource(chunk_rows), stack, compress_images=compress_images))
+    server, thread, port = serve(InstantChunk(chunk_rows), PolicyDeployment(stack, compress_images=compress_images))
     try:
         client_wire = WebsocketClientWire()
         address = wire.HostPortAddress('127.0.0.1', port, wire.SESSION_PATH, '')

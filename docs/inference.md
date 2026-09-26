@@ -6,33 +6,33 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified session protocol connects any hardware to any model (LeRobot, GR00T, OpenPI); the same frames cross either wire, a websocket or gRPC. A heavy model (OpenPI needs ~62GB, GR00T ~8GB) runs on GPU hardware separate from the robot/simulator machine.
 
-Each server carries a `PolicyDeployment`: a model source, a client processor stack,
-and an optional server codec. The handshake declares the client stack, which
-`RemotePolicy` builds automatically. Each vendor supplies named deployment configs
-as server subcommands, such as `groot-server droid`.
+Each server loads one model at launch and serves it through a `PolicyDeployment`: a
+client processor stack and an optional server codec. The handshake declares the
+client stack, which `RemotePolicy` builds automatically. Each vendor supplies named
+deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
-# The subcommand names the pipeline; everything the model is lives inside it
+# The subcommand pairs a model with a pipeline; --model.* names the checkpoint
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
-  --pipeline.source.model_source=/data/checkpoints/experiment_v1/
+  --model.model_source=/data/checkpoints/experiment_v1/
 
 # OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
+  --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
   --pipeline.ee_frame=None
 ```
 
-Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
+Check server: `curl http://localhost:8000/api/v1/models` returns the ID of the checkpoint it serves.
 
 **Run inference:**
 ```bash
@@ -51,16 +51,16 @@ uv run positronic eval run --eval=.real.droid.pick_place \
 
 `--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
 
-**Flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `websocket_unix`, `grpc` or `grpc_tls`; the `_tls` members dial a TLS front, and `websocket_unix` a Unix socket (below). Each wire then takes its own address, and `--policy.address.*` fills it: `--policy.address.host` and `--policy.address.port` for a network wire (`8000` is every vendor server's websocket default; a TLS front answers on `443`), or `--policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=…` for `websocket_unix`, which names no host and no port. `--policy.address.model` is the checkpoint, and naming none serves the one the server pinned at startup. `--policy.address.query` carries the session params:
+**Flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `websocket_unix`, `grpc` or `grpc_tls`; the `_tls` members dial a TLS front, and `websocket_unix` a Unix socket (below). Each wire then takes its own address, and `--policy.address.*` fills it: `--policy.address.host` and `--policy.address.port` for a network wire (`8000` is every vendor server's websocket default; a TLS front answers on `443`), or `--policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=…` for `websocket_unix`, which names no host and no port. `--policy.address.query` carries the session params:
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.wire=websocket_tls --policy.address.host=gpu-server --policy.address.port=443 \
-  --policy.address.model=20000 --policy.address.query='fps=10'
+  --policy.address.query='fps=10'
 ```
 
-**A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=/run/policy.sock` dials the socket a server bound with `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock`, over no network. `--policy.address.model` and `--policy.address.query` name a checkpoint and session params as they do on any other wire; this wire's address has no host and no port to fill. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
+**A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=/run/policy.sock` dials the socket a server bound with `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock`, over no network. `--policy.address.query` names session params as it does on any other wire; this wire's address has no host and no port to fill. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
 
 **Credentials stay off the command line.** A token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
@@ -78,7 +78,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **Session parameters** are `--policy.address.query`, a query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
-The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint with `--policy.address.model` instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
+Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
 `RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
@@ -119,7 +119,7 @@ Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/infere
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by naming each with `--policy.address.model`. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
+Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. To compare checkpoints, start one server for each and run the same evaluation against each server.
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

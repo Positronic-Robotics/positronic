@@ -1,6 +1,7 @@
 """The gRPC wire: a session runs over it as it runs over the websocket."""
 
 import asyncio
+import dataclasses
 import datetime
 import ipaddress
 import logging
@@ -28,8 +29,8 @@ from positronic.offboard import grpc_wire, protocol
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import ConnectRetries, InferenceClient
 from positronic.offboard.server import AUTH_HEADER, bearer
-from positronic.offboard.spec import ModelSource, PolicyDeployment
-from positronic.offboard.tests.conftest import DictSource, Served, StartServer
+from positronic.offboard.spec import PolicyDeployment
+from positronic.offboard.tests.conftest import Served, StartServer
 from positronic.policy.base import SEQ
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
@@ -37,11 +38,15 @@ from positronic.policy.sequential import Sequential
 _TOKEN = 'test-secret-token'
 
 
+# The server launched from an instantiated pipeline refuses every session param, in a frame.
+_A_REFUSED_PARAM = 'fps=5'
+
+
 @pytest.fixture
 def both_wires(start_server: StartServer, make_mock_model) -> tuple[Served, MagicMock]:
     """A server that offers both wires over one policy."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True)
     return served, policy
 
 
@@ -147,38 +152,30 @@ def test_a_failed_inference_reaches_the_client_as_an_exception(both_wires):
         session.close()
 
 
-def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(start_server, make_mock_model):
-    """A model the source refuses fails in the handshake, before the session serves anything."""
-    policies = {'alpha': make_mock_model([{'action': [1]}], {'model_name': 'alpha'})}
-    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
-    with pytest.raises(RuntimeError, match='Unknown model'):
-        InferenceClient(*served.grpc(model='beta')).new_session()
+def test_a_session_that_cannot_open_reaches_the_client_as_an_exception(both_wires):
+    """A session param the server refuses fails in the handshake, before the session serves anything."""
+    served, _policy = both_wires
+    with pytest.raises(RuntimeError, match='config-launched'):
+        InferenceClient(*served.grpc(query=_A_REFUSED_PARAM)).new_session()
 
 
-def test_the_session_path_names_the_model(start_server, make_mock_model):
-    policies = {
-        'alpha': make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'}),
-        'beta': make_mock_model([{'action': ['beta']}], {'model_name': 'beta'}),
-    }
-    served = start_server(PolicyDeployment(DictSource(policies), ChunkedSchedule(fps=10)), grpc=True)
-    session = InferenceClient(*served.grpc(model='beta')).new_session()
-    try:
-        assert session.metadata['model_name'] == 'beta'
-        assert session.infer({'obs': 'beta'}) == [{'action': ['beta']}]
-    finally:
-        session.close()
+def test_a_session_path_that_names_a_checkpoint_is_refused(both_wires):
+    """A path that names a checkpoint opens no session, as on the websocket wire: the server serves one checkpoint."""
+    served, _policy = both_wires
+    client_wire, address = served.grpc()
+    named = dataclasses.replace(address, path=f'{wire.SESSION_PATH}/other')
+    with pytest.raises(wire.ConnectRefused) as refused:
+        InferenceClient(client_wire, named).new_session()
+    assert refused.value.refusal is wire.Refusal.FINAL
 
 
-def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0)):
-    return PolicyDeployment(
-        source, Sequential(TemporalStack(keys=('x',), offsets_sec=offsets), ChunkedSchedule(fps=10))
-    )
+def _tunable_pipe(offsets: tuple[float, ...] = (-0.1, 0.0)):
+    return PolicyDeployment(Sequential(TemporalStack(keys=('x',), offsets_sec=offsets), ChunkedSchedule(fps=10)))
 
 
 def test_the_query_carries_the_session_params(start_server, make_mock_model):
-    policies = {'alpha': make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'})}
-    pipe = cfn.Config(_tunable_pipe, source=cfn.Config(DictSource, models=policies))
-    served = start_server(pipe, grpc=True)
+    policy = make_mock_model([{'action': ['alpha']}], {'model_name': 'alpha'})
+    served = start_server(policy, cfn.Config(_tunable_pipe), grpc=True)
     session = InferenceClient(*served.grpc(query='offsets=[-0.5, 0.0]')).new_session()
     try:
         stack = session.metadata[offboard_keys.LOCAL_STACK][SEQ]
@@ -190,9 +187,7 @@ def test_the_query_carries_the_session_params(start_server, make_mock_model):
 @pytest.fixture
 def authed_server(start_server: StartServer, make_mock_model) -> Served:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(
-        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, auth_token=_TOKEN
-    )
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True, auth_token=_TOKEN)
     return served
 
 
@@ -355,26 +350,6 @@ def test_a_grpc_session_names_the_session_port_alone(both_wires):
     served, _policy = both_wires
     client = InferenceClient(*served.grpc())
     assert client.session_url == f'{served.host}:{served.grpc_port}/api/v1/session'
-    with pytest.raises(ValueError, match='carries sessions alone'):
-        client.list_models()
-
-
-@pytest.mark.parametrize(
-    ('session_path', 'model_id'),
-    [
-        (wire.SESSION_PATH, None),
-        (f'{wire.SESSION_PATH}/10000', '10000'),
-        (f'{wire.SESSION_PATH}/GEAR-Dreams/DreamZero-DROID', 'GEAR-Dreams/DreamZero-DROID'),
-        (f'{wire.SESSION_PATH}/s3%3A//bucket/ckpt-1', 's3://bucket/ckpt-1'),
-    ],
-)
-def test_the_session_path_decodes_as_the_websocket_route_does(session_path, model_id):
-    assert grpc_wire.model_id_of(session_path) == model_id
-
-
-def test_a_path_outside_the_session_route_is_refused():
-    with pytest.raises(ValueError, match='Unexpected session path'):
-        grpc_wire.model_id_of('/api/v2/session/10000')
 
 
 def test_a_port_that_never_answers_is_named_at_the_deadline():
@@ -401,9 +376,7 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_mod
     assert client_grpc.target('0.0.0.0', 9000) == '0.0.0.0:9000'
 
     policy = make_mock_model([{'action': [4]}], {'model_name': 'stub'})
-    served = start_server(
-        PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True, host='::1'
-    )
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True, host='::1')
     session = InferenceClient(*served.grpc()).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [4]}]
@@ -414,7 +387,7 @@ def test_an_ipv6_host_binds_in_brackets(start_server: StartServer, make_mock_mod
 def test_a_refused_handshake_closes_the_connection(both_wires):
     """A refusal in a protocol frame raises past the transport handlers, and the connection holds a reader
     thread until it is closed."""
-    client = InferenceClient(*both_wires[0].grpc(model='unknown-model'))
+    client = InferenceClient(*both_wires[0].grpc(query=_A_REFUSED_PARAM))
     opened = []
     client_wire = client._wire
 
@@ -426,9 +399,6 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
 
         def session_url(self, address):
             return client_wire.session_url(address)
-
-        def list_models(self, address, headers, open_timeout):
-            return client_wire.list_models(address, headers, open_timeout)
 
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))
@@ -474,7 +444,7 @@ def test_a_server_on_the_grpc_ping_defaults_kills_the_silent_session(
     """gRPC's own server defaults answer those pings with ``GOAWAY too_many_pings``, and the session is lost."""
     monkeypatch.setattr(grpc_wire, '_server_options', lambda: list(client_grpc.MESSAGE_SIZE_OPTIONS))
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(PolicyDeployment(DictSource({'default': policy}), ChunkedSchedule(fps=10)), grpc=True)
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True)
     with pytest.raises(wire.PeerDisconnected, match='Too many pings'):
         _silent_then_infer(served)
 
@@ -525,11 +495,11 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
 def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
     """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires
-    address = served.grpc(model='unknown-model')[1]
+    address = served.grpc(query=_A_REFUSED_PARAM)[1]
     conn = client_grpc.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)
-        # The server refuses the model in a frame, then ends the stream with that status.
+        # The server refuses the session param in a frame, then ends the stream with that status.
         with pytest.raises(wire.PeerDisconnected) as gone:
             conn.recv(timeout=10.0)
         assert isinstance(gone.value.__cause__, grpc.RpcError)
@@ -540,7 +510,7 @@ def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
 def test_a_connection_refuses_to_send_once_the_server_ends_the_stream(both_wires):
     """``send`` raises as soon as the terminal status is read, and the write never reaches the outbox."""
     served, _policy = both_wires
-    address = served.grpc(model='unknown-model')[1]
+    address = served.grpc(query=_A_REFUSED_PARAM)[1]
     conn = client_grpc.GrpcClientWire().dial(address, None, 10.0)
     try:
         conn.recv(timeout=10.0)

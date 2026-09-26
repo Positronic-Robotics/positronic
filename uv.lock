@@ -5383,7 +5383,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d826
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.15.0"
+version = "0.15.1"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
@@ -5400,7 +5400,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "wire" }
 dependencies = [
     { name = "grpcio" },

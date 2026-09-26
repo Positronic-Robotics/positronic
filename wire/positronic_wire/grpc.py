@@ -244,15 +244,6 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def list_models(
-        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
-    ) -> list[str]:
-        """Raises: this wire's port carries sessions alone, and the catalogue is an HTTP route."""
-        raise ValueError(
-            f'{self.NAME} carries sessions alone and no catalogue; read it on an HTTP-capable wire, '
-            f'where the server serves one'
-        )
-
     def channel(self, target: str) -> grpc.Channel:
         return grpc.insecure_channel(target, options=_client_options())
 

@@ -264,23 +264,23 @@ Or against your own trained checkpoint:
 
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Use the vendor's source option to select the matching checkpoint (`model_source` for GR00T,
-`checkpoints_dir` for LeRobot and OpenPI):
+Use the vendor's model option to select the matching checkpoint (`--model.model_source` for GR00T,
+`--model.checkpoints_dir` for LeRobot and OpenPI):
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
 # --pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`
 bash workflows/nebius/serve.sh openpi my-openpi ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
   --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
-  --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+  --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both

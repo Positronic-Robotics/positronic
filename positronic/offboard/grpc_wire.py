@@ -1,7 +1,6 @@
 """The server side of the gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames."""
 
 import logging
-import urllib.parse
 from collections.abc import AsyncIterator, Mapping
 
 import grpc
@@ -91,16 +90,6 @@ def _server_options() -> list[tuple[str, int]]:
     ]
 
 
-def model_id_of(session_path: str) -> str | None:
-    """The model a session path names, or ``None`` for the model the server pinned."""
-    prefix = f'{wire.SESSION_PATH}/'
-    if session_path == wire.SESSION_PATH:
-        return None
-    if not session_path.startswith(prefix):
-        raise ValueError(f'Unexpected session path {session_path!r}; expected {wire.SESSION_PATH}[/<model_id>]')
-    return urllib.parse.unquote(session_path[len(prefix) :])
-
-
 class GrpcWire(server_wire.Wire):
     """The gRPC wire: sessions on a port of their own, one bidirectional stream each.
 
@@ -122,15 +111,18 @@ class GrpcWire(server_wire.Wire):
         self, session: server_wire.SessionHandler, authorized: server_wire.Authorized, api: APIRouter
     ) -> None:
         """Bind the gRPC port. ``api`` goes unserved: this port carries sessions alone. A server that
-        answers the catalogue serves an HTTP-capable wire beside this one."""
+        answers the model route serves an HTTP-capable wire beside this one."""
 
         async def serve_one(requests: AsyncIterator[bytes], context: grpc.aio.ServicerContext) -> None:
             headers = _headers(context)
             if not authorized(headers):
                 await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
             conn = GrpcServerConnection(requests, context, headers, self.served_address)
+            if conn.session_path != wire.SESSION_PATH:
+                refusal = f'No session on {conn.session_path!r}; sessions open on {wire.SESSION_PATH}'
+                await context.abort(grpc.StatusCode.NOT_FOUND, refusal)
             try:
-                await session(conn, model_id_of(conn.session_path))
+                await session(conn)
             except Exception as e:
                 # The session reports its own errors over the stream. One that reaches here reaches the client
                 # as the status alone.

@@ -13,15 +13,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
 from positronic.offboard.server import AUTH_TOKEN_ENV
-from positronic.offboard.serving_cost import (
-    InstantChunk,
-    InstantSource,
-    against_server,
-    capture,
-    observations,
-    replay,
-    rig_stack,
-)
+from positronic.offboard.serving_cost import InstantChunk, against_server, capture, observations, replay, rig_stack
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
@@ -41,7 +33,7 @@ def _declared_deployment() -> PolicyDeployment:
         ChunkedSchedule(fps=15.0),
         RestrictImageSize(width=DECLARED_WIDTH, height=DECLARED_HEIGHT),
     )
-    return PolicyDeployment(InstantSource(2), stack, compress_images=True)
+    return PolicyDeployment(stack, compress_images=True)
 
 
 def _ticks(count: int, period_ns: int = 66_666_666, size: tuple[int, int] = (48, 64)):
@@ -64,7 +56,7 @@ def test_replay_divides_a_round_trip_into_the_phases_the_server_reports(start_se
     payloads = capture(_ticks(12), stack, _model(), requests=2)
     assert payloads, 'the stack sent nothing'
 
-    host, port, *_ = start_server(PolicyDeployment(InstantSource(2), stack, compress_images=True))
+    host, port, *_ = start_server(InstantChunk(rows=2), PolicyDeployment(stack, compress_images=True))
     session = InferenceClient(
         websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
     ).new_session()
@@ -101,7 +93,7 @@ def test_a_payload_over_the_server_limit_is_refused_before_it_is_sent():
 
 
 def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
-    served = start_server(_declared_deployment())
+    served = start_server(InstantChunk(rows=2), _declared_deployment())
 
     with against_server('websocket', served.ws()[1]) as measured:
         assert measured.compress_images, 'the wire setting comes from the handshake too'
@@ -120,7 +112,7 @@ def test_a_named_server_is_measured_through_the_stack_it_declares(start_server):
 
 def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
     """A key error from inside a layer names nothing a reader can act on; the capture names the key."""
-    served = start_server(_declared_deployment())
+    served = start_server(InstantChunk(rows=2), _declared_deployment())
     gripless = ((ts, {key: value for key, value in obs.items() if key != keys.GRIP}) for ts, obs in _ticks(12))
 
     with against_server('websocket', served.ws()[1]) as measured:
@@ -195,7 +187,7 @@ def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_serv
     """A session opened without `headers` sends no token, even when `AUTH_TOKEN` is set."""
     token = 'a-token-for-another-endpoint'
     monkeypatch.setenv(AUTH_TOKEN_ENV, token)
-    served = start_server(_declared_deployment(), auth_token=token)
+    served = start_server(InstantChunk(rows=2), _declared_deployment(), auth_token=token)
 
     with pytest.raises(wire.ConnectRefused), against_server('websocket', served.ws()[1]):
         pass
@@ -206,7 +198,7 @@ def test_an_ambient_token_does_not_reach_a_server_the_run_never_named(start_serv
 
 def test_a_server_on_a_socket_is_measured_through_the_wire_that_dials_it(start_server, socket_path):
     """A socket wire dials a socket address, so the probe takes the address the chosen wire names."""
-    served = start_server(_declared_deployment(), uds=socket_path)
+    served = start_server(InstantChunk(rows=2), _declared_deployment(), uds=socket_path)
 
     with against_server('websocket_unix', served.unix()[1]) as measured:
         payloads = capture(_ticks(12), measured.stack, _model(), requests=1)
