@@ -13,6 +13,7 @@ import pos3
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
+from positronic import keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
@@ -147,20 +148,15 @@ class GalaxeaModel(Model):
 
 
 def _warm_observation() -> dict[str, Any]:
-    """An observation in the shape ``codecs.DroidCodec`` encodes: black views, the arm at zero, the gripper open."""
-    view = np.zeros((3, 224, 224), dtype=np.uint8)
-    return {
-        protocol.IMAGES: dict.fromkeys(
-            (protocol.EXTERIOR_IMAGE, protocol.WRIST_IMAGE, protocol.DUMMY_WRIST_RIGHT), view
-        ),
-        protocol.STATE: {
-            protocol.RIGHT_ARM: np.zeros(7, dtype=np.float32),
-            protocol.RIGHT_GRIPPER: np.ones(1, dtype=np.float32),
-        },
-        protocol.TASK: '',
-        protocol.FREQUENCY: 15.0,
-        protocol.EMBODIMENT_TYPE: protocol.DROID_FRANKA,
-    }
+    """A request as ``codecs.DroidCodec`` encodes one: black views, the arm at zero, the gripper open."""
+    view = np.zeros((224, 224, 3), dtype=np.uint8)
+    return codecs.DroidCodec().encode({
+        keys.EXTERIOR_IMAGE: view,
+        keys.WRIST_IMAGE: view,
+        keys.JOINTS: np.zeros(protocol.RIGHT_ARM_WIDTH),
+        keys.GRIP: 0.0,
+        keys.TASK: '',
+    })
 
 
 @cfn.config(
