@@ -12,8 +12,8 @@ loaded, so a session cut short still holds its results.
 | Probe | Answers |
 |---|---|
 | `link_probe facts` | the MTU, the network namespace and the socket buffers of wherever it runs |
-| `link_probe sink` | when the first byte landed, when the last one did, and every read between |
-| `link_probe source` | how long this end's own write took to return |
+| `link_probe sink` | when the first read returned, when the last one did, and every read between |
+| `link_probe source` | how long this end's own write took to return, and the send buffer it wrote into |
 | `link_probe watch` | the receive queue over the transfer |
 | `serving_cost --server_address` | one round trip, divided by the phases the server reports |
 
@@ -72,7 +72,9 @@ $PROBE source --host=$SERVER --port=9100 --kib=750 --transfers=10 --out=into-con
 $PROBE source --host=$SERVER --port=9101 --kib=750 --transfers=10 --out=into-host.json
 ```
 
-Read the pair this way:
+Read `sndbuf_bytes` first. Where it holds the payload whole, `sendall` returns before the receiver
+reads, so `write_ms` cannot show a late reader and `report_ms` carries it. Otherwise read the pair this
+way:
 
 - **`write_ms` high, `recv_q` high** — the receiver is not draining. The bytes arrived and sat.
 - **`write_ms` high, `recv_q` near zero** — the bytes are not arriving. The path is the cost.
@@ -104,8 +106,9 @@ websocket `send` returns once the bytes are written, and a gRPC `send` returns b
 undrained receiver shows up in `send_ms` on one and in `recv_ms` on the other.
 
 ```bash
-# in the receiver's namespace, over both runs
-$PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served.jsonl
+# in the receiver's namespace, one watcher per wire, over both runs
+$PROBE watch --port=8000 --interval_ms=20 --seconds=300 --out=recvq-served-ws.jsonl
+$PROBE watch --port=9000 --interval_ms=20 --seconds=300 --out=recvq-served-grpc.jsonl
 
 uv run --locked python -m positronic.offboard.serving_cost \
     --dataset.path=$EPISODE --server_wire=websocket_tls \
@@ -130,19 +133,27 @@ under it compares to one. `round_trip_ms - pack_ms - served_ms` is the link and 
 
 Run these two whatever the readings say.
 
-**A sink during a real inference.** Run step 3's sink in the container while step 5 is mid-round-trip.
+**A sink during a real inference.** Run step 3's sink in the container, and drive it from the client
+while step 5's requests run:
+
+```bash
+$PROBE source --host=$SERVER --port=9100 --kib=750 --transfers=10 --out=into-container-serving.json
+```
+
 A sink that stalls too says the whole box is busy; a sink that reads at full speed while the server
 does not says the cost is inside the server process.
 
 **A larger receive buffer.** A 750 KiB payload does not fit in a default `rmem_max` of about 200 KiB,
-so a late reader blocks the sender. Raise it in the receiver's namespace and repeat step 3:
+so a late reader blocks the sender once its send buffer is full. Raise it in the receiver's namespace
+and repeat step 3:
 
 ```bash
 sysctl -w net.core.rmem_max=8388608 net.ipv4.tcp_rmem='4096 131072 8388608'
 ```
 
-A `write_ms` that falls to what the link needs proves the cost is the receiver's scheduling, and that
-buffering absorbs it. A `write_ms` that does not move rules the buffer out.
+Compare `write_ms + report_ms`, because a larger send buffer can move the wait from one to the other.
+A sum that falls to what the link needs proves the cost is the receiver's scheduling, and that
+buffering absorbs it. A sum that does not move rules the buffer out.
 
 Run each of these only where the readings above point at it:
 
