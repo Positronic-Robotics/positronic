@@ -179,7 +179,7 @@ class RoboarenaPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         client = RoboarenaClient(self._address.host, self._address.port)
-        # Held by each inference, so a failure that closes the episode waits for the one in flight.
+        # One inference at a time on the connection.
         connection_lock = Lock()
         config = client.connect()
         try:
@@ -198,5 +198,4 @@ class RoboarenaPolicy(Policy):
                         return
                     obs = yield step
         finally:
-            with connection_lock:
-                client.close()
+            runtime.at_close(client.close)

@@ -139,8 +139,8 @@ def one_inference(client, obs):
         run.send(obs)
         wait_for_answer(runtime)
     finally:
-        runtime.close()
         run.close()
+        runtime.close()
 
 
 def play(chunk_rows: int) -> list[tuple[int, dict]]:
@@ -166,8 +166,8 @@ def play(chunk_rows: int) -> list[tuple[int, dict]]:
             clock.now_ns = max(clock.now_ns, step.resume_at_ns)
     finally:
         client.released.set()
-        runtime.close()
         run.close()
+        runtime.close()
     return emitted
 
 
@@ -329,8 +329,8 @@ class TestTheWire:
             for _ in range(2):
                 runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
                 run = runtime.start(policy)
-                runtime.close()
                 run.close()
+                runtime.close()
 
         for socket in sockets:
             socket.close.assert_called_once()
@@ -404,8 +404,8 @@ class TestTheStack:
         try:
             steps = [run.send(rig_observation(**{rig.ROBOT_STATUS: status})) for _ in range(3)]
         finally:
-            runtime.close()
             run.close()
+            runtime.close()
 
         assert [step.commands for step in steps] == [{}, {}, {}]
         assert client.sent == []

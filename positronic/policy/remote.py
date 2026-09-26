@@ -65,9 +65,9 @@ class RemotePolicy(Policy):
 
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
     quality of images sent to a server that asks for compressed images.
-    Each run owns a server session and its connection. Submitted calls finish before the harness
-    closes the generator; closing the session waits for the server to release its state, then closes
-    the connection. The declared stack determines when client codecs run.
+    Each run owns a server session and its connection. The runtime closes the session after the calls
+    that use it finish; closing the session waits for the server to release its state, then closes the
+    connection. The declared stack determines when client codecs run.
     """
 
     def __init__(
@@ -127,6 +127,4 @@ class RemotePolicy(Policy):
                         return
                     obs = yield step
         finally:
-            # Generator failure can reach cleanup while inference still owns the connection.
-            with connection_lock:
-                session.close()
+            runtime.at_close(session.close)

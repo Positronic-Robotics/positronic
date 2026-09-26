@@ -223,6 +223,32 @@ def test_unread_failure_is_reported_on_close(executors, caplog):
     assert caplog.text.count('unread failure') == 1
 
 
+def test_at_close_callbacks_run_after_running_work_finishes_and_at_once_after_close(executors):
+    runtime, _ = executors()
+    started, release = threading.Event(), threading.Event()
+    order = []
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2)
+        order.append('work')
+
+    runtime.submit(work)
+    assert started.wait(timeout=1)
+    runtime.at_close(lambda: order.append('first registered'))
+    runtime.at_close(lambda: order.append('second registered'))
+    releaser = threading.Timer(0.01, release.set)
+    releaser.start()
+    try:
+        runtime.close()
+    finally:
+        release.set()
+        releaser.join()
+    assert order == ['work', 'second registered', 'first registered']
+    runtime.at_close(lambda: order.append('after close'))
+    assert order[-1] == 'after close'
+
+
 def test_submission_preserves_context_and_keyword_arguments(executors):
     runtime, _ = executors()
     context = contextvars.ContextVar('test_context', default='missing')

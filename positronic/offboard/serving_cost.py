@@ -109,8 +109,8 @@ def capture(
             if len(sent) >= requests:
                 break
     finally:
-        runtime.close()
         run.close()
+        runtime.close()
     return sent
 
 

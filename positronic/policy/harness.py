@@ -278,19 +278,21 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
+            # The run writes its last episode values as it closes, so it closes before the snapshot.
+            policy_run.close()
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
             )
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
-            logging.info('Closing the policy runtime')
-            runtime.close()
-            logging.info('Policy runtime closed')
             if policy_run is not None:
                 logging.info('Closing the policy')
                 policy_run.close()
                 logging.info('Policy closed')
+            logging.info('Closing the policy runtime')
+            runtime.close()
+            logging.info('Policy runtime closed')
             self._obs_by_signal.clear()
 
         virtual_now = clock.now()
