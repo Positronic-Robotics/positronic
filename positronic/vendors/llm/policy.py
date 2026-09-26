@@ -29,7 +29,7 @@ from pydantic_ai.tools import ToolDefinition
 from positronic import geom, keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyRun, Runtime, Step
-from positronic.policy.layers import PauseOnUnavailable
+from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 
 from .client import Endpoint

@@ -20,7 +20,7 @@ from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.dreamzero import codecs, roboarena
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing

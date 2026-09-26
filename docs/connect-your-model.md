@@ -174,7 +174,7 @@ from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 
 
 class MyModel(Model):

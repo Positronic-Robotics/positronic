@@ -20,7 +20,7 @@ from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.compatibility import ChunkedScheduleV1
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils.versions import Deprecation, Version
 

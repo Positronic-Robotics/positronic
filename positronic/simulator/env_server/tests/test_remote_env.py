@@ -28,7 +28,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command

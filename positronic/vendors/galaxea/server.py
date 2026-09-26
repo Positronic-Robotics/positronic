@@ -20,7 +20,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.serialization import serialize
 from positronic.vendors.galaxea import codecs, protocol
 

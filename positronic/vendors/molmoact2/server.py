@@ -9,7 +9,7 @@ from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
 

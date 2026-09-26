@@ -14,7 +14,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.base import Obs
 from positronic.policy.codec import Codec
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 
 
 class StubModel(Model):

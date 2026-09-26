@@ -25,8 +25,8 @@ from positronic.policy.compatibility import (
     TemporalStackV1,
     _LayerV1,
 )
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 

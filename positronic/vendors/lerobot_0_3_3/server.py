@@ -17,7 +17,7 @@ from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, _detect_device, warm_observation

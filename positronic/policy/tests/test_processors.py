@@ -29,8 +29,8 @@ from positronic.policy.codec import (
     SetControlMode,
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 
 MOTOR = 'motor'

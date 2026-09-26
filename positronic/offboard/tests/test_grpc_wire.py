@@ -31,7 +31,7 @@ from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served, StartServer
 from positronic.policy.base import SEQ
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 _TOKEN = 'test-secret-token'

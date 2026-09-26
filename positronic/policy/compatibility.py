@@ -15,7 +15,7 @@ from typing import Any, cast
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import ARGS, NAME, VERSION, Answer, Obs, Policy, PolicyRun, Runtime, Step
 from positronic.policy.codec import Codec
-from positronic.policy.layers import _arms_available, _StackBuffer
+from positronic.policy.processors import _arms_available, _StackBuffer
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'

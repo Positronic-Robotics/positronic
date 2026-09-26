@@ -40,7 +40,7 @@ from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.policy.base import Obs, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import prepare_obs
 from positronic.policy.sequential import Sequential
 

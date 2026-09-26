@@ -2,7 +2,7 @@ import configuronic as cfn
 
 from positronic import keys as obs_keys
 from positronic.policy import Sequential
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
 temporal_stack = cfn.Config(TemporalStack)

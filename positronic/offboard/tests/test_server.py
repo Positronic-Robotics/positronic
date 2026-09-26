@@ -30,7 +30,7 @@ from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
 from positronic.offboard.tests.conftest import DictSource, Served
 from positronic.policy import Codec
 from positronic.policy.base import ARGS
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 

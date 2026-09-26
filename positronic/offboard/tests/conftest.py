@@ -14,7 +14,7 @@ from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWi
 from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 
 
 class Served(NamedTuple):

@@ -338,7 +338,7 @@ from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 
 pipeline = PolicyDeployment(
     source=my_model_source,
