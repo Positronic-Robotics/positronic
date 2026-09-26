@@ -1,7 +1,9 @@
 import json
+import logging
 import shutil
 import socket
 import struct
+import sys
 import threading
 
 import pytest
@@ -12,8 +14,9 @@ from positronic.offboard.link_probe import (
     _numeric_summary,
     _proc_queues,
     _queue_reader,
+    _read_kernel_value,
+    _serve_peer,
     _ss_queues,
-    _sysctl,
     network_facts,
     receive_one,
 )
@@ -51,6 +54,28 @@ def test_a_transfer_of_no_bytes_is_refused_rather_than_timed():
         receiver.close()
 
 
+def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
+    """One read has no span and so no rate; the sink must report it and serve the next transfer."""
+    sender, receiver = socket.socketpair()
+    peer = threading.Thread(target=_serve_peer, args=(receiver, READ_BYTES, 0), daemon=True)
+    peer.start()
+    try:
+        for _ in range(2):
+            sender.sendall(_framed(b'x' * 100))
+            report = json.loads(_read_reply(sender))
+            assert report['bytes'] == 100
+            assert report['reads'] == 1
+            assert report['mib_per_sec'] is None
+    finally:
+        sender.close()
+        peer.join(timeout=5.0)
+
+
+def _read_reply(conn: socket.socket) -> bytes:
+    declared = struct.unpack(HEADER, conn.recv(struct.calcsize(HEADER), socket.MSG_WAITALL))[0]
+    return conn.recv(declared, socket.MSG_WAITALL)
+
+
 def _unread_connection(port_holder: list[int]) -> tuple[socket.socket, socket.socket, socket.socket]:
     """A connected pair whose server end is accepted and never read, so the bytes sit in its queue."""
     listener = socket.socket()
@@ -72,7 +97,8 @@ def test_both_queue_readers_see_the_same_unread_bytes():
         proc = _proc_queues(held[0])
         by_ss = _ss_queues(held[0])
         assert [row['recv_q'] for row in proc] == [1100]
-        assert any(row['recv_q'] == 1100 for row in by_ss)
+        # The client's own socket has the port as its destination; only the server's end is read.
+        assert [row['recv_q'] for row in by_ss] == [1100]
     finally:
         client.close()
         accepted.close()
@@ -94,12 +120,27 @@ def test_a_socket_with_nothing_queued_is_still_reported():
         listener.close()
 
 
+@pytest.mark.skipif(sys.platform != 'linux', reason='the namespace facts are read from /sys and /proc')
 def test_the_namespace_reports_its_own_interfaces_and_buffers():
     reported = network_facts(peer=None)
     assert reported['net_namespace'].startswith('net:[')
     assert reported['interfaces']['lo']['mtu'] is not None
     assert reported['default_so_rcvbuf'] > 0
     json.dumps(reported)
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='the namespace facts are read from /sys and /proc')
+def test_the_route_towards_a_peer_names_its_interface():
+    reported = network_facts(peer='127.0.0.1')
+    assert reported['local_address_towards_peer'] == '127.0.0.1'
+    assert reported['interface_towards_peer'] == 'lo'
+    assert reported['interfaces']['lo']['ipv4'] == '127.0.0.1'
+
+
+def test_the_facts_refuse_a_system_without_proc_and_sys(monkeypatch):
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    with pytest.raises(OSError, match='run it on Linux'):
+        network_facts(peer=None)
 
 
 def test_the_summary_skips_a_column_that_is_not_a_number():
@@ -112,10 +153,22 @@ def test_the_summary_skips_a_column_that_is_not_a_number():
     assert 'read_timeline' not in summary and 'local' not in summary
 
 
-def test_a_missing_ss_falls_back_to_the_kernel_table(monkeypatch):
+def test_the_p95_of_twenty_transfers_is_not_their_maximum():
+    rows = [{'write_ms': float(value)} for value in range(1, 21)]
+    median, p95, maximum = (float(cell) for cell in _numeric_summary(rows).splitlines()[1].split()[1:])
+    assert (median, p95, maximum) == (10.5, 19.1, 20.0)
+
+
+def test_one_transfer_summarises_as_itself():
+    assert _numeric_summary([{'write_ms': 4.0}]).splitlines()[1].split()[1:] == ['4.0', '4.0', '4.0']
+
+
+def test_a_missing_ss_falls_back_to_the_kernel_table(monkeypatch, caplog):
     """A reader that cannot run must name itself at the start, not read as an empty queue per sample."""
     monkeypatch.setenv('PATH', '')
-    assert _queue_reader(9100) is _proc_queues
+    with caplog.at_level(logging.ERROR):
+        assert _queue_reader(9100) is _proc_queues
+    assert any(record.levelno == logging.ERROR and 'ss refused' in record.message for record in caplog.records)
 
 
 @pytest.mark.skipif(shutil.which('ss') is None, reason='ss is not installed here')
@@ -126,7 +179,7 @@ def test_ss_is_the_reader_where_it_answers():
 
 def test_a_kernel_without_the_setting_reports_it_absent(tmp_path):
     """A setting this kernel does not carry is a legitimate absence, and the facts still print."""
-    assert _sysctl(tmp_path / 'no_such_setting') is None
+    assert _read_kernel_value(tmp_path / 'no_such_setting') is None
 
 
 def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
@@ -135,4 +188,4 @@ def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
     refused.write_text('4096 131072 6291456\n')
     refused.chmod(0o000)
     with pytest.raises(PermissionError):
-        _sysctl(refused)
+        _read_kernel_value(refused)

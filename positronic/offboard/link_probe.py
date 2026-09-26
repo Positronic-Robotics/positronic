@@ -16,12 +16,16 @@ Usage
         --host=<host> --port=9100 --kib=750 --transfers=5
 """
 
+import errno
+import fcntl
 import json
+import logging
 import os
 import socket
 import statistics
 import struct
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -32,6 +36,8 @@ import configuronic as cfn
 from configuronic.cli import CommandTree
 
 from pimm.logging import init_logging
+
+logger = logging.getLogger(__name__)
 
 # One transfer is a length, that many bytes, then the sink's report under a length of its own. Both
 # ends read this module, so the header is written once.
@@ -124,9 +130,11 @@ def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None
             report['read_bytes'] = read_bytes
             report['busy_threads'] = busy_threads
             _send_framed(conn, json.dumps(report).encode())
+            # One read has no span, so it has no rate.
+            rate = 'no rate' if report['mib_per_sec'] is None else f'{report["mib_per_sec"]:.1f} MiB/s'
             print(
                 f'  {report["bytes"] / 1024:.0f} KiB in {report["read_span_ms"]:.1f} ms over '
-                f'{report["reads"]} read(s), {report["mib_per_sec"]:.1f} MiB/s',
+                f'{report["reads"]} read(s), {rate}',
                 flush=True,
             )
     except (ConnectionError, OSError, ValueError) as e:
@@ -161,19 +169,15 @@ def sink(host: str, port: int, read_bytes: int, busy_threads: int):
         listener.close()
 
 
-def _incompressible(count: int) -> bytes:
-    """``count`` bytes nothing along the path can shrink, so the wire carries what the caller asked for."""
-    return os.urandom(count)
-
-
 def _numeric_summary(rows: list[dict[str, Any]]) -> str:
     """Median, p95 and max of every numeric column in ``rows``, one column per line."""
     columns = [name for name, value in rows[0].items() if isinstance(value, int | float)]
     width = max(len(name) for name in columns)
     lines = [f'{"":<{width}}  {"median":>10}  {"p95":>10}  {"max":>10}']
     for name in columns:
-        values = sorted(float(row[name]) for row in rows)
-        p95 = values[min(int(0.95 * len(values)), len(values) - 1)]
+        values = [float(row[name]) for row in rows]
+        # Linear interpolation, as `numpy.percentile` computes it for `serving_cost`.
+        p95 = statistics.quantiles(values, n=20, method='inclusive')[18] if len(values) > 1 else values[0]
         lines.append(f'{name:<{width}}  {statistics.median(values):10.1f}  {p95:10.1f}  {max(values):10.1f}')
     return '\n'.join(lines)
 
@@ -184,9 +188,13 @@ def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: st
 
     ``write_ms`` is this end's own: the time ``sendall`` took to return. On a websocket that is the
     uplink span a session reports, so a ``write_ms`` far above what the link needs for ``kib`` says the
-    far end did not drain it. Every figure beside it comes back from the sink.
+    far end did not drain it. ``sndbuf_bytes`` is the send buffer after the write: where it holds the
+    payload whole, ``sendall`` returns before the far end reads, and a late reader shows in ``report_ms``
+    instead. Every other figure comes back from the sink.
     """
-    payload = _incompressible(kib * 1024)
+    out_path = None if out is None else Path(out)
+    # Random bytes, so no compression on the path shrinks what the wire carries.
+    payload = os.urandom(kib * 1024)
     rows = []
     with socket.create_connection((host, port), timeout=300.0) as conn:
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -195,6 +203,7 @@ def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: st
             started = time.perf_counter_ns()
             _send_framed(conn, payload)
             written = time.perf_counter_ns()
+            sndbuf = conn.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
             reported = json.loads(_read_exactly(conn, struct.unpack(HEADER, _read_exactly(conn, HEADER_BYTES))[0]))
             answered = time.perf_counter_ns()
             if attempt < warmups:
@@ -203,13 +212,14 @@ def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: st
             rows.append({
                 'write_ms': (written - started) / 1e6,
                 'report_ms': (answered - written) / 1e6,
+                'sndbuf_bytes': sndbuf,
                 **reported,
                 'read_timeline': timeline,
             })
     print('\n' + _numeric_summary(rows))
-    if out is not None:
-        Path(out).write_text(json.dumps(rows, indent=1))
-        print(f'\nper-transfer rows -> {out}')
+    if out_path is not None:
+        out_path.write_text(json.dumps(rows, indent=1))
+        print(f'\nper-transfer rows -> {out_path}')
 
 
 def _proc_queues(port: int) -> list[dict[str, Any]]:
@@ -240,13 +250,7 @@ def _ss_queues(port: int) -> list[dict[str, Any]]:
 
     Raises when ``ss`` is absent or refuses, carrying what it said.
     """
-    done = subprocess.run(
-        ['ss', '-tim', f'( sport = :{port} or dport = :{port} )'],
-        capture_output=True,
-        text=True,
-        timeout=5.0,
-        check=True,
-    )
+    done = subprocess.run(['ss', '-tim', f'sport = :{port}'], capture_output=True, text=True, timeout=5.0, check=True)
     rows = []
     for line in done.stdout.splitlines()[1:]:
         fields = line.split()
@@ -271,7 +275,8 @@ def _queue_reader(port: int) -> Callable[[int], list[dict[str, Any]]]:
     try:
         _ss_queues(port)
     except (OSError, subprocess.SubprocessError) as refused:
-        print(f'ss refused ({refused}); reading /proc/net/tcp instead', flush=True)
+        # /proc/net/tcp is the table `ss` reads, so it gives the same queues without the TCP info.
+        logger.error('ss refused (%s); reading /proc/net/tcp instead', refused)
         return _proc_queues
     print('reading queues through ss', flush=True)
     return _ss_queues
@@ -286,6 +291,7 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
     sender blocks means the bytes are not arriving. Run it in the receiver's namespace, against the
     sink's port or the policy server's.
     """
+    out_path = None if out is None else Path(out)
     reader = _queue_reader(port)
     print(f'watching port {port} every {interval_ms} ms for {seconds:.0f}s', flush=True)
     samples: list[dict[str, Any]] = []
@@ -308,13 +314,13 @@ def watch(port: int, interval_ms: int, seconds: float, out: str | None):
         f'{len(samples)} sample(s): recv_q max {max(queues)} B, median {statistics.median(queues):.0f} B, '
         f'non-empty in {len(busy)} of them; sampled every {statistics.median(steps) if steps else 0:.1f} ms'
     )
-    if out is not None:
-        Path(out).write_text('\n'.join(json.dumps(sample) for sample in samples) + '\n')
-        print(f'per-sample rows -> {out}')
+    if out_path is not None:
+        out_path.write_text('\n'.join(json.dumps(sample) for sample in samples) + '\n')
+        print(f'per-sample rows -> {out_path}')
 
 
-def _sysctl(path: Path) -> str | None:
-    """One kernel setting, or ``None`` where this kernel has no such file.
+def _read_kernel_value(path: Path) -> str | None:
+    """One ``/proc`` or ``/sys`` value, or ``None`` where this kernel has no such file.
 
     Any other read failure raises: a namespace that refuses ``/proc/sys`` is a fact about the
     namespace, and this tool reports those.
@@ -325,34 +331,60 @@ def _sysctl(path: Path) -> str | None:
         return None
 
 
+# `SIOCGIFADDR` from <linux/sockios.h>: the IPv4 address of one interface.
+SIOCGIFADDR = 0x8915
+
+
+def _ipv4_address(name: str) -> str | None:
+    """The IPv4 address of interface ``name``, or ``None`` where it carries none."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as query:
+        try:
+            answer = fcntl.ioctl(query.fileno(), SIOCGIFADDR, struct.pack('256s', name.encode()[:15]))
+        except OSError as e:
+            if e.errno == errno.EADDRNOTAVAIL:
+                return None
+            raise
+    return socket.inet_ntoa(answer[20:24])
+
+
 def network_facts(peer: str | None) -> dict[str, Any]:
     """What this namespace does to a transfer: its interfaces, its buffers, its congestion control.
 
     An overlay or a tunnel carries less than an ethernet link, and a sender that does not learn the
     MTU retransmits its way through every transfer.
     """
+    if sys.platform != 'linux':
+        raise OSError(f'facts reads /sys and /proc, which {sys.platform} does not have; run it on Linux')
     interfaces = {}
     for entry in sorted(Path('/sys/class/net').iterdir()):
-        interfaces[entry.name] = {'mtu': _sysctl(entry / 'mtu'), 'operstate': _sysctl(entry / 'operstate')}
+        interfaces[entry.name] = {
+            'mtu': _read_kernel_value(entry / 'mtu'),
+            'operstate': _read_kernel_value(entry / 'operstate'),
+            'ipv4': _ipv4_address(entry.name),
+        }
     facts: dict[str, Any] = {
         'net_namespace': Path('/proc/self/ns/net').readlink().name,
         'interfaces': interfaces,
-        'tcp_rmem': _sysctl(Path('/proc/sys/net/ipv4/tcp_rmem')),
-        'tcp_wmem': _sysctl(Path('/proc/sys/net/ipv4/tcp_wmem')),
-        'rmem_max': _sysctl(Path('/proc/sys/net/core/rmem_max')),
-        'wmem_max': _sysctl(Path('/proc/sys/net/core/wmem_max')),
-        'tcp_congestion_control': _sysctl(Path('/proc/sys/net/ipv4/tcp_congestion_control')),
-        'tcp_slow_start_after_idle': _sysctl(Path('/proc/sys/net/ipv4/tcp_slow_start_after_idle')),
+        'tcp_rmem': _read_kernel_value(Path('/proc/sys/net/ipv4/tcp_rmem')),
+        'tcp_wmem': _read_kernel_value(Path('/proc/sys/net/ipv4/tcp_wmem')),
+        'rmem_max': _read_kernel_value(Path('/proc/sys/net/core/rmem_max')),
+        'wmem_max': _read_kernel_value(Path('/proc/sys/net/core/wmem_max')),
+        'tcp_congestion_control': _read_kernel_value(Path('/proc/sys/net/ipv4/tcp_congestion_control')),
+        'tcp_slow_start_after_idle': _read_kernel_value(Path('/proc/sys/net/ipv4/tcp_slow_start_after_idle')),
     }
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         facts['default_so_rcvbuf'] = probe.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
         facts['default_so_sndbuf'] = probe.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
     if peer is not None:
-        # A connect-less UDP socket takes the route the kernel would use, naming the interface a
-        # transfer to ``peer`` leaves by — and so the MTU above that actually applies.
+        # A UDP connect sends nothing and takes the route the kernel would use, so its local address
+        # names the interface a transfer to ``peer`` leaves by, and so the MTU that applies.
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
             route.connect((peer, 9))
-            facts['local_address_towards_peer'] = route.getsockname()[0]
+            local = route.getsockname()[0]
+        facts['local_address_towards_peer'] = local
+        facts['interface_towards_peer'] = next(
+            (name for name, interface in interfaces.items() if interface['ipv4'] == local), None
+        )
     return facts
 
 
