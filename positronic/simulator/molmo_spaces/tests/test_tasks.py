@@ -154,18 +154,23 @@ class _MolmoObservationEnv(EnvProtocol):
         self.tokens.append(token)
         self.actions.clear()
         return {
-            protocol.FRAME_OBS: self.observation,
+            protocol.SLOTS: [{protocol.FRAME_OBS: self.observation}],
             protocol.FRAME_META: {mapping.META_TASK: self.INSTRUCTION},
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }
 
-    def step(self, action):
+    def step(self, actions):
+        (action,) = actions  # this env serves one slot
         self.actions.append(action)
         return {
-            protocol.FRAME_OBS: self.observation,
-            protocol.FRAME_DONE: self._done_after is not None and len(self.actions) >= self._done_after,
-            protocol.FRAME_SUCCESS: False,
+            protocol.SLOTS: [
+                {
+                    protocol.FRAME_OBS: self.observation,
+                    protocol.FRAME_DONE: self._done_after is not None and len(self.actions) >= self._done_after,
+                    protocol.FRAME_SUCCESS: False,
+                }
+            ],
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }
 
