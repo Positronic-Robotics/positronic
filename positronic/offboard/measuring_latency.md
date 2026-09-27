@@ -40,8 +40,9 @@ PROBE="uv run --locked python -m positronic.offboard.link_probe"
 
 ## 1. Bring up the box and the container
 
-Start one of the servers that [docs/inference.md](../../docs/inference.md) names, on the host. Keep its
-subcommand and model flags, and add the container name, the probe ports and a gRPC wire on 9000:
+Start one of the servers that [docs/inference.md](../../docs/inference.md) names, in a terminal of its own
+on the host. Keep its subcommand and model flags, and add the container name, the probe ports and a gRPC
+wire on 9000:
 
 ```bash
 cd docker && docker compose run --rm --service-ports --name link-probe-server \
@@ -52,8 +53,9 @@ cd docker && docker compose run --rm --service-ports --name link-probe-server \
 `--service-ports` publishes the websocket on 8000. The container gets no `AUTH_TOKEN`, so the server
 serves open and the client sends no token.
 
-The model load starts here and takes tens of minutes. Do not wait for it: steps 2 and 3 run while it
-loads.
+The server runs in the foreground. It holds its terminal until step 7 stops it, and its log prints there.
+The model load starts here and takes tens of minutes. Do not wait for it. Open the other shells in new
+terminals, and run steps 2 and 3 while it loads.
 
 ## 2. Read the namespace, on both sides
 
