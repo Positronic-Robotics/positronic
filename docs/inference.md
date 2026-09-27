@@ -82,7 +82,7 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 
 **The server declares data preparation.** Its client stack can contain
 `RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
-The rig JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
+The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
 websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 

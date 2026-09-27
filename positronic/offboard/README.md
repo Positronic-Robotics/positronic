@@ -174,7 +174,7 @@ This metadata tells the client:
   and decodes whole chunks. Codec specs also support `"par"` composition.
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
-- `compress_images` — whether the rig JPEG-encodes frames before
+- `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
