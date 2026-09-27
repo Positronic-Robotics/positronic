@@ -66,8 +66,7 @@ def yam(robot_arm, cameras, video_encoder):
         descriptor='yam',
         observations=observations,
         commands=commands,
-        # One driver, one handler: the YAM chain carries its own fingers
-        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
@@ -125,7 +124,10 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_handlers={f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={
+            **{f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+            **{f'{eval_keys.GRIPPER}.{s}': arm.sync_grip for s, arm in arms.items()},
+        },
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms[keys.LEFT_ARM].robot_meta,

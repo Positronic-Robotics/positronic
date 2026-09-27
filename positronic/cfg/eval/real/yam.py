@@ -14,7 +14,8 @@ from positronic.eval import keys as eval_keys
 def _bimanual_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
     """Each trial moves both arms to the nominal pose with the grippers open. A person sets the scene."""
     start = {
-        f'{eval_keys.ARM}.{side}': command.JointPosition(np.asarray(YAM_NOMINAL_JOINTS)) for side in keys.BIMANUAL_ARMS
+        **{f'{eval_keys.ARM}.{s}': command.JointPosition(np.asarray(YAM_NOMINAL_JOINTS)) for s in keys.BIMANUAL_ARMS},
+        **{f'{eval_keys.GRIPPER}.{s}': 0.0 for s in keys.BIMANUAL_ARMS},
     }
     return [
         Task(

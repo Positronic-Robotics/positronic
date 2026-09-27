@@ -1,8 +1,9 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
-# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
-# this trial runs in is ready, drawn by whichever handler the embodiment binds.
+# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}`` and its grippers
+# ``gripper.{side}``. ``SCENE`` means the world this trial runs in is ready, drawn by whichever handler the
+# embodiment binds.
 ARM = 'arm'
 GRIPPER = 'gripper'
 SCENE = 'scene'
