@@ -50,8 +50,7 @@ cd docker && docker compose run --rm --service-ports --name link-probe-server \
 ```
 
 `--service-ports` publishes the websocket on 8000. The container gets no `AUTH_TOKEN`, so the server
-serves open and the client sends no token. A server that binds 9000 itself, such as `dreamzero-server`,
-cannot serve gRPC there.
+serves open and the client sends no token.
 
 The model load starts here and takes tens of minutes. Do not wait for it: steps 2 and 3 run while it
 loads.
