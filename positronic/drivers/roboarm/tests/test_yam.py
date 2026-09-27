@@ -37,9 +37,10 @@ def _grip(rx: pimm.SignalReceiver[float]) -> float | None:
     return None if msg is None else msg.data
 
 
-def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: list[str]) -> dict[str, float | None]:
+def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: list[str]) -> list[float | None]:
     """Close each gripper as a policy does at the end of a trial, then ready the next trial with
-    ``prepare_args``. Returns the grip that each arm reads once every prepare call has an answer.
+    ``prepare_args``. Returns the grip that each arm reads, in the order of ``sides``, once every prepare call
+    has an answer.
 
     ``sides`` holds the suffix of each arm's ``grip`` and ``target_grip`` signals.
     """
@@ -57,7 +58,7 @@ def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: li
         _run_until(loop, lambda: all(a.done() for a in answers))
         for answer in answers:
             answer.result()
-        return {s: _grip(rx) for s, rx in grips.items()}
+        return [_grip(grips[s]) for s in sides]
 
 
 def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_closed_them(chains):
@@ -68,7 +69,7 @@ def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_clos
 
     grips = _a_trial_after_a_closed_trial(rig.embodiment, trial.prepare_args, [f'.{s}' for s in keys.BIMANUAL_ARMS])
 
-    assert all(g is not None and g < _GRIP_TOL for g in grips.values()), grips
+    assert all(g is not None and g < _GRIP_TOL for g in grips), grips
     assert len(chains) == 2
     for chain in chains.values():
         assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)  # the chain's 1 is open
@@ -78,8 +79,8 @@ def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_clos
     rig = embodiment.yam.override(video_encoder=video_encoder.libx264_veryfast).instantiate()
     start = {eval_keys.ARM: command.JointPosition(np.asarray(YAM_NOMINAL_JOINTS)), eval_keys.GRIPPER: OPEN}
 
-    grips = _a_trial_after_a_closed_trial(rig, start, [''])
+    (grip,) = _a_trial_after_a_closed_trial(rig, start, [''])
 
-    assert grips[''] is not None and grips[''] < _GRIP_TOL, grips
+    assert grip is not None and grip < _GRIP_TOL, grip
     (chain,) = chains.values()
     assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)
