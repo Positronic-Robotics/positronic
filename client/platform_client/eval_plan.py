@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Annotated, Generic, Literal, Self
 
-from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, Wire
+from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
@@ -437,6 +437,9 @@ class EvalPlan(Cascade, Generic[Credential]):
 
     # The rules, the approvals and the board this plan runs under.
     request_type: PlanRequestType
+    # The rig shape a plan that states its tasks runs on. A plan that names an eval runs on the
+    # embodiment the eval pins.
+    rig: Slugged[RigShape] = RigShape.franka
     tasks: list[TaskNode[Credential]] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
@@ -465,6 +468,16 @@ class EvalPlan(Cascade, Generic[Credential]):
             raise ValueError(f'a plan states tasks and names the eval {str(self.eval)!r}: it takes its tasks from one')
         if not self.tasks and not self.names_an_eval:
             raise ValueError('a plan names at least one task, or the eval whose tasks it runs')
+        return self
+
+    @model_validator(mode='after')
+    def _a_named_eval_takes_the_rig_it_pins(self) -> Self:
+        # A dump carries every field, so what is refused is a shape other than the default.
+        if self.names_an_eval and self.rig is not RigShape.franka:
+            raise ValueError(
+                f'the plan names the eval {str(self.eval)!r} and the {slug_of(self.rig)} rig: an eval runs on the '
+                'embodiment it pins, and `rig` names the bench of a plan that states its tasks'
+            )
         return self
 
     @model_validator(mode='after')
