@@ -63,10 +63,10 @@ $PROBE facts --peer=$SERVER          # on the client
 $PROBE facts --peer=$CLIENT          # in the container
 ```
 
-Record the MTU of the interface each side sends through, both namespaces, `tcp_rmem` and `rmem_max`.
-A tunnel carries less than an ethernet link, and a container's namespace is not its host's. A payload
-larger than `rmem_max` cannot sit in the kernel's buffer, so a receiver that reads late blocks the
-sender rather than falling behind quietly.
+Record the MTU of the interface each side sends through, both namespaces, and `tcp_rmem`. A tunnel
+carries less than an ethernet link, and a container's namespace is not its host's. A connection's
+receive buffer starts at the middle value of `tcp_rmem`, and the kernel grows it up to the top value. A
+payload larger than the starting buffer waits in the sender's queue until the receiver reads.
 
 ## 3. Measure the read, before the model is up
 
@@ -163,23 +163,25 @@ $PROBE source --host=$SERVER --port=9100 --kib=750 --transfers=10 --out=into-con
 A sink that stalls too says the whole box is busy; a sink that reads at full speed while the server
 does not says the cost is inside the server process.
 
-**A larger receive buffer.** A 750 KiB payload does not fit in a default `rmem_max` of about 200 KiB,
-so a late reader blocks the sender once its send buffer is full. Raise `rmem_max` and the top of
-`tcp_rmem`, then repeat step 3. A container shell cannot write them, because Docker mounts `/proc/sys`
-read-only there. Each network namespace has its own `tcp_rmem`, so a privileged container in the
-server's namespace writes it. `rmem_max` is one value for the whole host, and only the host's
-namespace can write it:
+**A larger starting receive buffer.** A connection's receive buffer starts at the middle value of
+`tcp_rmem`, 131072 bytes by default. A 750 KiB payload does not fit there, so most of it waits in the
+sender's queue until the receiver reads. Raise the middle value to 1 MiB, which holds the payload. A
+container shell cannot write it, because Docker mounts `/proc/sys` read-only there. Each network
+namespace has its own `tcp_rmem`, so a privileged container in the server's namespace writes it. The
+command reads the current values and writes the minimum and the top value back unchanged:
 
 ```bash
 # on the host
-docker run --rm --privileged --network container:link-probe-server alpine \
-    sysctl -w net.ipv4.tcp_rmem='4096 131072 8388608'
-docker run --rm --privileged --network host alpine sysctl -w net.core.rmem_max=8388608
+docker run --rm --privileged --network container:link-probe-server alpine sh -c \
+    'set -- $(cat /proc/sys/net/ipv4/tcp_rmem); sysctl -w net.ipv4.tcp_rmem="$1 1048576 $3"'
 ```
 
-The new `rmem_max` applies to every namespace on the host until the host restarts.
+`net.core.rmem_max` does not apply, because these receivers never set `SO_RCVBUF`. A connection takes
+its starting buffer from its listening socket, which reads `tcp_rmem` when it opens. Restart the sinks in
+the container, then repeat step 3. A larger buffer changes the measurement only before a connection first
+reads, or on a link where it grows more slowly than the payload arrives.
 
-Compare `write_ms + report_ms`, because a larger send buffer can move the wait from one to the other.
+Compare `write_ms + report_ms`, because a larger receive buffer can move the wait from one to the other.
 A sum that falls to what the link needs proves the cost is the receiver's scheduling, and that
 buffering absorbs it. A sum that does not move rules the buffer out.
 

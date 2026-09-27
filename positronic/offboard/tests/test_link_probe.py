@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import shutil
 import socket
 import struct
@@ -277,6 +278,7 @@ def test_a_kernel_without_the_setting_reports_it_absent(tmp_path):
     assert _read_kernel_value(tmp_path / 'no_such_setting') is None
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses the permission bits this asserts on')
 def test_a_setting_that_cannot_be_read_is_not_reported_absent(tmp_path):
     """A namespace refusing /proc/sys must raise; reported as null it reads as an absent setting."""
     refused = tmp_path / 'refused'
