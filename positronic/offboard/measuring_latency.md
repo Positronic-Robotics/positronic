@@ -164,12 +164,20 @@ A sink that stalls too says the whole box is busy; a sink that reads at full spe
 does not says the cost is inside the server process.
 
 **A larger receive buffer.** A 750 KiB payload does not fit in a default `rmem_max` of about 200 KiB,
-so a late reader blocks the sender once its send buffer is full. Raise it in the receiver's namespace
-and repeat step 3:
+so a late reader blocks the sender once its send buffer is full. Raise `rmem_max` and the top of
+`tcp_rmem`, then repeat step 3. A container shell cannot write them, because Docker mounts `/proc/sys`
+read-only there. Each network namespace has its own `tcp_rmem`, so a privileged container in the
+server's namespace writes it. `rmem_max` is one value for the whole host, and only the host's
+namespace can write it:
 
 ```bash
-sysctl -w net.core.rmem_max=8388608 net.ipv4.tcp_rmem='4096 131072 8388608'
+# on the host
+docker run --rm --privileged --network container:link-probe-server alpine \
+    sysctl -w net.ipv4.tcp_rmem='4096 131072 8388608'
+docker run --rm --privileged --network host alpine sysctl -w net.core.rmem_max=8388608
 ```
+
+The new `rmem_max` applies to every namespace on the host until the host restarts.
 
 Compare `write_ms + report_ms`, because a larger send buffer can move the wait from one to the other.
 A sum that falls to what the link needs proves the cost is the receiver's scheduling, and that
