@@ -238,7 +238,7 @@ After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
 
-Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64; a rig behind a message-size cap JPEG-encodes its frames instead (see `compress_images` above). `docs/connect-your-model.md` carries the full key table.
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false (see above). The server decodes each frame to the uint8 array below before the model sees it. `docs/connect-your-model.md` carries the full key table.
 
 ```json
 {
