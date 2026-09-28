@@ -346,7 +346,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
         DsWriterCommandType.START_EPISODE,
         DsWriterCommandType.STOP_EPISODE,
         DsWriterCommandType.START_EPISODE,
-        DsWriterCommandType.STOP_EPISODE,
+        DsWriterCommandType.ABORT_EPISODE,
     ]
 
 

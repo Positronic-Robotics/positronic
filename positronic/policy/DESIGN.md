@@ -134,8 +134,9 @@ keeps its history in a server session tied to the episode.
 
 The framework records sensor and executed-command signals, along with timing
 logs. Recording inputs and outputs at every policy and inference boundary is
-part of the debugging goal. The episode ends when the framework closes its
-server session, after the last call, and then the run. The record remains.
+part of the debugging goal. The episode ends on its deadline or on a done
+signal, and the record remains. An interrupt discards the record. Then the
+framework closes the server session, after the last call, and then the run.
 
 ![The life of an episode](docs/episode.svg)
 
