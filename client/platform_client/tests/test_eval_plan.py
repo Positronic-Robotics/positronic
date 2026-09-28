@@ -229,19 +229,19 @@ def test_a_plan_naming_an_eval_runs_on_the_embodiment_the_eval_pins():
     assert EvalPlan.model_validate(stated).rig_shape is RigShape.franka
 
 
-def test_a_rig_plan_states_its_band_and_approval_expiry_and_they_round_trip():
-    plan = a_plan(band='urgent', approval_expires_at='2026-10-16T17:00:00Z')
-    assert plan.band is Band.urgent
+def test_a_rig_plan_states_its_priority_and_approval_expiry_and_they_round_trip():
+    plan = a_plan(priority='urgent', approval_expires_at='2026-10-16T17:00:00Z')
+    assert plan.priority is Band.urgent
     stated = plan.model_dump(mode='json')
-    assert stated['band'] == 'urgent'
+    assert stated['priority'] == 'urgent'
     assert EvalPlan.model_validate(stated) == plan
-    assert a_plan().band is None
+    assert a_plan().priority is None
     assert a_plan().approval_expires_at is None
 
 
-def test_a_band_outside_the_closed_set_is_refused():
+def test_a_priority_outside_the_closed_set_of_bands_is_refused():
     with pytest.raises(ValidationError):
-        a_plan(band='asap')
+        a_plan(priority='asap')
 
 
 def test_an_approval_expiry_with_no_zone_is_refused():
@@ -249,13 +249,13 @@ def test_an_approval_expiry_with_no_zone_is_refused():
         a_plan(approval_expires_at='2026-10-16T17:00:00')
 
 
-def test_a_plan_naming_an_eval_states_no_band_and_no_approval_expiry():
+def test_a_plan_naming_an_eval_states_no_priority_and_no_approval_expiry():
     image = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'))
     stated = image.model_dump(mode='json')
-    for term in ({'band': 'low'}, {'approval_expires_at': '2026-10-16T17:00:00Z'}):
+    for term in ({'priority': 'low'}, {'approval_expires_at': '2026-10-16T17:00:00Z'}):
         with pytest.raises(ValidationError, match="order the lab rig's queue"):
             EvalPlan.model_validate({**stated, **term})
-    assert EvalPlan.model_validate(stated).band is None
+    assert EvalPlan.model_validate(stated).priority is None
 
 
 def test_an_unknown_field_is_refused():

@@ -461,8 +461,8 @@ class EvalPlan(Cascade, Generic[Credential]):
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
-    # None takes the band the platform gives the plan's client.
-    band: Slugged[Band] | None = None
+    # The band the rig's queue orders the plan in. None takes the band the platform gives its client.
+    priority: Slugged[Band] | None = None
     # None takes the approval the platform gives the plan's client, if any.
     approval_expires_at: AwareDatetime | None = None
 
@@ -494,9 +494,9 @@ class EvalPlan(Cascade, Generic[Credential]):
 
     @model_validator(mode='after')
     def _only_a_rig_plan_states_its_queue_terms(self) -> Self:
-        if self.names_an_eval and (self.band is not None or self.approval_expires_at is not None):
+        if self.names_an_eval and (self.priority is not None or self.approval_expires_at is not None):
             raise ValueError(
-                f'the plan names the eval {str(self.eval)!r} and states a band or an approval expiry: '
+                f'the plan names the eval {str(self.eval)!r} and states a priority or an approval expiry: '
                 "both order the lab rig's queue, and a named eval runs on the simulator"
             )
         return self

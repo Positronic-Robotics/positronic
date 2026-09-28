@@ -70,8 +70,9 @@ or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platfor
 that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
 names a `rig_shape` other than `franka`. The gateway refuses `sim`.
 
-`band` and `approval_expires_at` state how the lab rig's queue takes a plan that states its tasks.
-`band` is `urgent`, `normal` or `low`, and the queue launches from the most urgent band first.
+`priority` and `approval_expires_at` state how the lab rig's queue takes a plan that states its tasks.
+`priority` names the band the plan waits in: `urgent`, `normal` or `low`. The queue launches from the
+most urgent band first.
 `approval_expires_at` is the instant after which the queue starts no more runs of the plan. A plan
 that states neither takes the terms the platform gives its client, and the platform refuses a term
 its client may not choose. A plan that names an eval is refused when it states either.
@@ -97,7 +98,7 @@ episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
 max_cap_per_episode_sec: 300
-band: low                                # urgent | normal | low
+priority: low                            # urgent | normal | low
 approval_expires_at: 2026-10-16T17:00:00Z
 policy_preset: example_candidate
 tote_placement: random                   # left | right | random | none
