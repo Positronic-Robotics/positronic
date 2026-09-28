@@ -11,7 +11,7 @@ from positronic import keys
 from positronic.policy import keys as policy_keys
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.policy import llm
-from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
+from positronic.vendors.llm.tests.test_policy import complete, execution, finish, llm_metadata, observation
 
 
 def test_openai_compatible_endpoint_round_trip(monkeypatch):
@@ -77,7 +77,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
         complete(active, rt, clock, observation())
-        meta = policy.meta() | rt.metadata
+        meta = policy.meta() | llm_metadata(rt)
     assert len(requests) == 2
     assert requests[0].url.host == 'endpoint-secret.invalid'
     assert requests[0].url.path == '/path-secret/v1/chat/completions'
@@ -106,7 +106,7 @@ def test_run_records_compact_reply_and_usage(monkeypatch):
     with execution(policy) as (active, rt, clock):
         clock.advance_to_ns(1000)
         complete(active, rt, clock, observation())
-        meta = policy.meta() | rt.metadata
+        meta = policy.meta() | llm_metadata(rt)
     recorded = json.dumps(meta)
     assert 'base_url' not in meta
     assert 'endpoint-secret' not in recorded

@@ -98,7 +98,7 @@ Translation is linear and rotation follows the shortest spherical interpolation.
 
 ## Recordings and lifecycle
 
-Each episode buffers a compact transcript in `Runtime.metadata`. The harness copies this metadata when the episode ends. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Endpoint URLs are not recorded. Without an output directory, the transcript remains in memory.
+Each episode buffers a compact transcript in the metadata section of the policy's run. The harness copies the episode metadata when the episode ends. With `--output_dir`, the episode recorder saves the event list in the episode's `static.json` when the episode finishes. The `llm` config starts the policy first in its stack, so the event list is `inference.policy.0.transcript`. The stop reason and the hindsight are in the same section, and the model configuration is in the policy metadata. Endpoint URLs are not recorded. Without an output directory, the transcript remains in memory.
 
 Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
 
