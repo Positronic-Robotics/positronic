@@ -49,6 +49,7 @@ _IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
 _PARK_JOINTS = np.zeros(6)
 _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
+_CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -168,6 +169,9 @@ class _Kinematics:
 class _Arm(DriverRun[command.CommandType]):
     """Control and report one YAM arm and its gripper for a driver run."""
 
+    # A streamed target moves the joint that travels farthest no faster than this
+    _MAX_STREAMED_JOINT_SPEED_RAD_S = np.pi
+
     def __init__(
         self,
         vendor: Any,
@@ -183,7 +187,7 @@ class _Arm(DriverRun[command.CommandType]):
         kinematics: _Kinematics,
         state: YamState,
     ):
-        super().__init__(sync_move, async_move, should_stop, clock, hz=100)
+        super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
         self.park_tuning = park_tuning
         self.move_tuning = move_tuning
@@ -194,6 +198,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._kin = kinematics
         self._shutting_down = False
         self._publish_failure_logged = False
+        self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
 
     def observations(self) -> dict[str, np.ndarray]:
         return self.vendor.get_observations()
@@ -221,14 +226,30 @@ class _Arm(DriverRun[command.CommandType]):
                 self._publish_failure_logged = True
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
+    def _send(self, joints: np.ndarray, open_width: float) -> None:
+        self.vendor.command_joint_pos(np.append(joints, open_width))
+        self._sent_joints = np.array(joints, dtype=np.float64)
+
     def command_target(self, joints: np.ndarray, grip: float) -> None:
         """Command the joints and the grip; the vendor takes the grip as open width."""
-        self.vendor.command_joint_pos(np.append(joints, 1.0 - grip))
+        self._send(joints, 1.0 - grip)
+
+    def command_step_toward(self, target: np.ndarray, grip: float) -> None:
+        """Command the grip, and the joints one tick of travel from the last joints sent toward ``target``."""
+        if self._sent_joints is None:
+            raise RuntimeError('the chain has received no joints to step from')
+        step = target - self._sent_joints
+        farthest = float(np.max(np.abs(step)))
+        max_step = self._MAX_STREAMED_JOINT_SPEED_RAD_S / _CONTROL_HZ
+        if farthest <= max_step:
+            self.command_target(target, grip)
+        else:
+            self.command_target(self._sent_joints + step * (max_step / farthest), grip)
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Hold the measured position, publish it, and return it as the target."""
         obs = self.observations()
-        self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
+        self._send(obs[_JOINT_POS], obs[_GRIPPER_POS][0])
         self.publish(obs)
         return np.asarray(obs[_JOINT_POS], dtype=np.float64), self._grip(obs)
 
@@ -255,6 +276,14 @@ class _Arm(DriverRun[command.CommandType]):
                 return self._ik(delta_cmd.apply(self._base_pose * self._kin.fk(q)), q)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+
+    def streamed_target(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
+        """The joint target of a streamed command, inside the joint range; reject one that is not a finite joint
+        position."""
+        target = self.to_joints(cmd, q)
+        if target.shape != (len(_JOINT_NAMES),) or not np.all(np.isfinite(target)):
+            raise ValueError(f'joint target {target} is not a finite position of the {len(_JOINT_NAMES)} joints')
+        return np.clip(target, self._kin.lower, self._kin.upper)
 
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tuning: SettleTuning) -> bool:
         if not np.all(np.abs(obs[_JOINT_POS] - target) < tuning.tolerance_rad):
@@ -555,8 +584,7 @@ class Robot(pimm.ControlSystem):
         :param park_after_idle_s: Park after this many seconds with no arm or gripper command, counted from the
             end of a blocking move. None disables idle parking; the driver still parks on startup and shutdown.
         :param park_tuning: How the park settles on this arm.
-        :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands go to the chain
-            unchanged.
+        :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
         :param connect: ``(channel, sim) -> i2rt Robot`` factory; the fake-mode smoke injects ``_FakeYam``.
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
@@ -641,7 +669,7 @@ class Robot(pimm.ControlSystem):
                 if (step := self._advance_parking(serving)) is not None:
                     yield step
                     continue
-                arm.command_target(serving.q_target, serving.grip_target)
+                arm.command_step_toward(serving.q_target, serving.grip_target)
                 # Synchronous moves can take seconds; publish a fresh observation.
                 arm.publish(arm.observations())
                 yield arm.limiter.wait()
@@ -679,7 +707,7 @@ class Robot(pimm.ControlSystem):
             serving.idle_since = clock.now()
         elif asked is not None:
             with log_failure(asked):
-                serving.q_target = arm.to_joints(asked, q)
+                serving.q_target = arm.streamed_target(asked, q)
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm._grip(arm.observations()))
@@ -725,7 +753,7 @@ class _FakeYam:
     def command_joint_pos(self, joint_pos: np.ndarray) -> None:
         self.last_command = np.asarray(joint_pos, dtype=np.float64).copy()
         step = self._alpha * (self.last_command - self._pos)
-        self._vel = step * 100.0  # commands arrive at the driver's 100 Hz
+        self._vel = step * _CONTROL_HZ
         self._pos = self._pos + step
 
     def zero_torque_mode(self) -> None:
