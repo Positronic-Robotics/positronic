@@ -34,8 +34,8 @@ class KeyboardOperator(KeyboardControl):
 
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal — or a refused ask — arrives, and it
-    logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
-    press. Every episode records into ``output_path``, and none records when that is ``None``.
+    logs that as it lands. ``next_task`` makes the trial and the runtime opens the server session, once per
+    accepted press. Every episode records into ``output_path``, and none records when that is ``None``.
     """
 
     def __init__(self, next_task: Callable[[], Task], policy: Policy | Server, output_path: Path | None):
