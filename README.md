@@ -137,6 +137,15 @@ Install hardware extras only when you need physical robot drivers (Linux only):
 uv sync --locked --extra hardware
 ```
 
+Two arms carry their vendor package in an extra of their own, because each one needs more than a `pip`
+install: `franka` builds against a libfranka that the machine must already carry, and `yam` installs the i2rt
+package from git. Name the extra of the arm the station has:
+
+```bash
+uv sync --locked --extra hardware --extra franka   # a Franka station
+uv sync --locked --extra hardware --extra yam      # a YAM station
+```
+
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets
