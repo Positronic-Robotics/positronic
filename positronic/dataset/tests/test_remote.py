@@ -9,6 +9,7 @@ import time
 import httpx
 import numpy as np
 import pos3
+import pyarrow.parquet as pq
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
 from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
+from positronic.dataset.vector import PARQUET_ENCODING_FORMAT, SimpleSignal
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
 
@@ -129,7 +131,17 @@ def test_signal_encoded_endpoint(test_client):
     assert len(r.content) > 0
 
 
-def test_signal_encoded_not_supported(test_client):
+def test_signal_parquet_encoded_endpoint(test_client, dataset_with_video):
+    r = test_client.get('/api/v2/episodes/0/signals/action/encoded')
+    assert r.status_code == 200
+    assert r.headers['x-encoding-format'] == PARQUET_ENCODING_FORMAT
+    signal = dataset_with_video[0]['action']
+    assert isinstance(signal, SimpleSignal)
+    assert r.content == signal.filepath.read_bytes()
+
+
+def test_signal_encoded_not_supported(test_client, dataset_with_video, monkeypatch):
+    monkeypatch.setattr(remote_server, '_get_signal', lambda ep, sig: dataset_with_video[ep][sig][:])
     r = test_client.get('/api/v2/episodes/0/signals/action/encoded')
     assert r.status_code == 400
 
@@ -248,6 +260,43 @@ def test_remote_dataset_iteration(running_server):
 
 
 # --- Migration tests ---
+
+
+@pytest.mark.parametrize('over_http', [False, True])
+@pytest.mark.parametrize('legacy', [False, True])
+def test_migration_preserves_complete_parquet_records(tmp_path, monkeypatch, over_http, legacy):
+    source_root = tmp_path / 'source'
+    with LocalDatasetWriter(source_root) as writer, writer.new_episode(timeline='world') as episode:
+        for i in range(3):
+            timestamps = {'world': i * 100, 'message': 1000 + i, 'system': 2000 + i, 'wall': 3000 + i}
+            episode.append('scalar', i, timestamps)
+            episode.append('vector', np.array([i, -i], dtype=np.float32), timestamps)
+    source = LocalDataset(source_root)
+    if legacy:
+        source_episode = source[0]
+        assert isinstance(source_episode, Episode)
+        for signal in source_episode.signals.values():
+            assert isinstance(signal, SimpleSignal)
+            table = pq.read_table(signal.filepath).replace_schema_metadata(None)
+            pq.write_table(table, signal.filepath)
+        source = LocalDataset(source_root)
+
+    monkeypatch.setattr(remote_server, '_dataset', source)
+    with TestClient(remote_server._app) as client, RemoteDataset('http://testserver') as remote, pos3.mirror():
+        monkeypatch.setattr(remote._client, '_session', client)
+        migrate_dataset(remote if over_http else source, str(tmp_path / 'copied'))
+
+    copied = LocalDataset(tmp_path / 'copied')[0]
+    assert isinstance(copied, Episode)
+    source_episode = source[0]
+    assert isinstance(source_episode, Episode)
+    for name, signal in source_episode.signals.items():
+        result = copied.signals[name]
+        assert isinstance(signal, SimpleSignal)
+        assert isinstance(result, SimpleSignal)
+        assert result.filepath.read_bytes() == signal.filepath.read_bytes()
+        assert result.timeline == (RECORDED_TIME if legacy else 'world')
+        np.testing.assert_array_equal(result.values(), signal.values())
 
 
 def test_migrate_remote_dataset_numeric_only(tmp_path):

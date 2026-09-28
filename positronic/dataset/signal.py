@@ -437,9 +437,8 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
 class SupportsEncodedRepresentation(Protocol):
     """Protocol for signals with a raw/encoded representation distinct from decoded values.
 
-    Signals that use lossy encoding (e.g., video, compressed audio) can implement this
-    protocol to expose their raw encoded data for efficient transfer without re-encoding.
-    This is modality-agnostic - any signal type with lossy encoding can implement it.
+    The encoded data preserves the complete recording, including metadata and timestamp
+    coordinates, and can be transferred without re-encoding values.
     """
 
     @property

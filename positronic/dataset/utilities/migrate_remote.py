@@ -24,12 +24,13 @@ from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.vector import PARQUET_ENCODING_FORMAT
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     """Migrate any dataset to local or S3 storage.
 
-    Signals with encoded representations (e.g. video) are transferred as raw bytes
+    Signals with encoded representations (Parquet or video) are transferred as raw bytes
     without re-encoding. Static fields are materialized into static.json.
 
     Returns the number of episodes written.
@@ -79,6 +80,10 @@ def _write_encoded_signal(signal, episode_path: Path, signal_name: str) -> None:
     fmt = signal.encoding_format
     if fmt == 'positronic.video.v1':
         _write_video_v1(signal.iter_encoded_chunks(), episode_path, signal_name)
+    elif fmt == PARQUET_ENCODING_FORMAT:
+        with (episode_path / f'{signal_name}.parquet').open('wb') as file:
+            for chunk in signal.iter_encoded_chunks():
+                file.write(chunk)
     else:
         raise ValueError(f'Unknown encoding format: {fmt}')
 

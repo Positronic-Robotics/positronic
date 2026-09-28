@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -20,6 +20,7 @@ from .signal import (
 )
 
 T = TypeVar('T')
+PARQUET_ENCODING_FORMAT = 'positronic.parquet.v1'
 
 
 class SimpleSignal(Signal[T]):
@@ -128,6 +129,16 @@ class SimpleSignal(Signal[T]):
         if not is_realnum_dtype(req.dtype):
             raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
         return np.searchsorted(self._timestamps, req, side='right') - 1
+
+    @property
+    def encoding_format(self) -> str:
+        return PARQUET_ENCODING_FORMAT
+
+    def iter_encoded_chunks(self) -> Iterator[bytes]:
+        """Stream the complete Parquet file, including all timestamps and metadata."""
+        with self.filepath.open('rb') as file:
+            while chunk := file.read(64 * 1024):
+                yield chunk
 
 
 class SimpleSignalWriter(SignalWriter[T]):
