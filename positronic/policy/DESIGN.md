@@ -271,13 +271,8 @@ processor can keep state in its run and use the episode clock.
 Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
-Processors report metadata about their definitions. A composition combines its
-components' metadata. Processors write episode values into `runtime.metadata` on
-the control thread. The harness snapshots these values when the episode ends,
-before closing the runs, so a processor writes them as they change. Episode values
-override definition values with the same flattened keys. Each episode gets a
-separate metadata mapping. The chunk schedule writes the waypoints it planned,
-emitted and dropped this way.
+A processor reports metadata about its definition, and writes episode values into
+`runtime.metadata` as the values change.
 
 ### Remote policies
 
