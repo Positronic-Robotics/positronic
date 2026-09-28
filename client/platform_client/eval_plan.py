@@ -461,9 +461,8 @@ class EvalPlan(Cascade, Generic[Credential]):
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
-    # The band the rig's queue orders the plan in. None takes the band the platform gives its client.
+    # The band the rig's queue orders the plan in.
     priority: Slugged[Band] | None = None
-    # None takes the approval the platform gives the plan's client, if any.
     approval_expires_at: AwareDatetime | None = None
 
     @property
