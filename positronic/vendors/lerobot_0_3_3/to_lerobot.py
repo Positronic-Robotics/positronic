@@ -1,7 +1,5 @@
 """
-This utility converts Positronic datasets into LeRobot format. Now that
-`lerobot` ships with the Positronic training dependencies, the easiest way to
-run the tool is from the project environment (virtualenv or `uv run`).
+Convert Positronic datasets to LeRobot format using the lerobot 0.3.3 API.
 
 Examples:
 - Convert to a new LeRobot dataset
@@ -17,7 +15,7 @@ Examples:
 
 import json
 import logging
-import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
+import resource
 from collections.abc import Sequence as AbcSequence
 
 import configuronic as cfn
@@ -31,20 +29,8 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.signal import RECORDED_TIME, validate_timeline
 from positronic.policy.codec import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
-
-
-def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
-    """Increase soft RLIMIT_NOFILE to avoid LeRobot hitting macOS defaults."""
-    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
-    target = min(hard_limit, max(soft_limit, min_soft_limit))
-
-    if soft_limit < target:
-        try:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard_limit))
-        except (ValueError, OSError):
-            pass
 
 
 def seconds_to_str(seconds: float) -> str:
@@ -57,38 +43,55 @@ def seconds_to_str(seconds: float) -> str:
 
 
 class EpisodeDictDataset(torch.utils.data.Dataset):
-    """
-    This dataset is used to load the episode data from the file and encode it into a dictionary.
-    """
-
-    def __init__(self, dataset: Dataset, fps: int):
+    def __init__(self, dataset: Dataset, fps: int, *, timeline: str):
+        validate_timeline(timeline)
         self.dataset = dataset
         self.fps = fps
+        self.timeline = timeline
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        start, finish = episode.start_ts(RECORDED_TIME), episode.last_ts(RECORDED_TIME)
+        start, finish = episode.start_ts(self.timeline), episode.last_ts(self.timeline)
         timestamps = np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)
-        return episode.time(RECORDED_TIME)[timestamps]
+        return episode.time(self.timeline)[timestamps]
 
 
-# This function needs to be serialisable for PyTorch DataLoader
 def _collate_fn(x):
     return x[0]
 
 
+def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
+    """Increase soft RLIMIT_NOFILE to avoid LeRobot hitting macOS defaults."""
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = min(hard_limit, max(soft_limit, min_soft_limit))
+
+    if soft_limit < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard_limit))
+        except (ValueError, OSError):
+            # A denied increase leaves the existing file-descriptor limit usable.
+            logging.exception('Could not raise the file-descriptor limit from %s to %s', soft_limit, target)
+
+
 def append_data_to_dataset(
-    lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16, share=1.0, seed=42
+    lr_dataset: LeRobotDataset,
+    p_dataset: Dataset,
+    fps,
+    task=None,
+    num_workers=16,
+    share=1.0,
+    seed=42,
+    *,
+    timeline: str = RECORDED_TIME,
 ):
+    episode_dataset = EpisodeDictDataset(p_dataset, fps=fps, timeline=timeline)
     _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
-    # Process each episode file
     total_length_sec = 0
 
-    episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
     if share < 1.0:
         n = len(episode_dataset)
         k = max(1, round(n * share))
@@ -124,8 +127,16 @@ def append_data_to_dataset(
 
 @cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42)
 def convert_to_lerobot_dataset(
-    output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42
+    output_dir: str,
+    fps: int | None,
+    video: bool,
+    dataset: Dataset,
+    task=None,
+    share=1.0,
+    seed=42,
+    timeline: str = RECORDED_TIME,
 ):
+    validate_timeline(timeline)
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -140,8 +151,6 @@ def convert_to_lerobot_dataset(
         features=dataset.meta[LEROBOT_FEATURES],
         image_writer_threads=32,
     )
-    # Adding this file after the LR dataset is created,
-    # otherwise the former will complain about the directory not being empty.
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
     if GR00T_MODALITY in dataset.meta:
@@ -151,19 +160,23 @@ def convert_to_lerobot_dataset(
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
+    append_data_to_dataset(
+        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, timeline=timeline
+    )
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
 @cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42)
-def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42):
+def append_data_to_lerobot_dataset(
+    output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42, timeline: str = RECORDED_TIME
+):
+    validate_timeline(timeline)
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 
-    # Save metadata for append operation
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
     lr_modality_path = output_dir / GR00T_MODALITY_PATH
@@ -178,10 +191,11 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
                 ' must both exist and be equal, or be absent from both.'
             )
     elif ds_modality is not None:
-        # If dataset has modality but lerobot dataset doesn't, this is an error
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
+    append_data_to_dataset(
+        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, timeline=timeline
+    )
     logging.info(f'Dataset extended and saved to {output_dir}')
 
 
