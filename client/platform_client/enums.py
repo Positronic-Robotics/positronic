@@ -193,3 +193,13 @@ class RigShape(IntEnum):
     franka = 1
     yam = 2
     sim = 3
+
+
+@unique
+class Band(IntEnum):
+    """The band a rig plan waits in. The rig's queue launches from the most urgent band first."""
+
+    INVALID = 0
+    urgent = 1
+    normal = 2
+    low = 3

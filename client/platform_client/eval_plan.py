@@ -11,14 +11,23 @@ from collections import Counter
 from pathlib import Path
 from typing import Annotated, Generic, Literal, Self
 
-from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, Wire
+from platform_client.enums import Band, CameraVantage, EndpointKind, Placement, RequestType, RigShape, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import AfterValidator, BaseModel, Field, SecretStr, SerializationInfo, model_serializer, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    Field,
+    SecretStr,
+    SerializationInfo,
+    model_serializer,
+    model_validator,
+)
 from typing_extensions import TypeVar
 
 
@@ -452,6 +461,10 @@ class EvalPlan(Cascade, Generic[Credential]):
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
+    # None takes the band the platform gives the plan's client.
+    band: Slugged[Band] | None = None
+    # None takes the approval the platform gives the plan's client, if any.
+    approval_expires_at: AwareDatetime | None = None
 
     @property
     def names_an_eval(self) -> bool:
@@ -476,6 +489,15 @@ class EvalPlan(Cascade, Generic[Credential]):
             raise ValueError(
                 f'the plan names the eval {str(self.eval)!r} and the {slug_of(self.rig_shape)} rig shape: an eval runs '
                 'on the embodiment it pins, and `rig_shape` names the embodiment of a plan that states its tasks'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _only_a_rig_plan_states_its_queue_terms(self) -> Self:
+        if self.names_an_eval and (self.band is not None or self.approval_expires_at is not None):
+            raise ValueError(
+                f'the plan names the eval {str(self.eval)!r} and states a band or an approval expiry: '
+                "both order the lab rig's queue, and a named eval runs on the simulator"
             )
         return self
 

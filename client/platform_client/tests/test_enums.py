@@ -13,6 +13,7 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     TERMINAL_STATUSES,
+    Band,
     BoardVisibility,
     CameraVantage,
     EndpointKind,
@@ -97,6 +98,7 @@ CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
 REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
 RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
+BAND_VALUES = {'INVALID': 0, 'urgent': 1, 'normal': 2, 'low': 3}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),
@@ -112,6 +114,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (CameraVantage, CAMERA_VANTAGE_VALUES),
     (RequestType, REQUEST_TYPE_VALUES),
     (RigShape, RIG_SHAPE_VALUES),
+    (Band, BAND_VALUES),
 ]
 
 

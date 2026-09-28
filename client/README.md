@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.16.0"
+uv add "positronic-platform-client==0.17.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -70,6 +70,12 @@ or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platfor
 that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
 names a `rig_shape` other than `franka`. The gateway refuses `sim`.
 
+`band` and `approval_expires_at` state how the lab rig's queue takes a plan that states its tasks.
+`band` is `urgent`, `normal` or `low`, and the queue launches from the most urgent band first.
+`approval_expires_at` is the instant after which the queue starts no more runs of the plan. A plan
+that states neither takes the terms the platform gives its client, and the platform refuses a term
+its client may not choose. A plan that names an eval is refused when it states either.
+
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
 rig_shape: franka                        # franka | yam
@@ -91,6 +97,8 @@ episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
 max_cap_per_episode_sec: 300
+band: low                                # urgent | normal | low
+approval_expires_at: 2026-10-16T17:00:00Z
 policy_preset: example_candidate
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
