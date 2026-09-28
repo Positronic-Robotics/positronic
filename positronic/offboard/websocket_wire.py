@@ -151,8 +151,7 @@ def claim_socket_path(path: Path) -> socket.socket:
     return sock
 
 
-# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here
-# (measured by positronic/offboard/serving_cost.py).
+# uvicorn's default ('websockets') reassembles an 846 KiB observation in 58 ms, against 29 ms here.
 WS_IMPL = 'websockets-sansio'
 
 
