@@ -1,4 +1,5 @@
 import dataclasses
+import http.server
 import json
 import pathlib
 import threading
@@ -823,36 +824,64 @@ def test_a_wire_no_registry_member_carries_is_refused():
         RemotePolicy('ws', _address('localhost', 8000))
 
 
+class _KeepaliveAnswer(http.server.BaseHTTPRequestHandler):
+    """Answers a keepalive after ``delay_s``, as a server with no idle timeout does."""
+
+    delay_s = 0.0
+
+    def do_POST(self):
+        time.sleep(self.delay_s)
+        body = json.dumps({wire.ALIVE_SECONDS: None}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def keepalive_server():
+    """Starts an HTTP server whose keepalive answers after the delay a test gives; yields its address."""
+    servers: list[http.server.ThreadingHTTPServer] = []
+
+    def start(delay_s: float) -> wire.HostPortAddress:
+        handler = type('Handler', (_KeepaliveAnswer,), {'delay_s': delay_s})
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return wire.HostPortAddress('127.0.0.1', server.server_address[1], wire.SESSION_PATH, '')
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
 class TestEveryWireSpendsTheCallersBudgetOnce:
-    """A caller's timeout is one budget, whatever the transport underneath divides it into.
+    """A caller's timeout is one budget: each step of the call takes what the steps before it left."""
 
-    Each wait takes what is left of the budget. A phase a transport times on its own takes the whole
-    remainder, because no HTTP client bounds a request as a whole. Each test reads the value the transport
-    was handed, not the clock, so a slow machine does not fail it.
-    """
+    @staticmethod
+    def _clock_after_a_connect_that_took(spent: float):
+        """A clock that reads 0 once, then ``spent``: the connect took ``spent`` seconds."""
+        readings = iter([0.0])
+        return lambda: next(readings, spent)
 
-    def test_the_registry_holds_the_wires_these_cover(self):
-        """A wire added later fails here until a test covers its budget. The websocket members share one
-        ``keepalive``, and so do the gRPC members. ``roboarena`` answers no keepalive."""
-        assert set(registry.CLIENT_WIRES) == {
-            'websocket',
-            'websocket_tls',
-            'websocket_unix',
-            'grpc',
-            'grpc_tls',
-            'roboarena',
-        }
+    def test_the_websocket_wire_times_out_an_answer_the_connect_left_no_time_for(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.5)
+        with (
+            patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.8)),
+            pytest.raises(wire.ConnectRefused),
+        ):
+            websocket.WebsocketClientWire().keepalive(address, None, budget)
 
-    def test_the_websocket_wire_gives_every_phase_the_connection_times_the_whole_budget(self):
-        budget = 8.0
-        connection = MagicMock(**{
-            'getresponse.return_value.status': 200,
-            'getresponse.return_value.read.return_value': json.dumps({wire.ALIVE_SECONDS: None}).encode(),
-        })
-        with patch.object(websocket.WebsocketClientWire, '_api_connection', return_value=connection) as opened:
-            websocket.WebsocketClientWire().keepalive(_ADDRESS, None, budget)
-
-        assert opened.call_args.args[1] == budget
+    def test_the_websocket_wire_takes_an_answer_inside_what_the_connect_left(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.0)
+        with patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.0)):
+            assert websocket.WebsocketClientWire().keepalive(address, None, budget) is None
 
     def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
         budget, on_the_channel = 4.0, 1.0

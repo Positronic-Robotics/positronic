@@ -73,6 +73,14 @@ def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Re
     return wire.Refusal.COLD
 
 
+def _seconds_until(deadline: float) -> float:
+    """Raises ``TimeoutError`` once ``deadline`` has passed, as a socket that timed out does."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('the call spent its timeout')
+    return left
+
+
 class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     """What every websocket member shares: one session per connection, and how a refused one reads."""
 
@@ -94,14 +102,16 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     def keepalive(self, address: wire.AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
         """``POST`` to ``wire.KEEPALIVE_PATH`` on the HTTP API beside the session route.
 
-        ``timeout`` bounds each phase the connection times, not the whole call: no HTTP client bounds a
-        request as a whole.
+        ``timeout`` bounds the whole call: the request and the answer each get what the connect left.
         """
         deadline = time.monotonic() + timeout
         where = f'{wire.KEEPALIVE_PATH} on {self.session_url(address)}'
-        connection = self._api_connection(address, max(0.0, timeout))
+        connection = self._api_connection(address, timeout)
         try:
+            connection.connect()
+            connection.sock.settimeout(_seconds_until(deadline))
             connection.request('POST', wire.KEEPALIVE_PATH, headers=dict(headers or {}))
+            connection.sock.settimeout(_seconds_until(deadline))
             answer = connection.getresponse()
             status, body = answer.status, answer.read()
         except HTTPException as e:

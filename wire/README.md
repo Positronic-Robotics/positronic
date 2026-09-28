@@ -72,9 +72,8 @@ leaves out on the members that carry one.
   frame the server announces itself with.
 - `keepalive(address, headers, timeout)` — resets the server's idle timer outside a session, and
   returns the seconds the server stays alive after the call, or `None` for a server with no idle
-  timeout. The websocket members send `POST` to `KEEPALIVE_PATH`, and `timeout` bounds each phase: the
-  connect, each read and each write. A whole call can take longer than `timeout`. The gRPC members call
-  `KEEPALIVE_METHOD_PATH`, and `timeout` bounds the whole call. `keepalive` raises
+  timeout. `timeout` bounds the whole call. The websocket members send `POST` to `KEEPALIVE_PATH`, and
+  the gRPC members call `KEEPALIVE_METHOD_PATH`. `keepalive` raises
   `KeepaliveUnsupported` where the server does not serve the call, and `ConnectRefused` where the
   server answers nothing. `roboarena` always raises `KeepaliveUnsupported`.
 

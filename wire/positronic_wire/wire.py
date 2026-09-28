@@ -142,9 +142,8 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         """Reset the idle timer of the server on ``address``, outside any session.
 
         Returns the seconds the server stays alive after the call, or ``None`` for a server with no idle
-        timeout. Each wire says what ``timeout`` bounds: the whole call, or each phase its transport times.
-        Raises ``KeepaliveUnsupported`` where the server serves sessions but not the call, and
-        ``ConnectRefused`` where it answers nothing.
+        timeout. ``timeout`` bounds the whole call. Raises ``KeepaliveUnsupported`` where the server serves
+        sessions but not the call, and ``ConnectRefused`` where it answers nothing.
         """
 
     @abc.abstractmethod
