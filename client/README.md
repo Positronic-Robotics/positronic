@@ -162,7 +162,7 @@ catalogue entry gives it, else the platform draws it. The platform makes each dr
 the plan lays out that scene and that table, and runs the episodes in that order.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
-names each task and what it lacks. The preset is one the rig carries: `production` serves each
+names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. It files nothing,
