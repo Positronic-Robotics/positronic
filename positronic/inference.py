@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy import Policy
+from positronic.policy import Policy, Server
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
@@ -38,7 +38,7 @@ class KeyboardOperator(KeyboardControl):
     press. Every episode records into ``output_path``, and none records when that is ``None``.
     """
 
-    def __init__(self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None):
+    def __init__(self, next_task: Callable[[], Task], policy: Policy | Server, output_path: Path | None):
         super().__init__(quit_key='q')
         self._next_task = next_task
         self._policy = policy

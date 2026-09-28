@@ -90,7 +90,7 @@ The [Codecs Guide](codecs.md) lists the available conversions.
 
 A server builds one callable `Model` at launch. A `PolicyDeployment` holds the client
 processor stack and an optional server codec, which a session may retune.
-`RemotePolicy` opens a session and builds the declared stack around the remote call.
+For a `WireServer`, the runtime opens a session per episode and builds the declared stack around it.
 
 ## The wire format
 

@@ -20,7 +20,7 @@ from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.eval import Embodiment, Eval, Observation, Task
-from positronic.policy import Policy
+from positronic.policy import Policy, Server
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -74,7 +74,7 @@ class TaskDriver(pimm.ControlSystem):
     policy run and cleanup; every episode records into ``output_path``.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
+    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy | Server, output_path: Path | None):
         self._tasks = tasks
         self._policy = policy
         self._output_path = output_path

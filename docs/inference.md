@@ -8,7 +8,7 @@ Positronic's unified session protocol connects any hardware to any model (LeRobo
 
 Each server loads one model at launch and serves it through a `PolicyDeployment`: a
 client processor stack and an optional server codec. The handshake declares the
-client stack, which `RemotePolicy` builds automatically. Each vendor supplies named
+client stack, which the runtime builds for each `WireServer` session. Each vendor supplies named
 deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**

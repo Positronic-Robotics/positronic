@@ -1,6 +1,6 @@
-"""A policy served by a roboarena server, with the DROID codec in front of it.
+"""A roboarena server, with the DROID codec in front of it on the rig.
 
-The server announces its `PolicyServerConfig` on connect. Each episode reads that config and builds its codec
+The server announces its `PolicyServerConfig` on connect. Each session reads that config and builds its codec
 and the observation keys it sends from it.
 
 FOOTGUN: the server rejects an observation carrying a key it did not ask for, and one missing a key it did, so
@@ -9,18 +9,17 @@ the keys come from the announced config and the message is held to them before i
 
 import uuid
 from collections.abc import Mapping
-from contextlib import closing
-from threading import Lock
 from typing import Any
 
 import numpy as np
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.roboarena import RoboarenaClient
-from positronic.policy import Policy, PolicyRun, Runtime, Sequential
+from positronic.policy import Obs, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.remote import Server, Session
 from positronic.vendors.dreamzero import codecs, roboarena
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing
@@ -114,8 +113,8 @@ ACTIONS_FIELDS = ('actions', 'action')
 JOINT_POSITION_WIDTH = 8
 
 
-class RoboarenaEndpoint:
-    """The inference function one episode submits: an observation in, the chunk the server answers."""
+class RoboarenaSession(Session):
+    """One episode's connection to a roboarena server announcing `config`: an observation in, the chunk it answers."""
 
     def __init__(self, client: RoboarenaClient, config: Mapping[str, Any]):
         self._client = client
@@ -123,6 +122,7 @@ class RoboarenaEndpoint:
         self._renames = renaming()
         # A stateful server tells episodes apart by this id, so each episode gets its own.
         self._session_id = str(uuid.uuid4()) if config[roboarena.NEEDS_SESSION_ID] else ''
+        self.local_stack = local_stack(config)
 
     def _message(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         """`obs` in the wire's own names, holding the announced keys and no others."""
@@ -149,7 +149,7 @@ class RoboarenaEndpoint:
             )
         return np.asarray(reply[field])
 
-    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def __call__(self, obs: Obs) -> list[dict[str, Any]]:
         chunk = self._answer(obs)
         # One action, or a chunk of them. The codec decodes one row at a time either way.
         rows = chunk[np.newaxis, :] if chunk.ndim == 1 else chunk
@@ -166,39 +166,25 @@ class RoboarenaEndpoint:
             )
         return [{ACTION: row} for row in rows]
 
+    def close(self) -> None:
+        self._client.close()
 
-class RoboarenaPolicy(Policy):
-    """A policy served by the roboarena server at `address`, with the DROID codec in front of it.
 
-    Each episode opens its own connection, with `headers` on its handshake. The codec's geometry and the cameras
-    it sends come from the config the server announces on that connection, so the stack is built when the episode
-    starts.
+class RoboarenaServer(Server):
+    """The roboarena server at `address`.
+
+    Each session opens its own connection, with `headers` on its handshake, and reads the config announced on it.
     """
 
     def __init__(self, address: roboarena_wire.RoboarenaAddress, headers: Mapping[str, str] | None = None):
         self._address = address
         self._headers = headers
 
-    def run(self, runtime: Runtime) -> PolicyRun:
+    def open(self) -> RoboarenaSession:
         client = RoboarenaClient(self._address.host, self._address.port, self._headers)
-        # Held by each inference, so a failure that closes the episode waits for the one in flight.
-        connection_lock = Lock()
         config = client.connect()
         try:
-            endpoint = RoboarenaEndpoint(client, config)
-
-            def infer(obs: Mapping[str, Any]) -> list[dict[str, Any]]:
-                with connection_lock:
-                    return endpoint(obs)
-
-            with closing(runtime.start(local_stack(config), infer)) as stack:
-                obs = yield
-                while True:
-                    try:
-                        step = stack.send(obs)
-                    except StopIteration:
-                        return
-                    obs = yield step
-        finally:
-            with connection_lock:
-                client.close()
+            return RoboarenaSession(client, config)
+        except BaseException:
+            client.close()
+            raise
