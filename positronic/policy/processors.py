@@ -242,6 +242,43 @@ def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
     return lambda delays: min(max(delays[-last:]), max_sec)
 
 
+class _TimedChunk:
+    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
+
+    def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
+        self._actions = actions
+        self._start_ns = start_ns
+        self._fps = fps
+        self._next_index = self._running_index(now_ns)
+
+    def _due_ns(self, index: int) -> int:
+        return self._start_ns + round(index * 1e9 / self._fps)
+
+    def _running_index(self, time_ns: int) -> int:
+        """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
+        return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
+
+    def prefix(self, now_ns: int, duration_sec: float) -> list[Commands]:
+        """The actions that run from ``now_ns`` for ``duration_sec``."""
+        duration_ns = round(duration_sec * 1e9)
+        if duration_ns <= 0:
+            return []
+        end = self._running_index(now_ns + duration_ns - 1) + 1
+        return list(self._actions[self._running_index(now_ns) : end])
+
+    def take_due(self, now_ns: int) -> dict[str, Any]:
+        """The merged commands of every action due by ``now_ns`` and not taken yet."""
+        commands: dict[str, Any] = {}
+        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
+            commands.update(self._actions[self._next_index])
+            self._next_index += 1
+        return commands
+
+    def next_due_ns(self) -> int | None:
+        """When the next action not taken yet is due, or ``None`` after the last one."""
+        return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
+
+
 class RTCSchedule(Policy):
     """Run action chunks from a model, and ask for the next chunk while the current one runs.
 
@@ -330,43 +367,6 @@ class RTCSchedule(Policy):
 
     def meta(self) -> dict[str, Any]:
         return {policy_keys.ACTION_FPS: self._fps}
-
-
-class _TimedChunk:
-    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
-
-    def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = actions
-        self._start_ns = start_ns
-        self._fps = fps
-        self._next_index = self._running_index(now_ns)
-
-    def _due_ns(self, index: int) -> int:
-        return self._start_ns + round(index * 1e9 / self._fps)
-
-    def _running_index(self, time_ns: int) -> int:
-        """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
-        return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
-
-    def prefix(self, now_ns: int, duration_sec: float) -> list[Commands]:
-        """The actions that run from ``now_ns`` for ``duration_sec``."""
-        duration_ns = round(duration_sec * 1e9)
-        if duration_ns <= 0:
-            return []
-        end = self._running_index(now_ns + duration_ns - 1) + 1
-        return list(self._actions[self._running_index(now_ns) : end])
-
-    def take_due(self, now_ns: int) -> dict[str, Any]:
-        """The merged commands of every action due by ``now_ns`` and not taken yet."""
-        commands: dict[str, Any] = {}
-        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
-            commands.update(self._actions[self._next_index])
-            self._next_index += 1
-        return commands
-
-    def next_due_ns(self) -> int | None:
-        """When the next action not taken yet is due, or ``None`` after the last one."""
-        return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
 
 
 class _StackedObs(Mapping[str, Any]):
