@@ -5400,7 +5400,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "wire" }
 dependencies = [
     { name = "grpcio" },

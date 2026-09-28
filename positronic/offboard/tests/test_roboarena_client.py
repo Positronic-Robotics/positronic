@@ -64,6 +64,34 @@ def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failu
     assert client._connection is None
 
 
+def test_the_client_hands_its_headers_to_every_handshake_it_opens():
+    """A server that checks a token reads it on the handshake, so connect and probe carry the same headers."""
+    headers = {'Authorization': 'Bearer run-token'}
+    client = roboarena.RoboarenaClient('a-partner-host', 8000, headers)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
+        client_wire.probe.return_value = None
+        client.connect()
+        client.probe()
+
+    assert client_wire.dial.call_args.args[1] == headers
+    assert client_wire.probe.call_args.args[1] == headers
+
+
+def test_a_client_given_no_headers_sends_none():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
+        client_wire.probe.return_value = None
+        client.connect()
+        client.probe()
+
+    assert client_wire.dial.call_args.args[1] is None
+    assert client_wire.probe.call_args.args[1] is None
+
+
 def test_an_inference_with_no_connection_dials_one_and_keeps_it():
     connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize([0.0] * 8)]})
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
