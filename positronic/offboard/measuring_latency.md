@@ -96,6 +96,8 @@ way:
 - **`write_ms` high, `recv_q` high** — the receiver is not draining. The bytes arrived and sat.
 - **`write_ms` high, `recv_q` near zero** — the bytes are not arriving. The path is the cost.
 - **`read_span_ms` far below `write_ms`** — the reader started late and then caught up at full speed.
+- **Reads in `read_timeline` evenly spaced** — the path delivers slowly.
+- **A gap in `read_timeline`, then a burst** — the reader was not scheduled.
 
 Then sweep the payload, which says whether the cost scales with bytes or is a fixed stall:
 

@@ -1,8 +1,8 @@
 """Where the bytes of one transfer go, timed at both ends of the link.
 
 ``sink`` times the read, ``source`` times the write, ``watch`` samples the receive queue while
-either runs, and ``facts`` reports the namespace. It imports the standard library and configuronic
-only, so it runs in a vendor image beside the server; ``measuring_latency.md`` gives the order to run
+either runs, and ``facts`` reports the namespace. It needs only an installed positronic package, so it
+runs beside the server in any image that carries one. ``measuring_latency.md`` gives the order to run
 the four in.
 
 Usage
@@ -68,8 +68,7 @@ def _read_exactly(conn: socket.socket, count: int) -> bytes:
 def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
     """Read one transfer, and report the read: the span the bytes took, and every ``recv`` inside it.
 
-    ``reads`` is ``[offset_ms, size]`` per call, offset from the first byte. Evenly spaced reads are a
-    path delivering slowly; a gap and then a burst is a receiver that was not scheduled.
+    ``read_timeline`` holds ``[offset_ms, size]`` per ``recv``, with the offset from the first.
     """
     declared = struct.unpack(HEADER, _read_exactly(conn, HEADER_BYTES))[0]
     if declared == 0:
@@ -125,10 +124,7 @@ def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None
 
 
 class GilHog:
-    """Threads spinning in Python, so the reader competes for the interpreter while it reads.
-
-    A CUDA call or a busy model holds the GIL the same way. ``threads`` of 0 raises none.
-    """
+    """Threads that spin in Python until ``close``, to model Python work that holds the GIL beside the reader."""
 
     def __init__(self, threads: int):
         self._stop = threading.Event()
@@ -190,11 +186,7 @@ def _numeric_summary(rows: list[dict[str, Any]]) -> str:
 def source(host: str, port: int, kib: int, transfers: int, warmups: int, out: str | None):
     """Write ``kib`` to a sink ``transfers`` times on one connection, and report both ends of each.
 
-    ``write_ms`` is this end's own: the time ``sendall`` took to return. On a websocket that is the
-    uplink span a session reports, so a ``write_ms`` far above what the link needs for ``kib`` says the
-    far end did not drain it. ``sndbuf_bytes`` is the send buffer after the write: where it holds the
-    payload whole, ``sendall`` returns before the far end reads, and a late reader shows in ``report_ms``
-    instead. Every other figure comes back from the sink.
+    ``write_ms``, ``report_ms`` and ``sndbuf_bytes`` are this end's. Every other figure comes back from the sink.
     """
     out_path = None if out is None else Path(out)
     # Random bytes, so no compression on the path shrinks what the wire carries. Framed once, outside the
@@ -290,13 +282,7 @@ def _queue_reader(port: int) -> Callable[[int], list[dict[str, Any]]]:
 
 @cfn.config(port=9100, interval_ms=20, seconds=60.0, out=None)
 def watch(port: int, interval_ms: int, seconds: float, out: str | None):
-    """Sample the receive queue of every established socket on ``port``, for ``seconds``.
-
-    The queue tells a slow path from a late reader. Bytes piling up in ``recv_q`` while the sender
-    is still writing mean the receiver is not draining them; a queue that stays near empty while the
-    sender blocks means the bytes are not arriving. Run it in the receiver's namespace, against the
-    sink's port or the policy server's.
-    """
+    """Sample the receive queue of every established socket on ``port``, for ``seconds``."""
     out_path = None if out is None else Path(out)
     reader = _queue_reader(port)
     print(f'watching port {port} every {interval_ms} ms for {seconds:.0f}s', flush=True)
