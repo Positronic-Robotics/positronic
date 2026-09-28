@@ -7,7 +7,7 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
-from .signal import Signal, validate_timeline
+from .signal import Signal, Timestamps, validate_timeline
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -172,7 +172,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, timestamps: Mapping[str, int]) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Timestamps) -> None:
         """Append a sample for the named signal."""
         pass
 

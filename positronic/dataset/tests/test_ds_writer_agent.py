@@ -10,7 +10,7 @@ import pytest
 
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter, EpisodeWriter
+from positronic.dataset import DatasetWriter, EpisodeWriter, Timestamps
 from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -37,7 +37,7 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, timestamps: Mapping[str, int]) -> None:
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
         self.appends.append((signal_name, data, dict(timestamps)))
 
     def set_static(self, name: str, data: Any) -> None:

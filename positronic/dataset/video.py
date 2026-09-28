@@ -2,7 +2,7 @@ import queue
 import struct
 import threading
 from collections import defaultdict, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +24,7 @@ from .signal import (
     Signal,
     SignalMeta,
     SignalWriter,
+    Timestamps,
     is_realnum_dtype,
     validate_timeline,
 )
@@ -167,7 +168,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
-    def append(self, data: np.ndarray, timestamps: Mapping[str, int]) -> None:
+    def append(self, data: np.ndarray, timestamps: Timestamps) -> None:
         """Append a video frame with timestamp.
 
         Args:

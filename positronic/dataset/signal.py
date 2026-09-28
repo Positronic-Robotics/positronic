@@ -24,6 +24,8 @@ T = TypeVar('T')
 
 IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike: TypeAlias = Sequence[int] | Sequence[float] | np.ndarray
+# Named timeline timestamps for one signal record.
+Timestamps: TypeAlias = Mapping[str, int]
 
 
 def is_realnum_dtype(dtype) -> bool:
@@ -412,7 +414,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     def timeline(self) -> str:
         return self._timeline
 
-    def _validate_timestamps(self, timestamps: Mapping[str, int]) -> dict[str, int]:
+    def _validate_timestamps(self, timestamps: Timestamps) -> dict[str, int]:
         for name in timestamps:
             validate_timeline(name)
         if self.timeline not in timestamps:
@@ -420,7 +422,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
         return {name: int(ts) for name, ts in timestamps.items()}
 
     @abstractmethod
-    def append(self, data: T, timestamps: Mapping[str, int]) -> None:
+    def append(self, data: T, timestamps: Timestamps) -> None:
         pass
 
     @abstractmethod

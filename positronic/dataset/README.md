@@ -77,6 +77,9 @@ start = episode.start_ts("world")
 duration = episode.duration_ns("world")
 ```
 
+`Timestamps`, exported from `positronic.dataset`, is an alias for `Mapping[str, int]`: the named
+timeline timestamps of one signal record. Plain dictionaries satisfy this type.
+
 Episode queries include static data and only signals with the requested timeline. A direct signal
 query on an absent timeline raises `KeyError`. Bounds and duration use only the named timeline.
 `Join`, `TimeOffsets`, `concat`, `pairwise`, `diff`, and episode `Concat` require a timeline name.
@@ -149,7 +152,7 @@ class SignalWriter[T]:
         ...
 
     # Requires the primary timestamp to increase and data shape/dtype to remain consistent
-    def append(self, data: T, timestamps: Mapping[str, int]) -> None:
+    def append(self, data: T, timestamps: Timestamps) -> None:
         pass
 
     # Writers are context managers. Exiting the context finalizes the file.
@@ -195,7 +198,7 @@ class Episode:
 class EpisodeWriter:
     # Append dynamic `Signal` data; primary timestamps must strictly increase per signal
     # Raises if the `Signal` name conflicts with existing static items
-    def append(self, signal_name: str, data: T, timestamps: Mapping[str, int]) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Timestamps) -> None:
         pass
 
     # Set static (non-time-varying) item; raises on name conflicts
