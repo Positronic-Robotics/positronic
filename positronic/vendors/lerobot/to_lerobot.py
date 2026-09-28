@@ -28,6 +28,7 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES
 
 
@@ -61,9 +62,9 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        start, finish = episode.start_ts, episode.last_ts
+        start, finish = episode.start_ts(RECORDED_TIME), episode.last_ts(RECORDED_TIME)
         timestamps = np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)
-        return episode.time[timestamps]
+        return episode.time(RECORDED_TIME)[timestamps]
 
 
 def _collate_fn(x):

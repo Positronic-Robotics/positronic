@@ -658,7 +658,7 @@ class _Statics:
     def __getitem__(self, index: int) -> SimpleNamespace:
         if index >= len(self):
             raise IndexError(index)
-        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=0)
+        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=lambda timeline: 0)
 
 
 ASSISTED = 'assisted'

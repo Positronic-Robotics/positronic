@@ -7,6 +7,7 @@ import pytest
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import (
@@ -112,8 +113,8 @@ def test_ik_joints_from_episode():
 
     episode = EpisodeContainer(
         data={
-            keys.JOINTS: DummySignal(ts, q_traj),
-            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses),
+            keys.JOINTS: DummySignal(ts, q_traj, timeline=RECORDED_TIME),
+            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses, timeline=RECORDED_TIME),
             roboarm_keys.URDF: PANDA_URDF,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
             roboarm_keys.CONTROL_FRAME: PANDA_FRAME,
@@ -152,8 +153,8 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
 
     episode = EpisodeContainer(
         data={
-            keys.JOINTS: DummySignal(ts, q_traj),
-            keys.TARGET_EE_POSE: DummySignal(ts, moved),
+            keys.JOINTS: DummySignal(ts, q_traj, timeline=RECORDED_TIME),
+            keys.TARGET_EE_POSE: DummySignal(ts, moved, timeline=RECORDED_TIME),
             roboarm_keys.URDF: urdf,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,

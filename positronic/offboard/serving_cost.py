@@ -42,6 +42,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.eval import Embodiment, Observation, Task
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
@@ -107,9 +108,9 @@ def observations(episode: Episode, embodiment: Embodiment, rate_hz: float) -> It
         harness = Harness(recorded)
         feeds = {name: world.pair(receiver) for name, receiver in harness.observations.items()}
         world.start(harness)  # binds the feeds; nothing runs the harness loop, the replay calls `read_obs`
-        for ts in range(episode.start_ts, episode.last_ts + 1, period_ns):
+        for ts in range(episode.start_ts(RECORDED_TIME), episode.last_ts(RECORDED_TIME) + 1, period_ns):
             for name, feed in feeds.items():
-                feed.emit({signal[len(name) :]: signals[signal].time[ts][0] for signal in columns[name]})
+                feed.emit({signal[len(name) :]: signals[signal].time(RECORDED_TIME)[ts][0] for signal in columns[name]})
             obs = harness.read_obs(task, {})
             assert obs is not None, 'every channel was just fed'
             yield ts, obs

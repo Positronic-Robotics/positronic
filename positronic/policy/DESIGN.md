@@ -326,6 +326,47 @@ remain children of the call that submitted them. These are wall-clock timings,
 independent of simulation charging. Parent durations include synchronous children
 and should not be added to them.
 
+### Recording implementation sequence
+
+Key design decisions:
+
+1. Extend `Signal` and `Episode` so robot and policy records belong to one dataset.
+2. Each signal declares its own timelines, identified by non-empty strings. Every time query
+   names its timelines explicitly; there is no default timeline. An episode query includes only
+   signals containing every requested timeline, and applies all `<=` conditions to the same sample.
+3. Within a signal, every timeline is non-decreasing and at least one strictly increases on each
+   append. Timestamps that cannot satisfy that contract are payload, not timelines.
+4. One recorder owns the episode. Local and remote records enter the same recording path;
+   server contributions travel in inference responses. Deferred transfer is an optimization.
+
+The implementation is divided into these PRs, in dependency order. Each includes its focused
+tests and the documentation for the behavior it introduces.
+
+1. **Explicit timeline names.** Require names throughout dataset readers, writers, transforms,
+   playback, HTTP access, and viewer callers, retaining single-timeline behavior. Give legacy
+   recordings an explicit name for their timestamp column.
+2. **Multiple timelines for all signals.** Store and expose named coordinates for scalar, vector,
+   and image signals. Enforce the ordering contract and persist timeline types for visualization.
+3. **Queries across timelines.** Implement conjunctions of named `<=` conditions and filter
+   signals by their declared timelines, including HTTP access.
+4. **pimm recording coordinates.** Define read and emission times, record the coordinates each
+   input supplies, and drain queued samples.
+5. **Dataset timelines in Rerun.** Export every available axis with its type and support signals
+   with different timeline sets, including numbers and images.
+6. **Structured payloads.** Record nested values and variable-shaped arrays for inputs, outputs,
+   and diagnostics, reusing existing serialization and image storage where suitable.
+7. **Ordered record batches.** Accept dynamically named signals and explicit coordinates through
+   reliable delivery, coordinating episode start, appends, and finalization on that path. Integrate
+   with the harness shutdown lifecycle.
+8. **Local policy calls.** Capture processor and codec inputs and outputs with call identity and
+   parent relationships. Support custom logging within a call and preserve values at capture time.
+9. **Submitted work.** Carry call context into workers; capture arguments, results, failures,
+   and cancellations. Deliver records in valid per-signal order.
+10. **Remote contributions.** Propagate call context and return server inputs, outputs, and custom
+    logs with inference responses, following the protocol compatibility rules.
+11. **Policy visualization.** Present the component hierarchy, calls, and payloads alongside robot
+    signals in Rerun and exercise recording across the rig and server.
+
 ## API
 
 The core interfaces below are abridged from [base.py](base.py),

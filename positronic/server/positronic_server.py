@@ -39,6 +39,7 @@ from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
@@ -709,7 +710,7 @@ async def api_episodes(request: Request):
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
     ep_it = (
-        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
+        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns(RECORDED_TIME) / 1e9, **ep.static}
         for i, ep in enumerate(ds)
         if matches(ep)
     )

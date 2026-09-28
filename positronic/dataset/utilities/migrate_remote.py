@@ -60,9 +60,9 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         end = min(i + chunk_size, len(signal))
         indices = list(range(i, end))
         values = signal._values_at(indices)
-        timestamps = signal._ts_at(indices)
+        timestamps = signal._ts_at(indices, timeline=signal.timeline)
         for v, ts in zip(values, timestamps, strict=True):
-            ew.append(key, v, ts)
+            ew.append(key, v, ts, timeline=signal.timeline)
 
 
 def migrate_remote_dataset(source_url: str, dest_path: str) -> None:

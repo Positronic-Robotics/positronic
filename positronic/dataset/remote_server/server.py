@@ -10,16 +10,17 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset
-from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.remote import DATASET_API_PREFIX
+from positronic.dataset.signal import TIMELINE_KEY, SupportsEncodedRepresentation
 from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None
-_app = FastAPI(title='Positronic Dataset Server', version='1.0.0')
+_app = FastAPI(title='Positronic Dataset Server', version='2.0.0')
 
 
 class IndicesRequest(BaseModel):
@@ -27,23 +28,29 @@ class IndicesRequest(BaseModel):
     slice: list[int | None] | None = None
 
 
+class TimelineIndicesRequest(IndicesRequest):
+    timeline: str = Field(min_length=1, pattern=r'\S')
+
+
 class TimestampsRequest(BaseModel):
     timestamps: list[int]
+    timeline: str = Field(min_length=1, pattern=r'\S')
 
 
-@_app.get('/api/v1/dataset/info')
+@_app.get(f'{DATASET_API_PREFIX}/dataset/info')
 def dataset_info():
     ds = _get_dataset()
     return {'num_episodes': len(ds), 'meta': ds.meta}
 
 
-@_app.get('/api/v1/episodes/{index}/info')
+@_app.get(f'{DATASET_API_PREFIX}/episodes/{{index}}/info')
 def episode_info(index: int):
     ep = _get_episode(index)
     signals_meta = {}
     for name, sig in ep.signals.items():
         supports_encoded = isinstance(sig, SupportsEncodedRepresentation)
         signals_meta[name] = {
+            TIMELINE_KEY: sig.timeline,
             'length': len(sig),
             'kind': sig.kind.value,
             'dtype': np.dtype(sig.dtype).str,
@@ -53,28 +60,28 @@ def episode_info(index: int):
     return {'meta': ep.meta, 'static': serialize(ep.static).hex(), 'signals': signals_meta}
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/timestamps')
-def signal_timestamps(ep: int, sig: str, req: IndicesRequest):
-    signal = _get_signal(ep, sig)
+@_app.post(f'{DATASET_API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/timestamps')
+def signal_timestamps(ep: int, sig: str, req: TimelineIndicesRequest):
+    signal = _get_signal(ep, sig, req.timeline)
     indices = _parse_indices(req)
-    return {'timestamps': np.asarray(signal._ts_at(indices)).tolist()}
+    return {'timestamps': np.asarray(signal._ts_at(indices, timeline=req.timeline)).tolist()}
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/values')
+@_app.post(f'{DATASET_API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/values')
 def signal_values(ep: int, sig: str, req: IndicesRequest):
     signal = _get_signal(ep, sig)
     values = list(signal._values_at(_parse_indices(req)))
     return StreamingResponse(iter([serialize(values)]), media_type='application/msgpack')
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/search')
+@_app.post(f'{DATASET_API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/search')
 def signal_search(ep: int, sig: str, req: TimestampsRequest):
-    signal = _get_signal(ep, sig)
-    indices = signal._search_ts(np.array(req.timestamps, dtype=np.int64))
+    signal = _get_signal(ep, sig, req.timeline)
+    indices = signal._search_ts(np.array(req.timestamps, dtype=np.int64), timeline=req.timeline)
     return {'indices': np.asarray(indices).tolist()}
 
 
-@_app.get('/api/v1/episodes/{ep}/signals/{sig}/encoded')
+@_app.get(f'{DATASET_API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/encoded')
 def signal_encoded(ep: int, sig: str):
     signal = _get_signal(ep, sig)
     if not isinstance(signal, SupportsEncodedRepresentation):
@@ -86,11 +93,11 @@ def signal_encoded(ep: int, sig: str):
     )
 
 
-@_app.post('/api/v1/episodes/{ep}/sample')
+@_app.post(f'{DATASET_API_PREFIX}/episodes/{{ep}}/sample')
 def episode_sample(ep: int, req: TimestampsRequest):
     episode = _get_episode(ep)
     timestamps = np.array(req.timestamps, dtype=np.int64)
-    sampled = episode.time[timestamps]
+    sampled = episode.time(req.timeline)[timestamps]
 
     result_static, result_signals = {}, {}
     for key, value in sampled.items():
@@ -114,10 +121,15 @@ def _get_episode(index: int):
         raise HTTPException(404, f'Episode {index} not found') from e
 
 
-def _get_signal(ep: int, sig: str):
+def _get_signal(ep: int, sig: str, timeline: str | None = None):
     signal = _get_episode(ep).signals.get(sig)
     if signal is None:
         raise HTTPException(404, f'Signal {sig} not found')
+    if timeline is not None:
+        try:
+            signal._check_timeline(timeline)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
     return signal
 
 

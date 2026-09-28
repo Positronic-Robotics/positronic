@@ -36,11 +36,19 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 - One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
+## Timelines
+
+Each signal declares a non-empty string name for its timestamp coordinate. Time queries and bounds
+require that exact name; no timeline is implicit. Episode queries filter out signals without the
+requested timeline. Transforms that align or offset time require a name and reject mismatched signals.
+Parquet schema metadata persists the name; recordings without it expose their existing timestamp
+column as `recorded`. This compatibility name makes no claim about which clock produced the data.
+
 ## Episode properties
 
-`duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
+`duration_ns(timeline)`, `start_ts(timeline)`, `last_ts(timeline)` are **first-class methods on Episode**, derived only from signals on the named timeline. They are never stored in meta. If a transform changes signals, these properties reflect the change.
 
-Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
+Implementations may cache these values per timeline internally, but this is a private optimization — `episode.meta` must not expose `duration_ns`. Disk episodes derive bounds from signal footers; unqualified duration caches in legacy meta files are ignored.
 
 ## Laziness
 

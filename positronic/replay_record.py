@@ -16,6 +16,7 @@ from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
 from positronic.gui import dpg_ui
@@ -63,7 +64,7 @@ class RestoreCommand(Derive):
         return transforms.Elementwise(pose, RestoreCommand.command_from_pose)
 
     @staticmethod
-    def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:
+    def command_from_pose(pose: Sequence[np.ndarray] | np.ndarray) -> Sequence[roboarm.command.CommandType]:
         return transforms.LazySequence(
             pose,
             lambda p: roboarm.command.CartesianPosition(
@@ -156,9 +157,9 @@ def main(
 
             sim_iter = world.start([sim, replay, ds_agent], gui)
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
-            player_cmd.emit(DsPlayerStartCommand(episode))
+            player_cmd.emit(DsPlayerStartCommand(episode, timeline=RECORDED_TIME))
 
-            p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+            p_bar = tqdm.tqdm(total=round(episode.duration_ns(RECORDED_TIME) / 1e9, 1), unit='s')
 
             for _ in sim_iter:
                 p_bar.n = round(world.clock.now(), 1)

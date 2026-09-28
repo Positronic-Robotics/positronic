@@ -12,6 +12,7 @@ import rerun.recording as rr_recording
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
@@ -30,8 +31,8 @@ from positronic.server.dataset_utils import (
 def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = None) -> DiskEpisode:
     with DiskEpisodeWriter(ep_dir) as writer:
         for name, width in widths.items():
-            writer.append(name, np.zeros(width, dtype=np.float32), 1000)
-            writer.append(name, np.ones(width, dtype=np.float32), 2000)
+            writer.append(name, np.zeros(width, dtype=np.float32), 1000, timeline=RECORDED_TIME)
+            writer.append(name, np.ones(width, dtype=np.float32), 2000, timeline=RECORDED_TIME)
         for name, value in (static or {}).items():
             writer.set_static(name, value)
     return DiskEpisode(ep_dir)
@@ -109,7 +110,7 @@ def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
     with DiskEpisodeWriter(ep_dir) as writer:
         for name, values in texts.items():
             for i, value in enumerate(values):
-                writer.append(name, value, 1_000_000_000 * (i + 1))
+                writer.append(name, value, 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
     return DiskEpisode(ep_dir)
 
 
@@ -143,7 +144,7 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode() as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
+            writer.append('progress.state', state, 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
     rrd = tmp_path / 'ep.rrd'
     rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
 
@@ -190,9 +191,9 @@ def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_p
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('robot.q', np.zeros(2), machine_clock)
-        writer.append('progress.state', 'floating', machine_clock + 1_503_456_789)
-        writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000)
+        writer.append('robot.q', np.zeros(2), machine_clock, timeline=RECORDED_TIME)
+        writer.append('progress.state', 'floating', machine_clock + 1_503_456_789, timeline=RECORDED_TIME)
+        writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000, timeline=RECORDED_TIME)
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
@@ -209,9 +210,9 @@ def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('words', np.array(['a', 'b']), 1_000_000_000)
-        writer.append('robot.q', np.zeros(2), 3_000_000_000)
-        writer.append('progress.state', 'floating', 4_000_000_000)
+        writer.append('words', np.array(['a', 'b']), 1_000_000_000, timeline=RECORDED_TIME)
+        writer.append('robot.q', np.zeros(2), 3_000_000_000, timeline=RECORDED_TIME)
+        writer.append('progress.state', 'floating', 4_000_000_000, timeline=RECORDED_TIME)
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
@@ -265,10 +266,10 @@ def _tabs(container: Any) -> list[rrb.Tabs]:
 def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.delivered', float(i), 1_000_000_000 * (i + 1))
-            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
-            writer.append('robot.q', np.zeros(2), 1_000_000_000 * (i + 1))
-            writer.append('robot.dq', np.zeros(2), 1_000_000_000 * (i + 1))
+            writer.append('progress.delivered', float(i), 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
+            writer.append('progress.state', state, 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
+            writer.append('robot.q', np.zeros(2), 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
+            writer.append('robot.dq', np.zeros(2), 1_000_000_000 * (i + 1), timeline=RECORDED_TIME)
     ep = DiskEpisode(tmp_path / 'ep')
 
     tabs = {tab.name: tab.active_tab for tab in _tabs(_build_blueprint(_collect_signal_groups(ep), ep).root_container)}
@@ -355,7 +356,8 @@ class _RawFrameSignal:
     def __iter__(self):
         return iter(zip(self._frames, self._times, strict=True))
 
-    def keys(self):
+    def keys(self, timeline):
+        assert timeline == RECORDED_TIME
         return np.asarray(self._times, dtype=np.int64)
 
 

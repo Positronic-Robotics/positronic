@@ -4,6 +4,8 @@ from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TypeVar
 
+import numpy as np
+
 T = TypeVar('T')
 U = TypeVar('U')
 
@@ -112,7 +114,7 @@ class LazySequence(Sequence[U]):
     - Slicing returns another lazy view without materializing elements.
     """
 
-    def __init__(self, seq: Sequence[T], fn: Callable[[T], U]) -> None:
+    def __init__(self, seq: Sequence[T] | np.ndarray, fn: Callable[[T], U]) -> None:
         self._seq = seq
         self._fn = fn
 
@@ -125,6 +127,6 @@ class LazySequence(Sequence[U]):
         return self._fn(self._seq[int(index)])
 
 
-def lazy_sequence(fn: Callable[[T], U]) -> Callable[[Sequence[T]], Sequence[U]]:
+def lazy_sequence(fn: Callable[[T], U]) -> Callable[[Sequence[T] | np.ndarray], Sequence[U]]:
     """Decorator that wraps an elementwise transform into a lazy sequence transform."""
     return partial(LazySequence, fn=fn)

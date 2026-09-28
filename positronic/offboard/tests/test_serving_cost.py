@@ -9,6 +9,7 @@ from positronic import keys
 from positronic.cfg.embodiment import droid_3cam_fake, droid_fake
 from positronic.cfg.policy import bearer_headers
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard import protocol
 from positronic.offboard.client import RECV_MS, SEND_MS, InferenceClient
@@ -126,15 +127,15 @@ def _droid_episode(path, cameras):
     with DiskEpisodeWriter(path) as writer:
         for tick in range(3):
             at = tick * period_ns
-            writer.append(keys.JOINTS, np.zeros(7), at)
-            writer.append(keys.JOINT_VEL, np.zeros(7), at)
-            writer.append(keys.EE_POSE, np.zeros(7), at)
-            writer.append(keys.ROBOT_STATUS, 0, at)
-            writer.append(keys.GRIP, 0.0, at)
+            writer.append(keys.JOINTS, np.zeros(7), at, timeline=RECORDED_TIME)
+            writer.append(keys.JOINT_VEL, np.zeros(7), at, timeline=RECORDED_TIME)
+            writer.append(keys.EE_POSE, np.zeros(7), at, timeline=RECORDED_TIME)
+            writer.append(keys.ROBOT_STATUS, 0, at, timeline=RECORDED_TIME)
+            writer.append(keys.GRIP, 0.0, at, timeline=RECORDED_TIME)
             for camera in cameras:
-                writer.append(camera, np.zeros((48, 64, 3), np.uint8), at)
-            writer.append(keys.TARGET_EE_POSE, np.zeros(7), at)
-            writer.append(keys.TARGET_GRIP, 0.0, at)
+                writer.append(camera, np.zeros((48, 64, 3), np.uint8), at, timeline=RECORDED_TIME)
+            writer.append(keys.TARGET_EE_POSE, np.zeros(7), at, timeline=RECORDED_TIME)
+            writer.append(keys.TARGET_GRIP, 0.0, at, timeline=RECORDED_TIME)
         writer.set_static(keys.TASK, 'pick the spoon')
         for static in (roboarm_keys.URDF, roboarm_keys.JOINT_NAMES, roboarm_keys.CONTROL_FRAME, roboarm_keys.GRIPPER):
             writer.set_static(static, 'recorded')

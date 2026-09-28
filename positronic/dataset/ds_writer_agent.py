@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -230,7 +231,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 value = serializer(value)
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
-                    ep_writer.append(full_name, v, primary_ts, extra_ts)
+                    ep_writer.append(full_name, v, primary_ts, extra_ts, timeline=RECORDED_TIME)
 
     def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
         """Append this turn's input samples, dropping any stamped after ``before``.

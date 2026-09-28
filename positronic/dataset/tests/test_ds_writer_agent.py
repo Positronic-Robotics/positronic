@@ -35,7 +35,9 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(
+        self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None, *, timeline: str
+    ) -> None:
         self.appends.append((signal_name, data, int(ts_ns), extra_ts))
 
     def set_static(self, name: str, data: Any) -> None:

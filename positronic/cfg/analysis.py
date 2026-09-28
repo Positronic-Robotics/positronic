@@ -12,6 +12,7 @@ from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import META_CREATED_TS_NS, Episode
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import keys as policy_keys
@@ -125,7 +126,7 @@ def uph(ep: Episode) -> float | None:
     u = units(ep)
     if not u:
         return None
-    return u / (ep.duration_ns / 1e9 / 3600)
+    return u / (ep.duration_ns(RECORDED_TIME) / 1e9 / 3600)
 
 
 ########################
@@ -158,7 +159,7 @@ def unified_uph(ep: Episode) -> float | None:
         items = ep['eval.successful_items']
         if items == 0:
             return None
-        return items / (ep.duration_ns / 1e9 / 3600)
+        return items / (ep.duration_ns(RECORDED_TIME) / 1e9 / 3600)
     if 'stacking_success' in ep:
         t = success_time(ep)
         if t is None:
@@ -223,7 +224,7 @@ def episodes_table():
 def checkpoint_table():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(ep.duration_ns / 1e9 for ep in episodes)
+        total_duration = sum(ep.duration_ns(RECORDED_TIME) / 1e9 for ep in episodes)
 
         if 'stacking_success' in episodes[0]:
             successful_count = sum(1 for ep in episodes if success(ep))
@@ -323,7 +324,7 @@ def success_time(episode: Episode, score_threshold: float = 0.95) -> float | Non
                 in_success = True
                 success_start_ts = timestamp
             elif timestamp - success_start_ts >= threshold_ns:
-                return (timestamp - episode.start_ts) / 1e9
+                return (timestamp - episode.start_ts(RECORDED_TIME)) / 1e9
         else:
             in_success = False
             success_start_ts = None
@@ -419,7 +420,7 @@ def stacking_episodes_table():
 
 def _effective_duration(key: str, ep: Episode) -> float:
     t = ep.get(key)
-    return t if t is not None else ep.duration_ns / 1e9
+    return t if t is not None else ep.duration_ns(RECORDED_TIME) / 1e9
 
 
 @cfn.config()
@@ -510,12 +511,12 @@ def calculate_units(episode: Episode) -> int:  # noqa: C901
     pose_sig = episode.signals[keys.EE_POSE]
 
     # Sample signals at 10Hz to reduce noise and computation
-    times = np.arange(episode.start_ts, episode.last_ts, int(1e8))
+    times = np.arange(episode.start_ts(RECORDED_TIME), episode.last_ts(RECORDED_TIME), int(1e8))
     if len(times) == 0:
         return 0
 
-    grip_vals = np.array([v for v, _ in grip_sig.time[times]])
-    pose_vals = np.array([v for v, _ in pose_sig.time[times]])
+    grip_vals = np.array([v for v, _ in grip_sig.time(RECORDED_TIME)[times]])
+    pose_vals = np.array([v for v, _ in pose_sig.time(RECORDED_TIME)[times]])
     x_vals, y_vals, z_vals = pose_vals[:, 0], pose_vals[:, 1], pose_vals[:, 2]
 
     threshold = (grip_vals.max() + grip_vals.min()) / 2
@@ -605,7 +606,7 @@ def phail_uph(ep: Episode) -> float | None:
     items = ep.get('eval.successful_items', 0)
     if not items:
         return None
-    duration = ep.get('eval.duration') or ep.duration_ns / 1e9
+    duration = ep.get('eval.duration') or ep.duration_ns(RECORDED_TIME) / 1e9
     if not duration:
         return None
     return items / (duration / 3600)
@@ -669,7 +670,7 @@ phail_inference = base_cfg.transform.override(
 def _baseline_uph(ep: Episode, items: int) -> float | None:
     if not items:
         return None
-    return items / (ep.duration_ns / 1e9 / 3600)
+    return items / (ep.duration_ns(RECORDED_TIME) / 1e9 / 3600)
 
 
 _PHAIL_BASELINE = {

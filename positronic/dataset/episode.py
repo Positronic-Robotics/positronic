@@ -7,7 +7,7 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
-from .signal import Signal
+from .signal import Signal, validate_timeline
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -52,27 +52,35 @@ def _is_valid_static_value(value: Any) -> bool:
 class _EpisodeTimeIndexer:
     """Time-based indexer for Episode signals."""
 
-    def __init__(self, episode: 'Episode') -> None:
+    def __init__(self, episode: 'Episode', timeline: str) -> None:
+        validate_timeline(timeline)
         self.episode = episode
+        self.timeline = timeline
 
     def __getitem__(self, index_or_slice):
         match index_or_slice:
             case int() | np.integer() | float() | np.floating() as ts:
                 # For a single timestamp, return static items and only the values for signals
-                sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
+                sampled = {
+                    key: sig.time(self.timeline)[ts][0]
+                    for key, sig in self.episode.signals.items()
+                    if sig.timeline == self.timeline
+                }
                 return {**self.episode.static, **sampled}
             case slice() as sl if sl.step is None:
-                raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
+                raise KeyError('Episode.time(timeline)[start:stop] is not supported; use a step or explicit timestamps')
             case slice() | list() | tuple() | np.ndarray() as req:
                 # For slice or sequence of timestamps, return a dict:
                 # - static items as-is
                 # - dynamic signals mapped to sequences of values sampled at requested timestamps
                 # If slice with step but no stop provided, default stop to episode.last_ts (+1 for end-exclusive)
                 if isinstance(req, slice) and req.step is not None and req.stop is None:
-                    req = slice(req.start, self.episode.last_ts + 1, req.step)
+                    req = slice(req.start, self.episode.last_ts(self.timeline) + 1, req.step)
                 result: dict[str, Any] = self.episode.static.copy()
                 for key, sig in self.episode.signals.items():
-                    view = sig.time[req]
+                    if sig.timeline != self.timeline:
+                        continue
+                    view = sig.time(self.timeline)[req]
                     # Extract the full sequence of values corresponding to the time selection
                     result[key] = view._values_at(slice(None))
                 return {**self.episode.static, **result}
@@ -112,29 +120,28 @@ class Episode(ABC, Mapping[str, Any]):
                 out[k] = v
         return out
 
-    @property
-    def start_ts(self):
-        values = [sig.start_ts for sig in self.signals.values()]
+    def start_ts(self, timeline: str):
+        validate_timeline(timeline)
+        values = [sig.start_ts(timeline) for sig in self.signals.values() if sig.timeline == timeline]
         if not values:
-            raise ValueError('Episode has no signals')
+            raise ValueError(f'Episode has no signals on timeline {timeline!r}')
         return max(values)
 
-    @property
-    def last_ts(self):
-        values = [sig.last_ts for sig in self.signals.values()]
+    def last_ts(self, timeline: str):
+        validate_timeline(timeline)
+        values = [sig.last_ts(timeline) for sig in self.signals.values() if sig.timeline == timeline]
         if not values:
-            raise ValueError('Episode has no signals')
+            raise ValueError(f'Episode has no signals on timeline {timeline!r}')
         return max(values)
 
-    @property
-    def duration_ns(self):
-        if not self.signals:
+    def duration_ns(self, timeline: str):
+        validate_timeline(timeline)
+        if not any(sig.timeline == timeline for sig in self.signals.values()):
             return 0
-        return self.last_ts - self.start_ts
+        return self.last_ts(timeline) - self.start_ts(timeline)
 
-    @property
-    def time(self):
-        return _EpisodeTimeIndexer(self)
+    def time(self, timeline: str):
+        return _EpisodeTimeIndexer(self, timeline)
 
 
 class EpisodeContainer(Episode):
@@ -165,7 +172,9 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(
+        self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None, *, timeline: str
+    ) -> None:
         """Append a sample for the named signal."""
         pass
 

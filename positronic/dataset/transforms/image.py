@@ -29,7 +29,7 @@ def resize(
             raise ValueError(f'Expected frame shape (H, W, 3), got {img.shape}')
         return cv2.resize(img, dsize=(width, height), interpolation=interp_flag)
 
-    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+    def fn(x: Sequence[np.ndarray] | np.ndarray) -> Sequence[np.ndarray]:
         return LazySequence(x, per_frame)
 
     return Elementwise(signal, fn)
@@ -76,7 +76,7 @@ def resize_with_pad(
         method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
     """
 
-    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+    def fn(x: Sequence[np.ndarray] | np.ndarray) -> Sequence[np.ndarray]:
         return LazySequence(x, partial(resize_with_pad_per_frame, width, height, method))
 
     return Elementwise(signal, fn)

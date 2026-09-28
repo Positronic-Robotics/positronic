@@ -11,6 +11,7 @@ from positronic.dataset import Episode
 @dataclass
 class DsPlayerStartCommand:
     episode: Episode
+    timeline: str
     start_ts: int | None = None  # Start from `start_ts`
     end_ts: int | None = None  # End at `end_ts`
 
@@ -124,7 +125,7 @@ class _Playback:
                     raise ValueError(f"Requested output '{name}' is static and cannot be emitted")
                 raise KeyError(f"Requested output '{name}' is not present in episode signals")
 
-            playback.streams[name] = iter(signal.time[command.start_ts : command.end_ts])
+            playback.streams[name] = iter(signal.time(command.timeline)[command.start_ts : command.end_ts])
             playback.schedule_next(name)
 
         return playback if playback.heap else None

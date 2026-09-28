@@ -1,6 +1,6 @@
 import numpy as np
 
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms import image
 
 from ...tests.utils import DummySignal
@@ -12,7 +12,7 @@ def test_image_resize_basic():
     frame1 = np.full((h, w, 3), 10, dtype=np.uint8)
     frame2 = np.full((h, w, 3), 200, dtype=np.uint8)
     ts = [1000, 2000]
-    sig = DummySignal(ts, [frame1, frame2])
+    sig = DummySignal(ts, [frame1, frame2], timeline=RECORDED_TIME)
 
     # Resize to (width=3, height=2)
     resized = image.resize(3, 2, sig)
@@ -35,7 +35,7 @@ def test_image_resize_with_pad_basic():
     h, w = 4, 2
     frame = np.full((h, w, 3), 255, dtype=np.uint8)  # white
     ts = [1000]
-    sig = DummySignal(ts, [frame])
+    sig = DummySignal(ts, [frame], timeline=RECORDED_TIME)
 
     resized = image.resize_with_pad(4, 4, sig)  # target H=W=4
     v, t = resized[0]

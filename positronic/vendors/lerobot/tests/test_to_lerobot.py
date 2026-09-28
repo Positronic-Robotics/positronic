@@ -13,6 +13,7 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 import torch  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
+from positronic.dataset.signal import RECORDED_TIME  # noqa: E402
 from positronic.vendors.lerobot.to_lerobot import append_data_to_dataset  # noqa: E402
 
 
@@ -33,13 +34,24 @@ class _MockTimeIndex:
 
 class _MockEpisode:
     def __init__(self, num_frames, fps):
-        self.start_ts = 0
-        self.last_ts = int(num_frames * 1e9 / fps)
+        self._last_ts = int(num_frames * 1e9 / fps)
         data = {
             'observation.state': np.random.randn(num_frames, 8).astype(np.float32),
             'action': np.random.randn(num_frames, 8).astype(np.float32),
         }
-        self.time = _MockTimeIndex(data)
+        self._time = _MockTimeIndex(data)
+
+    def start_ts(self, timeline):
+        assert timeline == RECORDED_TIME
+        return 0
+
+    def last_ts(self, timeline):
+        assert timeline == RECORDED_TIME
+        return self._last_ts
+
+    def time(self, timeline):
+        assert timeline == RECORDED_TIME
+        return self._time
 
 
 class _MockDataset(torch.utils.data.Dataset):

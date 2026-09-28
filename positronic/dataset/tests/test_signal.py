@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms.signals import diff, norm
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 
@@ -12,7 +12,7 @@ from .utils import DummySignal
 def create_signal(tmp_path, data_timestamps, name='test.parquet'):
     """Helper to create a Signal with data and timestamps."""
     filepath = tmp_path / name
-    with SimpleSignalWriter(filepath) as writer:
+    with SimpleSignalWriter(filepath, timeline=RECORDED_TIME) as writer:
         for data, ts in data_timestamps:
             writer.append(data, ts)
     return SimpleSignal(filepath)
@@ -21,7 +21,7 @@ def create_signal(tmp_path, data_timestamps, name='test.parquet'):
 def write_data(tmp_path, data_timestamps, name='test.parquet'):
     """Helper to write data and return filepath."""
     filepath = tmp_path / name
-    with SimpleSignalWriter(filepath) as writer:
+    with SimpleSignalWriter(filepath, timeline=RECORDED_TIME) as writer:
         for data, ts in data_timestamps:
             writer.append(data, ts)
     return filepath
@@ -30,23 +30,23 @@ def write_data(tmp_path, data_timestamps, name='test.parquet'):
 class TestVectorMeta:
     def test_vector_start_last_ts_basic(self, tmp_path):
         fp = tmp_path / 'sig.parquet'
-        with SimpleSignalWriter(fp) as w:
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
             w.append(1, 1000)
             w.append(2, 2000)
             w.append(3, 3000)
         s = SimpleSignal(fp)
-        assert s.start_ts == 1000
-        assert s.last_ts == 3000
+        assert s.start_ts(RECORDED_TIME) == 1000
+        assert s.last_ts(RECORDED_TIME) == 3000
 
     def test_vector_start_last_ts_empty_raises(self, tmp_path):
         fp = tmp_path / 'empty.parquet'
-        with SimpleSignalWriter(fp):
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME):
             pass
         s = SimpleSignal(fp)
         with pytest.raises(ValueError):
-            _ = s.start_ts
+            _ = s.start_ts(RECORDED_TIME)
         with pytest.raises(ValueError):
-            _ = s.last_ts
+            _ = s.last_ts(RECORDED_TIME)
 
 
 class TestSignalWriterAppend:
@@ -58,7 +58,7 @@ class TestSignalWriterAppend:
         assert signal[2] == (44, 3000)
 
     def test_append_non_increasing_timestamp_raises(self, tmp_path):
-        writer = SimpleSignalWriter(tmp_path / 'test.parquet')
+        writer = SimpleSignalWriter(tmp_path / 'test.parquet', timeline=RECORDED_TIME)
         with writer:
             writer.append(42, 1000)
             with pytest.raises(ValueError, match='is not increasing'):
@@ -68,7 +68,7 @@ class TestSignalWriterAppend:
 
     def test_drop_equal_bytes_threshold_scalar(self, tmp_path):
         fp = tmp_path / 'dedupe_scalar.parquet'
-        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32) as w:
+        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32, timeline=RECORDED_TIME) as w:
             w.append(42, 1000)
             w.append(42, 2000)  # equal, dropped
             w.append(43, 3000)  # different, kept
@@ -79,7 +79,7 @@ class TestSignalWriterAppend:
 
     def test_drop_equal_bytes_threshold_numpy_small(self, tmp_path):
         fp = tmp_path / 'dedupe_array.parquet'
-        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64) as w:
+        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64, timeline=RECORDED_TIME) as w:
             w.append(np.array([1, 2, 3], dtype=np.int64), 1000)
             w.append(np.array([1, 2, 3], dtype=np.int64), 2000)  # equal content, dropped
             w.append(np.array([1, 2, 4], dtype=np.int64), 3000)  # different, kept
@@ -101,14 +101,14 @@ class TestSignalWriterContext:
 
     def test_context_writes_data(self, tmp_path):
         filepath = tmp_path / 'test.parquet'
-        with SimpleSignalWriter(filepath) as writer:
+        with SimpleSignalWriter(filepath, timeline=RECORDED_TIME) as writer:
             writer.append(42, 1000)
         signal = SimpleSignal(filepath)
-        assert signal.time[1000] == (42, 1000)
+        assert signal.time(RECORDED_TIME)[1000] == (42, 1000)
 
     def test_context_creates_file(self, tmp_path):
         filepath = tmp_path / 'test.parquet'
-        with SimpleSignalWriter(filepath) as writer:
+        with SimpleSignalWriter(filepath, timeline=RECORDED_TIME) as writer:
             writer.append(42, 1000)
             assert not filepath.exists()
         assert filepath.exists()
@@ -130,7 +130,7 @@ class TestSignalWriterContext:
 
     def test_simple_writer_abort_removes_file_and_blocks_usage(self, tmp_path):
         fp = tmp_path / 'abort.parquet'
-        with SimpleSignalWriter(fp) as w:
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
             w.append(1, 1000)
             w.abort()
             assert not fp.exists()
@@ -143,7 +143,7 @@ class TestSignalWriterChunking:
         filepath = tmp_path / 'large_test.parquet'
         chunk_size, num_records = 1000, 10000
 
-        with SimpleSignalWriter(filepath, chunk_size=chunk_size) as writer:
+        with SimpleSignalWriter(filepath, chunk_size=chunk_size, timeline=RECORDED_TIME) as writer:
             for i in range(num_records):
                 data = np.array([i, i * 2, i * 3], dtype=np.float32)
                 timestamp = i * 10**6  # nanoseconds
@@ -153,11 +153,11 @@ class TestSignalWriterChunking:
 
         reader = SimpleSignal(filepath)
 
-        value, ts = reader.time[5_000_000]
+        value, ts = reader.time(RECORDED_TIME)[5_000_000]
         np.testing.assert_array_equal(value, np.array([5, 10, 15], dtype=np.float32))
         assert ts == 5_000_000
 
-        view = reader.time[0:9_000_001:1_000_000]
+        view = reader.time(RECORDED_TIME)[0:9_000_001:1_000_000]
         assert len(view) == 10
 
         for i in range(10):
@@ -172,25 +172,25 @@ class TestVectorInterface:
     def test_len_and_search_ts_empty(self, tmp_path):
         s = create_signal(tmp_path, [], 'empty.parquet')
         assert len(s) == 0
-        empty = s._search_ts(np.array([], dtype=np.int64))
+        empty = s._search_ts(np.array([], dtype=np.int64), timeline=RECORDED_TIME)
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
 
     def test_search_ts_numeric_and_invalid_dtype(self, tmp_path):
         s = create_signal(tmp_path, [(1, 1000), (2, 2000), (3, 3000)])
         # Accept float array: floor indices for 500, 1500, 2500, 3500
-        idx = s._search_ts(np.array([500.0, 1500.0, 2500.0, 3500.0], dtype=np.float64))
+        idx = s._search_ts(np.array([500.0, 1500.0, 2500.0, 3500.0], dtype=np.float64), timeline=RECORDED_TIME)
         assert np.array_equal(idx, np.array([-1, 0, 1, 2]))
         # Accept scalar float via list-like contract
-        assert s._search_ts([1999.9])[0] == 0
+        assert s._search_ts([1999.9], timeline=RECORDED_TIME)[0] == 0
         # Reject non-numeric dtype
         with pytest.raises(TypeError):
-            _ = s._search_ts(np.array(['1000'], dtype=object))
+            _ = s._search_ts(np.array(['1000'], dtype=object), timeline=RECORDED_TIME)
 
     def test_values_and_ts_at(self, tmp_path):
         s = create_signal(tmp_path, [(np.array([1, 2]), 1000), (np.array([3, 4]), 2000)])
-        assert s._ts_at([1])[0] == 2000
-        ts_arr = s._ts_at(np.array([0, 1], dtype=np.int64))
+        assert s._ts_at([1], timeline=RECORDED_TIME)[0] == 2000
+        ts_arr = s._ts_at(np.array([0, 1], dtype=np.int64), timeline=RECORDED_TIME)
         assert np.array_equal(ts_arr, np.array([1000, 2000], dtype=np.int64))
         v0 = s._values_at([0])[0]
         np.testing.assert_array_equal(v0, [1, 2])
@@ -204,13 +204,13 @@ class TestVectorInterface:
 def sig_simple():
     ts = np.array([1000, 2000, 3000, 4000, 5000], dtype=np.int64)
     vals = np.array([10, 20, 30, 40, 50], dtype=np.int64)
-    return DummySignal(ts, vals)
+    return DummySignal(ts, vals, timeline=RECORDED_TIME)
 
 
 class TestCoreSignalBasics:
     def test_start_last_ts_basic(self, sig_simple):
-        assert sig_simple.start_ts == 1000
-        assert sig_simple.last_ts == 5000
+        assert sig_simple.start_ts(RECORDED_TIME) == 1000
+        assert sig_simple.last_ts(RECORDED_TIME) == 5000
 
     def test_index_scalar_and_negative(self, sig_simple):
         assert sig_simple[0] == (10, 1000)
@@ -261,26 +261,26 @@ class TestCoreSignalBasics:
 class TestCoreSignalTime:
     def test_time_scalar_cases(self, sig_simple):
         with pytest.raises(KeyError):
-            _ = sig_simple.time[999]
-        assert sig_simple.time[1000] == (10, 1000)
-        assert sig_simple.time[2500] == (20, 2000)
-        assert sig_simple.time[2500.0] == (20, 2000)
-        assert sig_simple.time[9999] == (50, 5000)
+            _ = sig_simple.time(RECORDED_TIME)[999]
+        assert sig_simple.time(RECORDED_TIME)[1000] == (10, 1000)
+        assert sig_simple.time(RECORDED_TIME)[2500] == (20, 2000)
+        assert sig_simple.time(RECORDED_TIME)[2500.0] == (20, 2000)
+        assert sig_simple.time(RECORDED_TIME)[9999] == (50, 5000)
 
     def test_time_window_basic(self, sig_simple):
-        view = sig_simple.time[1500:4500]
+        view = sig_simple.time(RECORDED_TIME)[1500:4500]
         assert list(view) == [(10, 1500), (20, 2000), (30, 3000), (40, 4000)]
-        v2 = sig_simple.time[:3000]
+        v2 = sig_simple.time(RECORDED_TIME)[:3000]
         assert len(v2) == 2
-        v3 = sig_simple.time[3000:]
+        v3 = sig_simple.time(RECORDED_TIME)[3000:]
         assert len(v3) == 3
-        v4 = sig_simple.time[:]
+        v4 = sig_simple.time(RECORDED_TIME)[:]
         assert len(v4) == len(sig_simple)
-        assert len(sig_simple.time[:900]) == 0
-        assert list(sig_simple.time[6000:]) == [(50, 6000)]
+        assert len(sig_simple.time(RECORDED_TIME)[:900]) == 0
+        assert list(sig_simple.time(RECORDED_TIME)[6000:]) == [(50, 6000)]
 
     def test_time_window_injects_start(self, sig_simple):
-        v = sig_simple.time[1500:3500]
+        v = sig_simple.time(RECORDED_TIME)[1500:3500]
         assert len(v) == 3
         assert v[0] == (10, 1500)
         assert v[1] == (20, 2000)
@@ -289,43 +289,43 @@ class TestCoreSignalTime:
     def test_time_stepped_empty_signal(self):
         ts = np.array([], dtype=np.int64)
         vals = np.array([], dtype=np.int64)
-        sig = DummySignal(ts, vals)
-        sampled = sig.time[1000:5000:1000]
+        sig = DummySignal(ts, vals, timeline=RECORDED_TIME)
+        sampled = sig.time(RECORDED_TIME)[1000:5000:1000]
         assert len(sampled) == 0
 
     def test_time_window_no_inject_when_exact(self, sig_simple):
-        v = sig_simple.time[2000:3500]
+        v = sig_simple.time(RECORDED_TIME)[2000:3500]
         assert len(v) == 2
         assert v[0] == (20, 2000)
         assert v[1] == (30, 3000)
 
     def test_time_window_start_before_first_no_inject(self, sig_simple):
-        assert list(sig_simple.time[500:2500]) == [(10, 1000), (20, 2000)]
+        assert list(sig_simple.time(RECORDED_TIME)[500:2500]) == [(10, 1000), (20, 2000)]
 
     def test_time_window_start_before_first_injects_start(self, sig_simple):
-        assert list(sig_simple.time[100:900]) == []
+        assert list(sig_simple.time(RECORDED_TIME)[100:900]) == []
 
     def test_time_stepped(self, sig_simple):
-        sampled = sig_simple.time[1000:6000:2000]
+        sampled = sig_simple.time(RECORDED_TIME)[1000:6000:2000]
         assert list(sampled) == [(10, 1000), (30, 3000), (50, 5000)]
         with pytest.raises(ValueError):
-            _ = sig_simple.time[:5000:1000]
+            _ = sig_simple.time(RECORDED_TIME)[:5000:1000]
         with pytest.raises(ValueError):
-            _ = sig_simple.time[1000:3000:0]
+            _ = sig_simple.time(RECORDED_TIME)[1000:3000:0]
         with pytest.raises(ValueError):
-            _ = sig_simple.time[1000:3000:-1000]
+            _ = sig_simple.time(RECORDED_TIME)[1000:3000:-1000]
         with pytest.raises(KeyError):
-            _ = sig_simple.time[500:3000:1000]
-        full = sig_simple.time[1000::1000]
+            _ = sig_simple.time(RECORDED_TIME)[500:3000:1000]
+        full = sig_simple.time(RECORDED_TIME)[1000::1000]
         assert list(full) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
 
     def test_time_array_sampling(self, sig_simple):
         req = [1000, 1500, 3000]
-        view = sig_simple.time[req]
+        view = sig_simple.time(RECORDED_TIME)[req]
         assert list(view) == [(10, 1000), (10, 1500), (30, 3000)]
-        view2 = sig_simple.time[[3000, 1000, 3000]]
+        view2 = sig_simple.time(RECORDED_TIME)[[3000, 1000, 3000]]
         assert list(view2) == [(30, 3000), (10, 1000), (30, 3000)]
-        viewf = sig_simple.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+        viewf = sig_simple.time(RECORDED_TIME)[np.array([1000.0, 2500.0], dtype=np.float64)]
         assert list(viewf) == [(10, 1000.0), (20, 2500.0)]
 
 
@@ -338,7 +338,7 @@ class TestCoreSignalViews:
         assert v2[1] == (40, 4000)
 
     def test_time_slice_then_index(self, sig_simple):
-        v = sig_simple.time[1500:4500]
+        v = sig_simple.time(RECORDED_TIME)[1500:4500]
         assert v[0] == (10, 1500)
         assert v[-1] == (40, 4000)
         vv = v[1:]
@@ -348,12 +348,12 @@ class TestCoreSignalViews:
         assert vv[2] == (40, 4000)
 
     def test_time_sample_then_time_slice(self, sig_simple):
-        sampled = sig_simple.time[[1500, 2500, 3500, 4500]]
-        sub = sampled.time[2500:4500]
+        sampled = sig_simple.time(RECORDED_TIME)[[1500, 2500, 3500, 4500]]
+        sub = sampled.time(RECORDED_TIME)[2500:4500]
         assert list(sub) == [(20, 2500), (30, 3500)]
 
     def test_iteration_over_views(self, sig_simple):
-        v = sig_simple.time[2000:5000]
+        v = sig_simple.time(RECORDED_TIME)[2000:5000]
         items = list(v)
         assert items == [(20, 2000), (30, 3000), (40, 4000)]
 
@@ -363,27 +363,27 @@ class TestCoreSignalViews:
         assert list(sub) == [(20, 2000), (40, 4000)]
 
     def test_time_slice_of_time_slice(self, sig_simple):
-        first = sig_simple.time[1500:4500]
-        second = first.time[2000:3500]
+        first = sig_simple.time(RECORDED_TIME)[1500:4500]
+        second = first.time(RECORDED_TIME)[2000:3500]
         assert list(second) == [(20, 2000), (30, 3000)]
 
     def test_iter_over_stepped_sampling(self, sig_simple):
-        sampled = sig_simple.time[1500:3500:1000]
+        sampled = sig_simple.time(RECORDED_TIME)[1500:3500:1000]
         assert list(sampled) == [(10, 1500), (20, 2500)]
 
     def test_time_array_mixed_before_first(self, sig_simple):
         with pytest.raises(KeyError):
-            _ = sig_simple.time[[500, 1000]]
+            _ = sig_simple.time(RECORDED_TIME)[[500, 1000]]
 
     def test_time_array_empty(self, sig_simple):
-        view = sig_simple.time[[]]
+        view = sig_simple.time(RECORDED_TIME)[[]]
         assert len(view) == 0
 
 
 class TestSignalDtypeShape:
     def test_empty_signal_dtype_shape_raises(self, tmp_path):
         fp = tmp_path / 'empty.parquet'
-        with SimpleSignalWriter(fp):
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME):
             pass
         s = SimpleSignal(fp)
         with pytest.raises(ValueError):
@@ -420,7 +420,7 @@ class TestSignalDtypeShape:
         obj_vals = np.empty(2, dtype=object)
         obj_vals[0] = (np.array([1, 2, 3], dtype=np.int32), 5.0)
         obj_vals[1] = (np.array([4, 5, 6], dtype=np.int32), 6.0)
-        sig = DummySignal(ts, obj_vals)
+        sig = DummySignal(ts, obj_vals, timeline=RECORDED_TIME)
         assert sig.dtype == (np.int32, float)
         assert sig.shape == ((3,), ())
 
@@ -429,7 +429,7 @@ class TestSignalDtypeShape:
         obj_vals = np.empty(2, dtype=object)
         obj_vals[0] = [1, 2, 3]
         obj_vals[1] = [4, 5, 6]
-        sig = DummySignal(ts, obj_vals)
+        sig = DummySignal(ts, obj_vals, timeline=RECORDED_TIME)
         assert sig.dtype is list
         assert sig.shape is None
 
@@ -438,7 +438,7 @@ class TestExtraTimelines:
     def test_simple_signal_writer_with_extra_timelines(self, tmp_path):
         """Test that SimpleSignalWriter stores extra timelines in separate columns."""
         fp = tmp_path / 'extra_timelines.parquet'
-        with SimpleSignalWriter(fp) as w:
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
             w.append(10, 1000, extra_ts={'producer': 900, 'consumer': 1100})
             w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
             w.append(30, 3000, extra_ts={'producer': 2900, 'consumer': 3100})
@@ -457,7 +457,7 @@ class TestExtraTimelines:
     def test_simple_signal_empty_with_extra_timelines(self, tmp_path):
         """Test that empty signal writer with no appends doesn't create extra timeline columns."""
         fp = tmp_path / 'empty_extra.parquet'
-        with SimpleSignalWriter(fp):
+        with SimpleSignalWriter(fp, timeline=RECORDED_TIME):
             pass
 
         table = pq.read_table(fp)
@@ -468,7 +468,7 @@ class TestExtraTimelines:
         """Test that inconsistent extra_ts keys across appends raises ValueError."""
         fp = tmp_path / 'inconsistent.parquet'
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with SimpleSignalWriter(fp) as w:
+            with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
                 w.append(10, 1000, extra_ts={'producer': 900})
                 w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
 
@@ -476,7 +476,7 @@ class TestExtraTimelines:
         """Test that omitting extra_ts after providing it first raises ValueError."""
         fp = tmp_path / 'missing.parquet'
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with SimpleSignalWriter(fp) as w:
+            with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
                 w.append(10, 1000, extra_ts={'producer': 900})
                 w.append(20, 2000)
 
@@ -484,7 +484,7 @@ class TestExtraTimelines:
         """Test that adding extra_ts after first append without it raises ValueError."""
         fp = tmp_path / 'late_extra.parquet'
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with SimpleSignalWriter(fp) as w:
+            with SimpleSignalWriter(fp, timeline=RECORDED_TIME) as w:
                 w.append(10, 1000)
                 w.append(20, 2000, extra_ts={'producer': 1900})
 
@@ -492,14 +492,14 @@ class TestExtraTimelines:
 def _make_signal(ts_sec, vals):
     """Create a DummySignal from timestamps in seconds and a 2D value array."""
     ts = (np.asarray(ts_sec, dtype=np.float64) * 1e9).astype(np.int64)
-    return DummySignal(ts, np.asarray(vals, dtype=np.float64))
+    return DummySignal(ts, np.asarray(vals, dtype=np.float64), timeline=RECORDED_TIME)
 
 
 class TestDiff:
     def test_velocity_of_linear_is_constant(self):
         # f(t) = [t, 2t] → velocity = [1, 2]
         sig = _make_signal([0, 1, 2, 3, 4], [[0, 0], [1, 2], [2, 4], [3, 6], [4, 8]])
-        vel = diff(sig, dt_sec=1.0)
+        vel = diff(sig, dt_sec=1.0, timeline=RECORDED_TIME)
         # Centered diff trims 1 from start; last point clamps so skip it
         vals = np.array(vel._values_at(np.arange(len(vel) - 1)))
         np.testing.assert_allclose(vals, [[1.0, 2.0]] * len(vals))
@@ -508,7 +508,7 @@ class TestDiff:
         # f(t) = [t²] → acceleration = [2]
         t = np.arange(7, dtype=np.float64)
         sig = _make_signal(t, (t**2).reshape(-1, 1))
-        accel = diff(sig, dt_sec=1.0, order=2)
+        accel = diff(sig, dt_sec=1.0, order=2, timeline=RECORDED_TIME)
         # Trims 1 from start; last point clamps so skip it
         vals = np.array(accel._values_at(np.arange(len(accel) - 1)))
         np.testing.assert_allclose(vals, [[2.0]] * len(vals))
@@ -516,7 +516,7 @@ class TestDiff:
     def test_invalid_order_raises(self):
         sig = _make_signal([0, 1], [[0], [1]])
         with pytest.raises(ValueError, match='order'):
-            diff(sig, dt_sec=1.0, order=3)
+            diff(sig, dt_sec=1.0, order=3, timeline=RECORDED_TIME)
 
 
 class TestNorm:
@@ -531,3 +531,42 @@ class TestNorm:
         n = norm(sig)
         vals = np.array(n._values_at(np.arange(3)))
         np.testing.assert_allclose(vals, [3.0, 0.0, 5.0])
+
+
+@pytest.mark.parametrize('count', [0, 3])
+def test_named_timeline_round_trip_and_views(tmp_path, count):
+    path = tmp_path / 'named.parquet'
+    with SimpleSignalWriter(path, timeline='world', chunk_size=1) as writer:
+        for i in range(count):
+            writer.append(i, 100 + i * 10)
+    signal = SimpleSignal(path)
+    assert signal.timeline == 'world'
+    assert signal[:].timeline == 'world'
+    assert list(signal.keys('world')) == [100 + i * 10 for i in range(count)]
+    with pytest.raises(KeyError, match='absent'):
+        signal.time(RECORDED_TIME)
+    with pytest.raises(KeyError, match='absent'):
+        signal[:].keys(RECORDED_TIME)
+    if count:
+        assert signal.time('world')[115] == (1, 110)
+        assert signal.time('world')[[105, 115]].timeline == 'world'
+
+
+@pytest.mark.parametrize('name', ['', '  ', None])
+def test_timeline_names_must_be_nonempty(tmp_path, name):
+    with pytest.raises(ValueError, match='non-empty'):
+        SimpleSignalWriter(tmp_path / 'invalid.parquet', timeline=name)
+    signal = create_signal(tmp_path, [(1, 100)])
+    with pytest.raises(ValueError, match='non-empty'):
+        signal.time(name)
+
+
+def test_legacy_signal_has_explicit_recorded_timeline(tmp_path):
+    path = write_data(tmp_path, [(1, 100), (2, 200)])
+    table = pq.read_table(path).replace_schema_metadata(None)
+    pq.write_table(table, path)
+    signal = SimpleSignal(path)
+    assert signal.timeline == RECORDED_TIME
+    assert signal.time(RECORDED_TIME)[150] == (1, 100)
+    with pytest.raises(KeyError):
+        signal.time('wall')

@@ -7,7 +7,16 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
+from .signal import (
+    RECORDED_TIME,
+    TIMELINE_METADATA_KEY,
+    IndicesLike,
+    RealNumericArrayLike,
+    Signal,
+    SignalWriter,
+    is_realnum_dtype,
+    validate_timeline,
+)
 
 T = TypeVar('T')
 
@@ -23,9 +32,19 @@ class SimpleSignal(Signal[T]):
     def __init__(self, filepath: Path):
         """Initialize Signal reader from a parquet file."""
         self.filepath = filepath
+        self._timeline: str | None = None
         self._timestamps: np.ndarray | None = None
         self._values: np.ndarray | None = None
         self._bounds: tuple[int, int, int] | None = None  # (first_ts, last_ts, num_rows)
+
+    @property
+    def timeline(self) -> str:
+        if self._timeline is None:
+            metadata = pq.read_schema(self.filepath).metadata or {}
+            name: str = metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
+            validate_timeline(name)
+            self._timeline = name
+        return self._timeline
 
     def _load_bounds(self):
         """Load signal bounds from parquet row-group statistics (reads only the file footer)."""
@@ -76,21 +95,22 @@ class SimpleSignal(Signal[T]):
         self._load_bounds()
         return self._bounds[2]
 
-    @property
-    def start_ts(self) -> int:
+    def start_ts(self, timeline: str) -> int:
+        self._check_timeline(timeline)
         self._load_bounds()
         if self._bounds[2] == 0:
             raise ValueError('Signal is empty')
         return self._bounds[0]
 
-    @property
-    def last_ts(self) -> int:
+    def last_ts(self, timeline: str) -> int:
+        self._check_timeline(timeline)
         self._load_bounds()
         if self._bounds[2] == 0:
             raise ValueError('Signal is empty')
         return self._bounds[1]
 
-    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
@@ -98,7 +118,8 @@ class SimpleSignal(Signal[T]):
         self._load_values()
         return self._values[index_or_indices]
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
+    def _search_ts(self, ts_or_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:
@@ -116,7 +137,9 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None):
+    def __init__(
+        self, filepath: Path, *, timeline: str, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None
+    ):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
@@ -125,6 +148,8 @@ class SimpleSignalWriter(SignalWriter[T]):
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
         """
+        validate_timeline(timeline)
+        self.timeline = timeline
         self.filepath = filepath
         self.chunk_size = chunk_size
         self._drop_equal_bytes_threshold = drop_equal_bytes_threshold
@@ -172,7 +197,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             arrays.append(pa.array(self._extra_timelines[timeline_name], type=pa.int64()))
             column_names.append(f'ts_ns.{timeline_name}')
 
-        batch = pa.record_batch(arrays, names=column_names)
+        batch = pa.record_batch(arrays, names=column_names).replace_schema_metadata({
+            TIMELINE_METADATA_KEY: self.timeline.encode()
+        })
 
         if self._writer is None:
             schema = batch.schema
@@ -270,7 +297,7 @@ class SimpleSignalWriter(SignalWriter[T]):
                     fields.append((col_name, pa.int64()))
                     data_dict[col_name] = []
 
-                schema = pa.schema(fields)
+                schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.timeline.encode()})
                 table = pa.table(data_dict, schema=schema)
                 pq.write_table(table, self.filepath)
 

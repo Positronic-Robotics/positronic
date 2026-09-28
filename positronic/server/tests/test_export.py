@@ -22,6 +22,7 @@ from positronic.dataset import Dataset
 from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.server import export, positronic_server
@@ -103,7 +104,9 @@ def a_dataset(root: Path, *statics: dict) -> Dataset:
                 for name, value in static.items():
                     episode.set_static(name, value)
                 for step in range(4):
-                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
+                    episode.append(
+                        keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000, timeline=RECORDED_TIME
+                    )
     return load_all_datasets(root)
 
 

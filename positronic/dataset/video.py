@@ -15,7 +15,18 @@ import pyarrow.parquet as pq
 from av.container import OutputContainer
 from av.video.stream import VideoStream
 
-from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
+from .signal import (
+    RECORDED_TIME,
+    TIMELINE_METADATA_KEY,
+    IndicesLike,
+    Kind,
+    RealNumericArrayLike,
+    Signal,
+    SignalMeta,
+    SignalWriter,
+    is_realnum_dtype,
+    validate_timeline,
+)
 
 
 class VideoEncoderSession(Protocol):
@@ -109,6 +120,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
         gop_size: int = 30,
         fps: int = 100,
+        *,
+        timeline: str,
     ):
         """Initialize VideoSignalWriter.
 
@@ -119,6 +132,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
         """
+        validate_timeline(timeline)
+        self.timeline = timeline
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.encoder = encoder
@@ -264,9 +279,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             fields.append((col_name, pa.int64()))
 
         if self._frame_timestamps:
-            frames_table = pa.table(data_dict)
+            frames_table = pa.table(data_dict).replace_schema_metadata({TIMELINE_METADATA_KEY: self.timeline.encode()})
         else:
-            schema = pa.schema(fields)
+            schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.timeline.encode()})
             frames_table = pa.table(data_dict, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
@@ -364,8 +379,18 @@ class VideoSignal(Signal[np.ndarray]):
         # TODO: Profile it to find the best default threshold
         self._seek_threshold = seek_threshold or 30
 
+        self._timeline: str | None = None
         self._timestamps = None
         self._navigator: _VideoNavigator | None = None
+
+    @property
+    def timeline(self) -> str:
+        if self._timeline is None:
+            metadata = pq.read_schema(self.frames_index_path).metadata or {}
+            name: str = metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
+            validate_timeline(name)
+            self._timeline = name
+        return self._timeline
 
     def _load_timestamps(self):
         """Lazily load timestamps from the index file."""
@@ -397,7 +422,8 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f'Could not decode frame {index}')
 
-    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
@@ -433,7 +459,8 @@ class VideoSignal(Signal[np.ndarray]):
             idxs = np.asarray(index_or_indices, dtype=np.int64)
         return VideoSignal._LazyFrames(self, idxs)
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
+    def _search_ts(self, ts_or_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:

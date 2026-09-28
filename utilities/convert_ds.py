@@ -27,7 +27,7 @@ import tqdm
 from positronic import keys
 from positronic.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
 from positronic.dataset.video import VideoSignal
@@ -46,9 +46,13 @@ def update_v0_1_0(path: str):
         LocalDataset(Path(path)),
         Group(
             Derive(**{
-                'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
-                'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
-                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
+                'controller_positions.right': Concat(
+                    'right_controller_translation', 'right_controller_quaternion', timeline=RECORDED_TIME
+                ),
+                'robot_commands.pose': Concat(
+                    'target_robot_position_translation', 'target_robot_position_quaternion', timeline=RECORDED_TIME
+                ),
+                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion', timeline=RECORDED_TIME),
                 'task': FromValue('Pick up the green cube and place it on the red cube.'),
             }),
             Rename(**{
@@ -81,7 +85,7 @@ def main(output_path: str, original_ds: Dataset | None = None):
                         continue
 
                     for value, ts in signal:
-                        ew.append(key, value, ts)
+                        ew.append(key, value, ts, timeline=signal.timeline)
 
 
 if __name__ == '__main__':

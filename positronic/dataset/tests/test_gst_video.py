@@ -7,6 +7,7 @@ import pytest
 
 from positronic.cfg.video_encoder import jetson_h264
 from positronic.dataset.gst_video import GST_INSPECT, GST_LAUNCH, GstH264Encoder, RawFormat
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 
 # The software stand-in for the Jetson chain, with the same frame budget
@@ -49,7 +50,7 @@ def _psnr(a: np.ndarray, b: np.ndarray) -> float:
 
 def _write(tmp_path: Path, encoder: GstH264Encoder, frames: list[np.ndarray]) -> VideoSignal:
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
-    with VideoSignalWriter(video, index, encoder) as w:
+    with VideoSignalWriter(video, index, encoder, timeline=RECORDED_TIME) as w:
         for i, frame in enumerate(frames):
             w.append(frame, 1_000_000_000 + i * 33_333_333)
     return VideoSignal(video, index)
@@ -109,7 +110,7 @@ def test_every_frame_reads_back_at_its_index_and_timestamp(tmp_path):
     signal = _write(tmp_path, SOFTWARE_H264, frames)
 
     assert len(signal) == len(frames)
-    np.testing.assert_array_equal(signal.keys(), [1_000_000_000 + i * 33_333_333 for i in range(45)])
+    np.testing.assert_array_equal(signal.keys(RECORDED_TIME), [1_000_000_000 + i * 33_333_333 for i in range(45)])
     decoded = signal.values()
     for i in (0, 44, 3, 31, 30, 29, 12):
         assert _psnr(decoded[i], frames[i]) > 30, f'frame {i}'
@@ -144,7 +145,9 @@ def test_flat_colours_keep_their_channels(tmp_path, raw_format):
 def test_a_pipeline_that_fails_surfaces_its_error(tmp_path):
     broken = GstH264Encoder(('nosuchelement',), (), SOFTWARE_H264.frame_bits)
     with pytest.raises(RuntimeError, match='Video encoding failed') as failed:
-        with VideoSignalWriter(tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet', broken) as w:
+        with VideoSignalWriter(
+            tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet', broken, timeline=RECORDED_TIME
+        ) as w:
             for i in range(20):
                 w.append(_textured_frame(i), i + 1)
     assert 'nosuchelement' in str(failed.value.__cause__)
@@ -153,7 +156,7 @@ def test_a_pipeline_that_fails_surfaces_its_error(tmp_path):
 @needs_gstreamer
 def test_abort_stops_the_process_and_deletes_the_files(tmp_path):
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
-    w = VideoSignalWriter(video, index, SOFTWARE_H264)
+    w = VideoSignalWriter(video, index, SOFTWARE_H264, timeline=RECORDED_TIME)
     for i in range(5):
         w.append(_textured_frame(i), i + 1)
     w.abort()

@@ -33,21 +33,27 @@ class Elementwise(Signal[U]):
 
     """
 
-    def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T]], Sequence[U]]):
+    def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T] | np.ndarray], Sequence[U] | np.ndarray]):
         self._signal = signal
         self._fn = fn
+
+    @property
+    def timeline(self) -> str:
+        return self._signal.timeline
 
     def __len__(self) -> int:
         return len(self._signal)
 
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        return self._signal._ts_at(indices)
+    def _ts_at(self, indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
+        return self._signal._ts_at(indices, timeline=timeline)
 
-    def _values_at(self, indices: IndicesLike) -> Sequence[U]:
+    def _values_at(self, indices: IndicesLike) -> Sequence[U] | np.ndarray:
         return self._fn(self._signal._values_at(indices))
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        return self._signal._search_ts(ts_array)
+    def _search_ts(self, ts_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
+        return self._signal._search_ts(ts_array, timeline=timeline)
 
     @staticmethod
     def _best_fn_name(fn: Callable[..., Any]) -> str:
@@ -95,6 +101,10 @@ class IndexOffsets(Signal[tuple]):
         self._max_off = int(np.max(self._offs))
         self._include_ref_ts = bool(include_ref_ts)
 
+    @property
+    def timeline(self) -> str:
+        return self._signal.timeline
+
     def __len__(self) -> int:
         n = len(self._signal)
         start_trim = max(0, -self._min_off)
@@ -108,9 +118,10 @@ class IndexOffsets(Signal[tuple]):
         n = len(self._signal)
         return n - 1 - max(0, self._max_off)
 
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         base = _as_indices(indices, len(self)) + self._base_start()
-        return self._signal._ts_at(base)
+        return self._signal._ts_at(base, timeline=timeline)
 
     def _values_at(self, indices: IndicesLike):
         base = _as_indices(indices, len(self)) + self._base_start()
@@ -120,12 +131,10 @@ class IndexOffsets(Signal[tuple]):
             idxs = base + int(off)
             vals_parts.append(self._signal._values_at(idxs))
             if self._include_ref_ts:
-                ts_parts.append(self._signal._ts_at(idxs))
+                ts_parts.append(self._signal._ts_at(idxs, timeline=self.timeline))
 
         n = len(self._offs)
         if not self._include_ref_ts:
-            # TODO: same as TimeOffsets — return np.stack(vals_parts, axis=1) once the
-            # Signal contract allows stacked ndarrays from _values_at.
             return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
         else:
             if n == 1:
@@ -135,13 +144,14 @@ class IndexOffsets(Signal[tuple]):
             out = [(tuple(parts[i] for parts in vals_parts), ts[i]) for i in range(len(base))]
             return out
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
+    def _search_ts(self, ts_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
         # Map parent floor indices to view indices, clamping to valid range.
+        self._check_timeline(timeline)
         n = len(self)
         t = np.asarray(ts_array)
         if n == 0:
             return np.full_like(t, -1, dtype=np.int64)  # nothing valid in this view
-        p = np.asarray(self._signal._search_ts(t))
+        p = np.asarray(self._signal._search_ts(t, timeline=timeline))
         base_start = self._base_start()
         base_last = self._base_last()
         view_idx = p - base_start
@@ -174,7 +184,8 @@ class TimeOffsets(Signal[tuple]):
         Zero offsets retain the original source name.
     """
 
-    def __init__(self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False) -> None:
+    def __init__(self, signal: Signal[T], *deltas_ts: int, timeline: str, include_ref_ts: bool = False) -> None:
+        signal._check_timeline(timeline)
         self._signal = signal
         if len(deltas_ts) == 0:
             raise ValueError('deltas_ts must be non-empty')
@@ -200,16 +211,20 @@ class TimeOffsets(Signal[tuple]):
         last_index = n - 1
         neg = self._deltas[self._deltas < 0]
         if neg.size > 0:
-            thr = int(self._signal.start_ts + int(np.max(-neg)))
-            floor_idx = int(self._signal._search_ts([thr])[0])
+            thr = int(self._signal.start_ts(self.timeline) + int(np.max(-neg)))
+            floor_idx = int(self._signal._search_ts([thr], timeline=self.timeline)[0])
             if floor_idx < 0:
                 start_offset = 0
             else:
-                floor_ts = _ts_at_index(self._signal, floor_idx)
+                floor_ts = _ts_at_index(self._signal, floor_idx, timeline=self.timeline)
                 start_offset = floor_idx if floor_ts == thr else floor_idx + 1
         self._start_offset = start_offset
         self._last_index = last_index
         self._bounds_ready = True
+
+    @property
+    def timeline(self) -> str:
+        return self._signal.timeline
 
     def __len__(self) -> int:
         self._compute_bounds()
@@ -217,36 +232,34 @@ class TimeOffsets(Signal[tuple]):
             return 0
         return self._last_index - self._start_offset + 1
 
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._compute_bounds()
         idxs = _as_indices(indices, len(self))
         if self._start_offset == 0:
-            return self._signal._ts_at(idxs)
+            return self._signal._ts_at(idxs, timeline=timeline)
         else:
-            return self._signal._ts_at(idxs + self._start_offset)
+            return self._signal._ts_at(idxs + self._start_offset, timeline=timeline)
 
     def _values_at(self, indices: IndicesLike):
         self._compute_bounds()
         base = _as_indices(indices, len(self))
         if self._start_offset > 0:
             base = base + self._start_offset
-        ref_ts = np.asarray(self._signal._ts_at(base), dtype=np.int64)
+        ref_ts = np.asarray(self._signal._ts_at(base, timeline=self.timeline), dtype=np.int64)
 
         vals_parts = []
         ts_parts = []
         for d in self._deltas:
             target_ts = ref_ts + int(d)
-            idx = self._signal._search_ts(target_ts)
+            idx = self._signal._search_ts(target_ts, timeline=self.timeline)
             vals_parts.append(self._signal._values_at(idx))
             if self._include_ref_ts:
-                ts_parts.append(self._signal._ts_at(idx))
+                ts_parts.append(self._signal._ts_at(idx, timeline=self.timeline))
 
         n = len(self._deltas)
         if not self._include_ref_ts:
-            # TODO: vals_parts are already batched arrays — zip tears them into per-row
-            # tuples that downstream Elementwise fns often reassemble with np.array().
-            # Return np.stack(vals_parts, axis=1) instead once the Signal contract is
-            # extended to allow _values_at to return stacked ndarrays.
+            # TODO: Stack homogeneous numeric batches without converting each row to a tuple.
             return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
 
         if n == 1:
@@ -256,9 +269,10 @@ class TimeOffsets(Signal[tuple]):
         out = [(tuple(parts[i] for parts in vals_parts), ts[i]) for i in range(len(base))]
         return out
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
+    def _search_ts(self, ts_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._compute_bounds()
-        parent_idx = np.asarray(self._signal._search_ts(ts_array))
+        parent_idx = np.asarray(self._signal._search_ts(ts_array, timeline=timeline))
         if (self._deltas < 0).any():
             shifted = parent_idx - self._start_offset
             shifted[parent_idx < self._start_offset] = -1
@@ -266,16 +280,16 @@ class TimeOffsets(Signal[tuple]):
         return parent_idx
 
 
-def _ts_at_index(sig: Signal[T], idx: int) -> int:
+def _ts_at_index(sig: Signal[T], idx: int, *, timeline: str) -> int:
     """Fetch a single timestamp at the given index as int."""
-    return int(sig._ts_at([idx])[0])
+    return int(sig._ts_at([idx], timeline=timeline)[0])
 
 
-def _first_idx_at_or_after(sig: Signal[T], ts: int) -> int:
-    floor = int(sig._search_ts([ts])[0])
+def _first_idx_at_or_after(sig: Signal[T], ts: int, *, timeline: str) -> int:
+    floor = int(sig._search_ts([ts], timeline=timeline)[0])
     if floor < 0:
         return 0
-    floor_ts = _ts_at_index(sig, floor)
+    floor_ts = _ts_at_index(sig, floor, timeline=timeline)
     return floor if floor_ts == ts else floor + 1
 
 
@@ -305,9 +319,12 @@ class Join(Signal[tuple]):
 
     """
 
-    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
+    def __init__(self, *signals: Signal[Any], timeline: str, include_ref_ts: bool = False) -> None:
         if len(signals) < 2:
             raise ValueError('Join requires at least two signals')
+        for signal in signals:
+            signal._check_timeline(timeline)
+        self._timeline = timeline
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
         self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
@@ -324,14 +341,14 @@ class Join(Signal[tuple]):
             self._length = 0
             self._bounds_ready = True
             return
-        start_ts = max(s.start_ts for s in self._signals)
-        self._starts = [_first_idx_at_or_after(s, start_ts) for s in self._signals]
+        start_ts = max(s.start_ts(self.timeline) for s in self._signals)
+        self._starts = [_first_idx_at_or_after(s, start_ts, timeline=self.timeline) for s in self._signals]
         # Collect timestamps from each signal starting at its aligned start
         ts_arrays = []
         for s, st in zip(self._signals, self._starts, strict=False):
             if st < len(s):
                 idxs = np.arange(st, len(s), dtype=np.int64)
-                ts_arrays.append(s._ts_at(idxs))
+                ts_arrays.append(s._ts_at(idxs, timeline=self.timeline))
         if len(ts_arrays) == 0:
             self._union_ts = np.empty((0,), dtype=np.int64)
         else:
@@ -340,39 +357,41 @@ class Join(Signal[tuple]):
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
 
-    # Note: previous 2-way merge helper removed; union now built via numpy unique.
+    @property
+    def timeline(self) -> str:
+        return self._timeline
 
     def __len__(self) -> int:
         self._compute_bounds()
         return self._length
 
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._compute_bounds()
         idxs = _as_indices(indices, len(self))
         return self._union_ts[idxs]
 
     def _values_at(self, indices: IndicesLike):
-        ts = np.asarray(self._ts_at(indices), dtype=np.int64)
+        ts = np.asarray(self._ts_at(indices, timeline=self.timeline), dtype=np.int64)
         # For each signal, sample at-or-before these timestamps
-        idx_all = [s._search_ts(ts) for s in self._signals]
+        idx_all = [s._search_ts(ts, timeline=self.timeline) for s in self._signals]
         vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all, strict=False)]
-        tss_all = [s._ts_at(idx) for s, idx in zip(self._signals, idx_all, strict=False)]
+        tss_all = [s._ts_at(idx, timeline=self.timeline) for s, idx in zip(self._signals, idx_all, strict=False)]
 
         if not self._include_ref_ts:
-            # TODO: same as TimeOffsets — return np.stack(vals_all, axis=1) once the
-            # Signal contract allows stacked ndarrays from _values_at.
             return [tuple(row) for row in zip(*vals_all, strict=False)]
         else:
             ts_mat = np.stack([np.asarray(t, dtype=np.int64) for t in tss_all], axis=1)
             return [(tuple(row_vals), ts_mat[i]) for i, row_vals in enumerate(zip(*vals_all, strict=False))]
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
+    def _search_ts(self, ts_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
+        self._check_timeline(timeline)
         self._compute_bounds()
         assert self._union_ts is not None
         return np.searchsorted(self._union_ts, ts_array, side='right') - 1
 
 
-def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
+def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple] | np.ndarray) -> np.ndarray:
     """Pickable callable that concatenates multiple array signals into a single array signal."""
     # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
     # High-performance path: preallocate (batch, total_dim) and fill via slicing.
@@ -401,7 +420,7 @@ def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
     return out
 
 
-def concat(*signals, dtype: np.dtype | str | None = None) -> NpSignal:
+def concat(*signals, timeline: str, dtype: np.typing.DTypeLike | None = None) -> NpSignal:
     """Concatenate multiple 1D array signals into a single array signal.
 
     - Aligns signals on the union of timestamps with carry-back semantics.
@@ -412,9 +431,12 @@ def concat(*signals, dtype: np.dtype | str | None = None) -> NpSignal:
     if n == 0:
         raise ValueError('concat requires at least one key')
     if n == 1:
+        signals[0]._check_timeline(timeline)
         return signals[0]
 
-    return Elementwise(Join(*signals), partial(_concat_per_frame, dtype))
+    return Elementwise(
+        Join(*signals, timeline=timeline), partial(_concat_per_frame, np.dtype(dtype) if dtype is not None else None)
+    )
 
 
 def _astype_per_frame(dtype: np.dtype, x: np.ndarray) -> np.ndarray:
@@ -437,7 +459,7 @@ def view(signal: NpSignal, slice: slice) -> NpSignal:
     return Elementwise(signal, fn)
 
 
-def diff(signal: NpSignal, dt_sec: float, order: int = 1) -> NpSignal:
+def diff(signal: NpSignal, dt_sec: float, order: int = 1, *, timeline: str) -> NpSignal:
     """Centered finite-difference derivative of a vector signal.
 
     Args:
@@ -456,18 +478,18 @@ def diff(signal: NpSignal, dt_sec: float, order: int = 1) -> NpSignal:
 
     if order == 1:
 
-        def fn(pairs):
+        def first_derivative(pairs):
             arr = np.array(pairs)  # (batch, 2, dim)
             return (arr[:, 1] - arr[:, 0]) / (2 * dt_sec)
 
-        return Elementwise(TimeOffsets(signal, -dt_ns, dt_ns), fn)
+        return Elementwise(TimeOffsets(signal, -dt_ns, dt_ns, timeline=timeline), first_derivative)
     else:
 
-        def fn(triples):
+        def second_derivative(triples):
             arr = np.array(triples)  # (batch, 3, dim)
             return (arr[:, 2] - 2 * arr[:, 1] + arr[:, 0]) / (dt_sec * dt_sec)
 
-        return Elementwise(TimeOffsets(signal, -dt_ns, 0, dt_ns), fn)
+        return Elementwise(TimeOffsets(signal, -dt_ns, 0, dt_ns, timeline=timeline), second_derivative)
 
 
 def norm(signal: NpSignal) -> NpSignal:
@@ -519,20 +541,20 @@ class _PairwiseMap:
     def __init__(self, op: Callable[[Any, Any], Any]):
         self._op = op
 
-    def __call__(self, rows: Sequence[tuple]) -> Sequence[Any]:
+    def __call__(self, rows: Sequence[tuple] | np.ndarray) -> Sequence[Any]:
         out: list[Any] = []
         for a, b in rows:
             out.append(self._op(a, b))
         return out
 
 
-def pairwise(a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any]) -> Signal[Any]:
+def pairwise(a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any], *, timeline: str) -> Signal[Any]:
     """Apply a binary operation pairwise across two signals aligned on time.
 
     - Aligns `a` and `b` on the union of timestamps with carry-back semantics.
     - Applies `op(a_value, b_value)` per row and returns a new Signal view of results.
     """
-    return Elementwise(Join(a, b), _PairwiseMap(op))
+    return Elementwise(Join(a, b, timeline=timeline), _PairwiseMap(op))
 
 
 def recode_transform(rep_from: RotRep, rep_to: RotRep, signal: NpSignal) -> NpSignal:

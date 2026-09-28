@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
 
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
 
 
@@ -20,7 +20,7 @@ def video_paths(tmp_path):
 @pytest.fixture
 def writer(video_paths):
     """Create a VideoSignalWriter instance."""
-    return VideoSignalWriter(video_paths['video'], video_paths['frames'])
+    return VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME)
 
 
 def create_frame(value=0, shape=(100, 100, 3)):
@@ -30,7 +30,7 @@ def create_frame(value=0, shape=(100, 100, 3)):
 
 def create_video_signal(video_paths, frames_with_timestamps):
     """Helper to create a video signal with given frames and timestamps."""
-    with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
+    with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as writer:
         for frame, ts in frames_with_timestamps:
             writer.append(frame, ts)
     return VideoSignal(video_paths['video'], video_paths['frames'])
@@ -106,7 +106,7 @@ class TestVideoSignalWriter:
         ]
 
         for frame, match in invalid_frames:
-            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
+            with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as writer:
                 with pytest.raises(ValueError, match=match):
                     writer.append(frame, 1000)
 
@@ -189,7 +189,9 @@ class FakeEncoder:
 class TestVideoEncoderSeam:
     def test_encoder_gets_every_frame_in_order_then_finishes(self, video_paths):
         encoder = FakeEncoder()
-        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, gop_size=12, fps=50) as w:
+        with VideoSignalWriter(
+            video_paths['video'], video_paths['frames'], encoder, gop_size=12, fps=50, timeline=RECORDED_TIME
+        ) as w:
             for i in range(20):
                 w.append(create_frame(i, (6, 8, 3)), 1000 * (i + 1))
 
@@ -201,13 +203,13 @@ class TestVideoEncoderSeam:
 
     def test_empty_writer_never_opens_the_encoder(self, video_paths):
         encoder = FakeEncoder()
-        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder):
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, timeline=RECORDED_TIME):
             pass
         assert encoder.sessions == []
 
     def test_abort_stops_the_encoder_and_deletes_the_files(self, video_paths):
         encoder = FakeEncoder()
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, timeline=RECORDED_TIME)
         w.append(create_frame(0), 1000)
         w.abort()
 
@@ -216,7 +218,9 @@ class TestVideoEncoderSeam:
         assert not video_paths['frames'].exists()
 
     def test_an_encoder_error_surfaces_on_append(self, video_paths):
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=0))
+        w = VideoSignalWriter(
+            video_paths['video'], video_paths['frames'], FakeEncoder(fail_at=0), timeline=RECORDED_TIME
+        )
         # An append past the 8 queued frames waits for the failed write and sees its error.
         with pytest.raises(RuntimeError, match='Video encoding failed'):
             for i in range(20):
@@ -225,7 +229,7 @@ class TestVideoEncoderSeam:
 
     def test_an_encoder_error_surfaces_on_exit_and_aborts_the_session(self, video_paths):
         encoder = FakeEncoder(fail_at=1)
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, timeline=RECORDED_TIME)
         w.append(create_frame(0), 1000)
         w.append(create_frame(1), 2000)
         with pytest.raises(RuntimeError, match='Video encoding failed'):
@@ -234,7 +238,7 @@ class TestVideoEncoderSeam:
 
     def test_a_failed_finish_surfaces_on_exit_and_aborts_the_session(self, video_paths):
         encoder = FakeEncoder(fail_at=FINISH)
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, timeline=RECORDED_TIME)
         w.append(create_frame(0), 1000)
         with pytest.raises(RuntimeError, match='Video encoding failed'):
             w.__exit__(None, None, None)
@@ -244,7 +248,7 @@ class TestVideoEncoderSeam:
 class TestLibavEncoder:
     def test_options_reach_the_codec(self, video_paths):
         encoder = LibavEncoder(options=(('preset', 'ultrafast'), ('bframes', '0')))
-        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder) as w:
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, timeline=RECORDED_TIME) as w:
             for i in range(5):
                 w.append(create_frame(i * 40), 1000 * (i + 1))
 
@@ -263,23 +267,25 @@ class TestLibavEncoder:
 
 class TestVideoSignalStartLastTs:
     def test_video_start_last_ts_basic(self, video_paths):
-        with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5, fps=30) as writer:
+        with VideoSignalWriter(
+            video_paths['video'], video_paths['frames'], gop_size=5, fps=30, timeline=RECORDED_TIME
+        ) as writer:
             writer.append(create_frame(10), 1000)
             writer.append(create_frame(20), 2000)
             writer.append(create_frame(30), 4000)
 
         s = VideoSignal(video_paths['video'], video_paths['frames'])
-        assert s.start_ts == 1000
-        assert s.last_ts == 4000
+        assert s.start_ts(RECORDED_TIME) == 1000
+        assert s.last_ts(RECORDED_TIME) == 4000
 
     def test_video_start_last_ts_empty_raises(self, video_paths):
-        with VideoSignalWriter(video_paths['video'], video_paths['frames']):
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
         with pytest.raises(ValueError):
-            _ = s.start_ts
+            _ = s.start_ts(RECORDED_TIME)
         with pytest.raises(ValueError):
-            _ = s.last_ts
+            _ = s.last_ts(RECORDED_TIME)
 
 
 class TestVideoInterface:
@@ -289,7 +295,7 @@ class TestVideoInterface:
         frame0, ts0 = sig[0]
         assert ts0 == 1000
         assert_frames_equal(frame0, create_frame(50))
-        assert sig._ts_at([1])[0] == 2000
+        assert sig._ts_at([1], timeline=RECORDED_TIME)[0] == 2000
 
     def test_video_kind(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(10), 1000)])
@@ -297,7 +303,7 @@ class TestVideoInterface:
 
     def test_video_kind_empty_raises(self, video_paths):
         # Create empty video index
-        with VideoSignalWriter(video_paths['video'], video_paths['frames']):
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
         with pytest.raises(ValueError):
@@ -313,18 +319,18 @@ class TestVideoInterface:
 
     def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])
-        empty = sig._search_ts(np.array([], dtype=np.int64))
+        empty = sig._search_ts(np.array([], dtype=np.int64), timeline=RECORDED_TIME)
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
-        idx = sig._search_ts(np.array([999, 1000, 1001], dtype=np.int64))
+        idx = sig._search_ts(np.array([999, 1000, 1001], dtype=np.int64), timeline=RECORDED_TIME)
         assert np.array_equal(idx, np.array([-1, 0, 0]))
-        assert sig._search_ts([1000])[0] == 0
+        assert sig._search_ts([1000], timeline=RECORDED_TIME)[0] == 0
 
 
 class TestVideoExtraTimelines:
     def test_video_writer_with_extra_timelines(self, video_paths):
         """Test that VideoSignalWriter stores extra timelines in frames index."""
-        with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as w:
             w.append(create_frame(50), 1000, extra_ts={'producer': 900, 'consumer': 1100})
             w.append(create_frame(100), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
             w.append(create_frame(150), 3000, extra_ts={'producer': 2900, 'consumer': 3100})
@@ -340,7 +346,7 @@ class TestVideoExtraTimelines:
 
     def test_video_writer_empty_with_no_extra_timelines(self, video_paths):
         """Test empty video writer doesn't create extra timeline columns."""
-        with VideoSignalWriter(video_paths['video'], video_paths['frames']):
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME):
             pass
 
         table = pq.read_table(video_paths['frames'])
@@ -350,20 +356,47 @@ class TestVideoExtraTimelines:
     def test_video_inconsistent_extra_ts_keys_raises(self, video_paths):
         """Test that inconsistent extra_ts keys across appends raises ValueError."""
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+            with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as w:
                 w.append(create_frame(50), 1000, extra_ts={'producer': 900})
                 w.append(create_frame(100), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
 
     def test_video_missing_extra_ts_after_first_raises(self, video_paths):
         """Test that omitting extra_ts after providing it first raises ValueError."""
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+            with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as w:
                 w.append(create_frame(50), 1000, extra_ts={'producer': 900})
                 w.append(create_frame(100), 2000)
 
     def test_video_adding_extra_ts_after_none_raises(self, video_paths):
         """Test that adding extra_ts after first append without it raises ValueError."""
         with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
-            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+            with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline=RECORDED_TIME) as w:
                 w.append(create_frame(50), 1000)
                 w.append(create_frame(100), 2000, extra_ts={'producer': 1900})
+
+
+@pytest.mark.parametrize('count', [0, 2])
+def test_video_timeline_round_trip(video_paths, count):
+    with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline='camera') as writer:
+        for i in range(count):
+            writer.append(create_frame(i * 100), 1000 + i * 100)
+    signal = VideoSignal(video_paths['video'], video_paths['frames'])
+    assert signal.timeline == 'camera'
+    assert list(signal.keys('camera')) == [1000 + i * 100 for i in range(count)]
+    with pytest.raises(KeyError):
+        signal.time(RECORDED_TIME)
+    if count:
+        frame, ts = signal.time('camera')[1050]
+        assert ts == 1000
+        assert_frames_equal(frame, create_frame(0))
+
+
+def test_legacy_video_has_explicit_recorded_timeline(video_paths):
+    create_video_signal(video_paths, [(create_frame(40), 1000)])
+    table = pq.read_table(video_paths['frames']).replace_schema_metadata(None)
+    pq.write_table(table, video_paths['frames'])
+    signal = VideoSignal(video_paths['video'], video_paths['frames'])
+    assert signal.timeline == RECORDED_TIME
+    frame, ts = signal.time(RECORDED_TIME)[1000]
+    assert ts == 1000
+    assert_frames_equal(frame, create_frame(40))

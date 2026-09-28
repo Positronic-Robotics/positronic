@@ -22,7 +22,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
-from positronic.dataset.signal import Signal
+from positronic.dataset.signal import RECORDED_TIME, Signal
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
@@ -58,7 +58,7 @@ def benchmark_of(episode: DiskEpisode) -> mapping.BenchmarkPath:
 
 def sample_at(signal: Signal, timestamps: list[int]) -> list:
     """The last signal value at or before each timestamp."""
-    sampled = signal.time[timestamps]
+    sampled = signal.time(RECORDED_TIME)[timestamps]
     assert isinstance(sampled, Signal)  # a sequence of timestamps samples a Signal, a single one a record
     return [value for value, _ts in sampled]
 
