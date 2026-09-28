@@ -189,8 +189,7 @@ class CameraVantage(IntEnum):
 class RigShape(IntEnum):
     """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or a simulation.
 
-    The slug and the value are the ones the rig registry gives the shape. The gateway refuses `sim`:
-    only an internal request runs on a simulated rig.
+    The slug and the value are the ones the rig registry gives the shape.
     """
 
     INVALID = 0
