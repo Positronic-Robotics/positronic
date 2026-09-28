@@ -291,53 +291,36 @@ class RTCSchedule(Policy):
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
 
-    def _due_ns(self, start_ns: int, index: int) -> int:
-        return start_ns + round(index * 1e9 / self._fps)
-
-    def _running_index(self, start_ns: int, chunk: Sequence[Commands], time_ns: int) -> int:
-        """The index of the action that runs at ``time_ns``, or ``len(chunk)`` after the chunk ends."""
-        return next((i for i in range(len(chunk)) if self._due_ns(start_ns, i + 1) > time_ns), len(chunk))
-
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
         delays: list[float] = []
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
-        chunk: Sequence[Commands] | None = None
-        start_ns = 0
-        next_index = 0
+        chunk: _TimedChunk | None = None
         next_call_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 if answer is not None and answer.done():
-                    new_chunk, answer = answer.result(), None
                     delays.append((now_ns - called_at_ns) / 1e9)
                     # The first chunk counts from its answer: the robot did not move while it waited.
                     start_ns = now_ns if chunk is None else called_at_ns
-                    chunk = new_chunk
-                    next_index = self._running_index(start_ns, chunk, now_ns)
+                    chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
+                    answer = None
                     next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    prefix: list[Commands] = []
-                    if chunk is not None:
-                        first = self._running_index(start_ns, chunk, now_ns)
-                        prefix_end_ns = now_ns + round(self._prefix_duration(delays) * 1e9)
-                        end = self._running_index(start_ns, chunk, prefix_end_ns - 1) + 1
-                        prefix = list(chunk[first:end]) if prefix_end_ns > now_ns else []
+                    prefix = [] if chunk is None else chunk.prefix(now_ns, self._prefix_duration(delays))
                     called_at_ns = now_ns
                     answer = runtime.submit(infer, obs, prefix)
 
-                commands: dict[str, Any] = {}
-                while chunk is not None and next_index < len(chunk) and self._due_ns(start_ns, next_index) <= now_ns:
-                    commands.update(chunk[next_index])
-                    next_index += 1
+                commands = {} if chunk is None else chunk.take_due(now_ns)
+                next_due_ns = None if chunk is None else chunk.next_due_ns()
                 if answer is not None:
                     # Pending inference asks for the earliest allowed poll; action cadence is independent.
                     resume_at_ns = now_ns
-                elif chunk is not None and next_index < len(chunk):
-                    resume_at_ns = min(next_call_ns, self._due_ns(start_ns, next_index))
+                elif next_due_ns is not None:
+                    resume_at_ns = min(next_call_ns, next_due_ns)
                 else:
                     resume_at_ns = next_call_ns
                 obs = yield Step(commands, resume_at_ns)
@@ -347,6 +330,43 @@ class RTCSchedule(Policy):
 
     def meta(self) -> dict[str, Any]:
         return {policy_keys.ACTION_FPS: self._fps}
+
+
+class _TimedChunk:
+    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
+
+    def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
+        self._actions = actions
+        self._start_ns = start_ns
+        self._fps = fps
+        self._next_index = self._running_index(now_ns)
+
+    def _due_ns(self, index: int) -> int:
+        return self._start_ns + round(index * 1e9 / self._fps)
+
+    def _running_index(self, time_ns: int) -> int:
+        """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
+        return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
+
+    def prefix(self, now_ns: int, duration_sec: float) -> list[Commands]:
+        """The actions that run from ``now_ns`` for ``duration_sec``."""
+        duration_ns = round(duration_sec * 1e9)
+        if duration_ns <= 0:
+            return []
+        end = self._running_index(now_ns + duration_ns - 1) + 1
+        return list(self._actions[self._running_index(now_ns) : end])
+
+    def take_due(self, now_ns: int) -> dict[str, Any]:
+        """The merged commands of every action due by ``now_ns`` and not taken yet."""
+        commands: dict[str, Any] = {}
+        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
+            commands.update(self._actions[self._next_index])
+            self._next_index += 1
+        return commands
+
+    def next_due_ns(self) -> int | None:
+        """When the next action not taken yet is due, or ``None`` after the last one."""
+        return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
 
 
 class _StackedObs(Mapping[str, Any]):
