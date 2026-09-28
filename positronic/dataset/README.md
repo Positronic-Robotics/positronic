@@ -95,6 +95,9 @@ timeline for every signal in the episode. For signals with different primary tim
 mapping at construction: `new_episode(timeline={"pose": "world", "latency": "wall"})`.
 Every dynamic signal must be listed when using this form.
 
+The viewer reads each signal's declared primary timeline. Its display uses one shared time axis,
+so recordings with independent clocks are not shown on separate Rerun timelines.
+
 HTTP clients and servers use `/api/v2`. Signal metadata includes `timeline`; timestamp, search,
 and episode sample requests require that field. Client and server must use the same API version.
 

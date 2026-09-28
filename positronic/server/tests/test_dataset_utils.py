@@ -154,6 +154,25 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
 
 
+@pytest.mark.parametrize('timeline', ['world', {keys.JOINTS: 'joints', 'camera': 'frames', 'status': 'events'}])
+def test_custom_primary_timelines_reach_the_viewer(tmp_path, timeline):
+    root = tmp_path / 'dataset'
+    values = {keys.JOINTS: np.zeros(2), 'camera': np.zeros((32, 32, 3), dtype=np.uint8), 'status': 'ready'}
+    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode(timeline=timeline) as writer:
+        for name, value in values.items():
+            primary = timeline if isinstance(timeline, str) else timeline[name]
+            writer.append(name, value, {primary: 1_000_000_000})
+            writer.append(name, value, {primary: 2_000_000_000})
+    rrd = tmp_path / 'episode.rrd'
+    rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
+
+    columns = rr_recording.load_recording(str(rrd)).schema().component_columns()
+    archetypes = {(column.entity_path, column.archetype) for column in columns}
+    assert (f'/signals/{keys.JOINTS}/0', 'rerun.archetypes.Scalars') in archetypes
+    assert ('/text/status', 'rerun.archetypes.TextLog') in archetypes
+    assert ('/camera', 'rerun.archetypes.VideoFrameReference') in archetypes
+
+
 def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
     return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
 
@@ -347,6 +366,8 @@ def test_a_signal_below_the_cap_keeps_every_sample():
 
 
 class _RawFrameSignal:
+    timeline = 'camera'
+
     def __init__(self, frames: list[np.ndarray], times: list[int]):
         self._frames, self._times = frames, times
 
@@ -357,7 +378,7 @@ class _RawFrameSignal:
         return iter(zip(self._frames, self._times, strict=True))
 
     def keys(self, timeline):
-        assert timeline == RECORDED_TIME
+        assert timeline == self.timeline
         return np.asarray(self._times, dtype=np.int64)
 
 
