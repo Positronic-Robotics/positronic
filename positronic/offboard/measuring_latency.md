@@ -28,14 +28,17 @@ Each step below answers on its own. The steps that need no model run while the m
   -m positronic.offboard.link_probe watch --port=8000`.
 - A recorded episode of the rig the server serves, for `serving_cost`.
 
-Set these once in each shell:
+Set these once in each shell, with the `PROBE` line for that shell:
 
 ```bash
 SERVER=<host the server runs on>      # as the client reaches it
 CLIENT=<address of the client>        # as the server sees it
 EPISODE=<dataset path>                 # one recorded episode
-PROBE="uv run --locked python -m positronic.offboard.link_probe"
+PROBE="uv run --locked python -m positronic.offboard.link_probe"            # on the client and the host
+PROBE="uv run --locked --no-sync python -m positronic.offboard.link_probe"  # in the container
 ```
+
+In the container, `--no-sync` leaves the server's environment untouched.
 
 ## 1. Bring up the box and the container
 

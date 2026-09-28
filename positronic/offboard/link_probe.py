@@ -7,9 +7,9 @@ the four in.
 
 Usage
     # In the container, before anything else is up:
-    uv run --locked python -m positronic.offboard.link_probe sink --port=9100
-    uv run --locked python -m positronic.offboard.link_probe watch --port=9100 --out=recvq.jsonl
-    uv run --locked python -m positronic.offboard.link_probe facts
+    uv run --locked --no-sync python -m positronic.offboard.link_probe sink --port=9100
+    uv run --locked --no-sync python -m positronic.offboard.link_probe watch --port=9100 --out=recvq.jsonl
+    uv run --locked --no-sync python -m positronic.offboard.link_probe facts
 
     # From the client, against the sink above and again against one on the host:
     uv run --locked python -m positronic.offboard.link_probe source \\
