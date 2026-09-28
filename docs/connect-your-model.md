@@ -171,6 +171,7 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import PolicyServer
+from positronic.offboard.server_utils import warmup
 from positronic.offboard.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
@@ -193,9 +194,15 @@ class MyModel(Model):
         return {'type': 'my_model', offboard_keys.CHECKPOINT_ID: 'default'}
 
 
+def build_my_model():
+    # Supply your checkpoint loader, and an observation your model accepts.
+    model = MyModel(load_my_weights())
+    warmup(model, my_warm_observation())
+    return model
+
+
 deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
-# The server builds the model once, when it starts; supply your checkpoint loader.
-server = PolicyServer(lambda: MyModel(load_my_weights()), deployment)
+server = PolicyServer(build_my_model, deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
@@ -207,10 +214,14 @@ belong in `local`, where they can mix with processors. For example,
 `compress_images=True` on the deployment enables JPEG transport compression.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
-The server builds the model off the event loop, before any wire binds. A slow
-download or subprocess startup writes its progress to the server log. The model
-owns those resources and releases them in `close()`. See the OpenPI and GR00T
-adapters for examples.
+The server builds the model once, off the event loop, before any wire binds. A
+slow download or subprocess startup writes its progress to the server log. The
+model owns those resources and releases them in `close()`. See the OpenPI and
+GR00T adapters for examples.
+
+The builder must warm the model before it returns: `warmup` runs one inference, so
+the first-call cost of a backend is paid before the server serves. A client reads
+any keepalive answer as ready, and a cold model makes its first inference slow.
 
 The server supplies `session_id` on every call. A stateless model may ignore it;
 a stateful model must keep episodes separate or reject another active owner.

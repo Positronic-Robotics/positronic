@@ -94,7 +94,8 @@ class _ServedTiming:
 class PolicyServer:
     """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
-    ``build_model`` runs once, when ``serve`` starts, and its model serves every session. A config-launched
+    ``build_model`` runs once, when ``serve`` starts, and its model serves every session. It returns the model
+    warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
     pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
     never reach the model. An instantiated PolicyDeployment refuses session parameters.
     """
