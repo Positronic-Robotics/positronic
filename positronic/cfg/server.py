@@ -12,8 +12,8 @@ from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
+from positronic.server.positronic_server import EPISODE_DURATION, GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
 
 from . import analysis as analysis_cfg
@@ -31,7 +31,7 @@ def eval_table():
     """
     return {
         '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.2f sec'),
+        EPISODE_DURATION: C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
         eval_keys.SUCCESS: C(
             label='Pass',
@@ -98,7 +98,7 @@ ft_eval_ds = ds.transform.override(
 def finetune_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        EPISODE_DURATION: C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'units': C(label='Units'),
         'uph': C(label='UPH', format='%.1f'),

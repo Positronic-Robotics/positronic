@@ -30,6 +30,7 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_UID
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
 from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
@@ -487,6 +488,7 @@ def export_static(
     home_page: str | None = None,
     max_resolution: int = DEFAULT_MAX_RESOLUTION,
     max_hz: float = DEFAULT_MAX_HZ,
+    duration_timeline: str = RECORDED_TIME,
     base_href: str = '/',
     title: str = '',
     show_paths: bool = False,
@@ -510,6 +512,7 @@ def export_static(
     exports names a directory per set of assets, so an export never overwrites the assets another export's
     pages read. An export holds the app's state for its duration, so a second export in the process waits for
     it; one into the same directory is then refused, as the directory holds the first.
+    Episode-table durations use `duration_timeline`.
     """
     out = _Output(Path(out_dir), normalized_base_href(base_href).removeprefix('/'))
     if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):
@@ -536,6 +539,7 @@ def export_static(
             home_page=home_page,
             max_resolution=max_resolution,
             max_hz=max_hz,
+            duration_timeline=duration_timeline,
         )
         configure_pages(
             base_href=base_href,
@@ -584,6 +588,7 @@ def main(
     assets: bool = True,
     asset_dir: str = ASSET_ROUTE,
     workers: int = DEFAULT_WORKERS,
+    duration_timeline: str = RECORDED_TIME,
 ):
     """Write the viewer for a Dataset as static files, for any static host.
 
@@ -602,6 +607,7 @@ def main(
         assets: Whether to write the app's own assets under `asset_dir`; with the root base href only
         asset_dir: Directory under `static/` the assets sit in, so a host holds one per set of assets
         workers: Recordings built at once; half the machine's cores by default
+        duration_timeline: Named timeline used for episode-table durations
     """
     written = export_static(
         dataset,
@@ -618,6 +624,7 @@ def main(
         assets=assets,
         asset_dir=PurePosixPath(asset_dir),
         workers=workers,
+        duration_timeline=duration_timeline,
     )
     logging.info(f'{len(written)} files, {sum(file.size for file in written) / 1e6:.1f} MB, under {out_dir}')
 

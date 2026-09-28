@@ -27,6 +27,7 @@ from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
 from positronic.eval import keys as eval_keys
+from positronic.server.positronic_server import EPISODE_DURATION
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 
@@ -237,7 +238,7 @@ _quality_scalars = Derive(
 
 _droid_debug_table = {
     '__index__': C(label='#', format='%d'),
-    '__duration__': C(label='Duration', format='%.0f sec'),
+    EPISODE_DURATION: C(label='Duration', format='%.0f sec'),
     'task': C(label='Task', filter=True),
     'idle_frac': C(label='Idle %', format='%.1f%%'),
     'cmd_lag_max': C(label='Lag Max', format='%.3f m'),

@@ -16,8 +16,8 @@ from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import keys as policy_keys
+from positronic.server.positronic_server import EPISODE_DURATION, GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
 
 
@@ -202,7 +202,7 @@ episodes = base_cfg.transform.override(
 def episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.1f sec'),
+        EPISODE_DURATION: C(label='Duration', format='%.1f sec'),
         'task_code': C(label='Task', filter=True),
         'model': C(label='Model', filter=True),
         'checkpoint': C(label='Checkpoint', filter=True),
@@ -399,7 +399,7 @@ stacking_episodes = base_cfg.transform.override(
 def stacking_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.2f sec'),
+        EPISODE_DURATION: C(label='Duration', format='%.2f sec'),
         'model': C(label='Model', filter=True, display=False),
         'checkpoint': C(label='CKPT', filter=True),
         'success': C(

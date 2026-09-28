@@ -22,8 +22,8 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
+from positronic.server.positronic_server import EPISODE_DURATION, GroupTableConfig
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
@@ -54,7 +54,7 @@ teleop_unified = transform.override(
 def episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        EPISODE_DURATION: C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }

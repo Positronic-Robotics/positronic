@@ -100,6 +100,8 @@ Every dynamic signal must be listed when using this form.
 
 The viewer reads each signal's declared primary timeline. Its display uses one shared time axis,
 so recordings with independent clocks are not shown on separate Rerun timelines.
+Episode-table durations use the server or static export's `duration_timeline` setting, which defaults
+to `"recorded"`. Set `duration_timeline="world"` to measure only signals recorded on that timeline.
 
 HTTP clients and servers use `/api/v2`. Signal metadata includes `timeline`; timestamp, search,
 and episode sample requests require that field. Client and server must use the same API version.
