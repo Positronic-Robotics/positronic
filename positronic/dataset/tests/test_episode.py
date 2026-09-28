@@ -11,6 +11,7 @@ from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, Dis
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
+from positronic.dataset.vector import SimpleSignalWriter
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
@@ -444,11 +445,12 @@ class TestLazyMetaProperties:
 
     def test_duration_is_scoped_to_timeline(self, tmp_path):
         ep_dir = tmp_path / 'ep_duration'
-        with DiskEpisodeWriter(ep_dir, timeline={'a': 'world', 'b': 'wall'}) as w:
+        with DiskEpisodeWriter(ep_dir, timeline='world') as w:
             w.append('a', 1, {'world': 1000})
             w.append('a', 2, {'world': 2000})
-            w.append('b', 10, {'wall': 1500})
-            w.append('b', 20, {'wall': 5000})
+            with SimpleSignalWriter(ep_dir / 'b.parquet', timeline='wall') as signal_writer:
+                signal_writer.append(10, {'wall': 1500})
+                signal_writer.append(20, {'wall': 5000})
 
         ep = DiskEpisode(ep_dir)
         assert ep.duration_ns('world') == 1000
@@ -609,11 +611,12 @@ def test_group_first_transform_takes_precedence(tmp_path):
 
 
 def test_episode_queries_only_signals_on_requested_timeline(tmp_path):
-    with DiskEpisodeWriter(tmp_path / 'named', timeline={'pose': 'world', 'latency': 'wall'}) as writer:
+    with DiskEpisodeWriter(tmp_path / 'named', timeline='world') as writer:
         writer.set_static('task', 'pick')
         writer.append('pose', 1, {'world': 10})
         writer.append('pose', 2, {'world': 20})
-        writer.append('latency', 3, {'wall': 1000})
+        with SimpleSignalWriter(writer.path / 'latency.parquet', timeline='wall') as signal_writer:
+            signal_writer.append(3, {'wall': 1000})
         with pytest.raises(ValueError, match='Missing timestamp for primary timeline'):
             writer.append('pose', 9, {'wall': 30})
     episode = DiskEpisode(tmp_path / 'named')
@@ -665,14 +668,12 @@ def test_writer_rejects_invalid_timestamps_without_recording(tmp_path, data, tim
 
 
 @pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
-def test_writer_captures_timestamps_and_constructor_selection(tmp_path, data):
+def test_writer_captures_timestamps(tmp_path, data):
     path = tmp_path / 'episode'
-    selection = {'signal': 'world'}
     timestamps = {'world': 10, 'wall': 20}
-    with DiskEpisodeWriter(path, timeline=selection) as writer:
+    with DiskEpisodeWriter(path, timeline='world') as writer:
         writer.append('signal', data, timestamps)
         assert timestamps == {'world': 10, 'wall': 20}
-        selection['signal'] = 'wall'
         timestamps.update(world=30, wall=40)
         writer.append('signal', data, timestamps)
     signal = DiskEpisode(path)['signal']
@@ -682,7 +683,7 @@ def test_writer_captures_timestamps_and_constructor_selection(tmp_path, data):
     assert pq.read_table(path / index)['ts_ns.wall'].to_pylist() == [20, 40]
 
 
-@pytest.mark.parametrize('timeline', ['', '  ', {'signal': ''}])
+@pytest.mark.parametrize('timeline', ['', '  ', {'signal': 'world'}])
 def test_invalid_primary_timeline_creates_no_episode(tmp_path, timeline):
     path = tmp_path / 'episode'
     with pytest.raises(ValueError, match='non-empty'):

@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
@@ -86,7 +86,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
-        timeline: str | Mapping[str, str],
+        timeline: str,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -96,7 +96,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
-            timeline: Primary timeline for all signals, or a mapping from signal names to primary timelines.
+            timeline: Primary timeline for all signals appended through this writer.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
@@ -104,13 +104,8 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve identity when copying an existing recording.
             video_encoder: The encoder for video signals.
         """
-        if isinstance(timeline, str):
-            validate_timeline(timeline)
-            self._timeline = timeline
-        else:
-            for name in timeline.values():
-                validate_timeline(name)
-            self._timeline = dict(timeline)
+        validate_timeline(timeline)
+        self._timeline = timeline
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
@@ -158,8 +153,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode {self._path}")
 
-        timeline = self._timeline if isinstance(self._timeline, str) else self._timeline[signal_name]
-
         # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
             if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
@@ -167,12 +160,12 @@ class DiskEpisodeWriter(EpisodeWriter):
                 video_path = self._path / f'{signal_name}.mp4'
                 frames_index = self._path / f'{signal_name}.frames.parquet'
                 self._writers[signal_name] = VideoSignalWriter(
-                    video_path, frames_index, self._video_encoder, timeline=timeline
+                    video_path, frames_index, self._video_encoder, timeline=self._timeline
                 )
             else:
                 # Scalar/vector signal
                 self._writers[signal_name] = SimpleSignalWriter(
-                    self._path / f'{signal_name}.parquet', timeline=timeline
+                    self._path / f'{signal_name}.parquet', timeline=self._timeline
                 )
 
         self._writers[signal_name].append(data, timestamps)
@@ -493,12 +486,12 @@ class LocalDatasetWriter(DatasetWriter):
         return max_id + 1
 
     def new_episode(
-        self, *, timeline: str | Mapping[str, str], created_ts_ns: int | None = None, uid: str | None = None
+        self, *, timeline: str, created_ts_ns: int | None = None, uid: str | None = None
     ) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
-            timeline: Primary timeline for all signals, or a mapping from signal names to primary timelines.
+            timeline: Primary timeline for all signals appended through this writer.
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
             uid: Optional episode identity (defaults to a fresh uuid4 hex).

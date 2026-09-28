@@ -20,18 +20,43 @@ import pyarrow.parquet as pq
 import tqdm
 
 from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
+from positronic.dataset.episode import META_CREATED_TS_NS, META_UID, Episode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
-from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
 from positronic.dataset.vector import PARQUET_ENCODING_FORMAT
+
+
+def _write_episode(episode: Episode, writer: LocalDatasetWriter) -> None:
+    timelines = {
+        signal.timeline
+        for signal in episode.signals.values()
+        if not isinstance(signal, SupportsEncodedRepresentation) or signal.encoding_format is None
+    }
+    if len(timelines) > 1:
+        raise ValueError(f'Signals rewritten during migration must share a primary timeline: {sorted(timelines)}')
+    meta = episode.meta
+    with writer.new_episode(
+        timeline=next(iter(timelines), RECORDED_TIME),
+        created_ts_ns=meta.get(META_CREATED_TS_NS),
+        uid=meta.get(META_UID),
+    ) as ew:
+        for key, value in episode.static.items():
+            ew.set_static(key, value)
+
+        for key, signal in episode.signals.items():
+            if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
+                _write_encoded_signal(signal, ew.path, key)
+            else:
+                _write_raw_signal(signal, ew, key)
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     """Migrate any dataset to local or S3 storage.
 
     Signals with encoded representations (Parquet or video) are transferred as raw bytes
-    without re-encoding. Static fields are materialized into static.json.
+    without re-encoding. Signals written from decoded values must share a primary
+    timeline. Static fields are materialized into static.json.
 
     Returns the number of episodes written.
     """
@@ -40,20 +65,7 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
 
     with LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
-            meta = episode.meta
-            with writer.new_episode(
-                timeline={name: signal.timeline for name, signal in episode.signals.items()},
-                created_ts_ns=meta.get(META_CREATED_TS_NS),
-                uid=meta.get(META_UID),
-            ) as ew:
-                for key, value in episode.static.items():
-                    ew.set_static(key, value)
-
-                for key, signal in episode.signals.items():
-                    if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
-                        _write_encoded_signal(signal, ew.path, key)
-                    else:
-                        _write_raw_signal(signal, ew, key)
+            _write_episode(episode, writer)
             count += 1
 
     return count

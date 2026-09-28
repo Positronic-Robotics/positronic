@@ -13,7 +13,7 @@ class DatasetWriter(AbstractContextManager, ABC):
     """Abstract factory for creating new Episodes within a dataset."""
 
     @abstractmethod
-    def new_episode(self, *, timeline: str | collections.abc.Mapping[str, str]) -> EpisodeWriter:
+    def new_episode(self, *, timeline: str) -> EpisodeWriter:
         """Allocate and return a writer for a new episode."""
         pass
 

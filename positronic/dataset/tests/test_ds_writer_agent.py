@@ -1,5 +1,4 @@
 import pickle
-from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -64,7 +63,7 @@ class FakeDatasetWriter(DatasetWriter):
         self.lifecycle.append('enter')
         return self
 
-    def new_episode(self, *, timeline: str | Mapping[str, str]) -> FakeEpisodeWriter:
+    def new_episode(self, *, timeline: str) -> FakeEpisodeWriter:
         assert timeline == RECORDED_TIME
         self.lifecycle.append('new_episode')
         w = FakeEpisodeWriter()

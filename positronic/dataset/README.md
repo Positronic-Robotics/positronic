@@ -94,14 +94,14 @@ alongside the primary timestamp are stored but are not queryable timeline coordi
 every append must supply the same timeline names; the primary timestamp must strictly increase.
 
 `DiskEpisodeWriter(..., timeline="world")` and `new_episode(timeline="world")` select the primary
-timeline for every signal in the episode. For signals with different primary timelines, provide a
-mapping at construction: `new_episode(timeline={"pose": "world", "latency": "wall"})`.
-Every dynamic signal must be listed when using this form.
+timeline for every signal appended through that writer. Each append supplies all timestamps together.
 
 The viewer reads each signal's declared primary timeline. Its display uses one shared time axis,
 so recordings with independent clocks are not shown on separate Rerun timelines.
 Episode-table durations use the server or static export's `duration_timeline` setting, which defaults
 to `"recorded"`. Set `duration_timeline="world"` to measure only signals recorded on that timeline.
+Lance and LeRobot exporters select their sampling clock with `timeline`, defaulting to `"recorded"`;
+only signals on the selected timeline contribute to exported samples.
 
 HTTP clients and servers use `/api/v2`. Signal metadata includes `timeline`; timestamp, search,
 and episode sample requests require that field. Client and server must use the same API version.
@@ -234,7 +234,7 @@ class Dataset:
 
 class DatasetWriter:
     # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
-    def new_episode(self, *, timeline: str | Mapping[str, str]) -> EpisodeWriter:
+    def new_episode(self, *, timeline: str) -> EpisodeWriter:
         pass
 ```
 

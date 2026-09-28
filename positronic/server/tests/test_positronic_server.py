@@ -19,6 +19,7 @@ from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.vector import SimpleSignalWriter
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
@@ -741,11 +742,12 @@ def _configure(ep_table_cfg, group_tables, *, duration_timeline=RECORDED_TIME):
 
 def test_episode_table_duration_uses_configured_timeline_and_invalidates_cache(tmp_path):
     with LocalDatasetWriter(tmp_path / 'dataset') as dataset_writer:
-        with dataset_writer.new_episode(timeline={'pose': 'world', 'events': 'wall'}) as writer:
+        with dataset_writer.new_episode(timeline='world') as writer:
             writer.append('pose', 1, {'world': 0})
             writer.append('pose', 2, {'world': 2_000_000_000})
-            writer.append('events', 1, {'wall': 1_000_000_000_000})
-            writer.append('events', 2, {'wall': 1_005_000_000_000})
+            with SimpleSignalWriter(writer.path / 'events.parquet', timeline='wall') as signal_writer:
+                signal_writer.append(1, {'wall': 1_000_000_000_000})
+                signal_writer.append(2, {'wall': 1_005_000_000_000})
     with app_state_restored():
         app_state['dataset'] = LocalDataset(tmp_path / 'dataset')
         app_state['loading_state'] = False

@@ -39,6 +39,7 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 ## Timelines
 
 Each signal exposes one primary timestamp coordinate, selected when its writer is constructed.
+An episode writer selects one primary timeline for every signal appended through it.
 Appends supply one mapping of non-empty timeline names to timestamps, including the primary timeline;
 additional coordinates are stored alongside it. The set of names is fixed per signal. Time queries and bounds
 require that exact name; no timeline is implicit. Episode queries filter out signals without the

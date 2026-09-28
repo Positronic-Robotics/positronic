@@ -20,8 +20,10 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
 from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
+from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.transforms.episode import Derive
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
-from positronic.dataset.vector import PARQUET_ENCODING_FORMAT, SimpleSignal
+from positronic.dataset.vector import PARQUET_ENCODING_FORMAT, SimpleSignal, SimpleSignalWriter
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
 
@@ -343,6 +345,33 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
     np.testing.assert_allclose(signal[0][0], [0])
 
 
+@pytest.mark.parametrize('second_timeline', ['world', 'wall'])
+def test_migration_requires_rewritten_signals_to_share_a_primary(tmp_path, second_timeline):
+    with LocalDatasetWriter(tmp_path / 'source') as writer, writer.new_episode(timeline='world') as episode:
+        episode.append('a', 1, {'world': 10})
+        with SimpleSignalWriter(episode.path / 'b.parquet', timeline=second_timeline) as signal_writer:
+            signal_writer.append(2, {second_timeline: 20})
+    source = TransformedDataset(
+        LocalDataset(tmp_path / 'source'), Derive(a=lambda ep: ep['a'][:], b=lambda ep: ep['b'][:])
+    )
+    destination = tmp_path / 'copied'
+    with pos3.mirror():
+        if second_timeline == 'world':
+            assert migrate_dataset(source, str(destination)) == 1
+        else:
+            with pytest.raises(ValueError, match='must share a primary timeline'):
+                migrate_dataset(source, str(destination))
+    copied = LocalDataset(destination)
+    assert len(copied) == (1 if second_timeline == 'world' else 0)
+    if second_timeline == 'world':
+        episode = copied[0]
+        assert isinstance(episode, Episode)
+        assert episode['a'].timeline == 'world'
+        assert episode['b'].timeline == 'world'
+        assert episode['a'][0] == (1, 10)
+        assert episode['b'][0] == (2, 20)
+
+
 def test_migrate_remote_dataset_with_video(running_server, tmp_path):
     """Test migration preserves video without re-encoding."""
     dest_root = tmp_path / 'migrated'
@@ -388,9 +417,10 @@ def test_time_endpoints_require_an_existing_named_timeline(test_client, endpoint
 
 def test_remote_sample_filters_signals_by_timeline(tmp_path, monkeypatch):
     with LocalDatasetWriter(tmp_path / 'named') as writer:
-        with writer.new_episode(timeline={'a': 'world', 'b': 'wall', 'cam': 'world'}) as episode:
+        with writer.new_episode(timeline='world') as episode:
             episode.append('a', 1, {'world': 10})
-            episode.append('b', 2, {'wall': 1000})
+            with SimpleSignalWriter(episode.path / 'b.parquet', timeline='wall') as signal_writer:
+                signal_writer.append(2, {'wall': 1000})
             episode.append('cam', np.zeros((32, 32, 3), dtype=np.uint8), {'world': 10})
     monkeypatch.setattr(remote_server, '_dataset', LocalDataset(tmp_path / 'named'))
     with TestClient(remote_server._app) as client:

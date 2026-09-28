@@ -13,6 +13,7 @@ import rerun.recording as rr_recording
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.vector import SimpleSignalWriter
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
@@ -154,15 +155,17 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
 
 
-@pytest.mark.parametrize('timeline', ['world', {keys.JOINTS: 'joints', 'camera': 'frames', 'status': 'events'}])
-def test_custom_primary_timelines_reach_the_viewer(tmp_path, timeline):
+@pytest.mark.parametrize('text_timeline', ['world', 'events'])
+def test_custom_primary_timelines_reach_the_viewer(tmp_path, text_timeline):
     root = tmp_path / 'dataset'
-    values = {keys.JOINTS: np.zeros(2), 'camera': np.zeros((32, 32, 3), dtype=np.uint8), 'status': 'ready'}
-    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode(timeline=timeline) as writer:
+    values = {keys.JOINTS: np.zeros(2), 'camera': np.zeros((32, 32, 3), dtype=np.uint8)}
+    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode(timeline='world') as writer:
         for name, value in values.items():
-            primary = timeline if isinstance(timeline, str) else timeline[name]
-            writer.append(name, value, {primary: 1_000_000_000})
-            writer.append(name, value, {primary: 2_000_000_000})
+            writer.append(name, value, {'world': 1_000_000_000})
+            writer.append(name, value, {'world': 2_000_000_000})
+        with SimpleSignalWriter(writer.path / 'status.parquet', timeline=text_timeline) as signal_writer:
+            signal_writer.append('ready', {text_timeline: 1_000_000_000})
+            signal_writer.append('ready', {text_timeline: 2_000_000_000})
     rrd = tmp_path / 'episode.rrd'
     rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
 

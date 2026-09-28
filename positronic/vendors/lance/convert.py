@@ -34,7 +34,7 @@ from positronic import utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind, validate_timeline
 
 
 def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> dict:
@@ -80,19 +80,20 @@ def _video_columns(name: str, uri: str, meta: dict) -> dict:
     }
 
 
-def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> dict:
+def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int, *, timeline: str) -> dict:
     step_ns = int(round(1e9 / fps))
-    ts_grid = slice(episode.start_ts(RECORDED_TIME), episode.last_ts(RECORDED_TIME) + 1, step_ns)
+    start, finish = episode.start_ts(timeline), episode.last_ts(timeline)
+    ts_grid = slice(start, finish + 1, step_ns)
 
     row: dict[str, Any] = {_column(k): v for k, v in episode.static.items()}
-    row['trajectory_length'] = (
-        int((episode.last_ts(RECORDED_TIME) - episode.start_ts(RECORDED_TIME)) * fps // int(1e9)) + 1
-    )
+    row['trajectory_length'] = int((finish - start) * fps // int(1e9)) + 1
     # `uuid` is opt-in (codec param). Fall back to row index for video sidecar paths.
     video_dirname = row.get('uuid') or f'{row_idx:06d}'
 
     for key, sig in episode.signals.items():
-        view = sig.time(RECORDED_TIME)[ts_grid]
+        if sig.timeline != timeline:
+            continue
+        view = sig.time(timeline)[ts_grid]
         values = view._values_at(slice(None))
         if sig.kind is Kind.IMAGE:
             rel = Path('videos') / video_dirname / f'{_column(key)}.mp4'
@@ -110,7 +111,8 @@ def _table_from_rows(rows: list[dict]) -> pa.Table:
 
 
 @cfn.config(dataset=apply_codec, fps=None)
-def convert(output_dir: str, fps: int | None, dataset: Dataset):
+def convert(output_dir: str, fps: int | None, dataset: Dataset, timeline: str = RECORDED_TIME):
+    validate_timeline(timeline)
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -123,7 +125,7 @@ def convert(output_dir: str, fps: int | None, dataset: Dataset):
 
     rows = []
     for i, episode in enumerate(tqdm.tqdm(dataset, desc='Converting episodes')):
-        rows.append(_episode_row(episode, fps=fps, output_dir=out_path, row_idx=i))
+        rows.append(_episode_row(episode, fps=fps, output_dir=out_path, row_idx=i, timeline=timeline))
 
     table = _table_from_rows(rows)
     lance.write_dataset(table, str(out_path / 'data.lance'), mode='overwrite')
