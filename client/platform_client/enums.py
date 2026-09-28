@@ -187,10 +187,7 @@ class CameraVantage(IntEnum):
 
 @unique
 class RigShape(IntEnum):
-    """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or a simulation.
-
-    The rig registry gives the shape its slug and its value.
-    """
+    """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or a simulation."""
 
     INVALID = 0
     franka = 1
