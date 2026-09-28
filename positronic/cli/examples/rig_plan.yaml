@@ -11,3 +11,4 @@ endpoints:
     address: {host: candidate.example, port: 443, path: /api/v1/session}
 episodes_per_endpoint: 10
 cap_per_episode_sec: 180
+policy_preset: production

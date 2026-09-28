@@ -27,11 +27,21 @@ place of a policy sends it to the platform, and a plan file files a plan for the
 ```bash
 uv run positronic eval catalog
 uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --org=<org>
+uv run positronic eval run --from-file=positronic/cli/examples/yam_plan.yaml --org=<org>
 ```
+
+`eval catalog` prints the tasks your org may put in a plan, and each task names its `embodiment`.
+`rig_plan.yaml` runs a task on the single-arm Franka. `yam_plan.yaml` states `rig_shape: yam`, so
+its tasks run on the bimanual YAM. A plan has one `rig_shape`, so it holds tasks of one embodiment.
 
 Two or more endpoints in the plan make one blind sample: the operator is told no policy, and each
 episode records which one served it. The plan is a YAML or JSON file, and each endpoint in it names
 its wire and that wire's address, as the [client README](../../../client/README.md) sets out.
+
+`eval status --id=<hex id>` reads a filed plan back. A finished plan carries `artifacts.result`,
+the prefix in your org's own bucket that its episodes landed under. Read that prefix with your own
+credential for the bucket. It also carries `outcome`, the kept, judged and successful episodes per
+endpoint, and `replay`, a page that plays the episodes back once the platform has built it.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list. Read the names
