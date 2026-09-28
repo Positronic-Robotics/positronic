@@ -66,6 +66,21 @@ def _apart_from_the_endpoint(meta: dict) -> dict:
     return {key: value for key, value in meta.items() if key not in (offboard_keys.HOST, offboard_keys.PORT)}
 
 
+def test_both_wires_answer_keepalive_alike(start_server, make_mock_model):
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=True, idle_timeout_min=2)
+    assert InferenceClient(*served.grpc()).keepalive() == InferenceClient(*served.ws()).keepalive() == 120
+
+
+def test_a_grpc_server_without_keepalive_says_so(both_wires, monkeypatch):
+    served, _policy = both_wires
+    monkeypatch.setattr(
+        client_grpc, 'KEEPALIVE_METHOD_PATH', f'/{client_grpc.SERVICE}/KeepAliveTheServerNeverRegistered'
+    )
+    with pytest.raises(wire.KeepaliveUnsupported):
+        InferenceClient(*served.grpc()).keepalive()
+
+
 def test_both_wires_answer_one_observation_alike(both_wires):
     served, _policy = both_wires
     obs = {'image': 'test'}
@@ -208,6 +223,13 @@ def test_the_grpc_wire_refuses_a_session_without_the_token(authed_server, header
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*authed_server.grpc(), headers=headers).new_session()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
+
+
+def test_the_grpc_keepalive_takes_the_token_that_gates_the_session(authed_server):
+    with pytest.raises(wire.ConnectRefused) as refused:
+        InferenceClient(*authed_server.grpc()).keepalive()
+    assert refused.value.refusal is wire.Refusal.FORBIDDEN
+    assert InferenceClient(*authed_server.grpc(), headers={AUTH_HEADER: bearer(_TOKEN)}).keepalive() is None
 
 
 # An address, and no name that resolves to two families: gRPC reports the last address it failed on,
@@ -403,6 +425,9 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
         def dial(self, address, headers, open_timeout):
             opened.append(client_wire.dial(address, headers, open_timeout))
             return opened[-1]
+
+        def keepalive(self, address, headers, timeout):
+            return client_wire.keepalive(address, headers, timeout)
 
         def probe(self, address, headers, open_timeout):
             return client_wire.probe(address, headers, open_timeout)

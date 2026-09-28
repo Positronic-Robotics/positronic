@@ -16,9 +16,9 @@ server side.
 
 | Wire | `--policy.wire` | Where it answers |
 |---|---|---|
-| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the HTTP routes |
-| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same HTTP routes |
-| gRPC | `grpc` | the gRPC wire's own port, sessions alone |
+| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the keepalive route |
+| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same keepalive route |
+| gRPC | `grpc` | the gRPC wire's own port, beside the keepalive method |
 | gRPC over TLS | `grpc_tls` | a TLS edge in front of that same port |
 
 - A client names its wire; nothing reads one off a URL. The WebSocket wire is the default, and a server
@@ -36,6 +36,8 @@ server side.
   construction, so there is no TLS member beside it.
 - A gRPC session is one bidirectional stream on `/positronic.offboard.v1.Inference/Session`.
   No `.proto` file describes the frames.
+- The keepalive call is beside the session: `POST /api/v1/keepalive` on the WebSocket wire, and the
+  unary `KeepAlive` method of the same gRPC service. Both answer JSON.
 - The session path, the query and the bearer token cross as the `positronic-session-path`,
   `positronic-session-query` and `authorization` metadata.
 - Take the gRPC wire wherever it reaches. Python's WebSocket stack spends about 30 ms per
@@ -50,13 +52,13 @@ server side.
 Both wires ping through a silent wait. A front drops a connection it reads nothing from (the managed
 front after about 90 s), and the pings keep an inference open through that wait.
 
-`/api/v1/models` is an HTTP route. It answers on the address the WebSocket wire binds: a port, or a
-Unix socket. The gRPC port carries sessions alone.
+The keepalive call answers as an HTTP route on the address the WebSocket wire binds, a port or a Unix
+socket, and as a unary call on the gRPC port.
 
 ### Authentication
 
 `PolicyServer(auth_token=...)` gates every route below on `Authorization: Bearer <token>`, answering
-`401` on the HTTP route, refusing the WebSocket upgrade before the session opens, and answering
+`401` on the keepalive route, refusing the WebSocket upgrade before the session opens, and answering
 `PERMISSION_DENIED` on the gRPC wire. `serve` — the entry point every vendor CLI exposes — takes that
 token from the `AUTH_TOKEN` environment variable, so
 a secret never lands in the process arguments. No token serves open, which is the usual shape on a
@@ -65,21 +67,29 @@ carries the header, and `positronic.cfg.policy.authed_remote` fills it in from t
 
 ### Endpoints
 
-#### `GET /api/v1/models`
-Returns the ID of the one checkpoint the server serves. The route answers only after the model loads,
-so a probe can read it to find a ready server.
+#### `POST /api/v1/keepalive`
 
-**Example Request:**
+Resets the server's idle timer, as a session does, and opens no session.
+
 ```bash
-curl http://localhost:8000/api/v1/models
+curl -X POST http://localhost:8000/api/v1/keepalive
 ```
 
 **Response:**
 ```json
-{
-  "models": ["30000"]
-}
+{"alive_seconds": 1800}
 ```
+
+`alive_seconds` is the number of seconds the server stays alive after the call, if nothing else calls
+it. It is `null` for a server with no idle timeout.
+
+The server builds its model before it binds a wire, and the build warms the model (see
+[`server.PolicyServer`](#serverpolicyserver)). So any answer means the policy is ready and warm. A server
+that is still loading answers nothing.
+
+A server without the call answers `404` on HTTP and `UNIMPLEMENTED` on gRPC, and the client raises
+`wire.KeepaliveUnsupported`. On a `404` the client also probes the session route. If no session server
+answers there, no positronic server is at the address, and the client raises `wire.ConnectRefused`.
 
 #### `/api/v1/session`
 Establishes an inference session with the server's model. The server loads one checkpoint at startup:
@@ -318,8 +328,9 @@ checkpoints, start one server for each.
 ### `server.PolicyServer`
 Serves one `Model` through a `PolicyDeployment` with explicit `local` and `codec` arguments. The server
 calls `build_model` once, when `serve` starts, and the model it returns owns the loaded resources and
-reports its checkpoint in `meta()`. Server codecs wrap the model's call; the client receives one stack spec
-containing its processors and codecs.
+reports its checkpoint in `meta()`. `build_model` warms the model before it returns: it runs one inference
+with `server_utils.warmup`, on an observation that the model defines. Server codecs wrap the model's call;
+the client receives one stack spec containing its processors and codecs.
 
 ```python
 from positronic.offboard.server import PolicyServer
@@ -354,15 +365,14 @@ wires = [
 server.serve(wires)
 ```
 
-`serve` hands every wire the HTTP routes it owns; a wire whose transport carries HTTP answers them
-beside its sessions, and the gRPC wire, whose port carries sessions alone, does not. A wire names
+`serve` hands every wire the session handler and the keepalive handler. A wire names
 where it bound in its `served_address` property: `ServedHostPort` for a host and a port — a wire
 asked for port 0 binds any free one, and `ws.served_address.port` is the port it took — or
 `ServedUnixSocket` for a socket path, which has no port at all.
 
 Passing a `cfn.Config` that builds the pipeline enables [session parameters](#session-parameters);
 an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the server after that
-many minutes without activity.
+many minutes with no session and no keepalive call.
 
 ### `server.serve`
 The CLI entry point every vendor server exposes. A vendor binds `model` and `pipeline` for each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. `--model.*` names the checkpoint: `--model.model_source=...` for GR00T, `--model.checkpoints_dir=...` for LeRobot and OpenPI. `--pipeline.*` tunes the rig-side stack and the server codec. `--websocket`, `--grpc` and `--idle_timeout_min` are the other flags of `serve` — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other. A deployment preset binds a model and a pipeline together.
@@ -394,6 +404,9 @@ session = client.new_session()
 meta = session.metadata
 action = session.infer(observation)
 ```
+
+`keepalive()` resets the server's idle timer and returns `alive_seconds`. It raises
+`wire.KeepaliveUnsupported` on a server without the call.
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
