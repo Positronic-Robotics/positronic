@@ -96,7 +96,7 @@ CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
 
 REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
-RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2}
+RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (ErrorCode, ERROR_CODE_VALUES),

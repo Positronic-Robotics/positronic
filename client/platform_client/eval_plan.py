@@ -439,7 +439,7 @@ class EvalPlan(Cascade, Generic[Credential]):
     request_type: PlanRequestType
     # The rig shape a plan that states its tasks runs on. A plan that names an eval runs on the
     # embodiment the eval pins.
-    rig: Slugged[RigShape] = RigShape.franka
+    rig_shape: Slugged[RigShape] = RigShape.franka
     tasks: list[TaskNode[Credential]] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
@@ -473,10 +473,10 @@ class EvalPlan(Cascade, Generic[Credential]):
     @model_validator(mode='after')
     def _a_named_eval_takes_the_rig_it_pins(self) -> Self:
         # A dump carries every field, so what is refused is a shape other than the default.
-        if self.names_an_eval and self.rig is not RigShape.franka:
+        if self.names_an_eval and self.rig_shape is not RigShape.franka:
             raise ValueError(
-                f'the plan names the eval {str(self.eval)!r} and the {slug_of(self.rig)} rig: an eval runs on the '
-                'embodiment it pins, and `rig` names the bench of a plan that states its tasks'
+                f'the plan names the eval {str(self.eval)!r} and the {slug_of(self.rig_shape)} rig shape: an eval runs '
+                'on the embodiment it pins, and `rig_shape` names the embodiment of a plan that states its tasks'
             )
         return self
 

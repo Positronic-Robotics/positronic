@@ -209,24 +209,24 @@ def test_every_cap_sits_under_the_ceiling():
 
 
 def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
-    assert a_plan().rig is RigShape.franka
-    yam = a_plan(rig='yam')
-    assert yam.rig is RigShape.yam
-    assert yam.model_dump(mode='json')['rig'] == 'yam'
+    assert a_plan().rig_shape is RigShape.franka
+    yam = a_plan(rig_shape='yam')
+    assert yam.rig_shape is RigShape.yam
+    assert yam.model_dump(mode='json')['rig_shape'] == 'yam'
     assert EvalPlan.model_validate(yam.model_dump(mode='json')) == yam
 
 
 def test_a_rig_shape_outside_the_closed_set_is_refused():
     with pytest.raises(ValidationError):
-        a_plan(rig='ur5')
+        a_plan(rig_shape='ur5')
 
 
 def test_a_plan_naming_an_eval_runs_on_the_embodiment_the_eval_pins():
     image = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'))
     stated = image.model_dump(mode='json')
     with pytest.raises(ValidationError, match='an eval runs on the embodiment it pins'):
-        EvalPlan.model_validate({**stated, 'rig': 'yam'})
-    assert EvalPlan.model_validate(stated).rig is RigShape.franka
+        EvalPlan.model_validate({**stated, 'rig_shape': 'yam'})
+    assert EvalPlan.model_validate(stated).rig_shape is RigShape.franka
 
 
 def test_an_unknown_field_is_refused():

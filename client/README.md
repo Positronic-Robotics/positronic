@@ -65,13 +65,14 @@ it names, and the caller must be a member of that org. The org's approvals decid
 tasks and the endpoint kinds it may use. `nebius_competition` names one eval and one image
 endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
 
-`rig` names the rig shape a plan that states its tasks runs on: `franka`, a single-arm Franka, or
-`yam`, a bimanual YAM. A plan that names no rig runs on a `franka`. A plan that names an eval runs
-on the embodiment the eval pins, and it is refused when it names a `rig` other than `franka`.
+`rig_shape` names the embodiment a plan that states its tasks runs on: `franka`, a single-arm Franka,
+or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platform picks the rig of
+that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
+names a `rig_shape` other than `franka`. The gateway refuses `sim`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
-rig: franka                              # franka | yam
+rig_shape: franka                        # franka | yam
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
