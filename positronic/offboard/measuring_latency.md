@@ -4,8 +4,7 @@ A served round trip divides into what the server reports spending and what it do
 `served_ms` covers the observation's decode, the queue and the model. Everything else — the link, and
 whether the receiver drains it — is outside every figure the server sends.
 
-Each step below answers on its own, and every step that needs no model runs before the model is
-loaded, so a session cut short still holds its results.
+Each step below answers on its own. The steps that need no model run while the model loads.
 
 ## What each probe answers
 
@@ -105,12 +104,14 @@ Then sweep the payload, which says whether the cost scales with bytes or is a fi
 for KIB in 128 750 2026; do $PROBE source --host=$SERVER --port=9100 --kib=$KIB --transfers=10; done
 ```
 
-And raise a reader that competes for the interpreter, as a busy model does to the loop that
-reads for it:
+Then run a sink beside threads that hold the GIL, as Python work in the server process does beside the
+loop that reads for it. The threads spin in Python and contend with the reader for the GIL, so together
+they load one core at most. `--busy_threads` sets how many threads share the GIL with the reader, and so
+the reader's share of it:
 
 ```bash
-# container shell 2; stop it with Ctrl-C after the source ends, because its threads load every core
-$PROBE sink --port=9102 --busy_threads=$(nproc)
+# container shell 2; stop it with Ctrl-C after the source ends
+$PROBE sink --port=9102 --busy_threads=4
 # from the client
 $PROBE source --host=$SERVER --port=9102 --kib=750 --transfers=10
 ```
@@ -149,8 +150,8 @@ Each run prints the stack it rebuilt from the handshake. Read it: the rig sends 
 
 Read `wire_kib` before anything else. The observation came to that on the wire, and if it is not
 close to what the rig sends in production, the episode is not standing in for the rig and no figure
-under it compares to one. `round_trip_ms - pack_ms - served_ms` is the link and the receiver, and
-`send_ms` against `recv_ms` says which half of the wire holds it.
+under it compares to one. `outside_served_ms` is the link and the receiver, and `send_ms` against
+`recv_ms` says which half of the wire holds it.
 
 ## 6. Test the countermeasures the readings point at
 
@@ -204,14 +205,14 @@ docker stop link-probe-server                      # --rm then removes the conta
 docker ps -a --filter name=link-probe-server       # prints no container
 ```
 
-A stopped container is not a deleted box. If the host was created for this session, delete it with its
-provider, then list the provider's resources and read the count, because a deleted box can leave its
+A stopped container is not a deleted host. Delete a host you created for the measurement with its
+provider. Then list the provider's resources and read the count, because a deleted host can leave its
 disk.
 
 ## What a local rehearsal cannot tell you
 
-Every probe here runs on one box over loopback, which is worth doing before the window and proves the
-commands work. It does not reproduce the reading: loopback buffers absorb a 750 KiB payload whole, so a
-reader that stalls never shows up in `write_ms`. A reader that starts late shows up in `report_ms`, and
-one that stalls between its reads shows up in `read_span_ms`. A link with a smaller bandwidth-delay
-product pushes the same stall back to the sender, and only a reading taken at both ends divides it.
+Every probe here also runs on one host over loopback, and that proves the commands work. It does not
+reproduce the reading: loopback buffers absorb a 750 KiB payload whole, so a reader that stalls never
+shows up in `write_ms`. A reader that starts late shows up in `report_ms`, and one that stalls between
+its reads shows up in `read_span_ms`. A link with a smaller bandwidth-delay product pushes the same
+stall back to the sender, and only a reading taken at both ends divides it.
