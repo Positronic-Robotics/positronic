@@ -1,5 +1,4 @@
 # A plan for the bimanual YAM: `rig_shape: yam` runs every task of the plan on a two-arm rig.
-# `uv run positronic eval run --from-file=positronic/cli/examples/yam_plan.yaml --org=<org>` files it for that org.
 rig_shape: yam
 tasks:
   - pass-the-cube-across
