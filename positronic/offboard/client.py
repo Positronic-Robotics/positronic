@@ -24,7 +24,6 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
-DEFAULT_KEEPALIVE_TIMEOUT = 30.0
 
 # What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
@@ -205,8 +204,8 @@ class InferenceClient:
 
     ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
-    ``connect_deadline`` the retries until a cold backend answers, ``infer_timeout`` one inference
-    round trip, and ``keepalive_timeout`` one keepalive call.
+    ``connect_deadline`` the retries until a cold backend answers, and ``infer_timeout`` one inference
+    round trip.
     """
 
     def __init__(
@@ -218,7 +217,6 @@ class InferenceClient:
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-        keepalive_timeout: float = DEFAULT_KEEPALIVE_TIMEOUT,
     ):
         if not isinstance(address, client_wire.ADDRESS):
             raise ValueError(
@@ -232,7 +230,6 @@ class InferenceClient:
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
-        self.keepalive_timeout = keepalive_timeout
 
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
@@ -278,4 +275,4 @@ class InferenceClient:
         A server binds its wires only after its model has loaded and warmed, so any answer means it is ready.
         Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.
         """
-        return self._wire.keepalive(self._address, self.headers, self.keepalive_timeout)
+        return self._wire.keepalive(self._address, self.headers, self.open_timeout)

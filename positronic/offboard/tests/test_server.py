@@ -951,12 +951,6 @@ class TestKeepalive:
         served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=math.inf)
         assert InferenceClient(*served.ws()).keepalive() is None
 
-    def test_a_nan_idle_timeout_is_refused_at_construction(self, make_mock_model):
-        with pytest.raises(ValueError, match='nan'):
-            PolicyServer(
-                lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=math.nan
-            )
-
     def test_it_holds_off_the_idle_timeout_as_a_session_does(self, make_mock_model):
         server = PolicyServer(
             lambda: make_mock_model([], {}),

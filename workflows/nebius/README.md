@@ -293,7 +293,7 @@ in [Authenticated inference](#authenticated-inference)):
 
 ```bash
 curl -X POST -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/keepalive
-# → {"alive_seconds": null}
+# → {"alive_seconds": 1200}
 ```
 
 Run inference from your laptop or robot host with `positronic eval run`

@@ -116,8 +116,6 @@ class PolicyServer:
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
 
-        if idle_timeout_min is not None and math.isnan(idle_timeout_min):
-            raise ValueError(f'idle_timeout_min must be a number of minutes, got {idle_timeout_min}')
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()

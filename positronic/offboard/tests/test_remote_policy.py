@@ -227,6 +227,63 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 2 * len(one_session)
 
+    def test_no_attempt_begins_past_the_connect_deadline(self):
+        """An attempt that begins past the deadline runs a whole `open_timeout`, which the caller never granted."""
+        deadline = 1.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 1, f'the loop dialled {len(fake.dials)} times inside a {deadline}s deadline'
+
+    def test_a_wait_that_leaves_budget_still_retries(self):
+        deadline = 3.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 2, f'a {deadline}s deadline took {len(fake.dials)} attempt(s)'
+
+    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
+        deadline = 0.5
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+        slept: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            slept.append(seconds)
+            clock[0] += seconds
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=sleep),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
+
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
@@ -814,54 +871,3 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
 
         given = unary.call_args.kwargs['timeout']
         assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'
-
-    def test_no_attempt_begins_past_the_connect_deadline(self):
-        """An attempt that begins past the deadline runs a whole `open_timeout`, which the caller never granted."""
-        deadline = 1.0
-        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
-        clock = [0.0]
-
-        with (
-            patch('positronic.offboard.client.InferenceSession'),
-            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-            patch(
-                'positronic.offboard.client.time.sleep',
-                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-            ),
-            pytest.raises(TimeoutError),
-        ):
-            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
-
-        assert len(fake.dials) == 1, f'the loop dialled {len(fake.dials)} times inside a {deadline}s deadline'
-
-    def test_a_wait_that_leaves_budget_still_retries(self):
-        deadline = 3.0
-        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
-        clock = [0.0]
-
-        with (
-            patch('positronic.offboard.client.InferenceSession'),
-            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-            patch(
-                'positronic.offboard.client.time.sleep',
-                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-            ),
-            pytest.raises(TimeoutError),
-        ):
-            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
-
-        assert len(fake.dials) == 2, f'a {deadline}s deadline took {len(fake.dials)} attempt(s)'
-
-    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
-        deadline = 0.5
-        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
-        slept: list[float] = []
-        with (
-            patch('positronic.offboard.client.InferenceSession'),
-            patch('positronic.offboard.client.time.sleep', side_effect=slept.append),
-            pytest.raises((TimeoutError, IndexError)),
-        ):
-            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
-
-        assert slept, 'the loop never backed off'
-        assert max(slept) <= deadline, f'a {deadline}s connect deadline slept {max(slept)}s in one wait'
