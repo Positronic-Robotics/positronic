@@ -92,7 +92,8 @@ class Harness(pimm.ControlSystem):
     handles completions before advancing time, including unrestricted chains of calls at one instant.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
-    Its answer carries the terminal payload. Between episodes, manual commands pass through.
+    Its answer carries the terminal payload. A stop before either discards the recording.
+    Between episodes, manual commands pass through.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
@@ -279,9 +280,10 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
-            self.ds_command.emit(
-                DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
-            )
+            if payload is None:
+                self.ds_command.emit(DsWriterCommand.ABORT())
+            else:
+                self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **payload}))
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
