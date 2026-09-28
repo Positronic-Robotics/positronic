@@ -85,13 +85,18 @@ def execution(policy):
         run.close()
 
 
+def llm_metadata(runtime) -> dict:
+    """What the LLM policy wrote: at the top level when it runs alone, in section 0 when `llm` starts it in a stack."""
+    return runtime.metadata.get('0', runtime.metadata)
+
+
 def complete(run, runtime, clock, obs) -> Step:
-    accepted = sum(e['event'] == 'accepted' for e in runtime.metadata['transcript'])
+    accepted = sum(e['event'] == 'accepted' for e in llm_metadata(runtime)['transcript'])
     for _ in range(1000):
         step = run.send(obs)
         if (
-            'stop_reason' in runtime.metadata
-            or sum(e['event'] == 'accepted' for e in runtime.metadata['transcript']) > accepted
+            'stop_reason' in llm_metadata(runtime)
+            or sum(e['event'] == 'accepted' for e in llm_metadata(runtime)['transcript']) > accepted
         ):
             return step
         result = runtime.wait(5)
@@ -262,19 +267,19 @@ def test_finished_run_stays_idle_and_new_run_starts_fresh(model, ending):
     policy = llm(model='test', images='on_demand', max_calls=1)
     with execution(policy) as (run, runtime, clock):
         assert not complete(run, runtime, clock, observation()).commands
-        meta = deepcopy(runtime.metadata)
+        meta = deepcopy(llm_metadata(runtime))
         assert meta['stop_reason'] == ending
         for status in (RobotStatus.AVAILABLE, RobotStatus.ERROR, RobotStatus.AVAILABLE):
             clock.advance_to_ns(clock.now_ns() + 1_000_000_000)
             assert not run.send(observation() | {keys.ROBOT_STATUS: status}).commands
-        assert runtime.metadata == meta
+        assert llm_metadata(runtime) == meta
     assert len(requests) == 1
     replies.append(finish())
     with execution(policy) as (fresh, runtime, clock):
-        assert 'stop_reason' not in runtime.metadata
-        assert runtime.metadata['transcript'] == []
+        assert 'stop_reason' not in llm_metadata(runtime)
+        assert llm_metadata(runtime)['transcript'] == []
         complete(fresh, runtime, clock, observation())
-        assert [e['call'] for e in runtime.metadata['transcript'] if e['event'] == 'request'] == [1]
+        assert [e['call'] for e in llm_metadata(runtime)['transcript'] if e['event'] == 'request'] == [1]
     assert len(requests) == 2
 
 
@@ -304,7 +309,7 @@ def test_fault_pauses_commands_without_discarding_pending_reply(model, status):
         clock.advance_to_ns(first.resume_at_ns)
         command = run.send(observation(x=0.02)).commands[keys.ROBOT_COMMAND]
         assert 0.02 < command.pose.translation[0] <= 0.04
-        accepted = [e for e in runtime.metadata['transcript'] if e['event'] == 'accepted']
+        accepted = [e for e in llm_metadata(runtime)['transcript'] if e['event'] == 'accepted']
         assert accepted[0]['target']['x'] == 0.04
     assert len(requests) == 1
 

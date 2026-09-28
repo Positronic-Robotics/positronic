@@ -256,7 +256,8 @@ processor can keep state in its run and use the episode clock.
   how often. A custom processor may use several children. Calls at the same
   clock time are allowed; code must not assume a positive time step.
 - Runs share the episode runtime. Each reads the clock when it needs it;
-  real time continues to pass while synchronous code executes.
+  real time continues to pass while synchronous code executes. Each run gets
+  its own view of the runtime, with its own metadata section.
 - A codec is a pair of transforms — encode and decode, as in a video
   codec. Around an inference function, encode converts the arguments and decode
   converts the answer. Around a policy run, encode converts the observations
@@ -272,7 +273,13 @@ Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
 A processor reports metadata about its definition, and writes episode values into
-`runtime.metadata` as the values change.
+`runtime.metadata` as the values change. `runtime.metadata` is the section of the
+run. The run that the framework starts writes at the top level. A run started by
+another run writes in a section of its parent's, named by its start index: `0`,
+`1`, and so on. The runtime names the sections, and the processor names the keys
+in its own section. So `Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=20))`
+records the schedule's counters as `0.chunked_schedule.dropped`, because the
+sequence starts its innermost component first.
 
 ### Remote policies
 
@@ -373,7 +380,7 @@ class Answer(ABC, Generic[T]):
 ### The runtime
 
 ```python
-# One runtime shared by the runs in an episode.
+# One runtime per episode. Each run gets a view of it with its own metadata section.
 class Runtime(ABC):
     @cached_property
     def metadata(self) -> dict[str, Any]: ...

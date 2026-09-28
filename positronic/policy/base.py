@@ -62,14 +62,18 @@ ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, N
 
 
 class Runtime(ABC):
-    """What the framework offers one episode. Every episode gets its own.
+    """What the framework offers one episode. Every episode gets its own, and each run a view of it.
 
     At episode shutdown, drain submitted work before closing live generators whose resources it may use.
     """
 
     @cached_property
     def metadata(self) -> dict[str, Any]:
-        """Episode metadata written on the control thread, overriding definition values at recording time."""
+        """This run's section of the episode metadata, written on the control thread.
+
+        The recording overrides definition values with it. A run started by another run writes in a section of
+        its parent's, named by its start index.
+        """
         return {}
 
     @property
@@ -113,7 +117,7 @@ class Runtime(ABC):
 
         Bind telemetry before starting processors; timing wrappers are selected at startup.
         """
-        run = processor.run(self, *args, **kwargs)
+        run = processor.run(self._runtime_for_run(), *args, **kwargs)
         initial = next(run)
         if initial is not None:
             run.close()
@@ -126,6 +130,36 @@ class Runtime(ABC):
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
+
+    def _runtime_for_run(self) -> Runtime:
+        """The view a run started here receives. The run the episode starts writes at the top level."""
+        return _RunRuntime(self, self.metadata)
+
+
+class _RunRuntime(Runtime):
+    """One run's view of its episode's runtime: the episode's clock and workers, and a metadata section."""
+
+    def __init__(self, episode: Runtime, metadata: dict[str, Any]) -> None:
+        self._episode = episode
+        self.metadata = metadata
+        self._started = 0
+
+    @property
+    def time_ns(self) -> int:
+        return self._episode.time_ns
+
+    @property
+    def tick(self) -> int:
+        return self._episode.tick
+
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        return self._episode.submit(function, *args, **kwargs)
+
+    def _runtime_for_run(self) -> Runtime:
+        section: dict[str, Any] = {}
+        self.metadata[str(self._started)] = section
+        self._started += 1
+        return _RunRuntime(self._episode, section)
 
 
 class Processor(ABC, Generic[InputT, OutputT]):
