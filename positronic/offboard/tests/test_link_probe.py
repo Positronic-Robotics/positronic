@@ -89,7 +89,7 @@ def _read_reply(conn: socket.socket) -> bytes:
 def test_a_transfer_that_lands_in_one_read_is_reported_and_the_sink_reads_on():
     """One read has no span and so no rate; the sink must report it and serve the next transfer."""
     sender, receiver = socket.socketpair()
-    peer = threading.Thread(target=_serve_peer, args=(receiver, READ_BYTES, 0), daemon=True)
+    peer = threading.Thread(target=_serve_peer, args=(receiver, READ_BYTES), daemon=True)
     peer.start()
     try:
         for _ in range(2):
@@ -114,7 +114,7 @@ def test_a_peer_that_breaks_a_transfer_is_logged_as_an_error(sent, caplog):
     sender.shutdown(socket.SHUT_WR)
     try:
         with caplog.at_level(logging.ERROR):
-            _serve_peer(receiver, READ_BYTES, 0)
+            _serve_peer(receiver, READ_BYTES)
     finally:
         sender.close()
     assert any(record.levelno == logging.ERROR for record in caplog.records)
@@ -126,7 +126,7 @@ def test_a_peer_that_closes_between_transfers_is_not_an_error(caplog):
     sender.shutdown(socket.SHUT_WR)
     try:
         with caplog.at_level(logging.ERROR):
-            _serve_peer(receiver, READ_BYTES, 0)
+            _serve_peer(receiver, READ_BYTES)
         assert json.loads(_read_reply(sender))['bytes'] == 100
     finally:
         sender.close()
@@ -141,7 +141,7 @@ def _source_against_a_sink(tmp_path: Path, kib: int) -> list[dict]:
     listener.bind(('127.0.0.1', 0))
     listener.listen(1)
     port = listener.getsockname()[1]
-    peer = threading.Thread(target=lambda: _serve_peer(listener.accept()[0], READ_BYTES, 0), daemon=True)
+    peer = threading.Thread(target=lambda: _serve_peer(listener.accept()[0], READ_BYTES), daemon=True)
     peer.start()
     out = tmp_path / 'rows.json'
     try:

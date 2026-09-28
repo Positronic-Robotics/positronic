@@ -99,14 +99,12 @@ def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
     }
 
 
-def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None:
+def _serve_peer(conn: socket.socket, read_bytes: int) -> None:
     """Read transfers off one connection until the peer goes, reporting each back to its sender."""
     try:
         # A peer that closes between transfers has finished; one that closes inside a transfer has failed.
         while conn.recv(1, socket.MSG_PEEK):
             report = receive_one(conn, read_bytes)
-            report['read_bytes'] = read_bytes
-            report['busy_threads'] = busy_threads
             conn.sendall(_frame(json.dumps(report).encode()))
             # One read has no span, so it has no rate.
             rate = 'no rate' if report['mib_per_sec'] is None else f'{report["mib_per_sec"]:.1f} MiB/s'
@@ -116,7 +114,7 @@ def _serve_peer(conn: socket.socket, read_bytes: int, busy_threads: int) -> None
                 flush=True,
             )
         print('  peer closed', flush=True)
-    except (ConnectionError, OSError, ValueError) as e:
+    except (OSError, ValueError) as e:
         # One peer's broken transfer says nothing about the next peer, so the sink serves on.
         logger.error('peer broke a transfer: %s; serving the next peer', e)
     finally:
@@ -161,7 +159,7 @@ def sink(host: str, port: int, read_bytes: int, busy_threads: int):
             conn, peer = listener.accept()
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             print(f'peer {peer[0]}:{peer[1]}', flush=True)
-            _serve_peer(conn, read_bytes, busy_threads)
+            _serve_peer(conn, read_bytes)
     except KeyboardInterrupt:
         print('sink stopped', flush=True)
     finally:
