@@ -34,7 +34,7 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -1104,5 +1104,40 @@ def test_real_sleep_stops_at_episode_deadline(episode_harness):
     h.world.clock.advance_to_ns(20_000_000)
     next(h.loop)
     assert h.deadlines.values[-1] == (20_000_000, None)
+    next(h.loop)
+    assert answer.result() == {eval_keys.TERMINATED: False}
+
+
+def test_a_missing_observation_is_read_again_after_one_poll_period(episode_harness):
+    h = episode_harness
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
+    observed_at = []
+
+    class Record(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                observed_at.append(runtime.time_ns)
+                yield Step({}, runtime.time_ns + 10**9)
+
+    h.caller(Rollout(Task('test', 1.0), Record(), None))
+    wake = next(h.loop)
+    assert wake.seconds == pytest.approx(POLL_PERIOD_SEC)
+    h.observation.emit(1)
+    h.world.clock.advance_to_ns(100_000_000)
+    next(h.loop)
+    assert observed_at == [100_000_000]
+
+
+def test_a_missing_observation_still_ends_the_episode_at_its_deadline(episode_harness):
+    h = episode_harness
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
+
+    answer = h.caller(Rollout(Task('test', 0.05), Hold(), None))
+    wake = next(h.loop)
+    assert wake.seconds == pytest.approx(0.05)
+    h.world.clock.advance_to_ns(50_000_000)
+    next(h.loop)
+    assert h.deadlines.values[-1] == (50_000_000, None)
     next(h.loop)
     assert answer.result() == {eval_keys.TERMINATED: False}
