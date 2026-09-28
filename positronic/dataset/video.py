@@ -2,7 +2,7 @@ import queue
 import struct
 import threading
 from collections import defaultdict, deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -132,8 +132,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
         """
-        validate_timeline(timeline)
-        self.timeline = timeline
+        super().__init__(timeline=timeline)
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.encoder = encoder
@@ -168,13 +167,12 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
-    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
+    def append(self, data: np.ndarray, timestamps: Mapping[str, int]) -> None:
         """Append a video frame with timestamp.
 
         Args:
             data: Image frame as uint8 numpy array with shape (H, W, 3)
-            ts_ns: Timestamp in nanoseconds (must be strictly increasing)
-            extra_ts: Optional dict of extra timeline names to timestamps
+            timestamps: All named timestamps in nanoseconds; the primary timeline must strictly increase.
 
         Raises:
             RuntimeError: If writer has been finished
@@ -185,6 +183,11 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
 
+        timestamps = self._validate_timestamps(timestamps)
+        ts_ns = timestamps[self.timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.timeline}
+        if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
+            raise ValueError('Timeline names must be consistent across all appends')
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
@@ -195,18 +198,6 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
             if data.dtype != np.uint8:
                 raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
-
-        # Validate extra_ts consistency: keys must match across all appends
-        extra_ts = extra_ts or {}
-        extra_ts = {k: int(v) for k, v in extra_ts.items()}
-        current_keys = frozenset(extra_ts.keys())
-        if self._frame_timestamps:  # Not the first append
-            expected_keys = frozenset(self._extra_timelines.keys())
-            if current_keys != expected_keys:
-                raise ValueError(
-                    f'extra_ts keys must be consistent across all appends. '
-                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
-                )
 
         if self._encoder_error is not None:
             raise RuntimeError('Video encoding failed') from self._encoder_error

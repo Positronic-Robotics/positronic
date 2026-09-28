@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -148,8 +148,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
         """
-        validate_timeline(timeline)
-        self.timeline = timeline
+        super().__init__(timeline=timeline)
         self.filepath = filepath
         self.chunk_size = chunk_size
         self._drop_equal_bytes_threshold = drop_equal_bytes_threshold
@@ -212,17 +211,9 @@ class SimpleSignalWriter(SignalWriter[T]):
         for timeline_name in self._extra_timelines:
             self._extra_timelines[timeline_name].clear()
 
-    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
-        if self._finished:
-            raise RuntimeError('Cannot append to a finished writer')
-        if self._aborted:
-            raise RuntimeError('Cannot append to an aborted writer')
-
-        if self._last_ts is not None and ts_ns <= self._last_ts:
-            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
-
+    def _validate_value(self, data: T) -> object:
         value: object = data
-        if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
+        if isinstance(value, pa.Array):
             value = value.to_numpy()
         elif isinstance(value, list | tuple):
             value = np.array(value)
@@ -236,12 +227,29 @@ class SimpleSignalWriter(SignalWriter[T]):
                     raise ValueError(f"Data shape {value.shape} doesn't match expected shape {self._expected_shape}")
                 if value.dtype != self._expected_dtype:
                     raise ValueError(f"Data dtype {value.dtype} doesn't match expected dtype {self._expected_dtype}")
-        else:  # Scalar type
+        else:
             if self._expected_dtype is None:
                 self._expected_dtype = type(value)
             else:
                 if type(value) is not self._expected_dtype:
                     raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
+        return value
+
+    def append(self, data: T, timestamps: Mapping[str, int]) -> None:
+        if self._finished:
+            raise RuntimeError('Cannot append to a finished writer')
+        if self._aborted:
+            raise RuntimeError('Cannot append to an aborted writer')
+
+        timestamps = self._validate_timestamps(timestamps)
+        ts_ns = timestamps[self.timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.timeline}
+        if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
+            raise ValueError('Timeline names must be consistent across all appends')
+        if self._last_ts is not None and ts_ns <= self._last_ts:
+            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
+
+        value = self._validate_value(data)
 
         if self._last_ts is None and self._drop_equal_bytes_threshold is not None:
             size_bytes = self._nbytes(value)
@@ -251,19 +259,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value):
             return
 
-        # Validate extra_ts consistency: keys must match across all appends
-        extra_ts = extra_ts or {}
-        extra_ts = {k: int(v) for k, v in extra_ts.items()}
-        current_keys = frozenset(extra_ts.keys())
-        if self._timestamps:  # Not the first append
-            expected_keys = frozenset(self._extra_timelines.keys())
-            if current_keys != expected_keys:
-                raise ValueError(
-                    f'extra_ts keys must be consistent across all appends. '
-                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
-                )
-
-        self._timestamps.append(int(ts_ns))
+        self._timestamps.append(ts_ns)
         self._values.append(value)
 
         # Handle extra timelines using defaultdict

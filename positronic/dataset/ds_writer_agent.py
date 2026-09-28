@@ -118,7 +118,7 @@ class _Recording:
         if cmd.output_path not in self._datasets:  # a dataset numbers its episodes, off the disk it holds
             ds_writer = self._dataset_factory(cmd.output_path)
             self._datasets[cmd.output_path] = self._open_datasets.enter_context(ds_writer)
-        self.writer = self._datasets[cmd.output_path].new_episode()
+        self.writer = self._datasets[cmd.output_path].new_episode(timeline=RECORDED_TIME)
         self._set_statics(self.writer, cmd.static_data)
         logger.info(f'DsWriterAgent: [START] {self._episode_path(self.writer)}')
 
@@ -219,10 +219,14 @@ class DsWriterAgent(pimm.ControlSystem):
         world_time_ns, message_time_ns = clock.now_ns(), msg.ts
         primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
-        extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
+        timestamps = {
+            RECORDED_TIME: primary_ts,
+            'message': message_time_ns,
+            'system': pimm.world.SystemClock().now_ns(),
+        }
         # Only add 'world' if clock is not system clock
         if not isinstance(clock, pimm.world.SystemClock):
-            extra_ts['world'] = world_time_ns
+            timestamps['world'] = world_time_ns
 
         with self._telemetry_span():
             serializer = self._serializers.get(name)
@@ -231,7 +235,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 value = serializer(value)
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
-                    ep_writer.append(full_name, v, primary_ts, extra_ts, timeline=RECORDED_TIME)
+                    ep_writer.append(full_name, v, timestamps)
 
     def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
         """Append this turn's input samples, dropping any stamped after ``before``.

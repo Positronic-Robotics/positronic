@@ -28,11 +28,11 @@ from positronic.dataset.signal import RECORDED_TIME
 @pytest.fixture
 def recorded_signals(monkeypatch, tmp_path):
     times = np.arange(0, EPISODE_SECONDS * 1_000_000_000 + 1, 100_000_000)
-    with DiskEpisodeWriter(tmp_path / 'episode') as writer:
+    with DiskEpisodeWriter(tmp_path / 'episode', timeline=RECORDED_TIME) as writer:
         for name in RECORDED_SIGNALS:
             sample_times = times[::10] if name in (keys.TARGET_EE_POSE, keys.TARGET_GRIP) else times
             for timestamp in sample_times:
-                writer.append(name, 0.0, int(timestamp), timeline=RECORDED_TIME)
+                writer.append(name, 0.0, {RECORDED_TIME: int(timestamp)})
     signals = DiskEpisode(tmp_path / 'episode').signals
     monkeypatch.setattr(
         act_stack,

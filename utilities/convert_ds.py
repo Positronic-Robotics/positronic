@@ -73,7 +73,7 @@ def main(output_path: str, original_ds: Dataset | None = None):
     root = Path(output_path)
     with LocalDatasetWriter(root) as writer:
         for episode in tqdm.tqdm(original_ds):
-            with writer.new_episode() as ew:
+            with writer.new_episode(timeline={name: signal.timeline for name, signal in episode.signals.items()}) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 
@@ -85,7 +85,7 @@ def main(output_path: str, original_ds: Dataset | None = None):
                         continue
 
                     for value, ts in signal:
-                        ew.append(key, value, ts, timeline=signal.timeline)
+                        ew.append(key, value, {signal.timeline: ts})
 
 
 if __name__ == '__main__':

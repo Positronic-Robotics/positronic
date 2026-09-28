@@ -38,7 +38,9 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 
 ## Timelines
 
-Each signal declares a non-empty string name for its timestamp coordinate. Time queries and bounds
+Each signal exposes one primary timestamp coordinate, selected when its writer is constructed.
+Appends supply one mapping of non-empty timeline names to timestamps, including the primary timeline;
+additional coordinates are stored alongside it. The set of names is fixed per signal. Time queries and bounds
 require that exact name; no timeline is implicit. Episode queries filter out signals without the
 requested timeline. Transforms that align or offset time require a name and reject mismatched signals.
 Parquet schema metadata persists the name; recordings without it expose their existing timestamp

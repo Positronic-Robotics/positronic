@@ -124,18 +124,18 @@ def test_an_episode_missing_a_key_the_stack_asks_for_says_which(start_server):
 def _droid_episode(path, cameras):
     """A DROID recording: its observation columns, the commands the rig emitted, and the statics it carries."""
     period_ns = int(1e9 / 15.0)
-    with DiskEpisodeWriter(path) as writer:
+    with DiskEpisodeWriter(path, timeline=RECORDED_TIME) as writer:
         for tick in range(3):
             at = tick * period_ns
-            writer.append(keys.JOINTS, np.zeros(7), at, timeline=RECORDED_TIME)
-            writer.append(keys.JOINT_VEL, np.zeros(7), at, timeline=RECORDED_TIME)
-            writer.append(keys.EE_POSE, np.zeros(7), at, timeline=RECORDED_TIME)
-            writer.append(keys.ROBOT_STATUS, 0, at, timeline=RECORDED_TIME)
-            writer.append(keys.GRIP, 0.0, at, timeline=RECORDED_TIME)
+            writer.append(keys.JOINTS, np.zeros(7), {RECORDED_TIME: at})
+            writer.append(keys.JOINT_VEL, np.zeros(7), {RECORDED_TIME: at})
+            writer.append(keys.EE_POSE, np.zeros(7), {RECORDED_TIME: at})
+            writer.append(keys.ROBOT_STATUS, 0, {RECORDED_TIME: at})
+            writer.append(keys.GRIP, 0.0, {RECORDED_TIME: at})
             for camera in cameras:
-                writer.append(camera, np.zeros((48, 64, 3), np.uint8), at, timeline=RECORDED_TIME)
-            writer.append(keys.TARGET_EE_POSE, np.zeros(7), at, timeline=RECORDED_TIME)
-            writer.append(keys.TARGET_GRIP, 0.0, at, timeline=RECORDED_TIME)
+                writer.append(camera, np.zeros((48, 64, 3), np.uint8), {RECORDED_TIME: at})
+            writer.append(keys.TARGET_EE_POSE, np.zeros(7), {RECORDED_TIME: at})
+            writer.append(keys.TARGET_GRIP, 0.0, {RECORDED_TIME: at})
         writer.set_static(keys.TASK, 'pick the spoon')
         for static in (roboarm_keys.URDF, roboarm_keys.JOINT_NAMES, roboarm_keys.CONTROL_FRAME, roboarm_keys.GRIPPER):
             writer.set_static(static, 'recorded')

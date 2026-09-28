@@ -100,13 +100,11 @@ def a_dataset(root: Path, *statics: dict) -> Dataset:
     """One episode per static-value dict, each four joint samples long."""
     with LocalDatasetWriter(root) as writer:
         for static in statics:
-            with writer.new_episode() as episode:
+            with writer.new_episode(timeline=RECORDED_TIME) as episode:
                 for name, value in static.items():
                     episode.set_static(name, value)
                 for step in range(4):
-                    episode.append(
-                        keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000, timeline=RECORDED_TIME
-                    )
+                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), {RECORDED_TIME: 10_000 + step * 1_000})
     return load_all_datasets(root)
 
 

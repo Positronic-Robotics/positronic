@@ -40,7 +40,11 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     with LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
             meta = episode.meta
-            with writer.new_episode(created_ts_ns=meta.get(META_CREATED_TS_NS), uid=meta.get(META_UID)) as ew:
+            with writer.new_episode(
+                timeline={name: signal.timeline for name, signal in episode.signals.items()},
+                created_ts_ns=meta.get(META_CREATED_TS_NS),
+                uid=meta.get(META_UID),
+            ) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 
@@ -62,7 +66,7 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         values = signal._values_at(indices)
         timestamps = signal._ts_at(indices, timeline=signal.timeline)
         for v, ts in zip(values, timestamps, strict=True):
-            ew.append(key, v, ts, timeline=signal.timeline)
+            ew.append(key, v, {signal.timeline: ts})
 
 
 def migrate_remote_dataset(source_url: str, dest_path: str) -> None:

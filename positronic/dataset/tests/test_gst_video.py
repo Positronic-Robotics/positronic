@@ -52,7 +52,7 @@ def _write(tmp_path: Path, encoder: GstH264Encoder, frames: list[np.ndarray]) ->
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
     with VideoSignalWriter(video, index, encoder, timeline=RECORDED_TIME) as w:
         for i, frame in enumerate(frames):
-            w.append(frame, 1_000_000_000 + i * 33_333_333)
+            w.append(frame, {RECORDED_TIME: 1_000_000_000 + i * 33_333_333})
     return VideoSignal(video, index)
 
 
@@ -149,7 +149,7 @@ def test_a_pipeline_that_fails_surfaces_its_error(tmp_path):
             tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet', broken, timeline=RECORDED_TIME
         ) as w:
             for i in range(20):
-                w.append(_textured_frame(i), i + 1)
+                w.append(_textured_frame(i), {RECORDED_TIME: i + 1})
     assert 'nosuchelement' in str(failed.value.__cause__)
 
 
@@ -158,7 +158,7 @@ def test_abort_stops_the_process_and_deletes_the_files(tmp_path):
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
     w = VideoSignalWriter(video, index, SOFTWARE_H264, timeline=RECORDED_TIME)
     for i in range(5):
-        w.append(_textured_frame(i), i + 1)
+        w.append(_textured_frame(i), {RECORDED_TIME: i + 1})
     w.abort()
 
     assert not video.exists()

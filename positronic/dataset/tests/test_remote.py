@@ -30,18 +30,13 @@ def dataset_with_video(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as w:
         for ep_idx in range(2):
-            with w.new_episode() as ew:
+            with w.new_episode(timeline=RECORDED_TIME) as ew:
                 ew.set_static('task', f'task_{ep_idx}')
                 ew.set_static('episode_id', ep_idx)
 
                 # Numeric signal
                 for i in range(5):
-                    ew.append(
-                        'action',
-                        np.array([i * 0.1, i * 0.2], dtype=np.float32),
-                        ts_ns=1000 + i * 100,
-                        timeline=RECORDED_TIME,
-                    )
+                    ew.append('action', np.array([i * 0.1, i * 0.2], dtype=np.float32), {RECORDED_TIME: 1000 + i * 100})
 
                 # Video signal
                 video_path = ew.path / 'cam.mp4'
@@ -49,7 +44,7 @@ def dataset_with_video(tmp_path):
                 with VideoSignalWriter(video_path, frames_path, fps=30, timeline=RECORDED_TIME) as vw:
                     for i in range(3):
                         frame = np.full((64, 64, 3), (ep_idx + 1) * 50 + i * 10, dtype=np.uint8)
-                        vw.append(frame, ts_ns=1000 + i * 100)
+                        vw.append(frame, {RECORDED_TIME: 1000 + i * 100})
 
     return LocalDataset(root)
 
@@ -262,10 +257,10 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
 
     with LocalDatasetWriter(source_root) as w:
         for i in range(2):
-            with w.new_episode() as ew:
+            with w.new_episode(timeline=RECORDED_TIME) as ew:
                 ew.set_static('id', i)
                 for j in range(3):
-                    ew.append('signal', np.array([j], dtype=np.float32), ts_ns=1000 + j * 100, timeline=RECORDED_TIME)
+                    ew.append('signal', np.array([j], dtype=np.float32), {RECORDED_TIME: 1000 + j * 100})
 
     source_ds = LocalDataset(source_root)
     port = find_free_port()
@@ -344,10 +339,10 @@ def test_time_endpoints_require_an_existing_named_timeline(test_client, endpoint
 
 def test_remote_sample_filters_signals_by_timeline(tmp_path, monkeypatch):
     with LocalDatasetWriter(tmp_path / 'named') as writer:
-        with writer.new_episode() as episode:
-            episode.append('a', 1, 10, timeline='world')
-            episode.append('b', 2, 1000, timeline='wall')
-            episode.append('cam', np.zeros((32, 32, 3), dtype=np.uint8), 10, timeline='world')
+        with writer.new_episode(timeline={'a': 'world', 'b': 'wall', 'cam': 'world'}) as episode:
+            episode.append('a', 1, {'world': 10})
+            episode.append('b', 2, {'wall': 1000})
+            episode.append('cam', np.zeros((32, 32, 3), dtype=np.uint8), {'world': 10})
     monkeypatch.setattr(remote_server, '_dataset', LocalDataset(tmp_path / 'named'))
     with TestClient(remote_server._app) as client:
         info = client.get('/api/v2/episodes/0/info').json()

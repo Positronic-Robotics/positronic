@@ -63,12 +63,13 @@ Recordings are never modified: edits persist but never compute, transforms compu
 
 ## Named timelines
 
-Each signal has one timestamp coordinate, exposed as `signal.timeline`. Names are non-empty strings.
-Readers and writers require the name explicitly; there is no default timeline:
+Each signal exposes one queryable timeline as `signal.timeline`. Writers accept all timestamps for a
+sample in one mapping, with non-empty string names. The writer's primary timeline is fixed at
+construction and must be present in every mapping. Queries always name their timeline explicitly:
 
 ```python
-with writer.new_episode() as episode_writer:
-    episode_writer.append("pose", np.array([1.0, 2.0]), 1000, timeline="world")
+with writer.new_episode(timeline="world") as episode_writer:
+    episode_writer.append("pose", np.array([1.0, 2.0]), {"world": 1000, "wall": 2000})
 
 pose, timestamp = episode["pose"].time("world")[1000]
 sample = episode.time("world")[1000]
@@ -86,7 +87,13 @@ stored under `positronic.timeline` in the Parquet schema metadata, including vid
 Recordings without this metadata expose their timestamp column as `"recorded"`, represented in
 Python by `RECORDED_TIME`. The name does not assert a wall or simulation clock. Existing recording,
 training, and viewer callers explicitly use this convention. Auxiliary timestamp columns written
-through `extra_ts` are retained but are not queryable timeline coordinates.
+alongside the primary timestamp are stored but are not queryable timeline coordinates. Within a signal,
+every append must supply the same timeline names; the primary timestamp must strictly increase.
+
+`DiskEpisodeWriter(..., timeline="world")` and `new_episode(timeline="world")` select the primary
+timeline for every signal in the episode. For signals with different primary timelines, provide a
+mapping at construction: `new_episode(timeline={"pose": "world", "latency": "wall"})`.
+Every dynamic signal must be listed when using this form.
 
 HTTP clients and servers use `/api/v2`. Signal metadata includes `timeline`; timestamp, search,
 and episode sample requests require that field. Client and server must use the same API version.
@@ -135,8 +142,11 @@ class Signal[T]:
     #     any t < first -> KeyError.
 
 class SignalWriter[T]:
-    # Appends data with timestamp. Fails if ts_ns is not increasing or data shape/dtype doesn't match
-    def append(self, data: T, ts_ns: int) -> None:
+    def __init__(self, *, timeline: str):
+        ...
+
+    # Requires the primary timestamp to increase and data shape/dtype to remain consistent
+    def append(self, data: T, timestamps: Mapping[str, int]) -> None:
         pass
 
     # Writers are context managers. Exiting the context finalizes the file.
@@ -180,9 +190,9 @@ class Episode:
         pass
 
 class EpisodeWriter:
-    # Append dynamic `Signal` data; timestamps must be strictly increasing per signal
+    # Append dynamic `Signal` data; primary timestamps must strictly increase per signal
     # Raises if the `Signal` name conflicts with existing static items
-    def append(self, signal_name: str, data: T, ts_ns: int, *, timeline: str) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Mapping[str, int]) -> None:
         pass
 
     # Set static (non-time-varying) item; raises on name conflicts
@@ -216,7 +226,7 @@ class Dataset:
 
 class DatasetWriter:
     # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
-    def new_episode(self) -> EpisodeWriter:
+    def new_episode(self, *, timeline: str | Mapping[str, str]) -> EpisodeWriter:
         pass
 ```
 
@@ -291,11 +301,11 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 
 ## Episodes
 
-An `Episode` is a collection of `Signal`s recorded together plus static, episode-level metadata. All dynamic signals in an `Episode` share a common time axis.
+An `Episode` is a collection of `Signal`s recorded together plus static, episode-level metadata. Dynamic signals can have different primary timelines.
 
 ### Recording
 
-Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns, timeline="recorded")` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via an `EpisodeWriter` implementation. Construct it with `timeline="recorded"`, then add time-varying data with `append(signal_name, data, {"recorded": ts_ns})`. Primary timestamps must strictly increase per signal. Add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
@@ -354,10 +364,10 @@ Access semantics mirror those of `Signal.time` for selecting timestamps; the epi
 `DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new `Episode` slot and return an `EpisodeWriter` for recording:
 
 ```python
-with dataset_writer.new_episode() as ew:
+with dataset_writer.new_episode(timeline="recorded") as ew:
     ew.set_static("task", "pick_place")
     ew.set_static("id", 123)
-    ew.append("state", np.array([...]), ts_ns, timeline="recorded")
+    ew.append("state", np.array([...]), {"recorded": ts_ns})
 ```
 
 ### Editing datasets

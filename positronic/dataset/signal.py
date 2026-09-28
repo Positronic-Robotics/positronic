@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -404,8 +404,23 @@ class _SignalView(Signal[T], Generic[T]):
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     """Append-only writer for Signals."""
 
+    def __init__(self, *, timeline: str):
+        validate_timeline(timeline)
+        self._timeline = timeline
+
+    @property
+    def timeline(self) -> str:
+        return self._timeline
+
+    def _validate_timestamps(self, timestamps: Mapping[str, int]) -> dict[str, int]:
+        for name in timestamps:
+            validate_timeline(name)
+        if self.timeline not in timestamps:
+            raise ValueError(f'Missing timestamp for primary timeline {self.timeline!r}')
+        return {name: int(ts) for name, ts in timestamps.items()}
+
     @abstractmethod
-    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(self, data: T, timestamps: Mapping[str, int]) -> None:
         pass
 
     @abstractmethod
