@@ -443,7 +443,7 @@ Notes
 
 Component layout
 - Outputs are dynamically declared via `player.outputs[name]` before playback begins; every declared name must map to a dynamic signal in the episode. Static-only items raise `ValueError`, and missing signals raise `KeyError` so wiring mistakes surface immediately.
-- `command` receives control messages. `DsPlayerStartCommand(episode, timeline="recorded", start_ts=None, end_ts=None)` starts playback, optionally restricting the time window. `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
+- `command` receives control messages. `DsPlayerStartCommand(episode, timeline, start_ts=None, end_ts=None)` starts playback on the required named timeline, optionally restricting the time window. `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
 - `finished` emits the originating `DsPlayerStartCommand` once all scheduled samples have been streamed.
 - `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
 
@@ -462,18 +462,18 @@ Typical use cases
 
 ### Building blocks
 - `Elementwise(signal, fn)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
-- `Join(*signals, timeline="recorded", include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp.
+- `Join(*signals, timeline, include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp.
 - `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
-- `TimeOffsets(signal, *deltas_ns, timeline="recorded", include_ref_ts=False)`: samples values at requested time deltas relative to the current time. Can be used to lookup into "past" or "future".
+- `TimeOffsets(signal, *deltas_ns, timeline, include_ref_ts=False)`: samples values at requested time deltas relative to the current time. Can be used to lookup into "past" or "future".
 
 Transforms operate purely on values; if you need semantic labels, maintain them alongside your data at a higher layer.
 
 ### Derived helpers
 Common utilities stack the building blocks to cover frequent needs:
 - `image.resize(...)` and `image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL. Import from `positronic.dataset.transforms.image`.
-- `concat(*signals, timeline="recorded", dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
+- `concat(*signals, timeline, dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
-- `pairwise(a, b, op, timeline="recorded")`: join two signals and apply a custom binary operator to every aligned pair.
+- `pairwise(a, b, op, *, timeline)`: join two signals and apply a custom binary operator to every aligned pair.
 - `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
 - `view(signal, slice_obj)`: create a zero-copy view that slices each frame (e.g., select quaternion components from a pose vector) while preserving timestamps.
 
@@ -505,7 +505,7 @@ Each transform is responsible for defining which keys are available in the outpu
 - **`Eager(transform)`**: Force eager evaluation of a wrapped transform. Use when you want all values computed upfront (e.g., for debugging or when you know all values will be accessed).
 
 Helper callables (used within `Derive`):
-- **`Concat(*keys, timeline="recorded")`**: Concatenate multiple signals into a single array signal.
+- **`Concat(*keys, timeline)`**: Concatenate multiple signals into a single array signal.
 - **`FromValue(value)`**: Return a constant value (useful for adding static labels).
 
 `TransformedEpisode` applies a sequence of transforms lazily—transforms are chained sequentially where each receives the output of the previous one. Transformation happens on first access and results are cached. `TransformedDataset` lifts the same pattern to the dataset level so every retrieved episode is automatically transformed.
