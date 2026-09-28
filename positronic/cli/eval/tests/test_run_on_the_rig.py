@@ -12,7 +12,6 @@ from positronic.cli.eval.plan import given, read_plan
 from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
-EXAMPLE_PLANS = sorted((Path(__file__).resolve().parents[2] / 'examples').glob('*_plan.yaml'))
 FILED = {'submission_id': '2a', 'status': 'pending'}
 BASELINE = {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session'}
 
@@ -343,6 +342,9 @@ def test_an_empty_org_is_refused_in_one_line(platform, run_command, tmp_path: Pa
     with pytest.raises(SystemExit, match=r'plan\.yaml: .*org'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='')
     assert platform.seen is None
+
+
+EXAMPLE_PLANS = sorted((Path(__file__).resolve().parents[2] / 'examples').glob('*_plan.yaml'))
 
 
 @pytest.mark.parametrize('path', EXAMPLE_PLANS, ids=lambda path: path.name)
