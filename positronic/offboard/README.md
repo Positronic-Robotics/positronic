@@ -141,7 +141,7 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "horizon_sec": 1.0}},
       {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
-    "compress_images": false,
+    "compress_images": true,
     "positronic_version": "0.2.1"
   }
 }
@@ -165,8 +165,8 @@ This metadata tells the client:
   and decodes whole chunks. Codec specs also support `"par"` composition.
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
-- `compress_images` — whether the rig JPEG-encodes frames before
-  sending, for an endpoint behind a proxy with a message-size cap.
+- `compress_images` — whether the client JPEG-encodes frames before
+  sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
@@ -229,7 +229,7 @@ After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
 
-Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64; a rig behind a message-size cap JPEG-encodes its frames instead (see `compress_images` above). `docs/connect-your-model.md` carries the full key table.
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false (see above). `deserialise()` decodes each frame to the uint8 array below. `docs/connect-your-model.md` carries the full key table and the JPEG envelope.
 
 ```json
 {

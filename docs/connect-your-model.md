@@ -204,7 +204,8 @@ cadence and the execution horizon. Add a server codec with `codec=your_codec` if
 the model takes encoded inputs and returns model-native outputs. Client codecs
 belong in `local`, where they can mix with processors. For example,
 `RestrictImageSize(224, 224)` before the remote call limits upload volume.
-`compress_images=True` on the deployment enables JPEG transport compression.
+The client JPEG-encodes each frame before it sends it. Set `compress_images=False` on the
+deployment to receive raw frames.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
 The server builds the model off the event loop, before any wire binds. A slow
@@ -239,8 +240,21 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle this and the
-robot commands:
+An image frame travels as JPEG unless the deployment sets `compress_images=False`. One envelope
+carries one `(H, W, 3)` frame or a `(T, H, W, 3)` stack:
+
+```python
+# uint8 image or image stack -> msgpack
+{
+    b"__jpeg__": True,
+    b"frames": [jpeg_bytes, ...],  # one JPEG per frame
+    b"ndim": 3,                    # 3 for one frame, 4 for a stack
+}
+```
+
+`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle both
+envelopes and the robot commands. `deserialise()` decodes each JPEG frame back to a uint8 array. A
+server that does not use it decodes the frames itself, or sets `compress_images=False`.
 
 The session handshake and inference envelopes are defined in the
 [Offboard Protocol](../positronic/offboard/README.md). Use `PolicyServer` to handle
