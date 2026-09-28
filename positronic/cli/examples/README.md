@@ -30,9 +30,10 @@ uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --o
 uv run positronic eval run --from-file=positronic/cli/examples/yam_plan.yaml --org=<org>
 ```
 
-`eval catalog` prints the tasks your org may put in a plan, and each task names its `embodiment`.
-`rig_plan.yaml` runs a task on the single-arm Franka. `yam_plan.yaml` states `rig_shape: yam`, so
-its tasks run on the bimanual YAM. A plan has one `rig_shape`, so it holds tasks of one embodiment.
+`eval catalog` prints the tasks your org may put in a plan. `rig_plan.yaml` runs a task on the
+single-arm Franka. `yam_plan.yaml` states `rig_shape: yam`, so its tasks run on the bimanual YAM.
+Every task of a plan runs on the rig that its `rig_shape` names, and the platform does not check a
+task against that rig, so put in one plan only the tasks laid out for that rig.
 
 Two or more endpoints in the plan make one blind sample: the operator is told no policy, and each
 episode records which one served it. The plan is a YAML or JSON file, and each endpoint in it names
