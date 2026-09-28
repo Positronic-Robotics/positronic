@@ -41,7 +41,7 @@ Three types are currently supported.
   * __vector__ – of any length
   * __image__ – 3-channel images (of uint8 dtype)
 
-__Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis, so a single time query can retrieve a synchronized view across everything.
+__Episode__ – collection of Signals recorded together plus static, episode-level metadata. A time query names a timeline and retrieves a synchronized view of the signals that declare it.
 
 __Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
 
@@ -498,6 +498,7 @@ Each `EpisodeTransform` can expose metadata via its `meta` property. `Transforme
 
 ```python
 from positronic.dataset import transforms
+from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 import numpy as np
@@ -508,7 +509,7 @@ class Features(transforms.EpisodeTransform):
     def __call__(self, episode: Episode) -> Episode:
         joint_q = episode["robot.q"]
         ee_pose = episode["robot.ee_pose"]
-        features = transforms.concat(joint_q, ee_pose, dtype=np.float32)
+        features = transforms.concat(joint_q, ee_pose, timeline="recorded", dtype=np.float32)
         resized_image = image.resize(width=224, height=224, signal=episode["rgb_camera"])
         return EpisodeContainer(
             {"features": features, "resized_image": resized_image},
@@ -518,7 +519,7 @@ class Features(transforms.EpisodeTransform):
 
 # Or use built-in Derive for simple cases
 features_transform = Derive(
-    features=lambda ep: transforms.concat(ep["robot.q"], ep["robot.ee_pose"], dtype=np.float32),
+    features=lambda ep: transforms.concat(ep["robot.q"], ep["robot.ee_pose"], timeline="recorded", dtype=np.float32),
     resized_image=lambda ep: image.resize(width=224, height=224, signal=ep["rgb_camera"])
 )
 
