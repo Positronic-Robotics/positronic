@@ -890,66 +890,10 @@
         ],
         "./pimm/world.py": [
             {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 20,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 14,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 18,
-                    "endColumn": 26,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 31,
                     "endColumn": 43,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 20,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 14,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 18,
-                    "endColumn": 26,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 18,
-                    "endColumn": 26,
                     "lineCount": 1
                 }
             },
