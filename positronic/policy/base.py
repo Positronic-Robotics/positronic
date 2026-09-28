@@ -5,12 +5,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
 from functools import cached_property, partial
-from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, ParamSpec, TypeVar, overload
 
 from attr import dataclass
 from typing_extensions import TypeAliasType
 
 from positronic import telemetry
+
+if TYPE_CHECKING:
+    from .remote import Server, Session
 
 
 class NotAnswered(RuntimeError):
@@ -64,7 +67,7 @@ ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, N
 class Runtime(ABC):
     """What the framework offers one episode. Every episode gets its own, and each run a view of it.
 
-    At episode shutdown, drain submitted work before closing live generators whose resources it may use.
+    At episode shutdown, drain submitted work, then close the server sessions, then the live generators.
     """
 
     @cached_property
@@ -110,13 +113,30 @@ class Runtime(ABC):
         finally:
             run.close()
 
+    @cached_property
+    def _sessions(self) -> list[Session]:
+        """The server sessions of the episode, which close after its submitted work drains."""
+        return []
+
+    @overload
+    def start(self, processor: Server, /) -> PolicyRun: ...
+
+    @overload
     def start(
         self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
-    ) -> ProcessorRun[InputT, OutputT]:
+    ) -> ProcessorRun[InputT, OutputT]: ...
+
+    def start(self, processor: Processor[Any, Any] | Server, /, *args: Any, **kwargs: Any) -> ProcessorRun[Any, Any]:
         """Create and prime an episode generator. The caller owns its closure.
 
+        For a server, open a session and start the stack it declares, with the session as its inference function.
+        The episode's runtime closes the session after its submitted work drains.
         Bind telemetry before starting processors; timing wrappers are selected at startup.
         """
+        if not isinstance(processor, Processor):
+            session = processor.open()
+            self._sessions.append(session)
+            processor, args, kwargs = session.local_stack, (session,), {}
         run = processor.run(self._runtime_for_run(), *args, **kwargs)
         initial = next(run)
         if initial is not None:
@@ -142,6 +162,7 @@ class _RunRuntime(Runtime):
     def __init__(self, episode: Runtime, metadata: dict[str, Any]) -> None:
         self._episode = episode
         self.metadata = metadata
+        self._sessions = episode._sessions
         self._started = 0
 
     @property

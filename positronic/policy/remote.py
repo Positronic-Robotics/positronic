@@ -1,6 +1,8 @@
+"""Servers a policy runs against, and the session an episode holds on one."""
+
 import collections.abc as cabc
+from abc import ABC, abstractmethod
 from contextlib import closing
-from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -15,9 +17,35 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import Obs, Policy, Processor
 from .compatibility import from_v1_spec
 from .spec import from_spec
+
+
+class Session(ABC):
+    """One episode's connection to a server: the stack the server declares for the rig, and one inference per call.
+
+    The runtime opens it at episode start and makes one call at a time. It closes the session after the last call.
+    """
+
+    local_stack: Policy
+
+    @abstractmethod
+    def __call__(self, obs: Obs) -> Any: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+
+class Server(ABC):
+    """An address and the rules of the wire that reaches it. It holds no connection."""
+
+    @abstractmethod
+    def open(self) -> Session: ...
+
+    def meta(self) -> dict[str, Any]:
+        """Model and configuration metadata shared across episodes."""
+        return {}
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
@@ -74,14 +102,27 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
     return stack
 
 
-class RemotePolicy(Policy):
-    """Run the server-declared client stack around an ordinary remote inference call.
+class WireSession(Session):
+    """A session on a positronic wire server. Images go as JPEG when the handshake asks for compressed images."""
 
-    ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
-    Each run owns a server session and its connection. Submitted calls finish before the harness
-    closes the generator; closing the session waits for the server to release its state, then closes
-    the connection. The declared stack determines when client codecs run.
+    def __init__(self, session: InferenceSession, jpeg_quality: int) -> None:
+        self.local_stack = declared_stack(session.metadata, session.protocol_version)
+        self._session = session
+        self._compress_images = bool(session.metadata.get(offboard_keys.COMPRESS_IMAGES))
+        self._jpeg_quality = jpeg_quality
+
+    def __call__(self, obs: Obs) -> list[dict[str, Any]] | dict[str, Any]:
+        return round_trip(self._session, obs, self._compress_images, self._jpeg_quality)
+
+    def close(self) -> None:
+        self._session.close()
+
+
+class WireServer(Server):
+    """A server that speaks the positronic wire protocol.
+
+    ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG quality of
+    images sent to a server that asks for compressed images.
     """
 
     def __init__(
@@ -96,43 +137,24 @@ class RemotePolicy(Policy):
         self._client = InferenceClient(
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
-        self._server_meta: dict[str, Any] | None = None
         self._jpeg_quality = jpeg_quality
+        # The handshake metadata of the last session, which `meta` reports.
+        self._served: dict[str, Any] | None = None
+
+    def open(self) -> WireSession:
+        session = self._client.new_session()
+        self._served = dict(session.metadata)
+        try:
+            return WireSession(session, self._jpeg_quality)
+        except BaseException:
+            session.close()
+            raise
 
     def meta(self) -> dict[str, Any]:
-        if self._server_meta is None:
-            session = self._client.new_session()
-            try:
-                self._server_meta = dict(session.metadata)
-            finally:
-                session.close()
-        meta: dict[str, Any] = {policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(offboard_keys.COMPRESS_IMAGES):
+        if self._served is None:
+            with closing(self._client.new_session()) as session:
+                self._served = dict(session.metadata)
+        meta: dict[str, Any] = {policy_keys.TYPE: 'remote', policy_keys.SERVER: self._served}
+        if self._served.get(offboard_keys.COMPRESS_IMAGES):
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
         return flatten_dict(meta)
-
-    def run(self, runtime: Runtime) -> PolicyRun:
-        session = self._client.new_session()
-        connection_lock = Lock()
-        try:
-            meta = session.metadata
-            self._server_meta = dict(meta)
-            stack = declared_stack(meta, session.protocol_version)
-            compress_images = bool(meta.get(offboard_keys.COMPRESS_IMAGES))
-
-            def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
-                with connection_lock:
-                    return round_trip(session, obs, compress_images, self._jpeg_quality)
-
-            with closing(runtime.start(stack, infer)) as run:
-                obs = yield
-                while True:
-                    try:
-                        step = run.send(obs)
-                    except StopIteration:
-                        return
-                    obs = yield step
-        finally:
-            # Generator failure can reach cleanup while inference still owns the connection.
-            with connection_lock:
-                session.close()

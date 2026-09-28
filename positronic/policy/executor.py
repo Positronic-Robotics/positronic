@@ -192,7 +192,7 @@ class Executor(Runtime):
             )
 
     def close(self) -> None:
-        """Cancel queued calls, drain running calls, and report failures whose results were never read."""
+        """Cancel queued calls, drain running calls, report failures nobody read, and close the server sessions."""
         self._pool.shutdown(wait=True, cancel_futures=True)
         for answer in self._answers:
             if answer.result_read or answer.call.cancelled():
@@ -201,3 +201,5 @@ class Executor(Runtime):
             if (exc := answer.call.exception()) is not None:
                 logging.error('A submitted function failed without its result being read: %s', exc)
         self._answers.clear()
+        while self._sessions:
+            self._sessions.pop().close()

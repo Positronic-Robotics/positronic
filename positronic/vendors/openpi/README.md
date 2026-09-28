@@ -185,7 +185,7 @@ be JSON literals; the model is fixed at launch, and a session param cannot reach
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
-`RemotePolicy` handles the handshake, session ID, inference requests, and session cleanup.
+`WireServer` handles the handshake, session ID, inference requests, and session cleanup.
 For a low-level client, use `InferenceClient` and `InferenceSession` as described in the
 [offboard protocol](../../offboard/README.md). The session must end after its outstanding
 calls finish. Inference replies contain full action chunks.

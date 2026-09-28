@@ -130,12 +130,12 @@ this loop, so the run submits the model call and yields control while it
 executes. The policy can continue to control the robot and acts on the
 answer when it arrives. After the setup, the server only answers these
 calls. A stateless model answers from its arguments alone; a stateful model
-keeps its history in a server session tied to the policy run's lifetime.
+keeps its history in a server session tied to the episode.
 
 The framework records sensor and executed-command signals, along with timing
 logs. Recording inputs and outputs at every policy and inference boundary is
-part of the debugging goal. The episode ends when the framework closes the
-run and its server session. The record remains.
+part of the debugging goal. The episode ends when the framework closes its
+server session, after the last call, and then the run. The record remains.
 
 ![The life of an episode](docs/episode.svg)
 
@@ -153,9 +153,10 @@ One algorithm may drive several robots at once.
   its own episode.
 - The runtime starts a run and prepares it to receive input. Each resumption
   supplies an input and gets an output back.
-- The framework receives a complete policy definition, creates one runtime per
-  episode, and starts the policy. The definition resolves its own dependencies;
-  child runs share the runtime and receive their dependencies explicitly.
+- The framework receives a complete policy definition, or a server that declares
+  one, creates one runtime per episode, and starts it. The definition resolves its
+  own dependencies; child runs share the runtime and receive their dependencies
+  explicitly.
 - Whoever starts a run is responsible for closing it and the resources it owns.
   Submitted work must finish before those resources close. Closure happens
   between resumptions, never while the run is processing an input.
@@ -299,10 +300,14 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
-Each remote run opens a server session and runs the declared client stack
-around an ordinary inference function. The session identifies that run's calls
-and owns any server-side episode state. It ends when the run closes or the
-connection is lost, after outstanding calls finish using its resources.
+The runtime owns every server session. A server is an address and the rules of
+its wire, and it holds no connection. `runtime.start(server)` opens one session
+per episode, before the timed part of the episode. It starts the client stack
+that the session declares, with the session as the stack's inference function.
+The session identifies the episode's calls and owns any server-side episode
+state. At the end of the episode, the runtime waits for the call in flight and
+closes the session. Then the stack closes, so a policy holds no lock and no
+close step for its server.
 
 A session does not require the model to be stateful. Stateless models can serve
 several sessions without keeping episode history. Stateful models must keep
@@ -336,7 +341,7 @@ and should not be added to them.
 ## API
 
 The core interfaces below are abridged from [base.py](base.py),
-[sequential.py](sequential.py), and [codec.py](codec.py).
+[remote.py](remote.py), [sequential.py](sequential.py), and [codec.py](codec.py).
 
 ### The policy step
 
@@ -391,14 +396,38 @@ class Runtime(ABC):
     @property
     def tick(self) -> int: ...
 
+    # A server opens a session, and the stack it declares starts with the session as its only argument.
     def start(
-        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
+        self, processor: Processor[InputT, OutputT] | Server, /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT]: ...
 
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Answer[T]: ...
 ```
+
+### Servers and sessions
+
+```python
+# An address and the rules of its wire. It holds no connection.
+class Server(ABC):
+    def open(self) -> Session: ...
+
+    def meta(self) -> dict[str, Any]: ...
+
+
+# One episode's connection. The runtime opens it, calls it, and closes it.
+class Session(ABC):
+    local_stack: Policy
+
+    # One inference.
+    def __call__(self, obs: Obs) -> Any: ...
+
+    def close(self) -> None: ...
+```
+
+`WireServer` speaks the positronic wire protocol. The DreamZero vendor code has a
+`RoboarenaServer` for a RoboArena server.
 
 ### Processors and policies
 
