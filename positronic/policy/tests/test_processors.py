@@ -31,7 +31,14 @@ from positronic.policy.codec import (
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    PauseOnUnavailable,
+    RTCSchedule,
+    TemporalStack,
+    max_delay,
+    mean_delay,
+)
 from positronic.policy.sequential import Sequential
 
 MOTOR = 'motor'
@@ -283,6 +290,125 @@ def test_empty_chunks_request_an_immediate_retry(execution):
         assert run.send({}) == Step({}, now)
     assert requests == [0, 0]
     run.close()
+
+
+PERIOD_NS = 100_000_000
+
+
+class SlowModel:
+    """Answers each call only when the test gives the answer, and records each call."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self.calls: list[tuple[int, list]] = []
+        self._pending: Future | None = None
+
+    def submit(self, function, obs, prefix):
+        self.calls.append((self._runtime.time_ns, [c[MOTOR] for c in prefix]))
+        self._pending = Future()
+        return _UnchargedAnswer(self._pending)
+
+    def answer(self, name, length=10):
+        assert self._pending is not None
+        self._pending.set_result([{MOTOR: f'{name}{i}'} for i in range(length)])
+        self._pending = None
+
+
+def _rtc(execution, monkeypatch, call_after_sec, prefix_duration):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration), Mock())
+
+    def step(index):
+        clock.advance_to_ns(index * PERIOD_NS)
+        return run.send({})
+
+    return model, run, step
+
+
+def test_rtc_follows_the_drawing(execution, monkeypatch):
+    seen_delays = []
+
+    def prefix_duration(delays):
+        seen_delays.append(list(delays))
+        return mean_delay()(delays)
+
+    model, run, step = _rtc(execution, monkeypatch, 0.5, prefix_duration)
+    answers = {3: 'o', 11: 'n'}
+    executed = []
+    try:
+        for index in range(18):
+            if index in answers:
+                model.answer(answers[index])
+            result = step(index)
+            executed.append(result.commands.get(MOTOR, '--'))
+            if index == 3:
+                assert result.resume_at_ns == 4 * PERIOD_NS
+    finally:
+        run.close()
+    assert executed == ['--'] * 3 + [f'o{i}' for i in range(8)] + [f'n{i}' for i in range(3, 10)]
+    assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert seen_delays == [[0.3], [0.3, 0.3]]
+
+
+def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, mean_delay())
+    answers = {1: ('o', 4), 8: ('n', 10)}
+    executed = []
+    try:
+        for index in range(10):
+            if index in answers:
+                model.answer(*answers[index])
+            executed.append(step(index).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (8 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+
+
+@pytest.mark.parametrize(
+    ('prefix_duration', 'prefix'),
+    [(mean_delay(), ['n3', 'n4']), (max_delay(), ['n3', 'n4', 'n5']), (max_delay(max_sec=0.1), ['n3'])],
+)
+def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_duration, prefix):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, prefix_duration)
+    answers = {1: 'o', 6: 'n'}
+    executed = []
+    try:
+        for index in range(7):
+            if index in answers:
+                model.answer(answers[index])
+            executed.append(step(index).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (6 * PERIOD_NS, prefix)]
+
+
+def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.4, lambda delays: 0.5)
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer('o', 6)
+            step(index)
+    finally:
+        run.close()
+    assert model.calls == [(0, []), (5 * PERIOD_NS, ['o4', 'o5'])]
+
+
+@pytest.mark.parametrize(
+    ('prefix_duration', 'expected'),
+    [
+        (mean_delay(last=2), 0.2),
+        (max_delay(last=2), 0.3),
+        (mean_delay(last=2, max_sec=0.15), 0.15),
+        (max_delay(max_sec=0.4), 0.4),
+    ],
+)
+def test_prefix_durations_read_the_last_delays_and_cap_them(prefix_duration, expected):
+    assert prefix_duration([0.9, 0.1, 0.3]) == pytest.approx(expected)
 
 
 IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
