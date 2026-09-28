@@ -48,6 +48,27 @@ def test_a_read_is_reported_as_its_bytes_and_the_calls_it_took():
     assert report['read_span_ms'] >= 0.0
 
 
+class _ScriptedReceiver(socket.socket):
+    """A socket whose ``recv`` returns the header, then ``chunks`` one per call."""
+
+    def __init__(self, chunks: list[bytes]):
+        super().__init__()
+        self._pending = [struct.pack(HEADER, sum(len(chunk) for chunk in chunks)), *chunks]
+
+    def recv(self, bufsize: int, flags: int = 0, /) -> bytes:
+        return self._pending.pop(0)
+
+
+def test_the_rate_counts_only_the_bytes_that_arrived_inside_the_span(monkeypatch):
+    chunk = b'x' * READ_BYTES
+    clock = iter([0, 10_000_000, 20_000_000])
+    monkeypatch.setattr(link_probe, 'time', SimpleNamespace(perf_counter_ns=lambda: next(clock)))
+    with _ScriptedReceiver([chunk, chunk, chunk]) as conn:
+        report = receive_one(conn, READ_BYTES)
+    assert report['read_span_ms'] == 20.0
+    assert report['mib_per_sec'] == pytest.approx((2 * READ_BYTES / 2**20) / 0.020)
+
+
 def test_a_transfer_of_no_bytes_is_refused_rather_than_timed():
     """There is no first byte to stamp, so the read has no span; say so instead of failing on an index."""
     sender, receiver = socket.socketpair()

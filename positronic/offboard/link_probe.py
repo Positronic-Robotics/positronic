@@ -94,7 +94,8 @@ def receive_one(conn: socket.socket, read_bytes: int) -> dict[str, Any]:
         'reads': len(reads),
         'read_bytes_median': statistics.median(sizes),
         'read_bytes_max': max(sizes),
-        'mib_per_sec': (received / 2**20) / (span_ms / 1000.0) if span_ms > 0 else None,
+        # The span opens when the first read returns, so the bytes of that read arrived before it.
+        'mib_per_sec': ((received - sizes[0]) / 2**20) / (span_ms / 1000.0) if span_ms > 0 else None,
         'read_timeline': reads,
     }
 
