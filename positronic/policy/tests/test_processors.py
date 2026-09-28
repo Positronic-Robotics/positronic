@@ -398,6 +398,27 @@ def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch):
     assert model.calls == [(0, []), (5 * PERIOD_NS, ['o4', 'o5'])]
 
 
+def test_rtc_prefix_holds_every_old_action_the_robot_executes_before_the_answer(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.45, mean_delay())
+    _, clock = execution
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer('o')
+            step(index)
+        clock.advance_to_ns(550_000_000)
+        run.send({})
+    finally:
+        run.close()
+    assert model.calls == [(0, []), (550_000_000, ['o4', 'o5'])]
+
+
+@pytest.mark.parametrize('duration', [mean_delay, max_delay])
+def test_prefix_durations_refuse_a_negative_cap(duration):
+    with pytest.raises(ValueError, match='max_sec'):
+        duration(max_sec=-0.1)
+
+
 @pytest.mark.parametrize(
     ('prefix_duration', 'expected'),
     [

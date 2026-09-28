@@ -228,6 +228,8 @@ def mean_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
     """The mean of the last `last` delays, but not more than `max_sec`."""
     if last < 1:
         raise ValueError('last must be at least 1')
+    if not max_sec >= 0:
+        raise ValueError('max_sec must not be negative')
     return lambda delays: min(fmean(delays[-last:]), max_sec)
 
 
@@ -235,6 +237,8 @@ def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
     """The longest of the last `last` delays, but not more than `max_sec`. The RTC paper does this."""
     if last < 1:
         raise ValueError('last must be at least 1')
+    if not max_sec >= 0:
+        raise ValueError('max_sec must not be negative')
     return lambda delays: min(max(delays[-last:]), max_sec)
 
 
@@ -319,7 +323,9 @@ class RTCSchedule(Policy):
                     prefix: list[Commands] = []
                     if chunk is not None:
                         first = self._running_index(start_ns, chunk, now_ns)
-                        prefix = list(chunk[first : first + round(self._prefix_duration(delays) * self._fps)])
+                        prefix_end_ns = now_ns + round(self._prefix_duration(delays) * 1e9)
+                        end = self._running_index(start_ns, chunk, prefix_end_ns - 1) + 1
+                        prefix = list(chunk[first:end]) if prefix_end_ns > now_ns else []
                     called_at_ns = now_ns
                     answer = runtime.submit(infer, obs, prefix)
 
