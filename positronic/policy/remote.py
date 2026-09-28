@@ -143,8 +143,8 @@ class WireServer(Server):
 
     def open(self) -> WireSession:
         session = self._client.new_session()
-        self._served = dict(session.metadata)
         try:
+            self._served = dict(session.metadata)
             return WireSession(session, self._jpeg_quality)
         except BaseException:
             session.close()
