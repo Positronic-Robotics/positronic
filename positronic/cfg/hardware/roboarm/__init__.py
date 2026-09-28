@@ -1,8 +1,11 @@
+import dataclasses
+
 import configuronic as cfn
 
 import positronic.cfg.hardware.motors
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.franka_fake import FakeFranka
+from positronic.drivers.roboarm.settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -73,8 +76,33 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', sim=False, base_pose=None)
-def yam(channel: str, sim: bool, base_pose):
+yam_park_tuning = cfn.Config(SettleTuning, **dataclasses.asdict(PARK_SETTLE))
+yam_move_tuning = cfn.Config(SettleTuning, **dataclasses.asdict(MOVE_SETTLE))
+
+
+@cfn.config(
+    channel='can0',
+    sim=False,
+    base_pose=None,
+    park_after_idle_s=60.0,
+    park_tuning=yam_park_tuning,
+    move_tuning=yam_move_tuning,
+)
+def yam(
+    channel: str,
+    sim: bool,
+    base_pose,
+    park_after_idle_s: float | None,
+    park_tuning: SettleTuning,
+    move_tuning: SettleTuning,
+):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, base_pose=base_pose, sim=sim)
+    return Robot(
+        channel,
+        base_pose=base_pose,
+        sim=sim,
+        park_after_idle_s=park_after_idle_s,
+        park_tuning=park_tuning,
+        move_tuning=move_tuning,
+    )
