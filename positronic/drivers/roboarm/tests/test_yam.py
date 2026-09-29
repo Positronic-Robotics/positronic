@@ -24,6 +24,7 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 DEFAULT_TUNING = yam.PARK_SETTLE
+MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
 OPEN, CLOSED = 0.0, 1.0
 _GRIP_TOL = 0.05
 
@@ -549,15 +550,83 @@ def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
     assert min(target[1] for target in rig.vendor.targets[sent:]) >= 0.0
 
 
-def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
+def test_a_streamed_target_one_tick_of_travel_away_reaches_the_chain_unchanged_and_uncorrected(rig):
     rig.tick(4)
     rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
-    rig.commands.push(command.JointPosition(RAISED))
+    target = np.array([0.0, MAX_STREAMED_STEP, MAX_STREAMED_STEP / 2, 0.0, -MAX_STREAMED_STEP, 0.0])
+    rig.commands.push(command.JointPosition(target))
     rig.tick()
-    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], RAISED)
+    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], target)
     sent = len(rig.vendor.targets)
     rig.tick(0.5)  # inside the rig's one-second idle limit, so no park takes over
-    assert all(np.array_equal(target[:6], RAISED) for target in rig.vendor.targets[sent:])
+    assert all(np.array_equal(asked, target) for asked in _asked(rig)[sent:])
+
+
+def test_a_far_streamed_target_is_approached_in_a_line_at_the_speed_cap(rig):
+    rig.tick(4)
+    sent = len(rig.vendor.targets)
+    rig.commands.push(command.JointPosition(RAISED))
+    rig.tick(0.5)
+    asked = _asked(rig)[sent - 1 :]
+    steps = np.max(np.abs(np.diff(asked, axis=0)), axis=1)
+    assert steps[0] == pytest.approx(MAX_STREAMED_STEP)
+    assert np.all(steps <= MAX_STREAMED_STEP * (1 + 1e-9))
+    np.testing.assert_array_equal(asked[:, 1], asked[:, 2])
+    assert not asked[:, [0, 3, 4, 5]].any()
+    np.testing.assert_array_equal(asked[-1], RAISED)
+
+
+# A joint step between two commands of a 15 Hz policy, which the cap must pass before the next command
+POLICY_STEP_RAD, POLICY_HZ = 0.12, 15.0
+
+
+def test_the_speed_cap_lands_a_policy_step_before_the_next_command(rig):
+    rig.raise_arm()
+    target = RAISED + np.array([0.0, 0.0, 0.0, POLICY_STEP_RAD, 0.0, 0.0])
+    rig.commands.push(command.JointPosition(target))
+    rig.tick(1 / POLICY_HZ)
+    np.testing.assert_array_equal(rig.vendor.targets[-1][:6], target)
+
+
+@pytest.mark.parametrize(
+    'past_the_range',
+    [
+        command.JointPosition(RAISED + np.array([0.0, 0.0, 0.0, 3.0, 0.0, -3.0])),
+        command.JointDelta(np.array([0.0, 0.0, 0.0, 3.0, 0.0, -3.0])),
+    ],
+)
+def test_a_streamed_target_past_the_joint_range_stops_at_the_limit(rig, past_the_range):
+    rig.raise_arm()
+    sent = len(rig.vendor.targets)
+    rig.commands.push(past_the_range)
+    rig.tick(0.9)
+    kinematics = yam._Kinematics()
+    asked = _asked(rig)[sent:]
+    assert np.all((asked >= kinematics.lower) & (asked <= kinematics.upper))
+    assert asked[-1][3] == kinematics.upper[3]
+    assert asked[-1][5] == kinematics.lower[5]
+
+
+def test_the_park_holds_its_correction_past_the_joint_range(rig):
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.0, 0.025, 0.0, 0.0, 0.0])
+    rig.tick(10)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    sent = len(rig.vendor.targets)
+    rig.tick(0.5)
+    held = _asked(rig)[sent:]
+    assert np.all(held[:, 2] < yam._Kinematics().lower[2])
+    assert all(np.array_equal(asked, held[0]) for asked in held)
+
+
+@pytest.mark.parametrize('positions', [[np.nan, 1.047, 1.047, 0.0, 0.0, 0.0], [0.5]])
+def test_a_streamed_target_that_is_not_six_finite_joints_is_refused(rig, caplog, positions):
+    rig.raise_arm()
+    sent = len(rig.vendor.targets)
+    rig.commands.push(command.JointPosition(np.array(positions)))
+    rig.tick(0.1)
+    assert all(np.array_equal(asked, RAISED) for asked in _asked(rig)[sent:])
+    assert 'not applied' in caplog.text
 
 
 @pytest.mark.parametrize(('stop_rad', 'releases'), [(0.006, True), (0.02, False)])
@@ -879,7 +948,7 @@ def parking_rig(rig):
 def test_arm_command_interrupts_idle_parking(parking_rig):
     target = np.array([0.0, 0.8, 0.8, 0.0, 0.0, 0.0])
     parking_rig.commands.push(command.JointPosition(target))
-    parking_rig.tick(0.02)
+    parking_rig.tick(0.5)
     np.testing.assert_array_equal(parking_rig.vendor.targets[-1][:6], target)
     assert not parking_rig.vendor.released_at
 
