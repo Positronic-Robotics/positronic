@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from typing import Literal
 
 import numpy as np
@@ -14,6 +14,10 @@ with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
 
 logger = logging.getLogger(__name__)
+
+
+class CameraOpenError(RuntimeError):
+    """The SDK did not open the camera."""
 
 
 class SLCamera(pimm.ControlSystem):
@@ -44,7 +48,7 @@ class SLCamera(pimm.ControlSystem):
             max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
                         -Inf will be set to 0. All values above this will be set to max_depth.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
-            max_recovery_time_sec: (float) Maximum time to wait for camera recovery. If exceeded, will stop the camera.
+            max_recovery_time_sec: (float) Time without frames after which the camera is closed and opened again.
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
         """
@@ -75,7 +79,7 @@ class SLCamera(pimm.ControlSystem):
         self.depth_mask: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
 
-    REBOOTED_CAMERA_POLL_SEC = 0.5
+    DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
 
     @staticmethod
@@ -98,18 +102,18 @@ class SLCamera(pimm.ControlSystem):
         with device_open_lock():
             result = sl.Camera.reboot(serial)
         if result != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f'{failure}; the SDK did not reboot camera {serial}: {result}')
+            raise CameraOpenError(f'{failure}; the SDK did not reboot camera {serial}: {result}')
         for _ in range(SLCamera.REBOOTED_CAMERA_MAX_POLLS):
             if SLCamera._is_listed(serial):
                 break
-            yield pimm.Sleep(SLCamera.REBOOTED_CAMERA_POLL_SEC)
+            yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
         else:
-            raise RuntimeError(f'{failure}; camera {serial} is still not listed after its reboot')
+            raise CameraOpenError(f'{failure}; camera {serial} is still not listed after its reboot')
         logger.info(f'Camera {serial} is listed again after its reboot')
         with device_open_lock():
             error_code = zed.open(init_params)
         if error_code != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f'Failed to open camera {serial} after its reboot: {error_code}')
+            raise CameraOpenError(f'Failed to open camera {serial} after its reboot: {error_code}')
         logger.info(f'Opened camera {serial} after its reboot')
 
     @staticmethod
@@ -132,8 +136,29 @@ class SLCamera(pimm.ControlSystem):
                 continue
             failure = f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}'
             if reboot_serial is None or not SLCamera._lost_by_the_sdk(error_code, reboot_serial):
-                raise RuntimeError(failure)
+                raise CameraOpenError(failure)
             yield from SLCamera._reboot_and_reopen(zed, init_params, reboot_serial, failure)
+
+    def _new_camera(self):
+        return sl.CameraOne() if self._mono else sl.Camera()
+
+    def _reopen(
+        self, lost, init_params, listed_serial: int | None, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, 'sl.Camera | sl.CameraOne | None']:
+        """Close ``lost`` and open a new camera once ``listed_serial`` is listed; ``None`` if the world stops first."""
+        lost.close()
+        while not should_stop.value:
+            if listed_serial is None or self._is_listed(listed_serial):
+                zed = self._new_camera()
+                try:
+                    yield from self._open_under_device_lock(zed, init_params, listed_serial)
+                    return zed
+                except CameraOpenError as e:
+                    # A camera that does not open yet is tried again: only the world stopping ends the driver.
+                    logger.error('Camera %s did not open, trying again: %s', self._serial_number, e)
+                    zed.close()
+            yield pimm.Sleep(self.DEVICE_LIST_POLL_SEC)
+        return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         SUCCESS = sl.ERROR_CODE.SUCCESS
@@ -174,10 +199,10 @@ class SLCamera(pimm.ControlSystem):
                 'Set depth_mask=True to enable depth mask output.'
             )
 
-        zed = sl.CameraOne() if self._mono else sl.Camera()
-        # `sl.Camera.reboot` serves the stereo models; a mono camera is not rebooted.
-        reboot_serial = None if self._mono else self._serial_number
-        yield from self._open_under_device_lock(zed, init_params, reboot_serial)
+        zed = self._new_camera()
+        # The serial `sl.Camera` lists and reboots. A mono camera is an `sl.CameraOne`, so it has none here.
+        listed_serial = None if self._mono else self._serial_number
+        yield from self._open_under_device_lock(zed, init_params, listed_serial)
 
         self.recovery_start_time = None
 
@@ -185,11 +210,26 @@ class SLCamera(pimm.ControlSystem):
             result = zed.grab()
             if result != SUCCESS:
                 if self.recovery_start_time is None:
-                    logger.warning('Camera lost with error code %s, starting recovery', result)
+                    logger.warning(
+                        'Camera lost with error code %s, starting recovery of camera %s', result, self._serial_number
+                    )
                     self.recovery_start_time = clock.now()
                 if clock.now() - self.recovery_start_time > self.max_recovery_time_sec:
-                    logger.error(f'Recovery time exceeded {self.max_recovery_time_sec} seconds, stopping')
-                    return
+                    logger.error(
+                        'Recovery time exceeded %s seconds, reopening camera %s',
+                        self.max_recovery_time_sec,
+                        self._serial_number,
+                    )
+                    zed = yield from self._reopen(zed, init_params, listed_serial, should_stop)
+                    if zed is None:
+                        return
+                    logger.info(
+                        'Reopened camera %s after %.2f seconds without frames',
+                        self._serial_number,
+                        clock.now() - self.recovery_start_time,
+                    )
+                    self.recovery_start_time = None
+                    continue
                 yield pimm.Sleep(0.01)
                 continue
 
