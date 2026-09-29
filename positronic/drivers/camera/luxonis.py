@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import timedelta
 
 import pimm
 from positronic.drivers import vendor_import
@@ -42,8 +43,8 @@ class LuxonisCamera(pimm.ControlSystem):
                 fps_counter.tick()
 
                 image = frame.getCvFrame()[..., ::-1]  # BGR to RGB
-                ts = frame.getTimestamp().total_seconds()
+                ts_ns = frame.getTimestamp() // timedelta(microseconds=1) * 1_000
 
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
-                self.frame.emit(self._frame_adapter, ts=ts)
+                self.frame.emit(self._frame_adapter, ts=ts_ns)
                 yield pimm.Sleep(0.001)
