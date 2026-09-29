@@ -543,7 +543,7 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
         assert protocol.SESSION_ID not in first.metadata
         first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
         response = protocol.deserialise(first._conn.recv(timeout=5))
-        # The server answered on the session's connection, past ``infer``, so a drop now must not reconnect.
+        # A drop now must not reconnect: the server answered on the session's connection, past ``infer``.
         first._answered = True
         assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
         assert 'session ID' in response[protocol.ERROR]

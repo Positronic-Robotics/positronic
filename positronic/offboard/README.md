@@ -409,15 +409,12 @@ action = session.infer(observation)
 `wire.KeepaliveUnsupported` on a server without the call.
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
-cold. No attempt begins past the deadline, and no handshake waits for a further status update past it. A
-refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server answered:
-`FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no exception of
-the WebSocket or gRPC library.
+cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
+answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
+exception of the WebSocket or gRPC library.
 
-A session whose connection drops before the server's first answer reconnects once, within
-`reconnect_deadline`, and sends the observation again. The new session must declare the same metadata,
-or `infer` raises `wire.PeerDisconnected`. A drop after the first answer raises at once: the server's
-session state for the episode is gone.
+A session recovers a connection that drops before the server's first answer. A later drop raises
+`wire.PeerDisconnected`.
 
 ## Vendor Implementations
 
