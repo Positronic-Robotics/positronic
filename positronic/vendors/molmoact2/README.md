@@ -74,6 +74,32 @@ ships one, `droid` (source: [`codecs.py`](./codecs.py)):
 |-------|-------------|--------|
 | `droid` | 3 cameras (raw RGB, ordered `[exterior_1, exterior_2, wrist]`) + 8-D state `[joints(7), grip(1)]` + language task | Absolute joint positions (7) + grip → `JointPosition` command |
 
+## Bimanual YAM
+
+`yam_bimanual` serves [MolmoAct2-BimanualYAM](https://huggingface.co/allenai/MolmoAct2-BimanualYAM) for a
+two-arm i2rt YAM rig. It is not validated on a robot.
+
+```bash
+uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.server yam_bimanual
+```
+
+The weights are ~22 GB in `float32`. The server loads them in `bfloat16`: the model card reports under 16 GB of GPU memory.
+On the rig, point the `.real.yam.bimanual` eval at the server:
+
+```bash
+uv run --locked --extra yam positronic eval run --eval=.real.yam.bimanual \
+  --eval.instruction='fold the towel' \
+  --policy=.remote --policy.address.host=<server> --policy.address.port=8000 \
+  --output_dir=~/datasets/molmoact2_yam
+```
+
+| Codec | Observation | Action |
+|-------|-------------|--------|
+| `yam_bimanual` | 3 cameras `[top, left wrist, right wrist]` + 14-D state, per arm `[joints(6), gripper width(1)]`, left first | 14-D, split into a `JointPosition` and a grip target per arm |
+
+The checkpoint speaks the i2rt gripper width (1 open, 0 closed), so the codec inverts the grip both ways. It
+predicts 30 steps at 30 Hz, and the client executes the first 25, as the upstream YAM example does.
+
 ## Technical details
 
 - **Action space**: absolute joint positions (7) + gripper (1), decoded straight into a `JointPosition`

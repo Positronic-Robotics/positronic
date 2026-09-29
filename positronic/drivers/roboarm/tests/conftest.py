@@ -1,10 +1,10 @@
 """Stand-ins for the vendor packages the arm drivers import.
 
-``positronic_franka`` builds against libfranka, ``scservo_sdk`` talks to a serial servo bus, and ``placo``
-solves kinematics; all three ship only in the ``hardware`` extra, so the driver modules cannot be imported
-from a default sync. Their Python-side logic needs no vendor behaviour, so a stub carrying the names each
-module binds at import is enough — a test that needs a vendor to compute something stands in for the class
-that wraps it instead. Installed here, before any test module imports a driver, and only where the real
+``positronic_franka`` builds against libfranka, ``scservo_sdk`` talks to a serial servo bus, ``placo``
+solves kinematics and ``i2rt`` opens a YAM CAN chain; all four ship only in an extra, so the driver modules
+cannot be imported from a default sync. Their Python-side logic needs no vendor behaviour, so a stub carrying
+the names each module binds at import is enough — a test that needs a vendor to compute something stands in
+for the class that wraps it instead. Installed here, before any test module imports a driver, and only where the real
 package is absent.
 """
 
@@ -20,6 +20,7 @@ import pimm
 PACKAGE = 'positronic_franka'
 VENDOR = f'{PACKAGE}._franka'
 DESK = f'{PACKAGE}.desk'
+I2RT = 'i2rt'
 
 
 def _install_vendor_stub() -> None:
@@ -64,11 +65,32 @@ def _install_vendor_stub() -> None:
     sys.modules.update({PACKAGE: package, VENDOR: vendor, DESK: desk})
 
 
+def _install_i2rt_stub() -> None:
+    """Bind the names the YAM driver imports. A test hands the driver a chain of its own."""
+
+    def get_yam_robot(*_args, **_kwargs):
+        raise RuntimeError('no YAM chain here; a test replaces this factory')
+
+    get_robot = types.ModuleType(f'{I2RT}.robots.get_robot')
+    get_robot.__dict__.update(get_yam_robot=get_yam_robot)
+    utils = types.ModuleType(f'{I2RT}.robots.utils')
+    utils.__dict__.update(GripperType=Enum('GripperType', ['LINEAR_4310']))
+    robots = types.ModuleType(f'{I2RT}.robots')
+    robots.__dict__.update(get_robot=get_robot, utils=utils)
+    package = types.ModuleType(I2RT)
+    package.__dict__.update(robots=robots)
+
+    sys.modules.update({I2RT: package, robots.__name__: robots, get_robot.__name__: get_robot, utils.__name__: utils})
+
+
 # Both are reached for only inside the functions that use them, so an empty module carries the import
 _EMPTY_STUBS = ('scservo_sdk', 'placo')
 
 if importlib.util.find_spec(PACKAGE) is None:
     _install_vendor_stub()
+
+if importlib.util.find_spec(I2RT) is None:
+    _install_i2rt_stub()
 
 for _name in _EMPTY_STUBS:
     if importlib.util.find_spec(_name) is None:
