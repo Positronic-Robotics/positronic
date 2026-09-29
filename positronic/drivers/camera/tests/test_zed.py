@@ -1,4 +1,4 @@
-"""The ZED open path, with the SDK faked: a camera the SDK loses is rebooted once and opened once more."""
+"""The ZED driver with the SDK faked: its open path, and its recovery of a camera that drops off the bus."""
 
 import enum
 import importlib.util
@@ -7,9 +7,11 @@ import types
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import pimm
+from pimm.tests.testing import MockClock
 
 SERIAL = 39567055
 ZED_PATH = Path(__file__).parents[1] / 'zed.py'
@@ -18,6 +20,8 @@ ZED_PATH = Path(__file__).parents[1] / 'zed.py'
 class ErrorCode(enum.Enum):
     SUCCESS = 'SUCCESS'
     CAMERA_NOT_DETECTED = 'CAMERA NOT DETECTED'
+    CAMERA_REBOOTING = 'CAMERA REBOOTING'
+    INVALID_FUNCTION_CALL = 'INVALID FUNCTION CALL'
     FAILURE = 'FAILURE'
 
 
@@ -132,3 +136,187 @@ def test_an_open_without_a_serial_is_not_rebooted(zed_module):
     with pytest.raises(RuntimeError, match='after 3 attempts'):
         _open(zed_module, sdk, reboot_serial=None)
     assert sdk.reboots == []
+
+
+class DroppingSdk:
+    """Stands in for `sl.Camera` over one ZED that leaves the device list at ``lost_at`` and returns at ``listed_at``.
+
+    A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
+    never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail.
+    """
+
+    def __init__(
+        self,
+        clock: MockClock,
+        lost_at: float,
+        listed_at: float,
+        sdk_recovers_at: float | None = None,
+        failed_reopens: int = 0,
+    ):
+        self.clock = clock
+        self.lost_at = lost_at
+        self.listed_at = listed_at
+        self.sdk_recovers_at = sdk_recovers_at
+        self.failed_reopens = failed_reopens
+        self.cameras: list[FakeCamera] = []
+        self.reboots: list[int] = []
+
+    def __call__(self) -> 'FakeCamera':
+        camera = FakeCamera(self)
+        self.cameras.append(camera)
+        return camera
+
+    def is_listed(self) -> bool:
+        return not self.lost_at <= self.clock.now() < self.listed_at
+
+    def get_device_list(self) -> list[types.SimpleNamespace]:
+        return [types.SimpleNamespace(serial_number=SERIAL)] if self.is_listed() else []
+
+    def reboot(self, serial: int) -> ErrorCode:
+        self.reboots.append(serial)
+        return ErrorCode.INVALID_FUNCTION_CALL
+
+
+class FakeCamera:
+    def __init__(self, sdk: DroppingSdk):
+        self._sdk = sdk
+        self.opened_at: float | None = None
+        self.closed_at: float | None = None
+
+    def open(self, _init_params) -> ErrorCode:
+        if not self._sdk.is_listed():
+            return ErrorCode.CAMERA_NOT_DETECTED
+        if self._sdk.clock.now() >= self._sdk.lost_at and self._sdk.failed_reopens > 0:
+            self._sdk.failed_reopens -= 1
+            return ErrorCode.FAILURE
+        self.opened_at = self._sdk.clock.now()
+        return ErrorCode.SUCCESS
+
+    def grab(self) -> ErrorCode:
+        assert self.opened_at is not None and self.closed_at is None, 'grab on a camera that is not open'
+        now, sdk = self._sdk.clock.now(), self._sdk
+        if now < sdk.lost_at or self.opened_at >= sdk.listed_at:
+            return ErrorCode.SUCCESS
+        if sdk.sdk_recovers_at is not None and now >= sdk.sdk_recovers_at:
+            return ErrorCode.SUCCESS
+        return ErrorCode.CAMERA_REBOOTING
+
+    def close(self) -> None:
+        self.closed_at = self._sdk.clock.now()
+
+    def get_timestamp(self, _reference) -> types.SimpleNamespace:
+        return types.SimpleNamespace(get_nanoseconds=self._sdk.clock.now_ns)
+
+    def retrieve_image(self, _image, _view) -> ErrorCode:
+        return ErrorCode.SUCCESS
+
+
+class FakeInitParameters:
+    def set_from_serial_number(self, serial: int) -> None:
+        self.serial = serial
+
+
+class FakeMat:
+    def get_data(self) -> np.ndarray:
+        return np.zeros((2, 2, 4), dtype=np.uint8)
+
+
+class StopFlag(pimm.SignalReceiver[bool]):
+    def __init__(self):
+        self.raised = False
+
+    def read(self) -> pimm.Message[bool]:
+        return pimm.Message(self.raised)
+
+
+class FrameLog(pimm.SignalEmitter):
+    def __init__(self):
+        self.times: list[float] = []
+
+    def emit(self, data, ts=-1):
+        self.times.append(ts)
+
+
+def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: FrameLog) -> pimm.Run[None]:
+    """The driver's `run` loop for the camera `SERIAL`, bound to ``sdk``."""
+    module.sl.__dict__.update(
+        ERROR_CODE=ErrorCode,
+        Camera=sdk,
+        InitParameters=FakeInitParameters,
+        Mat=FakeMat,
+        RESOLUTION=types.SimpleNamespace(AUTO='auto'),
+        VIEW=types.SimpleNamespace(LEFT='left'),
+        DEPTH_MODE=types.SimpleNamespace(NONE='none'),
+        UNIT=types.SimpleNamespace(METER='meter'),
+        TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
+    )
+    camera = module.SLCamera(serial_number=SERIAL)
+    camera.frame._bind(frames)
+    return camera.run(stop, sdk.clock)
+
+
+def _returns_before(loop: pimm.Run[None], clock: MockClock, until: float) -> bool:
+    """Drive ``loop`` on ``clock`` until the clock reaches ``until``."""
+    for command in loop:
+        assert isinstance(command, pimm.Sleep)
+        clock.advance(command.seconds)
+        if clock.now() >= until:
+            return False
+    return True
+
+
+LOST_AT = 1.0
+RECOVERY_TIME = 10.0  # the driver's default `max_recovery_time_sec`
+LISTED_AGAIN_AT = 18.0
+NEVER = float('inf')
+
+
+def test_a_camera_lost_past_the_recovery_time_is_reopened_and_its_frames_resume(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    assert not _returns_before(loop, clock, 30.0)
+    lost, reopened = sdk.cameras
+    assert lost.closed_at is not None and lost.closed_at >= LOST_AT + RECOVERY_TIME
+    assert reopened.opened_at is not None and reopened.opened_at >= LISTED_AGAIN_AT
+    assert not [t for t in frames.times if LOST_AT < t < LISTED_AGAIN_AT]
+    assert max(frames.times) > reopened.opened_at
+    assert sdk.reboots == []
+
+
+def test_the_loop_does_not_return_while_the_camera_stays_away(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=NEVER)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    assert not _returns_before(loop, clock, 600.0)
+    assert max(frames.times) < LOST_AT + 0.02
+    assert len(sdk.cameras) == 1
+
+
+def test_a_camera_the_sdk_recovers_inside_the_recovery_time_is_not_reopened(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=3.0, sdk_recovers_at=LOST_AT + RECOVERY_TIME - 0.5)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    assert not _returns_before(loop, clock, 30.0)
+    (camera,) = sdk.cameras
+    assert camera.closed_at is None
+    assert max(frames.times) > LOST_AT + RECOVERY_TIME
+
+
+def test_a_reopen_that_fails_is_tried_again_until_the_camera_opens(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT, failed_reopens=3)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    assert not _returns_before(loop, clock, 40.0)
+    lost, failed, reopened = sdk.cameras
+    assert failed.opened_at is None and failed.closed_at is not None
+    assert reopened.opened_at is not None and max(frames.times) > reopened.opened_at
+
+
+def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=NEVER)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    assert not _returns_before(loop, clock, 20.0)
+    stop.raised = True
+    assert _returns_before(loop, clock, clock.now() + 1.0)
