@@ -83,12 +83,20 @@ def test_a_probe_reads_the_announcement_and_closes():
 
 
 @pytest.mark.parametrize('verb', [roboarena.RoboarenaClientWire.dial, roboarena.RoboarenaClientWire.probe])
-def test_a_server_another_party_runs_gets_no_headers_from_the_caller(verb):
-    """A caller hands every wire its edge headers, and this wire opens its handshake without them."""
+def test_the_handshake_carries_the_headers_the_caller_gives(verb):
+    """The caller decides which headers reach the server, so the wire sends exactly the ones it is given."""
     with patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = _ANNOUNCEMENT
-        verb(roboarena.RoboarenaClientWire(), _ADDRESS, {'Modal-Key': 'k'}, 3.0)
-    assert connect.call_args.kwargs.get('additional_headers') is None
+        verb(roboarena.RoboarenaClientWire(), _ADDRESS, {'Authorization': 'Bearer run-token'}, 3.0)
+    assert connect.call_args.kwargs['additional_headers'] == {'Authorization': 'Bearer run-token'}
+
+
+@pytest.mark.parametrize('verb', [roboarena.RoboarenaClientWire.dial, roboarena.RoboarenaClientWire.probe])
+def test_a_caller_giving_no_headers_opens_a_handshake_with_none(verb):
+    with patch('positronic_wire.roboarena.connect') as connect:
+        connect.return_value.recv.return_value = _ANNOUNCEMENT
+        verb(roboarena.RoboarenaClientWire(), _ADDRESS, None, 3.0)
+    assert connect.call_args.kwargs['additional_headers'] is None
 
 
 def test_a_port_that_accepts_and_announces_nothing_is_cold():
@@ -168,3 +176,9 @@ def test_the_address_carries_the_host_and_the_port_alone():
     assert (address.path, address.query) == ('', '')
     assert address.at_root() is address
     assert roboarena.RoboarenaClientWire().ADDRESS is roboarena.RoboarenaAddress
+
+
+def test_a_keepalive_is_refused_without_a_dial():
+    with patch('positronic_wire.roboarena.connect') as dialled, pytest.raises(wire.KeepaliveUnsupported):
+        roboarena.RoboarenaClientWire().keepalive(_ADDRESS, None, 1.0)
+    dialled.assert_not_called()

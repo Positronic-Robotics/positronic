@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 import types
+from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
 
@@ -11,14 +12,21 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
+from positronic import keys
+from positronic.cfg import video_encoder
+from positronic.cfg.eval.real import yam as yam_eval
 from positronic.drivers.roboarm import RobotStatus, command, yam
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.eval import Embodiment
+from positronic.eval import keys as eval_keys
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 DEFAULT_TUNING = yam.PARK_SETTLE
 MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
+OPEN, CLOSED = 0.0, 1.0
+_GRIP_TOL = 0.05
 
 
 class FakeYam(yam._FakeYam):
@@ -1130,3 +1138,73 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
     assert 'Publishing the arm state failed during shutdown' in caplog.text
+
+
+@pytest.fixture
+def chains(monkeypatch) -> dict[str, yam._FakeYam]:
+    """The fake chain each driver opens, keyed by its CAN channel."""
+    opened: dict[str, yam._FakeYam] = {}
+    monkeypatch.setattr(yam, 'get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam()))
+    return opened
+
+
+def _run_until(loop: Iterator[pimm.Command], done: Callable[[], bool], steps: int = 20_000) -> None:
+    for _ in range(steps):
+        if done():
+            return
+        next(loop)
+    raise AssertionError('the world did not reach the state the test waits for')
+
+
+def _grip(rx: pimm.SignalReceiver[float]) -> float | None:
+    msg = rx.read()
+    return None if msg is None else msg.data
+
+
+def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: list[str]) -> list[float | None]:
+    """Close each gripper as a policy does at the end of a trial, then ready the next trial with
+    ``prepare_args``. Returns the grip that each arm reads, in the order of ``sides``, once every prepare call
+    has an answer.
+
+    ``sides`` holds the suffix of each arm's ``grip`` and ``target_grip`` signals.
+    """
+    with pimm.World(virtual_time=True) as world:
+        close = {s: world.pair(rig.commands[f'{keys.TARGET_GRIP}{s}'].dest) for s in sides}
+        grips = {s: world.pair(rig.observations[f'{keys.GRIP}{s}'].source) for s in sides}
+        prepare = {name: world.pair(handler) for name, handler in rig.prepare_handlers.items()}
+        loop = world.start(list(rig.control_systems))
+
+        for emitter in close.values():
+            emitter.emit(CLOSED)
+        _run_until(loop, lambda: all((g := _grip(rx)) is not None and g > CLOSED - _GRIP_TOL for rx in grips.values()))
+
+        answers = [prepare[name](arg) for name, arg in prepare_args.items()]
+        _run_until(loop, lambda: all(a.done() for a in answers))
+        for answer in answers:
+            answer.result()
+        return [_grip(grips[s]) for s in sides]
+
+
+def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_closed_them(chains):
+    rig = yam_eval.bimanual.override(
+        embodiment=embodiment_cfg.yam_bimanual.override(cameras={}, video_encoder=video_encoder.libx264_veryfast)
+    ).instantiate()
+    (trial,) = rig.tasks()
+
+    grips = _a_trial_after_a_closed_trial(rig.embodiment, trial.prepare_args, [f'.{s}' for s in keys.BIMANUAL_ARMS])
+
+    assert all(g is not None and g < _GRIP_TOL for g in grips), grips
+    assert len(chains) == 2
+    for chain in chains.values():
+        assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)  # the chain's 1 is open
+
+
+def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_closed_it(chains):
+    rig = embodiment_cfg.yam.override(video_encoder=video_encoder.libx264_veryfast).instantiate()
+    start = {eval_keys.ARM: command.JointPosition(np.asarray(roboarm_cfg.YAM_NOMINAL_JOINTS)), eval_keys.GRIPPER: OPEN}
+
+    (grip,) = _a_trial_after_a_closed_trial(rig, start, [''])
+
+    assert grip is not None and grip < _GRIP_TOL, grip
+    (chain,) = chains.values()
+    assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)

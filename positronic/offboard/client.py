@@ -262,8 +262,17 @@ class InferenceClient:
                 refusal, not_ready = wire.Refusal.COLD, e
             if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
+            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
+            backoff = min(backoff * 2, 30.0)
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
+
+    def keepalive(self) -> int | None:
+        """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
+        the call, or ``None`` for a server with no idle timeout.
+
+        A server binds its wires only after its model has loaded and warmed, so any answer means it is ready.
+        Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.
+        """
+        return self._wire.keepalive(self._address, self.headers, self.open_timeout)

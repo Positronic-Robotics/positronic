@@ -28,6 +28,9 @@ class Backend:
         })
     )
 
+    def start(self):
+        pass
+
     def stop(self):
         pass
 
@@ -162,12 +165,34 @@ def test_model_load_failure_stops_child(monkeypatch):
 def test_loaded_policy_metadata_and_cleanup(tmp_path, monkeypatch):
     backend = Mock()
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
+    monkeypatch.setattr(server, 'warmup', Mock())
     checkpoint = tmp_path / 'model_state_dict.pt'
     policy = server.galaxea_model(checkpoint_path=str(checkpoint))
     assert policy.meta()[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
     backend.start.assert_called_once_with()
     backend.stop.assert_not_called()
     policy.close()
+    backend.stop.assert_called_once()
+
+
+def test_the_load_runs_one_warm_inference_through_the_backend(backend, monkeypatch):
+    monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
+    policy = server.galaxea_model()
+    try:
+        assert len(backend.requests) == 1
+        assert backend.requests[0][protocol.EMBODIMENT_TYPE] == protocol.DROID_FRANKA
+        assert len(backend.requests[0][protocol.STATE][protocol.RIGHT_ARM]) == protocol.RIGHT_ARM_WIDTH
+        assert policy._connections == {}, 'the warm left its session open'
+    finally:
+        policy.close()
+
+
+def test_a_warm_the_backend_refuses_fails_the_load_and_stops_the_child(backend, monkeypatch):
+    backend.response = {protocol.ERROR: 'the model refused the observation'}
+    backend.stop = Mock()
+    monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
+    with pytest.raises(RuntimeError, match='refused the observation'):
+        server.galaxea_model()
     backend.stop.assert_called_once()
 
 
