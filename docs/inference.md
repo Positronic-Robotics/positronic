@@ -111,6 +111,8 @@ Something has to say when an episode starts and when it finishes. There are two 
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 
+**A stale device ends only its episode.** On a real rig, an observation that brings no new message for longer than `MAX_OBSERVATION_AGE_SEC` (1 s) aborts the episode before the policy reads it. The recorder discards the episode, and the driver's ask fails with `StaleObservation`. An observation that has sent nothing yet is stale too. The harness keeps serving asks, so the next ask runs once every device sends again.
+
 ## Recording and Replay
 
 Specify `--output_dir` to record runs as Positronic datasets. Recorded data includes robot state, camera feeds, actions, gripper commands, and timing information.
