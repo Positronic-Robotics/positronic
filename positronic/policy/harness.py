@@ -120,6 +120,7 @@ class Harness(pimm.ControlSystem):
         self._embodiment = embodiment
         self._static_meta = static_meta or {}
         self._obs_by_signal: dict[str, dict[str, Any]] = {}
+        # On the harness's clock, not ``Message.ts``: a driver can stamp that on its device's clock, as the ZED does.
         self._updated_at_ns: dict[str, int] = {}
         self._telemetry = _EpisodeTelemetry()
 
