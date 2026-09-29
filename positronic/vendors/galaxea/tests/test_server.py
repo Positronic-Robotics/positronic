@@ -28,6 +28,9 @@ class Backend:
         })
     )
 
+    def start(self):
+        pass
+
     def stop(self):
         pass
 
@@ -136,7 +139,6 @@ def test_inference_timeout_closes_connection():
 def test_vendor_codec_stays_on_server_side():
     pipeline = server.pipeline()
     local, remote_half = pipeline.local, pipeline.codec
-    assert isinstance(pipeline.source, server.GalaxeaSource)
     assert remote_half is not None
     assert 'DroidCodec' not in str(local.to_spec())
     assert (
@@ -156,21 +158,41 @@ def test_model_load_failure_stops_child(monkeypatch):
     backend.start.side_effect = RuntimeError('model failed to load')
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
     with pytest.raises(RuntimeError, match='model failed to load'):
-        server.GalaxeaSource().load(protocol.MODEL_ID)
+        server.galaxea_model()
     backend.stop.assert_called_once()
 
 
 def test_loaded_policy_metadata_and_cleanup(tmp_path, monkeypatch):
     backend = Mock()
     monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
-    progress = Mock()
+    monkeypatch.setattr(server, 'warmup', Mock())
     checkpoint = tmp_path / 'model_state_dict.pt'
-    source = server.GalaxeaSource(checkpoint_path=str(checkpoint))
-    policy = source.load(protocol.MODEL_ID, progress)
+    policy = server.galaxea_model(checkpoint_path=str(checkpoint))
     assert policy.meta()[policy_keys.CHECKPOINT_PATH] == str(checkpoint)
-    backend.start.assert_called_once_with(progress)
+    backend.start.assert_called_once_with()
     backend.stop.assert_not_called()
     policy.close()
+    backend.stop.assert_called_once()
+
+
+def test_the_load_runs_one_warm_inference_through_the_backend(backend, monkeypatch):
+    monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
+    policy = server.galaxea_model()
+    try:
+        assert len(backend.requests) == 1
+        assert backend.requests[0][protocol.EMBODIMENT_TYPE] == protocol.DROID_FRANKA
+        assert len(backend.requests[0][protocol.STATE][protocol.RIGHT_ARM]) == protocol.RIGHT_ARM_WIDTH
+        assert policy._connections == {}, 'the warm left its session open'
+    finally:
+        policy.close()
+
+
+def test_a_warm_the_backend_refuses_fails_the_load_and_stops_the_child(backend, monkeypatch):
+    backend.response = {protocol.ERROR: 'the model refused the observation'}
+    backend.stop = Mock()
+    monkeypatch.setattr(server, '_BackendProcess', Mock(return_value=backend))
+    with pytest.raises(RuntimeError, match='refused the observation'):
+        server.galaxea_model()
     backend.stop.assert_called_once()
 
 
@@ -188,7 +210,7 @@ def test_subprocess_preserves_venv_and_checkpoint_symlinks(tmp_path, monkeypatch
     monkeypatch.setattr(server.subprocess, 'Popen', popen)
     monkeypatch.setattr(server, 'wait_for_subprocess_ready', Mock())
     backend = server._BackendProcess(tmp_path, checkpoint, 'cuda', 0)
-    backend.start(None)
+    backend.start()
     command = popen.call_args.args[0]
     assert command[0] == str(interpreter)
     assert command[command.index('--checkpoint') + 1] == str(checkpoint)

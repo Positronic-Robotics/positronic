@@ -50,7 +50,6 @@ def run_episode(wire: str, host: str, port: int, output: Path, seed: int, wall_t
         f'--policy.wire={wire}',
         f'--policy.address.host={host}',
         f'--policy.address.port={port}',
-        f'--policy.address.model={CHECKPOINT_ID}',
         f'--eval.seed={seed}',
         '--eval.trial_count=1',
         f'--eval.timeout={EPISODE_SECONDS}',

@@ -1,4 +1,6 @@
 import dataclasses
+import http.server
+import json
 import pathlib
 import threading
 import time
@@ -7,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from positronic_wire import registry, websocket, wire
+from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
@@ -23,7 +25,6 @@ from positronic.offboard.client import (
     InferenceSession,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.offboard.tests.conftest import DictSource
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
@@ -45,21 +46,18 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused):
         self._outcomes = list(outcomes)
         self.dials: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
-        self.catalogue_reads: list[tuple[wire.HostPortAddress, Mapping[str, str] | None, float]] = []
-        self.models: list[str] = []
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         query = f'?{address.query}' if address.query else ''
         return f'fake://{wire.netloc(address, 0)}{address.path}{query}'
 
-    def list_models(self, address: wire.HostPortAddress, headers, open_timeout: float) -> list[str]:
-        self.catalogue_reads.append((address, headers, open_timeout))
-        return self.models
-
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         return None
+
+    def keepalive(self, address, headers, timeout):
+        raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         self.dials.append((address, headers, open_timeout))
@@ -69,9 +67,9 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         return outcome
 
 
-def _address(host: str, port: int, model: str = '', query: str = '') -> wire.HostPortAddress:
+def _address(host: str, port: int, query: str = '') -> wire.HostPortAddress:
     """Where a network wire opens a session."""
-    return wire.HostPortAddress(host, port, wire.session_path(model), query)
+    return wire.HostPortAddress(host, port, wire.SESSION_PATH, query)
 
 
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
@@ -154,20 +152,9 @@ class TestInferenceClientHeaders:
 
         assert fake.dials == [(_ADDRESS, None, DEFAULT_OPEN_TIMEOUT)]
 
-    def test_the_catalogue_read_hands_the_wire_the_headers_and_the_open_timeout(self):
-        """The client asks the wire for the catalogue, with the headers and the timeout it dials with."""
-        headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        fake = _FakeWire()
-        fake.models = ['m1']
-
-        client = InferenceClient(fake, _ADDRESS, headers=headers, open_timeout=3.0)
-
-        assert client.list_models() == ['m1']
-        assert fake.catalogue_reads == [(_ADDRESS, headers, 3.0)]
-
 
 def test_every_session_dials_the_same_address():
-    address = wire.HostPortAddress('localhost', 8000, wire.session_path('10000'), 'fps=10')
+    address = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, 'fps=10')
     fake = _FakeWire(MagicMock(), MagicMock())
     with patch('positronic.offboard.client.InferenceSession'):
         client = InferenceClient(fake, address)
@@ -175,7 +162,7 @@ def test_every_session_dials_the_same_address():
         client.new_session()
 
     assert [dialed for dialed, _headers, _timeout in fake.dials] == [address, address]
-    assert client.session_url == 'fake://localhost:8000/api/v1/session/10000?fps=10'
+    assert client.session_url == 'fake://localhost:8000/api/v1/session?fps=10'
 
 
 def _refused(refusal: wire.Refusal) -> wire.ConnectRefused:
@@ -241,14 +228,69 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 2 * len(one_session)
 
+    def test_no_attempt_begins_past_the_connect_deadline(self):
+        """An attempt that begins past the deadline runs a whole `open_timeout`, which the caller never granted."""
+        deadline = 1.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
 
-def test_remote_policy_hands_the_wire_the_server_the_model_and_the_headers_to_the_client():
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 1, f'the loop dialled {len(fake.dials)} times inside a {deadline}s deadline'
+
+    def test_a_wait_that_leaves_budget_still_retries(self):
+        deadline = 3.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 2, f'a {deadline}s deadline took {len(fake.dials)} attempt(s)'
+
+    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
+        deadline = 0.5
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+        slept: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            slept.append(seconds)
+            clock[0] += seconds
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=sleep),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
+
+
+def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy(
-        'websocket_tls', _address('example.com', 443, model='10000', query='fps=2.5'), headers=headers
-    )
+    policy = RemotePolicy('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
     client = policy._client
-    assert client.session_url == 'wss://example.com/api/v1/session/10000?fps=2.5'
+    assert client.session_url == 'wss://example.com/api/v1/session?fps=2.5'
     assert client.headers == headers
 
 
@@ -277,12 +319,11 @@ def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
-            DictSource({'050000': model}),
             local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
-        server = start_server(pipeline, grpc=transport == 'grpc')
-        address = server.ws(model='050000')[1] if transport == 'websocket' else server.grpc(model='050000')[1]
+        server = start_server(model, pipeline, grpc=transport == 'grpc')
+        address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
         return address, model, pipeline
 
     return start
@@ -598,7 +639,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 def test_pipeline_rejects_frame_conversion_on_both_sides():
     local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(DictSource({'050000': FixedModel()}), local, codec=ChangeEEFrame(Transform3D.identity))
+        PolicyDeployment(local, codec=ChangeEEFrame(Transform3D.identity))
 
 
 @pytest.fixture
@@ -667,6 +708,38 @@ def test_compression_follows_the_handshake(runtime, compressed):
     session.close.assert_called_once()
 
 
+def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
+    qualities = []
+    monkeypatch.setattr(
+        'positronic.policy.remote.encode_jpeg', lambda image, quality: qualities.append(quality) or {'jpeg': b''}
+    )
+    session = _mock_session({**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: True})
+    session.infer.return_value = [{'value': 42}]
+    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = session
+    run = runtime.start(policy)
+    try:
+        run.send({'image': _make_image(48, 64)})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        runtime.close()
+        run.close()
+    assert qualities == [75]
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
+    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = _mock_session({offboard_keys.COMPRESS_IMAGES: compressed})
+    meta = policy.meta()
+    if compressed:
+        assert meta[policy_keys.JPEG_QUALITY] == 75
+    else:
+        assert policy_keys.JPEG_QUALITY not in meta
+
+
 @pytest.mark.parametrize('fails', [False, True])
 def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp_path, monkeypatch, fails):
     session = _mock_session()
@@ -675,7 +748,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
         session.infer.side_effect = TimeoutError('server stalled')
     encoded_at = []
 
-    def encode(image):
+    def encode(image, quality):
         encoded_at.append(time.time_ns())
         return {'jpeg': b''}
 
@@ -697,9 +770,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(
-        PolicyDeployment(DictSource({'default': model}), ChunkedSchedule(fps=10)), grpc=transport == 'grpc'
-    )
+    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
         run = runtime.start(RemotePolicy(transport, address))
@@ -751,3 +822,81 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
         RemotePolicy('ws', _address('localhost', 8000))
+
+
+class _KeepaliveAnswer(http.server.BaseHTTPRequestHandler):
+    """Answers a keepalive after ``delay_s``, as a server with no idle timeout does."""
+
+    delay_s = 0.0
+
+    def do_POST(self):
+        time.sleep(self.delay_s)
+        body = json.dumps({wire.ALIVE_SECONDS: None}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def keepalive_server():
+    """Starts an HTTP server whose keepalive answers after the delay a test gives; yields its address."""
+    servers: list[http.server.ThreadingHTTPServer] = []
+
+    def start(delay_s: float) -> wire.HostPortAddress:
+        handler = type('Handler', (_KeepaliveAnswer,), {'delay_s': delay_s})
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return wire.HostPortAddress('127.0.0.1', server.server_address[1], wire.SESSION_PATH, '')
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+class TestEveryWireSpendsTheCallersBudgetOnce:
+    """A caller's timeout is one budget: each step of the call takes what the steps before it left."""
+
+    @staticmethod
+    def _clock_after_a_connect_that_took(spent: float):
+        """A clock that reads 0 once, then ``spent``: the connect took ``spent`` seconds."""
+        readings = iter([0.0])
+        return lambda: next(readings, spent)
+
+    def test_the_websocket_wire_times_out_an_answer_the_connect_left_no_time_for(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.5)
+        with (
+            patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.8)),
+            pytest.raises(wire.ConnectRefused),
+        ):
+            websocket.WebsocketClientWire().keepalive(address, None, budget)
+
+    def test_the_websocket_wire_takes_an_answer_inside_what_the_connect_left(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.0)
+        with patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.0)):
+            assert websocket.WebsocketClientWire().keepalive(address, None, budget) is None
+
+    def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
+        budget, on_the_channel = 4.0, 1.0
+        unary = MagicMock(return_value=json.dumps({wire.ALIVE_SECONDS: None}).encode())
+        channel = MagicMock(**{'unary_unary.return_value': unary})
+
+        def a_channel_that_took_its_time(*_args, **_kwargs):
+            time.sleep(on_the_channel)
+            return channel
+
+        with (
+            patch.object(grpc.GrpcClientWire, 'channel', return_value=channel),
+            patch('positronic_wire.grpc._ready_channel', side_effect=a_channel_that_took_its_time),
+        ):
+            grpc.GrpcClientWire().keepalive(_ADDRESS, None, budget)
+
+        given = unary.call_args.kwargs['timeout']
+        assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'

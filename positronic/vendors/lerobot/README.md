@@ -40,7 +40,7 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
 
 # 3. Serve (the subcommand selects the codec pipeline; must match training)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
 
 # 4. Run inference
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -97,27 +97,27 @@ Two training modes are available:
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
+  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --websocket.served_address.port=8000
 ```
 
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
 | subcommand | Named policy pipeline to serve — its codec must match training: `ee`, `joints`, `joints_ik`, `joints_ik_sim` | `ee` | `joints` |
-| `--pipeline.source.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
-| `--pipeline.source.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipeline.source.device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
+| `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
+| `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
+| `--model.device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket instead, and takes `.uds` | host and port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
 | `--grpc` | Serve the gRPC wire beside the websocket one, and `--grpc.served_address.port` names its port | not served | `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
-**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` is the `ee` pipeline with its `checkpoints_dir` bound (e.g. `lerobot-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), and `serve` is `ee`. `phail` serves a bound checkpoint through the `ee` pipeline (e.g. `lerobot-server phail`).
 
 **Session parameters:** A client can tune the served pipeline per session with query params on the session URL —
-dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`). The model source
-(`checkpoints_dir`, `checkpoint`, `device`) is fixed at launch and cannot be changed per session. See the
+dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`). The model
+(`--model.checkpoints_dir`, `--model.checkpoint`, `--model.device`) is fixed at launch and cannot be changed per session. See the
 [offboard README](../../offboard/README.md) for the full syntax and error behavior.
 
 ## See Also

@@ -16,15 +16,6 @@ from positronic.policy.codec import (
     Metadata,
     RestrictImageSize,
 )
-from positronic.policy.compatibility import (
-    ActionHorizonV1,
-    ActionTimestampV1,
-    ChunkedScheduleV1,
-    StackV1,
-    StopOnFaultV1,
-    TemporalStackV1,
-    _LayerV1,
-)
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.sequential import Sequential
@@ -50,8 +41,6 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         JointDeltaAction,
     )
 }
-for component in (ChunkedScheduleV1, StopOnFaultV1, TemporalStackV1, ActionTimestampV1, ActionHorizonV1):
-    COMPONENTS.setdefault(component.WIRE_NAME, {})[component.WIRE_VERSION] = Version(component)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:
@@ -65,8 +54,7 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
                 raise ValueError('A sequential spec must contain at least one component')
             if all(isinstance(part, Codec) for part in parts):
                 return reduce(or_, cast(list[Codec], parts))
-            composition = StackV1 if any(isinstance(part, (_LayerV1, StackV1)) for part in parts) else Sequential
-            return composition(parts[0], *parts[1:])
+            return Sequential(parts[0], *parts[1:])
         if PAR in node:
             parts = [build(child) for child in node[PAR]]
             if not parts or not all(isinstance(part, Codec) for part in parts):
@@ -81,10 +69,4 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
             versions[version] = factory
         return versions[version](**node.get(ARGS, {}))
 
-    stack = build(node)
-    legacy_timing = any(
-        codec.WIRE_VERSION in selected.get(codec.WIRE_NAME, {}) for codec in (ActionTimestampV1, ActionHorizonV1)
-    )
-    if legacy_timing and isinstance(stack, Processor) and not isinstance(stack, (_LayerV1, StackV1)):
-        raise ValueError('V1 timing codecs cannot be mixed with Step processors; configure ChunkedSchedule timing')
-    return stack
+    return build(node)

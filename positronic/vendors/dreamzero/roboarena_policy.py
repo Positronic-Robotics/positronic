@@ -105,8 +105,9 @@ def local_stack(config: Mapping[str, Any]) -> Sequential:
     return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
 
 
-# The key the chunk arrives under in the server's reply, which is a mapping rather than a bare array.
-ACTIONS_FIELD = 'actions'
+# The keys the chunk can arrive under in the server's reply, which is a mapping. The first key that the reply
+# carries holds the chunk: servers differ on the key.
+ACTIONS_FIELDS = ('actions', 'action')
 
 # How many values one action in `JOINT_POSITION_SPACE` carries: seven joints and a gripper. A row of another
 # width is read by the codec as joints anyway, and the arm executes it.
@@ -140,7 +141,13 @@ class RoboarenaEndpoint:
             raise RuntimeError(
                 f'the roboarena server at {self._client.url} answered an error instead of an action chunk: {e.text}'
             ) from e
-        return np.asarray(reply[ACTIONS_FIELD])
+        field = next((field for field in ACTIONS_FIELDS if field in reply), None)
+        if field is None:
+            raise ValueError(
+                f'the roboarena server at {self._client.url} answered {sorted(reply)} and no action chunk under '
+                f'any of {list(ACTIONS_FIELDS)}'
+            )
+        return np.asarray(reply[field])
 
     def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]]:
         chunk = self._answer(obs)
@@ -163,15 +170,17 @@ class RoboarenaEndpoint:
 class RoboarenaPolicy(Policy):
     """A policy served by the roboarena server at `address`, with the DROID codec in front of it.
 
-    Each episode opens its own connection. The codec's geometry and the cameras it sends come from the config
-    the server announces on that connection, so the stack is built when the episode starts.
+    Each episode opens its own connection, with `headers` on its handshake. The codec's geometry and the cameras
+    it sends come from the config the server announces on that connection, so the stack is built when the episode
+    starts.
     """
 
-    def __init__(self, address: roboarena_wire.RoboarenaAddress):
+    def __init__(self, address: roboarena_wire.RoboarenaAddress, headers: Mapping[str, str] | None = None):
         self._address = address
+        self._headers = headers
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        client = RoboarenaClient(self._address.host, self._address.port)
+        client = RoboarenaClient(self._address.host, self._address.port, self._headers)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.
         connection_lock = Lock()
         config = client.connect()

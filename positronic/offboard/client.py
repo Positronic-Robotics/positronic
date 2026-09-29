@@ -25,6 +25,11 @@ DEFAULT_INFER_TIMEOUT = 180.0
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
 
+# What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
+# cost the two minus ``served_ms``, because the server's own span sits inside the second one.
+SEND_MS = 'send_ms'
+RECV_MS = 'recv_ms'
+
 
 class InferenceSession:
     """One connection using the protocol declared by its server. Finish inference before closing it."""
@@ -33,6 +38,8 @@ class InferenceSession:
     # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
     # still carries it.
     served_timing: Mapping[str, float] = MappingProxyType({})
+    # This client's own halves of the last round trip, under ``SEND_MS`` and ``RECV_MS``.
+    wire_timing: Mapping[str, float] = MappingProxyType({})
 
     def __init__(self, conn: wire.ClientConnection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._conn = conn
@@ -93,7 +100,7 @@ class InferenceSession:
         """
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
-        self.served_timing = {}
+        self.served_timing = self.wire_timing = {}
         request = (
             obs
             if self._protocol is protocol.ProtocolVersion.V1
@@ -104,11 +111,19 @@ class InferenceSession:
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        send_started = time.time_ns()
         try:
-            with telemetry.span(telemetry_keys.SPAN_WIRE_SEND, **wire_bytes):
+            try:
                 self._conn.send(serialised)
-            with telemetry.span(telemetry_keys.SPAN_WIRE_RECV):
+            finally:
+                # A send that raises gets timed too, so the span is recorded on the way out.
+                sent = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+            try:
                 received = self._conn.recv(timeout=self._infer_timeout)
+            finally:
+                answered = time.time_ns()
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -122,6 +137,7 @@ class InferenceSession:
             self._closed = True
             self._conn.close()
             raise
+        self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
         response = deserialise(received)
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
@@ -218,7 +234,7 @@ class InferenceClient:
     def _open_session(self) -> InferenceSession:
         """One attempt at a session. The connection closes when the handshake does not finish.
 
-        A refusal sent as a protocol frame (an unknown model, a rejected session param) raises past every
+        A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._wire.dial(self._address, self.headers, self.open_timeout)
@@ -229,7 +245,7 @@ class InferenceClient:
             raise
 
     def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the address names.
+        """Creates a new inference session on the server's model.
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
@@ -246,12 +262,17 @@ class InferenceClient:
                 refusal, not_ready = wire.Refusal.COLD, e
             if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
+            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
+            backoff = min(backoff * 2, 30.0)
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
 
-    def list_models(self) -> list[str]:
-        """The models this server serves, read by the wire on the transport it carries sessions on."""
-        return self._wire.list_models(self._address, self.headers, self.open_timeout)
+    def keepalive(self) -> int | None:
+        """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
+        the call, or ``None`` for a server with no idle timeout.
+
+        A server binds its wires only after its model has loaded and warmed, so any answer means it is ready.
+        Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.
+        """
+        return self._wire.keepalive(self._address, self.headers, self.open_timeout)

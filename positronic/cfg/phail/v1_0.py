@@ -27,7 +27,7 @@ from positronic.server.positronic_server import main as server_main
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
 # with no AWS credentials — a reader can pass a model URL straight to an inference server's
-# `--pipeline.source.checkpoints_dir`.
+# `--model.checkpoints_dir`.
 _ROOT = 's3://PUBLIC@positronic-public/phail/v1.0'
 
 ds = types.SimpleNamespace(

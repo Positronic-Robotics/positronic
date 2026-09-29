@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import configuronic as cfn
-from positronic_wire.wire import HostPortAddress, UnixSocketAddress, session_path
+from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
 from positronic.offboard.protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
@@ -25,16 +25,16 @@ def placeholder():
     )
 
 
-@cfn.config(host='localhost', port=8000, model='', query='')
-def network_address(host: str, port: int, model: str, query: str) -> HostPortAddress:
+@cfn.config(host='localhost', port=8000, query='')
+def network_address(host: str, port: int, query: str) -> HostPortAddress:
     """A session on a server reached over the network, as the network wires dial one."""
-    return HostPortAddress(host, port, session_path(model), query)
+    return HostPortAddress(host, port, SESSION_PATH, query)
 
 
-@cfn.config(model='', query='')
-def socket_address(uds: str, model: str, query: str) -> UnixSocketAddress:
+@cfn.config(query='')
+def socket_address(uds: str, query: str) -> UnixSocketAddress:
     """A session on a server on this machine, as `websocket_unix` dials one."""
-    return UnixSocketAddress(Path(uds), session_path(model), query)
+    return UnixSocketAddress(Path(uds), SESSION_PATH, query)
 
 
 remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)

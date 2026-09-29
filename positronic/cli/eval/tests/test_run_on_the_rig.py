@@ -1,4 +1,4 @@
-"""`positronic eval run` with a policy URL: the plan is filed with the platform, over a stub transport."""
+"""`positronic eval run` with a plan file: the plan is filed with the platform, over a stub transport."""
 
 import json
 from pathlib import Path
@@ -7,23 +7,13 @@ import pytest
 from platform_client import routes
 from platform_client.ids import SubmissionId
 
-from positronic.cli.conftest import KEY
-from positronic.cli.eval.plan import endpoint_of, flag_entries, given
+from positronic.cli.conftest import KEY, runs_of_four
+from positronic.cli.eval.plan import given
 from positronic.cli.eval.run import run
 
 SPOONS = 'eight-spoons-into-grey-tote'
-MUG = 'marker-in-mug'
-BASELINE = 'wss://baseline.example/ws'
-CANDIDATE = 'wss://candidate.example/ws'
 FILED = {'submission_id': '2a', 'status': 'pending'}
-
-FLAGS = {
-    'policy_url': f'baseline={BASELINE},candidate={CANDIDATE}',
-    'tasks': f'{SPOONS},{MUG}',
-    'episodes': 10,
-    'cap': 180,
-    'preset': 'example_candidate',
-}
+BASELINE = {'host': 'baseline.example', 'port': 443, 'path': '/api/v1/session'}
 
 
 def a_plan_file(directory: Path, name: str, payload: str) -> str:
@@ -33,102 +23,52 @@ def a_plan_file(directory: Path, name: str, payload: str) -> str:
 
 
 PLAN_YAML = f"""
+request_type:
+  type: private_eval
+  org: acme
 tasks:
   - {SPOONS}
 endpoints:
   - name: baseline
-    url: {BASELINE}
+    wire: websocket_tls
+    address: {{host: baseline.example, port: 443, path: /api/v1/session}}
 episodes_per_endpoint: 4
 """
 
-
-def test_the_flags_state_a_plan_and_it_is_filed(platform, run_command, capsys):
-    platform.answer(FILED)
-
-    filed = run_command(run, **FLAGS)
-
-    # Returned as well as printed, so a caller holding the function has the id without scraping stdout.
-    assert filed.submission_id == SubmissionId(0x2A)
-    assert platform.request.url.path == routes.SUBMISSIONS_CREATE
-    assert platform.request.headers['authorization'] == f'Bearer {KEY}'
-    body = platform.body
-    assert [task['task_id'] for task in body['tasks']] == [SPOONS, MUG]
-    assert [(entry['name'], entry['url']) for entry in body['endpoints']] == [
-        ('baseline', BASELINE),
-        ('candidate', CANDIDATE),
-    ]
-    assert body['episodes_per_endpoint'] == 10
-    assert body['cap_per_episode_sec'] == 180
-    assert body['policy_preset'] == 'example_candidate'
-    assert json.loads(capsys.readouterr().out)['submission_id'] == '2a'
-
-
-def test_a_bracketed_list_states_the_same_plan_as_the_comma_form(platform, run_command):
-    # A CLI value is literal-evaluated, so `[a,b]` arrives as a list where the entries read as
-    # names and as text where they do not. Both spell one plan.
-    platform.answer(FILED)
-    run_command(
-        run, **{**FLAGS, 'tasks': [SPOONS, MUG], 'policy_url': [f'baseline={BASELINE}', f'candidate={CANDIDATE}']}
-    )
-    from_list = platform.body
-
-    platform.answer(FILED)
-    run_command(run, **FLAGS)
-
-    assert from_list == platform.body
-
-
-def test_a_bare_policy_url_is_named_for_its_place_in_the_list(platform, run_command):
-    platform.answer(FILED)
-
-    run_command(run, policy_url=f'{BASELINE},{CANDIDATE}', tasks=SPOONS, episodes=2)
-
-    assert [(entry['name'], entry['url']) for entry in platform.body['endpoints']] == [
-        ('policy1', BASELINE),
-        ('policy2', CANDIDATE),
-    ]
-
-
-def test_a_url_carrying_a_query_is_not_read_as_a_label(platform, run_command):
-    # A URL takes `=` in its query, so the part before the first one labels an endpoint only where
-    # it names no scheme and no path.
-    platform.answer(FILED)
-
-    run_command(run, policy_url='wss://h/ws?mode=native', tasks=SPOONS, episodes=1)
-
-    assert platform.body['endpoints'][0] == {
-        'name': 'policy1',
-        'kind': 'remote',
-        'url': 'wss://h/ws?mode=native',
-        'provider': None,
-        'spec': None,
-        'image': None,
-        'episodes_per_endpoint': None,
-        'cap_per_episode_sec': None,
-        'policy_preset': None,
-        'tote_placement': None,
-        'camera_vantage': None,
-        'external_cameras': {},
-        'clutter': None,
-    }
-
-
 PLAN_JSON = json.dumps({
+    'request_type': {'type': 'private_eval', 'org': 'acme'},
     'tasks': [SPOONS],
-    'endpoints': [{'name': 'baseline', 'url': BASELINE}],
+    'endpoints': [{'name': 'baseline', 'wire': 'websocket_tls', 'address': BASELINE}],
     'episodes_per_endpoint': 4,
 })
 
 
 @pytest.mark.parametrize(('name', 'payload'), [('plan.yaml', PLAN_YAML), ('plan.json', PLAN_JSON)])
-def test_a_plan_file_is_filed_whole(platform, run_command, tmp_path: Path, name: str, payload: str):
+def test_a_plan_file_is_filed_whole(platform, run_command, tmp_path: Path, capsys, name: str, payload: str):
     platform.answer(FILED)
 
-    run_command(run, from_file=a_plan_file(tmp_path, name, payload))
+    filed = run_command(run, from_file=a_plan_file(tmp_path, name, payload))
 
+    # Returned as well as printed, so a caller holding the function has the id without scraping stdout.
+    assert filed.submission_id == SubmissionId(0x2A)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
+    assert platform.request.headers['authorization'] == f'Bearer {KEY}'
     assert platform.body['episodes_per_endpoint'] == 4
     assert [task['task_id'] for task in platform.body['tasks']] == [SPOONS]
+    assert [(entry['wire'], entry['address']) for entry in platform.body['endpoints']] == [
+        ('websocket_tls', {**BASELINE, 'query': ''})
+    ]
+    assert json.loads(capsys.readouterr().out)['submission_id'] == '2a'
+
+
+def test_a_plan_file_naming_a_url_is_refused_before_it_is_filed(platform, run_command, tmp_path: Path):
+    by_url = PLAN_YAML.replace(
+        '    wire: websocket_tls\n    address: {host: baseline.example, port: 443, path: /api/v1/session}\n',
+        '    url: wss://baseline.example/api/v1/session\n',
+    )
+    with pytest.raises(SystemExit, match='names a url'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', by_url))
+    assert platform.seen is None
 
 
 def test_a_plan_file_giving_a_key_twice_is_refused(platform, run_command, tmp_path: Path):
@@ -136,13 +76,6 @@ def test_a_plan_file_giving_a_key_twice_is_refused(platform, run_command, tmp_pa
     twice = PLAN_YAML + 'episodes_per_endpoint: 40\n'
     with pytest.raises(SystemExit, match="'episodes_per_endpoint' is given twice"):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', twice))
-
-
-def test_a_plan_file_beside_a_plan_flag_is_refused(platform, run_command, tmp_path: Path):
-    # One source states the plan; a flag beside a file would be ignored.
-    with pytest.raises(SystemExit, match='carries the whole plan'):
-        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), episodes=3)
-    assert platform.seen is None
 
 
 def test_a_transaction_key_beside_a_plan_file_is_filed_with_the_plan(platform, run_command, tmp_path: Path):
@@ -175,14 +108,6 @@ def test_a_plan_file_carrying_an_alias_takes_no_flag(platform, run_command, tmp_
     assert platform.seen is None
 
 
-def test_the_rig_flags_state_an_alias(platform, run_command):
-    platform.answer(FILED)
-
-    run_command(run, **FLAGS, alias='nightly')
-
-    assert platform.body['alias'] == 'nightly'
-
-
 def test_a_plan_file_beside_a_policy_image_is_refused(platform, run_command, tmp_path: Path):
     # The platform runs an eval of its own by name, so it has no plan file to read.
     named = a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML)
@@ -202,7 +127,7 @@ def test_an_eval_beside_a_plan_file_is_refused(platform, run_command, tmp_path: 
 
 def test_a_file_that_is_not_a_plan_names_the_field(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='episodes_per_endpoint'):
-        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'))
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', f'tasks: [{SPOONS}]\n'), org='acme')
     assert platform.seen is None
 
 
@@ -212,55 +137,182 @@ def test_a_file_that_reads_as_neither_yaml_nor_json_says_so(platform, run_comman
     assert platform.seen is None
 
 
+# No run of this appears in a temp path or in the words a refusal is built from, so a match is the
+# password and nothing else.
+REGISTRY_PASSWORD = 'Zx9QvT7Lm2Rk'
+
+
+# Each puts the password somewhere PyYAML quotes what it read: on the error's mark, or inside the
+# message as the alias, anchor, tag or repeated key it could not resolve.
+BROKEN_CREDENTIALS = {
+    'given twice': f'      password: {REGISTRY_PASSWORD}\n      password: {REGISTRY_PASSWORD}\n',
+    'a tab before the value': f'      password:\t{REGISTRY_PASSWORD}\n',
+    'an unclosed quote': f'      password: "{REGISTRY_PASSWORD}\n',
+    'a flow sequence left open': f'      password: [{REGISTRY_PASSWORD}\n',
+    'an undefined alias': f'      password: *{REGISTRY_PASSWORD}\n',
+    'a duplicate anchor': f'      password: &{REGISTRY_PASSWORD} x\n      other: &{REGISTRY_PASSWORD} y\n',
+    'an unknown tag': f'      password: !{REGISTRY_PASSWORD} x\n',
+    'a tag carrying a URI escape': f"      password: !a%22b'{REGISTRY_PASSWORD} x\n",
+    'a repeated mapping key': f'      password:\n        {REGISTRY_PASSWORD}: a\n        {REGISTRY_PASSWORD}: b\n',
+}
+
+
+def a_plan_with_a_broken_credential(how: str) -> str:
+    """A plan carrying a password a caller pasted into it, where the parser would quote it back.
+
+    A plan names a password file, so this is a caller's mistake. The refusal still prints none of it.
+    """
+    broken = BROKEN_CREDENTIALS[how]
+    return (
+        f'tasks:\n  - {SPOONS}\nendpoints:\n  - name: baseline\n'
+        '    image: registry.example/policy:v1\n    image_credential:\n      username: reader\n'
+        f'{broken}episodes_per_endpoint: 4\n'
+    )
+
+
+@pytest.mark.parametrize('how', sorted(BROKEN_CREDENTIALS))
+def test_a_malformed_plan_prints_no_part_of_its_registry_password(platform, run_command, tmp_path: Path, how: str):
+    # A refusal is built from this file's own words and a position, so no run of the password can
+    # reach it. Four characters catch a partial echo that a search for the whole string would miss.
+    payload = a_plan_with_a_broken_credential(how)
+    with pytest.raises(SystemExit) as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    message = str(refusal.value)
+    assert not [
+        run_of_the_password for run_of_the_password in runs_of_four(REGISTRY_PASSWORD) if run_of_the_password in message
+    ]
+    assert platform.seen is None
+
+
+def test_a_password_pasted_as_its_file_is_not_printed(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(a_credential_naming(REGISTRY_PASSWORD))
+    with pytest.raises(SystemExit, match=r'image_credential\.password: .*names no file') as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    message = str(refusal.value)
+    assert not [
+        run_of_the_password for run_of_the_password in runs_of_four(REGISTRY_PASSWORD) if run_of_the_password in message
+    ]
+    assert platform.seen is None
+
+
+def test_a_malformed_plan_still_says_where_the_fault_is(platform, run_command, tmp_path: Path):
+    # The redaction keeps the position: a refusal naming no line sends the author hunting.
+    payload = a_plan_with_a_broken_credential('given twice')
+    with pytest.raises(SystemExit, match=r'line \d+, column \d+'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+
+
+def test_a_scalar_where_a_plan_lists_its_tasks_is_refused(platform, run_command, tmp_path: Path):
+    payload = f'tasks: 1\nendpoints:\n  - name: baseline\n    url: {BASELINE}\nepisodes_per_endpoint: 4\n'
+    with pytest.raises(SystemExit, match='tasks: Input should be a valid list'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def a_plan_with_credentials(on_plan: str, on_task: str | None = None) -> str:
+    """A plan whose image endpoint states `on_plan` as its credential, and whose task states `on_task`."""
+
+    def endpoint(credential: str, indent: str) -> str:
+        lines = [
+            '- name: private',
+            '  kind: image',
+            '  wire: websocket',
+            '  image: registry.example/policy:v1',
+            '  image_credential:',
+        ]
+        lines += [f'    {line}' for line in credential.splitlines()]
+        return ''.join(f'{indent}{line}\n' for line in lines)
+
+    task = (
+        f'  - {SPOONS}\n'
+        if on_task is None
+        else f'  - task_id: {SPOONS}\n    endpoints:\n' + endpoint(on_task, '      ')
+    )
+    request_type = 'request_type:\n  type: private_eval\n  org: acme\n'
+    return f'{request_type}tasks:\n{task}endpoints:\n{endpoint(on_plan, "  ")}episodes_per_endpoint: 4\n'
+
+
+def a_credential_naming(password_file: Path | str) -> str:
+    return f'username: reader\npassword_file: {password_file}'
+
+
+def test_a_plan_file_sends_the_password_each_of_its_files_holds(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    on_plan = tmp_path / 'plan-password'
+    on_plan.write_text(f'{REGISTRY_PASSWORD}\n')
+    on_task = tmp_path / 'task-password'
+    on_task.write_text('the-task-password\n')
+
+    run_command(
+        run,
+        from_file=a_plan_file(
+            tmp_path, 'plan.yaml', a_plan_with_credentials(a_credential_naming(on_plan), a_credential_naming(on_task))
+        ),
+    )
+
+    body = platform.body
+    assert body['endpoints'][0]['image_credential'] == {'username': 'reader', 'password': REGISTRY_PASSWORD}
+    assert body['tasks'][0]['endpoints'][0]['image_credential'] == {
+        'username': 'reader',
+        'password': 'the-task-password',
+    }
+
+
+@pytest.mark.parametrize('stated', ['[]', '1'])
+def test_a_password_file_that_is_no_path_is_refused(platform, run_command, tmp_path: Path, stated: str):
+    payload = a_plan_with_credentials(a_credential_naming(stated))
+    with pytest.raises(SystemExit, match=r'image_credential\.password_file: Input is not a valid path'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def test_a_plan_file_stating_a_password_is_refused_at_it(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(f'username: reader\npassword: {REGISTRY_PASSWORD}')
+    with pytest.raises(SystemExit, match=r'image_credential\.password: Extra inputs are not permitted') as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert REGISTRY_PASSWORD not in str(refusal.value)
+    assert platform.seen is None
+
+
+def test_a_password_file_under_no_such_home_is_refused(platform, run_command, tmp_path: Path):
+    payload = a_plan_with_credentials(a_credential_naming('~no-such-user-on-this-machine/registry-password'))
+    with pytest.raises(SystemExit, match='names no home directory'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert platform.seen is None
+
+
+def test_a_password_file_that_is_not_there_is_refused_at_its_credential(platform, run_command, tmp_path: Path):
+    on_plan = tmp_path / 'plan-password'
+    on_plan.write_text(f'{REGISTRY_PASSWORD}\n')
+    payload = a_plan_with_credentials(a_credential_naming(on_plan), a_credential_naming(tmp_path / 'never-written'))
+    with pytest.raises(
+        SystemExit, match=r'tasks\.0\.endpoints\.0\.image_credential\.password: .*names no file'
+    ) as refusal:
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
+    assert REGISTRY_PASSWORD not in str(refusal.value)
+    assert platform.seen is None
+
+
 def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='absent.yaml'):
         run_command(run, from_file=str(tmp_path / 'absent.yaml'))
     assert platform.seen is None
 
 
-def test_an_eval_is_refused_on_the_rig(platform, run_command):
-    # The rig runs a plan, and `EvalPlan` carries no eval name, so a name reaches nothing there.
-    with pytest.raises(SystemExit, match='the rig runs a plan'):
-        run_command(run, eval='fake.smoke', policy_url=BASELINE, tasks=SPOONS, episodes=1)
-    assert platform.seen is None
-
-
-def test_a_rig_run_states_its_tasks_its_endpoints_and_its_count(platform, run_command):
-    with pytest.raises(SystemExit, match='--tasks, --policy-url and --episodes'):
-        run_command(run, policy_url=BASELINE, episodes=1)
-    assert platform.seen is None
-
-
-@pytest.mark.parametrize('rig_only', [{'policy_url': BASELINE}, {'tasks': SPOONS}, {'episodes': 4}, {'cap': 60}])
-def test_a_local_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
-    with pytest.raises(SystemExit, match='a local run has no'):
-        run_command(run, eval='fake.smoke', policy='a policy', **rig_only)
-    assert platform.seen is None
-
-
-@pytest.mark.parametrize(
-    'rig_only', [{'policy_url': BASELINE}, {'preset': 'p'}, {'episodes': 0}, {'cap': 0}, {'episodes': False}]
-)
-def test_a_platform_run_refuses_what_only_a_rig_run_can_mean(platform, run_command, rig_only: dict):
-    with pytest.raises(SystemExit, match='a platform run has no'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **rig_only)
-    assert platform.seen is None
-
-
 @pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
-def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, elsewhere: dict):
+def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, tmp_path: Path, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
-        run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **elsewhere)
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), **elsewhere)
     assert platform.seen is None
 
 
 @pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': True}])
-def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_command, switch: dict):
+def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_command, tmp_path: Path, switch: dict):
     # A switch stated at what a rig run already does reads as one left at its default, so the rig
     # takes it.
     platform.answer(FILED)
 
-    run_command(run, policy_url=BASELINE, tasks=SPOONS, episodes=1, **switch)
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), **switch)
 
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
 
@@ -271,63 +323,22 @@ def test_a_run_naming_no_policy_is_told_the_three_places(platform, run_command):
     assert platform.seen is None
 
 
-def test_a_transaction_key_makes_a_retry_return_the_first_plan(platform, run_command):
-    platform.answer(FILED)
-
-    run_command(run, **FLAGS, transaction_key='round-1')
-
-    assert platform.body['transaction_key'] == 'round-1'
-
-
-def test_a_task_id_that_could_never_be_a_catalogue_key_ends_the_command(platform, run_command):
-    with pytest.raises(SystemExit, match='not a task id'):
-        run_command(run, policy_url=BASELINE, tasks='Eight Spoons', episodes=1)
-    assert platform.seen is None
-
-
-# --- the flag readers ----------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ('value', 'entries'),
-    [
-        ('a-b', ['a-b']),
-        ('a-b,c-d', ['a-b', 'c-d']),
-        ('[a-b,c-d]', ['a-b', 'c-d']),
-        (['a-b', 'c-d'], ['a-b', 'c-d']),
-        (None, []),
-    ],
-)
-def test_a_repeatable_flag_reads_every_spelling_the_command_line_reaches(value: object, entries: list[str]):
-    assert flag_entries(value, '--tasks') == entries
-
-
-@pytest.mark.parametrize('url', ['wss://[::1]', 'ws://[::1]', 'wss://[2001:db8::1]:8443'])
-def test_a_bracketed_ipv6_url_keeps_its_closing_bracket(url: str):
-    # A list arrives bracketed at both ends. A URL may merely END in `]`, and trimming that alone
-    # hands on an address no endpoint will take.
-    assert flag_entries(url, '--policy-url') == [url]
-
-
-@pytest.mark.parametrize('value', ['a,,b', ' '])
-def test_a_repeatable_flag_refuses_an_empty_entry(value: str):
-    with pytest.raises(SystemExit, match='empty entry'):
-        flag_entries(value, '--tasks')
-
-
-def test_a_repeatable_flag_read_as_a_number_is_refused():
-    with pytest.raises(SystemExit, match='quote'):
-        flag_entries(10, '--tasks')
-
-
 @pytest.mark.parametrize(('value', 'is_given'), [(None, False), (False, True), (0, True), ('', True), (True, True)])
 def test_a_flag_is_given_unless_it_is_unset(value: object, is_given: bool):
     assert given(value) is is_given
 
 
-def test_a_labelled_url_takes_its_label():
-    assert (endpoint_of(f'baseline={BASELINE}', 1).name, endpoint_of(f'baseline={BASELINE}', 1).url) == (
-        'baseline',
-        BASELINE,
-    )
-    assert (endpoint_of(BASELINE, 3).name, endpoint_of(BASELINE, 3).url) == ('policy3', BASELINE)
+def test_a_rig_run_states_the_org_it_runs_for(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='other')
+    assert platform.body['request_type'] == {'type': 'private_eval', 'org': 'other'}
+    with pytest.raises(SystemExit, match='drop --org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), org='other')
+
+
+def test_an_empty_org_is_refused_in_one_line(platform, run_command, tmp_path: Path):
+    bare = PLAN_YAML.replace('request_type:\n  type: private_eval\n  org: acme\n', '')
+    with pytest.raises(SystemExit, match=r'plan\.yaml: .*org'):
+        run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', bare), org='')
+    assert platform.seen is None

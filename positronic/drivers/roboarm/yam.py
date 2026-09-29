@@ -24,7 +24,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -188,7 +188,7 @@ class _Chain(DriverRun[command.CommandType]):
         return self.vendor.get_observations()
 
     @staticmethod
-    def _grip(obs: dict[str, np.ndarray]) -> float:
+    def read_grip(obs: dict[str, np.ndarray]) -> float:
         """How closed the fingers are, from the width they read back."""
         return 1.0 - float(obs[_GRIPPER_POS][0])
 
@@ -201,14 +201,14 @@ class _Chain(DriverRun[command.CommandType]):
         driver put it."""
         self.encode(obs, RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
-        self.grip_out.emit(self._grip(obs))
+        self.grip_out.emit(self.read_grip(obs))
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Command the chain to stay where it reads, publish that, and return it as the target to hold."""
         obs = self.observations()
         self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
         self.publish(obs)
-        return np.asarray(obs[_JOINT_POS], dtype=np.float64), self._grip(obs)
+        return np.asarray(obs[_JOINT_POS], dtype=np.float64), self.read_grip(obs)
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""
@@ -237,7 +237,7 @@ class _Chain(DriverRun[command.CommandType]):
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float) -> bool:
         """Whether ``obs`` reads the chain where it was sent, fingers as much as joints."""
         return bool(np.all(np.abs(obs[_JOINT_POS] - target) < self._ARRIVED_TOL)) and (
-            abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
+            abs(self.read_grip(obs) - grip) < self._GRIP_ARRIVED_TOL
         )
 
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
@@ -260,7 +260,7 @@ class _Chain(DriverRun[command.CommandType]):
                 self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
                 self.encode(obs, RobotStatus.BUSY)  # the driver owns the chain until it arrives
                 self.out.emit(self.state)
-                self.grip_out.emit(self._grip(obs))
+                self.grip_out.emit(self.read_grip(obs))
                 yield self.limiter.wait()
         except Exception:
             self.moves.errored = True
@@ -322,7 +322,7 @@ class Robot(pimm.ControlSystem):
     ``base_pose`` places the arm base in the world frame (identity = arm-base frame): IK targets are pulled
     back through it and the emitted ``ee_pose`` is pushed forward, so a bimanual embodiment can mount both
     arms in the training world frame. The gripper shares the CAN chain, so the arm driver carries the
-    ``grip``/``target_grip`` ports (SO-101 precedent).
+    ``grip``/``target_grip``/``sync_grip`` ports (SO-101 precedent).
     """
 
     def __init__(
@@ -347,6 +347,7 @@ class Robot(pimm.ControlSystem):
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
+        self.sync_grip = pimm.calls.ControlSystemHandler[float, None](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -362,23 +363,25 @@ class Robot(pimm.ControlSystem):
 
             q_target, grip_target = yield from chain.park(0.0)  # nothing has asked for a grip yet
 
-            while not should_stop.value:
-                if (grip := pimm.value_updated(self.target_grip)) is not None:
-                    grip_target = float(grip)
+            with Moves[float](self.sync_grip, self.target_grip) as fingers:
+                while not should_stop.value:
+                    obs = chain.observations()
+                    if (grip := grip_setpoint(fingers, chain.read_grip(obs), clock.now())) is not None:
+                        grip_target = grip
 
-                q = chain.observations()[_JOINT_POS]
-                asked = chain.moves.next_request()
-                if isinstance(asked, pimm.calls.Call):
-                    q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
-                elif asked is not None:
-                    with log_failure(asked):
-                        q_target = chain.to_joints(asked, q)
+                    asked = chain.moves.next_request()
+                    if isinstance(asked, pimm.calls.Call):
+                        q_target, grip_target = yield from chain.sync_move(asked, obs[_JOINT_POS], grip_target)
+                    elif asked is not None:
+                        with log_failure(asked):
+                            q_target = chain.to_joints(asked, obs[_JOINT_POS])
 
-                chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
+                    chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
-                # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
-                chain.publish(chain.observations())
-                yield chain.limiter.wait()
+                    # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
+                    chain.publish(chain.observations())
+                    fingers.answer()  # the width a settled finger move is answered with is published
+                    yield chain.limiter.wait()
 
 
 class _FakeYam:

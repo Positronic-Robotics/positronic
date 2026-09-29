@@ -1,6 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
+from positronic.drivers.camera.zed_fake import FakeSLCamera
 
 
 @cfn.config()
@@ -47,6 +48,10 @@ droid = {
 }
 
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
+
+zed_fake = cfn.Config(FakeSLCamera)
+droid_fake = dict.fromkeys(droid, zed_fake)
+droid_3cam_fake = dict.fromkeys(droid_3cam, zed_fake)
 
 # `droid_left` holds `sideview_left` under `exterior`; `droid_right` holds `sideview_right` there.
 # FOOTGUN: `exterior` and `exterior_2` hold opposite sideviews in the two dicts.

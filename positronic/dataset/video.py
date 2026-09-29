@@ -3,15 +3,96 @@ import struct
 import threading
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Protocol
 
 import av
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from av.container import OutputContainer
+from av.video.stream import VideoStream
 
 from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
+
+
+class VideoEncoderSession(Protocol):
+    """One video file that an encoder writes, frame by frame."""
+
+    def write(self, frame: np.ndarray, index: int) -> None:
+        """Encode one ``(H, W, 3)`` uint8 RGB frame. ``index`` counts from 0 and increases by 1 each call."""
+        ...
+
+    def finish(self) -> None:
+        """Flush the encoder and close the file. Raise if the file is not complete."""
+        ...
+
+    def abort(self) -> None:
+        """Stop at once and release the encoder. The file can stay incomplete."""
+        ...
+
+
+class VideoEncoder(Protocol):
+    """A picklable choice of video encoder. Each ``open`` starts one file."""
+
+    def ensure_available(self) -> None:
+        """Raise if this host cannot run the encoder."""
+        ...
+
+    def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
+        """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames."""
+        ...
+
+
+class _LibavSession:
+    def __init__(self, container: OutputContainer, stream: VideoStream):
+        self._container = container
+        self._stream = stream
+
+    def write(self, frame: np.ndarray, index: int) -> None:
+        video_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
+        video_frame.pts = index
+        for packet in self._stream.encode(video_frame):  # Every frame may produce 0, 1, or more packets
+            self._container.mux(packet)
+
+    def finish(self) -> None:
+        for packet in self._stream.encode():
+            self._container.mux(packet)
+        self._container.close()
+
+    def abort(self) -> None:
+        self._container.close()
+
+
+@dataclass(frozen=True)
+class LibavEncoder:
+    """Encodes in the calling process with a PyAV (libav) codec."""
+
+    codec: str = 'h264'
+    # Encoder options as (name, value) pairs, e.g. x264 ``preset``/``tune``; empty keeps the codec defaults.
+    options: tuple[tuple[str, str], ...] = ()
+
+    def ensure_available(self) -> None:
+        if av.Codec(self.codec, 'w').type != 'video':
+            raise ValueError(f"'{self.codec}' is not a video codec")
+
+    def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
+        container = av.open(str(path), mode='w')
+        stream = container.add_stream(self.codec, rate=fps, options=dict(self.options))
+        if not isinstance(stream, VideoStream):
+            container.close()
+            raise ValueError(f"'{self.codec}' is not a video codec")
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = 'yuv420p'
+        stream.gop_size = gop
+        return _LibavSession(container, stream)
+
+
+# libx264 at its default preset
+DEFAULT_VIDEO_ENCODER = LibavEncoder()
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -25,63 +106,52 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self,
         video_path: Path,
         frames_index_path: Path,
-        codec: str = 'h264',
+        encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
         gop_size: int = 30,
         fps: int = 100,
-        codec_options: dict[str, str] | None = None,
     ):
         """Initialize VideoSignalWriter.
 
         Args:
             video_path: Path to the video file to write
             frames_index_path: Path to frames.parquet index file
-            codec: Video codec to use (default: 'h264')
+            encoder: The encoder that writes the video file
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
-            fps: Frame rate for encoding (default: 30)
-            codec_options: Encoder options (e.g. x264 ``preset``/``tune``); None keeps the codec defaults.
+            fps: Frame rate for encoding (default: 100)
         """
         self.video_path = video_path
         self.frames_index_path = frames_index_path
-        self.codec = codec
+        self.encoder = encoder
         self.gop_size = gop_size
         self.fps = fps
-        self.codec_options = codec_options
 
         self._finished = False
         self._aborted = False
         self._frame_count = 0
         self._last_ts = None
 
-        self._container: av.container.OutputContainer | None = None
-        self._stream: av.video.stream.VideoStream | None = None
+        self._session: VideoEncoderSession | None = None
         self._width: int | None = None
         self._height: int | None = None
         self._frame_timestamps: list[int] = []
         self._extra_timelines: dict[str, list[int]] = defaultdict(list)
 
-        # Encoding runs on a per-writer thread (libav releases the GIL), so several writers — e.g. one per
-        # camera — encode concurrently while ``append`` stays a validate-copy-enqueue. The queue bound gives
-        # backpressure instead of unbounded memory when the encoder can't keep up.
+        # One encoder thread per writer; the bound makes ``append`` wait when the encoder falls behind.
         self._frames: queue.Queue[tuple[np.ndarray, int] | None] = queue.Queue(maxsize=8)
         self._encoder_thread: threading.Thread | None = None
         self._encoder_error: Exception | None = None
 
-    def _init_video_encoder(self, first_frame: np.ndarray) -> None:
-        """Initialize video encoder based on first frame dimensions."""
+    def _open_encoder(self, first_frame: np.ndarray) -> None:
+        """Open the encoder session based on first frame dimensions."""
         if first_frame.ndim != 3 or first_frame.shape[2] != 3:
             raise ValueError(f'Expected frame shape (H, W, 3), got {first_frame.shape}')
 
         if first_frame.dtype != np.uint8:
             raise ValueError(f'Expected uint8 dtype, got {first_frame.dtype}')
 
-        self._height, self._width = first_frame.shape[:2]
-
-        self._container = av.open(str(self.video_path), mode='w')
-        self._stream = self._container.add_stream(self.codec, rate=self.fps, options=self.codec_options)
-        self._stream.width = self._width
-        self._stream.height = self._height
-        self._stream.pix_fmt = 'yuv420p'
-        self._stream.gop_size = self.gop_size
+        height, width = first_frame.shape[:2]
+        self._height, self._width = height, width
+        self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
     def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
         """Append a video frame with timestamp.
@@ -103,8 +173,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
-        if self._container is None:
-            self._init_video_encoder(data)
+        if self._session is None:
+            self._open_encoder(data)
         else:
             if data.shape[:2] != (self._height, self._width):
                 raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
@@ -145,18 +215,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._last_ts = ts_ns
 
     def _encode_loop(self) -> None:
-        stream, container = self._stream, self._container
-        assert stream is not None and container is not None  # the thread starts only after encoder init
+        session = self._session
+        assert session is not None  # the thread starts only after the encoder opens
         try:
             while True:
                 item = self._frames.get()
                 if item is None:
                     return
-                data, pts = item
-                frame = av.VideoFrame.from_ndarray(data, format='rgb24')
-                frame.pts = pts
-                for packet in stream.encode(frame):  # Every frame may produce 0, 1, or more packets
-                    container.mux(packet)
+                data, index = item
+                session.write(data, index)
         except Exception as e:
             self._encoder_error = e
             # Keep draining so a blocked ``append`` unblocks; the error surfaces on the caller thread.
@@ -176,13 +243,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._finished = True
 
         self._stop_encoder()
-        if self._encoder_error is not None:
-            raise RuntimeError('Video encoding failed') from self._encoder_error
-
-        if self._container is not None:
-            for packet in self._stream.encode():  # Flush remaining frames
-                self._container.mux(packet)
-            self._container.close()
+        if self._session is not None:
+            if self._encoder_error is not None:
+                self._session.abort()
+                raise RuntimeError('Video encoding failed') from self._encoder_error
+            try:
+                self._session.finish()
+            except Exception as e:
+                self._session.abort()
+                raise RuntimeError('Video encoding failed') from e
 
         # Write frame index with primary timestamp and extra timelines
         data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
@@ -210,9 +279,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             raise RuntimeError('Cannot abort a finished writer')
 
         self._stop_encoder()
-        if self._container is not None:
-            self._container.close()
-        self._container = None
+        if self._session is not None:
+            self._session.abort()
+        self._session = None
 
         for p in [self.video_path, self.frames_index_path]:
             if p.exists():

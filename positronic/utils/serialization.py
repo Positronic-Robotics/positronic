@@ -32,10 +32,10 @@ _NDIM = b'ndim'
 # JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
 # MB raw, over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
 # 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
-_JPEG_QUALITY = 90
+DEFAULT_JPEG_QUALITY = 90
 
 
-def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
+def encode_jpeg(image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY) -> dict[bytes, Any]:
     """JPEG-encode a single ``(H, W, 3)`` image or a ``(T, H, W, 3)`` stack to a compact wire marker.
 
     Sends one JPEG per frame plus the original ``ndim`` so ``unpack`` restores the exact shape.
@@ -44,7 +44,7 @@ def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
     bufs = []
     for frame in frames:
         buf = io.BytesIO()
-        PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=_JPEG_QUALITY)
+        PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=quality)
         bufs.append(buf.getvalue())
     return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
 

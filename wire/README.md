@@ -8,7 +8,7 @@ installable on its own, with `grpcio` and `websockets` as its only dependencies.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.6.0"
+uv add "positronic-wire==0.10.0"
 uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -36,10 +36,10 @@ serves it, and this package holds the client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `MODELS_ROUTE`, `MODELS_PATH`) and `session_path(model)`, `MODELS_KEY`, the key the model catalogue answers under, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
-| `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the call both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
-| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The wire sends no headers, because another party runs its server |
+| `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
@@ -58,13 +58,6 @@ leaves out on the members that carry one.
   members write `host:port`, and `roboarena` writes the root it dials. What a wire dials is its own:
   `websocket`, `websocket_tls` and `roboarena` dial this spelling, and the others dial a socket or a
   target instead.
-- `list_models(address, headers, open_timeout)` — the models the server serves, read on the
-  transport that carries this wire's sessions: over HTTP for the network members, and over the
-  socket itself for `websocket_unix`. It carries the same `headers` as `dial`, so an edge that
-  authenticates on them lets the read through, and refuses in `dial`'s own vocabulary. The gRPC
-  members raise `ValueError`: their port carries sessions alone. A server that answers the catalogue
-  serves an HTTP-capable wire beside the gRPC one. `roboarena` raises too, because a partner's
-  endpoint is the one model it serves. No caller builds a URL or a transport.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
@@ -76,13 +69,19 @@ leaves out on the members that carry one.
   a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
-  frame the server announces itself with. The protocol carries no other readiness.
+  frame the server announces itself with.
+- `keepalive(address, headers, timeout)` — resets the server's idle timer outside a session, and
+  returns the seconds the server stays alive after the call, or `None` for a server with no idle
+  timeout. `timeout` bounds the whole call. The websocket members send `POST` to `KEEPALIVE_PATH`, and
+  the gRPC members call `KEEPALIVE_METHOD_PATH`. `keepalive` raises
+  `KeepaliveUnsupported` where the server does not serve the call, and `ConnectRefused` where the
+  server answers nothing. `roboarena` always raises `KeepaliveUnsupported`.
 
 `registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
 
 **Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
 type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
-`HostPortAddress` — `host`, `port`, `path` (`session_path(model)`), `query`, as written.
+`HostPortAddress` — `host`, `port`, `path` (`SESSION_PATH`), `query`, as written.
 `websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
 `RoboarenaAddress` — `host` and `port`. A record that names an endpoint carries the wire's name and
 that wire's fields, never a URL, and no address carries a field a wire ignores.
@@ -134,7 +133,7 @@ matching library exception names over the raised type's bases has to list `grpc.
 `websockets.*` and `httpx.*`; `dial` raises one `ConnectRefused` for all of them, so `isinstance`
 answers.
 
-A copied fact disappears too. The gRPC probe path, the session route and the models route are each
+A copied fact disappears too. The gRPC probe path, the session route and the keepalive route are each
 one symbol here, and the set of wires is `registry.CLIENT_WIRES`. A literal spelled a second time
 in another repository drifts the day either side edits it, and nothing reports the drift; an
 imported symbol cannot.

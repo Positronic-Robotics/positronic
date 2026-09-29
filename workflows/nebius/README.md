@@ -264,23 +264,23 @@ Or against your own trained checkpoint:
 
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Use the vendor's source option to select the matching checkpoint (`model_source` for GR00T,
-`checkpoints_dir` for LeRobot and OpenPI):
+Use the vendor's model option to select the matching checkpoint (`--model.model_source` for GR00T,
+`--model.checkpoints_dir` for LeRobot and OpenPI):
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
 # --pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`
 bash workflows/nebius/serve.sh openpi my-openpi ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+  --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
   --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
-  --pipeline.source.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+  --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
@@ -292,8 +292,8 @@ server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_T
 in [Authenticated inference](#authenticated-inference)):
 
 ```bash
-curl -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/models
-# → {"models": ["050000"]}
+curl -X POST -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/keepalive
+# → {"alive_seconds": 1200}
 ```
 
 Run inference from your laptop or robot host with `positronic eval run`
@@ -329,7 +329,7 @@ than `port8000`). Nebius offers no custom domain or uploaded certificate on eith
 
 ## Authenticated inference
 
-The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on both session
+The server validates `Authorization: Bearer <token>` on `/api/v1/keepalive` and on both session
 wires — the WebSocket upgrade and the gRPC stream — rejecting before the session opens. A client
 of the printed gRPC host, on the `grpc_tls` wire, sends the same token, which `.authed_remote` carries as gRPC
 metadata. `serve.sh` injects the token from the

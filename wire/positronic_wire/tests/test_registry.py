@@ -48,20 +48,6 @@ def test_a_name_no_wire_carries_is_refused_naming_every_wire():
         registry.client_wire('ws')
 
 
-@pytest.mark.parametrize(
-    ('model', 'path'),
-    [
-        ('', wire.SESSION_PATH),
-        ('10000', '/api/v1/session/10000'),
-        ('GEAR-Dreams/DreamZero-DROID', '/api/v1/session/GEAR-Dreams/DreamZero-DROID'),
-        ('s3://bucket/ckpt#1', '/api/v1/session/s3%3A//bucket/ckpt%231'),
-        ('checkpoint-500/', '/api/v1/session/checkpoint-500/'),
-    ],
-)
-def test_the_session_path_keeps_a_models_slashes_and_encodes_the_rest(model, path):
-    assert wire.session_path(model) == path
-
-
 def test_the_readme_package_table_lists_every_public_name():
     readme = (Path(__file__).parents[2] / 'README.md').read_text()
     rows = dict(re.findall(r'^\| `positronic_wire\.(\w+)` \| (.*) \|$', readme, re.MULTILINE))

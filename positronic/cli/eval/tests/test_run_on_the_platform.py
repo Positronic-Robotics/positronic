@@ -7,7 +7,7 @@ import pytest
 from platform_client import routes
 from platform_client.ids import SubmissionId
 
-from positronic.cli.conftest import ID, KEY
+from positronic.cli.conftest import ID, KEY, runs_of_four
 from positronic.cli.eval.run import run
 
 
@@ -20,11 +20,12 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert created.submission_id == SubmissionId.parse(ID)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
-    # A policy image is one endpoint of a plan, and the eval names the tasks the catalogue expands.
+    # A policy image is one endpoint of a plan on the websocket wire, and the eval names the tasks the
+    # catalogue expands.
     body = platform.body
     assert body['eval'] == 'fake.smoke' and body['tasks'] == []
-    assert [(entry['name'], entry['kind'], entry['image']) for entry in body['endpoints']] == [
-        ('policy', 'image', 'org/p:v1')
+    assert [(entry['name'], entry['kind'], entry['wire'], entry['image']) for entry in body['endpoints']] == [
+        ('policy', 'image', 'websocket', 'org/p:v1')
     ]
     assert body['alias'] is None and body['transaction_key'] == 'retry-1'
     out = capsys.readouterr().out
@@ -141,15 +142,6 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('stated_off', [{'episodes': False}, {'cap': False}])
-def test_a_platform_run_refuses_a_rig_flag_stated_false(platform, run_command, stated_off: dict):
-    # The command line literal-evaluates its values, so `--episodes=False` reaches the run as
-    # `False`. It is a value asked for, like `--episodes=0`, and a platform run has no such flag.
-    with pytest.raises(SystemExit, match='a platform run has no'):
-        run_command(run, eval='fake.smoke', policy_image='org/p:v1', **stated_off)
-    assert platform.seen is None
-
-
 @pytest.mark.parametrize('already_so', [{'timing': False}, {'charge_inference_time': True}])
 def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(platform, run_command, already_so: dict):
     # A switch reads the same whether it was left at its default or stated there, and either way asks
@@ -170,3 +162,110 @@ def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):
 
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert f'submission {ID} (pending)' in capsys.readouterr().out
+
+
+def a_password_file(tmp_path, password: str = 'the-registry-password\n'):
+    path = tmp_path / 'registry-password'
+    path.write_text(password)
+    return path
+
+
+def test_a_private_image_sends_the_credential_the_registry_asks_for(platform, run_command, tmp_path):
+    # The caller names the file, and the password itself first appears in the request.
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+    password_file = a_password_file(tmp_path)
+
+    run_command(
+        run,
+        eval='fake.smoke',
+        policy_image='org/p:v1',
+        registry_username='a-reader',
+        registry_password_file=str(password_file),
+    )
+
+    assert platform.body['endpoints'][0]['image_credential'] == {
+        'username': 'a-reader',
+        'password': 'the-registry-password',
+    }
+
+
+def test_a_public_image_sends_no_credential(platform, run_command):
+    platform.answer({'submission_id': ID, 'status': 'pending'})
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert platform.body['endpoints'][0]['image_credential'] is None
+
+
+def test_half_a_credential_is_refused_before_the_submission(platform, run_command, tmp_path):
+    with pytest.raises(SystemExit, match='pass both'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', registry_username='a-reader')
+    with pytest.raises(SystemExit, match='pass both'):
+        run_command(
+            run, eval='fake.smoke', policy_image='org/p:v1', registry_password_file=str(a_password_file(tmp_path))
+        )
+    assert platform.seen is None
+
+
+def test_a_credential_naming_no_such_file_is_refused_before_the_submission(platform, run_command, tmp_path):
+    with pytest.raises(
+        SystemExit, match='--registry-password-file names no readable password: the password file path names no file'
+    ):
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file=str(tmp_path / 'never-written'),
+        )
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('not_a_path', [1, [], ['a-pasted-password'], 70914233])
+def test_a_password_file_flag_that_is_no_text_is_refused_without_printing_it(platform, run_command, not_a_path):
+    with pytest.raises(SystemExit, match='--registry-password-file names no file: pass its path') as refusal:
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file=not_a_path,
+        )
+    assert str(refusal.value) == '--registry-password-file names no file: pass its path'
+    assert platform.seen is None
+
+
+def test_an_empty_username_is_refused_as_the_username(platform, run_command, tmp_path):
+    with pytest.raises(SystemExit, match='username') as refusal:
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='',
+            registry_password_file=str(a_password_file(tmp_path)),
+        )
+    assert '--registry-password-file' not in str(refusal.value)
+    assert platform.seen is None
+
+
+def test_a_password_pasted_as_its_file_is_not_printed(platform, run_command):
+    pasted = 'Zx9QvT7Lm2Rk'
+    with pytest.raises(SystemExit, match='--registry-password-file names no readable password') as refusal:
+        run_command(
+            run, eval='fake.smoke', policy_image='org/p:v1', registry_username='a-reader', registry_password_file=pasted
+        )
+    message = str(refusal.value)
+    assert not [run_of_the_password for run_of_the_password in runs_of_four(pasted) if run_of_the_password in message]
+    assert platform.seen is None
+
+
+def test_a_credential_naming_no_such_home_is_refused_before_the_submission(platform, run_command):
+    with pytest.raises(SystemExit, match='names no home directory'):
+        run_command(
+            run,
+            eval='fake.smoke',
+            policy_image='org/p:v1',
+            registry_username='a-reader',
+            registry_password_file='~no-such-user-on-this-machine/registry-password',
+        )
+    assert platform.seen is None

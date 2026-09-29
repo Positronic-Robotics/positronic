@@ -3,6 +3,7 @@
 import dataclasses
 import socket
 import ssl
+import threading
 from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from positronic_wire import websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidStatus
 from websockets.http11 import Response
+from websockets.sync.server import serve
 
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
@@ -70,6 +72,29 @@ def test_a_dial_carries_the_headers_on_the_handshake():
     with patch('positronic_wire.websocket.connect') as connect:
         websocket.WebsocketClientWire().dial(_ADDRESS, {'Modal-Key': 'k'}, 3.0)
     assert connect.call_args.kwargs['additional_headers'] == {'Modal-Key': 'k'}
+
+
+def test_a_dial_negotiates_no_deflate_with_a_server_that_offers_it():
+    """A stock websockets server offers permessage-deflate, and the session still opens uncompressed."""
+    negotiated = []
+
+    def echo(connection):
+        negotiated.append(connection.protocol.extensions)
+        connection.send(connection.recv())
+
+    with serve(echo, '127.0.0.1', 0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.socket.getsockname()[1]
+        connection = websocket.WebsocketClientWire().dial(
+            dataclasses.replace(_ADDRESS, host='127.0.0.1', port=port), None, 5.0
+        )
+        try:
+            connection.send(b'frame')
+            assert connection.recv(timeout=5.0) == b'frame'
+        finally:
+            connection.close()
+        server.shutdown()
+    assert negotiated == [[]]
 
 
 def test_a_probe_asks_the_host_root_with_the_headers():
@@ -137,8 +162,8 @@ def test_the_tls_member_dials_wss_and_probes_it():
         ),
         (
             websocket.WebsocketClientWire(),
-            dataclasses.replace(_ADDRESS, path=wire.session_path('10000'), query='codec.fps=10&pad=false'),
-            'ws://localhost:8000/api/v1/session/10000?codec.fps=10&pad=false',
+            dataclasses.replace(_ADDRESS, query='codec.fps=10&pad=false'),
+            'ws://localhost:8000/api/v1/session?codec.fps=10&pad=false',
         ),
     ],
 )
@@ -148,11 +173,11 @@ def test_the_member_spells_the_session_and_leaves_out_its_default_port(client_wi
 
 def test_the_socket_wire_names_the_socket_it_dials_and_claims_no_authority():
     """A socket names no host and no port, so the log names the socket and the handshake a stand-in."""
-    address = wire.UnixSocketAddress(Path('/run/policy.sock'), wire.session_path('10000'), 'fps=10')
+    address = wire.UnixSocketAddress(Path('/run/policy.sock'), wire.SESSION_PATH, 'fps=10')
     unix = websocket.WebsocketUnixClientWire()
 
-    assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session/10000?fps=10'
-    assert unix.handshake_url(address) == 'ws://localhost/api/v1/session/10000?fps=10'
+    assert unix.session_url(address) == 'ws+unix:///run/policy.sock/api/v1/session?fps=10'
+    assert unix.handshake_url(address) == 'ws://localhost/api/v1/session?fps=10'
 
 
 def test_each_member_declares_the_address_it_dials():
@@ -179,7 +204,7 @@ def test_each_member_declares_the_address_it_dials():
 def test_a_socket_dial_that_did_not_open_says_whether_a_retry_can_reach_it(raised, refusal, tmp_path):
     """A connection-level failure reached the socket, so it reads as it does on a port. An absent path
     is cold because a misspelt one and a socket nobody has bound yet look the same from here."""
-    address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.session_path(), '')
+    address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.SESSION_PATH, '')
 
     with (
         patch('positronic_wire.websocket.unix_connect', side_effect=raised),
@@ -195,7 +220,7 @@ def test_a_refusal_from_a_path_that_is_not_a_socket_is_final(tmp_path):
     the refusal reads the path: only one of the two can ever come good."""
     not_a_socket = tmp_path / 'regular.file'
     not_a_socket.write_text('not a socket')
-    address = wire.UnixSocketAddress(not_a_socket, wire.session_path(), '')
+    address = wire.UnixSocketAddress(not_a_socket, wire.SESSION_PATH, '')
 
     with (
         patch('positronic_wire.websocket.unix_connect', side_effect=ConnectionRefusedError(111, 'Connection refused')),
@@ -208,4 +233,4 @@ def test_a_refusal_from_a_path_that_is_not_a_socket_is_final(tmp_path):
 def test_a_socket_address_refuses_a_relative_path():
     """`--policy.address.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
     with pytest.raises(ValueError, match='relative socket path'):
-        wire.UnixSocketAddress(Path('policy.sock'), wire.session_path(), '')
+        wire.UnixSocketAddress(Path('policy.sock'), wire.SESSION_PATH, '')

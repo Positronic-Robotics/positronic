@@ -87,7 +87,7 @@ class FakeClient(RoboarenaClient):
 
     def infer(self, observation):
         self.sent.append(observation)
-        return {roboarena_policy.ACTIONS_FIELD: self.chunk}
+        return {roboarena_policy.ACTIONS_FIELDS[0]: self.chunk}
 
 
 class Clock:
@@ -291,13 +291,23 @@ class TestOneInference:
 
 
 class TestTheWire:
-    def test_the_chunk_is_read_out_of_the_reply_s_own_field(self):
+    # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
+    @pytest.mark.parametrize('field', ['actions', 'action'])
+    def test_the_chunk_is_read_out_of_the_reply_s_own_field(self, field):
         chunk = np.zeros((32, 8), dtype=np.float32)
-        websocket = websocket_answering(serialize(ANNOUNCED), serialize({roboarena_policy.ACTIONS_FIELD: chunk}))
+        websocket = websocket_answering(serialize(ANNOUNCED), serialize({field: chunk}))
         client = RoboarenaClient(ADDRESS.host, ADDRESS.port)
         with patch('positronic_wire.roboarena.connect', return_value=websocket):
             client.connect()
             assert len(endpoint_over(client)(encoded())) == 32
+
+    def test_a_reply_with_no_chunk_names_the_keys_it_carried(self):
+        websocket = websocket_answering(serialize(ANNOUNCED), serialize({'status': 'ok'}))
+        client = RoboarenaClient(ADDRESS.host, ADDRESS.port)
+        with patch('positronic_wire.roboarena.connect', return_value=websocket):
+            client.connect()
+            with pytest.raises(ValueError, match="answered \\['status'\\] and no action chunk"):
+                endpoint_over(client)(encoded())
 
     def test_a_server_error_names_the_endpoint_and_the_server_s_own_words(self):
         websocket = websocket_answering(serialize(ANNOUNCED), 'CUDA out of memory')
@@ -324,6 +334,18 @@ class TestTheWire:
 
         for socket in sockets:
             socket.close.assert_called_once()
+
+    def test_each_episode_s_handshake_carries_the_policy_s_headers(self):
+        headers = {'Authorization': 'Bearer run-token'}
+        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
+
+        with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
+            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            run = runtime.start(policy)
+            runtime.close()
+            run.close()
+
+        assert dial.call_args.kwargs['additional_headers'] == headers
 
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""

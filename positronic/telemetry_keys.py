@@ -51,6 +51,16 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
+# One harness step and its durations in milliseconds. docs/telemetry.md defines each value.
+SPAN_HARNESS_STEP = 'harness.step'
+ATTR_STEP_LATE_MS = 'step.late_ms'
+ATTR_STEP_OBSERVE_MS = 'step.observe_ms'
+ATTR_STEP_POLICY_MS = 'step.policy_ms'
+ATTR_STEP_EMIT_MS = 'step.emit_ms'
+# The signal's name follows each prefix.
+ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
+ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
+
 # One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
 # came due and went out on no round.
 ATTR_WAYPOINTS_SCHEDULED = 'episode.waypoints.scheduled'

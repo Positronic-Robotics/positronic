@@ -9,15 +9,14 @@ from __future__ import annotations
 
 from platform_client.boards import BoardRef
 from platform_client.ids import SubmissionId
-from pydantic import BaseModel, ConfigDict, Field
-
-_FORBID_EXTRA = ConfigDict(extra='forbid')
+from platform_client.model_config import INPUT_MODEL_CONFIG
+from pydantic import BaseModel, Field
 
 
 class RegisterRequest(BaseModel):
     """`users.register` — create-or-return, keyed on the external identity behind `credential`."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     credential: str
     alias: str | None = None
@@ -27,7 +26,7 @@ class RegisterRequest(BaseModel):
 class CancelRequest(BaseModel):
     """`submissions.cancel`."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     id: SubmissionId
 
@@ -35,7 +34,7 @@ class CancelRequest(BaseModel):
 class SubmissionGetQuery(BaseModel):
     """`submissions.get` — the id travels in the query string, in its hex wire form."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     id: SubmissionId
 
@@ -48,7 +47,7 @@ class SubmissionArtifactsQuery(BaseModel):
     A `limit` above the gateway's cap is clamped to it.
     """
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     id: SubmissionId
     prefix: str | None = None
@@ -59,7 +58,7 @@ class SubmissionArtifactsQuery(BaseModel):
 class RankingsQuery(BaseModel):
     """`rankings.get` — one board by slug."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     board: BoardRef
 
@@ -67,7 +66,7 @@ class RankingsQuery(BaseModel):
 class SubmissionListQuery(BaseModel):
     """`submissions.list` — the page after the last id seen. A `limit` above the gateway's cap is clamped to it."""
 
-    model_config = _FORBID_EXTRA
+    model_config = INPUT_MODEL_CONFIG
 
     after: SubmissionId | None = None
     limit: int | None = Field(default=None, gt=0)

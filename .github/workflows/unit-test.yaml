@@ -36,6 +36,38 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest
 
+  gstreamer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The GStreamer tests skip on a host without the software chain; this step fails instead.
+      - name: Check the software H.264 chain
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run python -c 'from positronic.dataset.tests.test_gst_video import SOFTWARE_H264; SOFTWARE_H264.ensure_available()'
+
+      - name: Run GStreamer encoder tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/dataset/tests/test_gst_video.py
+
   packaging:
     runs-on: ubuntu-latest
     strategy:
@@ -91,6 +123,40 @@ jobs:
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/lerobot/tests
+
+  llm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        extra: [llm, llm-openai]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.11
+      - run: uv sync --locked --extra ${{ matrix.extra }}
+      - run: uv run --no-sync pytest positronic/vendors/llm/tests
+
+  openpi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra openpi
+
+      - name: Run openpi vendor tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/vendors/openpi/tests
 
   lockfile-portability:
     strategy:

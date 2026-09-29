@@ -6,6 +6,7 @@ import os
 import socket
 import ssl
 import stat
+import time
 from collections.abc import Mapping
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
@@ -72,6 +73,14 @@ def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Re
     return wire.Refusal.COLD
 
 
+def _seconds_until(deadline: float) -> float:
+    """Raises ``TimeoutError`` once ``deadline`` has passed, as a socket that timed out does."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('the call spent its timeout')
+    return left
+
+
 class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     """What every websocket member shares: one session per connection, and how a refused one reads."""
 
@@ -90,24 +99,39 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     def _api_connection(self, address: wire.AddressT, open_timeout: float) -> HTTPConnection:
         """An unopened connection to the server's HTTP API, however this wire reaches it."""
 
-    def list_models(self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> list[str]:
-        """The catalogue, read on the transport that carries this wire's sessions."""
-        where = self.session_url(address)
-        connection = self._api_connection(address, open_timeout)
+    def keepalive(self, address: wire.AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """``POST`` to ``wire.KEEPALIVE_PATH`` on the HTTP API beside the session route.
+
+        ``timeout`` bounds the whole call: the request and the answer each get what the connect left.
+        """
+        deadline = time.monotonic() + timeout
+        where = f'{wire.KEEPALIVE_PATH} on {self.session_url(address)}'
+        connection = self._api_connection(address, timeout)
         try:
-            connection.request('GET', wire.MODELS_PATH, headers=dict(headers or {}))
+            connection.connect()
+            connection.sock.settimeout(_seconds_until(deadline))
+            connection.request('POST', wire.KEEPALIVE_PATH, headers=dict(headers or {}))
+            connection.sock.settimeout(_seconds_until(deadline))
             answer = connection.getresponse()
             status, body = answer.status, answer.read()
         except HTTPException as e:
             # The connection opened and the exchange did not finish: a backend that is not ready.
-            raise wire.ConnectRefused(wire.Refusal.COLD, f'{e} (listing the models on {where})') from e
+            raise wire.ConnectRefused(wire.Refusal.COLD, f'{e} (calling {where})') from e
         except OSError as e:
-            raise wire.ConnectRefused(self._refusal(e, address), f'{e} (listing the models on {where})') from e
+            raise wire.ConnectRefused(self._refusal(e, address), f'{e} (calling {where})') from e
         finally:
             connection.close()
+        if status == HTTPStatus.NOT_FOUND:
+            # A server without the call answers 404, and so does an address that serves something else.
+            refusal = self.probe(address, headers, max(0.0, deadline - time.monotonic()))
+            if refusal is None:
+                raise wire.KeepaliveUnsupported(f'{where} answers 404; this server serves sessions but not keepalive')
+            raise wire.ConnectRefused(refusal, f'{where} answers 404, and no session server answers there')
         if status != HTTPStatus.OK:
-            raise wire.ConnectRefused(_status_refusal(status), f'the catalogue on {where} answered {status}')
-        return json.loads(body)[wire.MODELS_KEY]
+            # An HTTP route refuses a credential with 401, where the upgrade beside it refuses with 403.
+            refusal = wire.Refusal.FORBIDDEN if status == HTTPStatus.UNAUTHORIZED else _status_refusal(status)
+            raise wire.ConnectRefused(refusal, f'{where} answers {status}')
+        return json.loads(body)[wire.ALIVE_SECONDS]
 
     def dial(
         self, address: wire.AddressT, headers: Mapping[str, str] | None, open_timeout: float
@@ -123,6 +147,8 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
                 additional_headers=headers,
                 ping_interval=20.0,
                 max_size=wire.MAX_MESSAGE_BYTES,
+                # Deflate costs ~100 ms of sender CPU on three raw 640x400 frames; compress_images makes them small.
+                compression=None,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             raise wire.ConnectRefused(self._refusal(e, address), f'{e} (connecting to {url})') from e
@@ -230,7 +256,7 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
         return f'{self.SCHEME}+unix://{address.uds}{address.path}{query}'
 
     def _api_connection(self, address: wire.UnixSocketAddress, open_timeout: float) -> HTTPConnection:
-        """The catalogue answers on the session's own socket, beside the sessions."""
+        """The HTTP API answers on the session's own socket, beside the sessions."""
         return _UnixHTTPConnection(address.uds, self.STANDS_FOR_THE_SERVER, timeout=open_timeout)
 
     @staticmethod

@@ -4,6 +4,7 @@ from typing import Any
 
 import pimm
 from positronic.dataset.serializers import Serializer
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
@@ -60,6 +61,8 @@ class Embodiment:
     meta_source: pimm.ControlSystemEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
+    # How the recorder encodes the camera signals
+    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER
 
 
 @dataclass

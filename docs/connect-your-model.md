@@ -17,8 +17,8 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server demo
 Check it is ready:
 
 ```bash
-curl http://localhost:8000/api/v1/models
-# {"models": ["050000"]}
+curl -X POST http://localhost:8000/api/v1/keepalive
+# {"alive_seconds": null}
 ```
 
 In a separate terminal, run inference inside the simulation:
@@ -88,8 +88,8 @@ A `Codec` converts observations and actions, and prepares the same features for
 training. `Sequential` combines codecs and processors such as `ChunkedSchedule`.
 The [Codecs Guide](codecs.md) lists the available conversions.
 
-A server loads callable `Model` objects through a `ModelSource`. A `PolicyDeployment`
-packages that source with the client processor stack and an optional server codec.
+A server builds one callable `Model` at launch. A `PolicyDeployment` holds the client
+processor stack and an optional server codec, which a session may retune.
 `RemotePolicy` opens a session and builds the declared stack around the remote call.
 
 ## The wire format
@@ -164,14 +164,16 @@ To connect a custom model you implement this protocol. The full low-level spec â
 
 ### Models and deployments
 
-Implement `Model` and `ModelSource`, then pass a deployment to `PolicyServer`:
+Implement `Model`, then pass a function that builds it and a deployment to `PolicyServer`:
 
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import PolicyServer
+from positronic.offboard.server_utils import warmup
 from positronic.offboard.server_wire import ServedHostPort
-from positronic.offboard.spec import Model, ModelSource, PolicyDeployment
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
@@ -189,22 +191,18 @@ class MyModel(Model):
         ]
 
     def meta(self):
-        return {'type': 'my_model'}
+        return {'type': 'my_model', offboard_keys.CHECKPOINT_ID: 'default'}
 
 
-class MySource(ModelSource):
-    def get_models(self):
-        return ['default']
+def build_my_model():
+    # Supply your checkpoint loader, and an observation your model accepts.
+    model = MyModel(load_my_weights())
+    warmup(model, my_warm_observation())
+    return model
 
-    def load(self, model_id, on_progress=None):
-        return MyModel(load_my_weights())  # supply your checkpoint loader
 
-
-deployment = PolicyDeployment(
-    source=MySource(),
-    local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)),
-)
-server = PolicyServer(deployment)
+deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
+server = PolicyServer(build_my_model, deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```
 
@@ -213,11 +211,18 @@ cadence and the execution horizon. Add a server codec with `codec=your_codec` if
 the model takes encoded inputs and returns model-native outputs. Client codecs
 belong in `local`, where they can mix with processors. For example,
 `RestrictImageSize(224, 224)` before the remote call limits upload volume.
-`compress_images=True` on the deployment enables JPEG transport compression.
+The client JPEG-encodes each frame before it sends it. Set `compress_images=False` on the
+deployment to receive raw frames.
+The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
-The server calls `load` off the event loop and forwards progress messages during
-slow downloads or subprocess startup. The loaded model owns those resources and
-releases them in `close()`. See the OpenPI and GR00T adapters for examples.
+The server builds the model once, off the event loop, before any wire binds. A
+slow download or subprocess startup writes its progress to the server log. The
+model owns those resources and releases them in `close()`. See the OpenPI and
+GR00T adapters for examples.
+
+The builder must warm the model before it returns: `warmup` runs one inference, so
+the first-call cost of a backend is paid before the server serves. A client reads
+any keepalive answer as ready, and a cold model makes its first inference slow.
 
 The server supplies `session_id` on every call. A stateless model may ignore it;
 a stateful model must keep episodes separate or reject another active owner.
@@ -246,8 +251,21 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle this and the
-robot commands:
+An image frame travels as JPEG unless the deployment sets `compress_images=False`. One envelope
+carries one `(H, W, 3)` frame or a `(T, H, W, 3)` stack:
+
+```python
+# uint8 image or image stack -> msgpack
+{
+    b"__jpeg__": True,
+    b"frames": [jpeg_bytes, ...],  # one JPEG per frame
+    b"ndim": 3,                    # 3 for one frame, 4 for a stack
+}
+```
+
+`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle both
+envelopes and the robot commands. `deserialise()` decodes each JPEG frame back to a uint8 array. A
+server that does not use it decodes the frames itself, or sets `compress_images=False`.
 
 The session handshake and inference envelopes are defined in the
 [Offboard Protocol](../positronic/offboard/README.md). Use `PolicyServer` to handle

@@ -1,8 +1,12 @@
+import asyncio
 from types import MappingProxyType
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
+from fastapi import WebSocket
 from positronic_wire import websocket, wire
+from starlette.websockets import WebSocketState
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -14,6 +18,7 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
 from positronic.utils.serialization import encode_jpeg
@@ -52,42 +57,28 @@ def test_connections_reuse_the_loaded_model(inference_server, mock_model):
     mock_model.close.assert_not_called()
 
 
-def test_session_url_selects_the_model(multi_model_server):
-    host, port, policies = multi_model_server
+def _server_connection(state: WebSocketState) -> websocket_wire.WebsocketServerConnection:
+    scope = {'type': 'websocket', 'path': wire.SESSION_PATH, 'headers': [], 'client': ('10.0.0.1', 4321)}
+    socket = WebSocket(scope, receive=AsyncMock(), send=AsyncMock())
+    socket.application_state = state
+    return websocket_wire.WebsocketServerConnection(socket, server_wire.ServedHostPort('localhost', 8000))
 
-    default_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
-    ).new_session()
-    try:
-        assert default_session.metadata['model_name'] == 'alpha'
-        action = default_session.infer({'obs': 'default'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        default_session.close()
 
-    alpha_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('alpha'), '')
-    ).new_session()
-    try:
-        assert alpha_session.metadata['model_name'] == 'alpha'
-        action = alpha_session.infer({'obs': 'alpha'})
-        assert action['action_data'] == ['alpha']
-    finally:
-        alpha_session.close()
+def test_a_send_after_the_session_closed_says_the_peer_is_gone():
+    conn = _server_connection(WebSocketState.DISCONNECTED)
 
-    beta_session = InferenceClient(
-        websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.session_path('beta'), '')
-    ).new_session()
-    try:
-        assert beta_session.metadata['model_name'] == 'beta'
-        action = beta_session.infer({'obs': 'beta'})
-        assert action['action_data'] == ['beta']
-    finally:
-        beta_session.close()
+    with pytest.raises(wire.PeerDisconnected):
+        asyncio.run(conn.send(b'a frame nobody is there to read'))
 
-    policies['alpha'].assert_any_call({'obs': 'alpha'}, session_id=alpha_session.session_id)
-    policies['beta'].assert_any_call({'obs': 'beta'}, session_id=beta_session.session_id)
-    policies['alpha'].assert_any_call({'obs': 'default'}, session_id=default_session.session_id)
+
+def test_a_send_on_a_live_session_goes_out():
+    conn = _server_connection(WebSocketState.CONNECTED)
+    sent = AsyncMock()
+    conn._websocket.send_bytes = sent
+
+    asyncio.run(conn.send(b'a frame'))
+
+    sent.assert_awaited_once_with(b'a frame')
 
 
 def test_wire_serialisation_accepts_mappingproxy():
@@ -115,6 +106,12 @@ def test_jpeg_round_trips_single_image_and_stack():
     assert restored_stack.shape == (3, 16, 24, 3)
     # q90 JPEG on solid colors is near-lossless; this also verifies per-frame order is preserved.
     np.testing.assert_allclose(restored_stack, stack, atol=4)
+
+
+def test_a_lower_jpeg_quality_gives_smaller_frames():
+    image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    low, high = (len(serialise({keys.WRIST_IMAGE: encode_jpeg(image, quality)})) for quality in (30, 90))
+    assert low < high
 
 
 class TestCommandEnvelope:

@@ -73,8 +73,9 @@ def _recorder(
 ) -> DsWriterAgent:
     """An embodiment's observations, command chunks and privileged ground-truth, recorded into the dataset
     each episode names."""
+    embodiment.video_encoder.ensure_available()
     ds_agent = DsWriterAgent(
-        LocalDatasetWriter,
+        functools.partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder),
         time_mode=time_mode,
         virtual_time=embodiment.simulated,
         telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),

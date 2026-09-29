@@ -13,6 +13,7 @@ from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
@@ -98,6 +99,29 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         run.close()
 
 
+def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, monkeypatch):
+    runtime, clock = execution
+    requests = []
+    monkeypatch.setattr(runtime, 'submit', lambda function, obs: requests.append(obs) or _UnchargedAnswer(Future()))
+    stacks = []
+    stack = np.stack
+    monkeypatch.setattr(np, 'stack', lambda arrays: stacks.append(1) or stack(arrays))
+    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.1, 0.0)), ChunkedSchedule(fps=10)), Mock())
+    try:
+        obs = {}  # One dict for every tick, changed in place, so the request must not read it late.
+        for tick in range(4):
+            clock.advance_to_ns(tick * 5_000_000)
+            obs.update({POSITION: np.array([tick]), keys.TASK: f'tick {tick}'})
+            run.send(obs)
+        assert len(requests) == 1 and stacks == []
+        # Tick 0 sampled this window. Later ticks appended to the buffer and did not change it.
+        np.testing.assert_array_equal(requests[0][POSITION][:, 0], [0, 0])
+        assert len(stacks) == 1
+        assert dict(requests[0]).keys() == {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
+    finally:
+        run.close()
+
+
 @pytest.fixture
 def execution(monkeypatch):
     with pimm.World(virtual_time=True) as world:
@@ -168,6 +192,70 @@ def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     clock.advance_to_ns(225_000_000)
     assert run.send({}) == Step({POSITION: 2, MOTOR: 3}, 300_000_000)
     run.close()
+    assert runtime.metadata[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 1
+
+
+def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 100_000_000, 350_000_000, 400_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    assert emitted == [0, 1, 3, 4]
+    prefix = eval_keys.SCHEDULE
+    assert runtime.metadata == {
+        f'{prefix}.{eval_keys.SCHEDULED}': 5,
+        f'{prefix}.{eval_keys.EMITTED}': 4,
+        f'{prefix}.{eval_keys.DROPPED}': 1,
+        f'{prefix}.{eval_keys.LATE_P50_MS}': 0.0,
+        f'{prefix}.{eval_keys.LATE_P90_MS}': pytest.approx(35.0),
+        f'{prefix}.{eval_keys.LATE_MAX_MS}': 50.0,
+        f'{prefix}.{eval_keys.GAP_MAX_MS}': 250.0,
+    }
+    run.close()
+
+
+def test_a_schedule_without_stats_writes_no_metadata(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: [{MOTOR: i} for i in range(5)])
+    for now in (0, 100_000_000, 350_000_000):
+        clock.advance_to_ns(now)
+        run.send({})
+    run.close()
+    assert runtime.metadata == {}
+
+
+def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 600_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    run.close()
+    assert emitted == [0, 0]
+    prefix = eval_keys.SCHEDULE
+    assert runtime.metadata[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
+    assert runtime.metadata[f'{prefix}.{eval_keys.EMITTED}'] == 2
+    assert runtime.metadata[f'{prefix}.{eval_keys.DROPPED}'] == 4
+
+
+@pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
+def test_late_percentiles_match_numpy(execution, late_ms):
+    # The first waypoint is due when the answer is read, so it is never late.
+    runtime, clock = execution
+    chunk = [{MOTOR: i} for i in range(len(late_ms))]
+    run = runtime.start(ChunkedSchedule(fps=1), lambda obs: chunk)
+    for index, late in enumerate(late_ms):
+        clock.advance_to_ns(index * 1_000_000_000 + late * 1_000_000)
+        run.send({})
+    run.close()
+    prefix = eval_keys.SCHEDULE
+    p50, p90 = np.percentile(late_ms, (50, 90))
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] == pytest.approx(p50)
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] == pytest.approx(p90)
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_MAX_MS}'] == max(late_ms)
 
 
 def test_horizon_cuts_commands_but_preserves_boundary(execution):
@@ -358,6 +446,7 @@ class TestRestrictImageSize:
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        ChunkedSchedule(fps=10, record_stats=False),
         ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],
@@ -373,7 +462,10 @@ def test_stack_and_codec_specs_round_trip(definition):
         ({'par': []}, ValueError),
         ({'par': [{'name': 'stop_on_fault'}]}, ValueError),
         ({'name': 'unknown'}, ValueError),
-        ({'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}}, TypeError),
+        (
+            {'name': 'temporal_stack', 'version': 2, 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}},
+            TypeError,
+        ),
     ],
 )
 def test_invalid_stack_specs_are_rejected(node, error):
@@ -403,7 +495,7 @@ def test_wire_names_match_the_registered_components():
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
     }
     registered = spec.COMPONENTS
-    assert set(instances) | {'action_timestamp', 'action_horizon'} == set(registered)
+    assert set(instances) == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
         assert type(instance) is registered[name][instance.WIRE_VERSION].implementation

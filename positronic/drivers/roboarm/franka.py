@@ -6,7 +6,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -108,6 +108,15 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 SAFE_INPUT_STATE = 'safeInputState'
 
 
+class _SafeInputLevel(StrEnum):
+    """The signal level Desk reports for one safe input."""
+
+    ACTIVE = 'Active'
+    INACTIVE = 'Inactive'
+    ACKNOWLEDGE_REQUIRED = 'AcknowledgeRequired'
+    INVALID = 'Invalid'
+
+
 class _Reading(NamedTuple):
     """One reading of the safe inputs, published in one assignment so a reader never sees half of it."""
 
@@ -122,9 +131,15 @@ class _SafeInputs:
     token, and the session that drives the arm must stay on one thread.
     """
 
-    # Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
-    # safety log records the same two: 'Not triggered (Motion permitted)' and 'Triggered (Motion prohibited)'.
-    _MOTION_PERMITTED = 'not triggered'
+    # ACTIVE releases the emergency stop (x31) and presses an enabling device (x4, guidingEnableButton);
+    # x32 and x33 carry no fixed meaning. A level or an input not listed here counts as triggered.
+    _CLEAR_STATES: Mapping[str, frozenset[_SafeInputLevel]] = {
+        'x31': frozenset({_SafeInputLevel.ACTIVE}),
+        'x4': frozenset({_SafeInputLevel.INACTIVE}),
+        'guidingEnableButton': frozenset({_SafeInputLevel.INACTIVE}),
+        'x32': frozenset({_SafeInputLevel.ACTIVE, _SafeInputLevel.INACTIVE}),
+        'x33': frozenset({_SafeInputLevel.ACTIVE, _SafeInputLevel.INACTIVE}),
+    }
     # How often the watch thread reads the safe inputs.
     _POLL_S = 0.5
 
@@ -154,12 +169,20 @@ class _SafeInputs:
         return reading.sampled and not reading.triggered
 
     @staticmethod
-    def _triggered(reading: object) -> bool:
-        """Whether Desk reports a safe input as triggered.
+    def _level(reading: object) -> _SafeInputLevel | None:
+        """The level Desk sent, or None where Desk sent a value that names no level."""
+        try:
+            return _SafeInputLevel(reading)
+        except ValueError:
+            return None
 
-        A reading this does not recognise counts as triggered: the driver cannot read it as clear.
+    @staticmethod
+    def _triggered(name: str, level: _SafeInputLevel | None) -> bool:
+        """Whether the safe input ``name`` is at a level that holds the driver back.
+
+        An input or a level this does not recognise counts as triggered: the driver cannot read it as clear.
         """
-        return _SafeInputs._MOTION_PERMITTED not in str(reading).casefold()
+        return level not in _SafeInputs._CLEAR_STATES.get(name, frozenset())
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
@@ -187,7 +210,7 @@ class _SafeInputs:
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
-        triggered = frozenset(name for name, reading in state.items() if self._triggered(reading))
+        triggered = frozenset(name for name, reading in state.items() if self._triggered(name, self._level(reading)))
         if triggered != was_triggered:
             if triggered:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')

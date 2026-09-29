@@ -342,7 +342,10 @@ def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[.
 
 
 def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
-    """Record a completed span with explicit wall-clock bounds. Parents like ``span``; needs an exporter."""
+    """Record a completed span with explicit wall-clock bounds. Parents like ``span``, and reaches a timing sink."""
+    sink = _timing_sink.get()
+    if sink is not None:
+        sink(name, start_ns, end_ns)
     recorded = _tracer().start_span(
         name, context=_anchor_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
     )

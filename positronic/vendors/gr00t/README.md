@@ -91,12 +91,12 @@ Fine-tuned checkpoint:
 
 ```bash
 docker compose run --rm --service-ports --pull never -v "$PWD/groot-data:/data" groot-server droid \
-  --pipeline.source.model_source=/data/checkpoints/my_task
+  --model.model_source=/data/checkpoints/my_task
 ```
 
 Select `droid_three_cameras` for a checkpoint trained on three views.
-Use `--pipeline.source.checkpoint=10000` to select a saved step. Omit it to serve the latest.
-A Hugging Face source uses `--pipeline.source.model_source=hf://owner/model`.
+Use `--model.checkpoint=10000` to select a saved step. Omit it to serve the latest.
+A Hugging Face source uses `--model.model_source=hf://owner/model`.
 
 ## Adapter parity tests
 

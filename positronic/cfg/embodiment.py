@@ -3,6 +3,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -38,10 +39,19 @@ def droid(robot_arm, gripper, cameras):
 
 
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
+# DROID with no device behind it, for code that reads the embodiment's contract on a box without the vendor packages.
+droid_fake = droid.override(
+    robot_arm=positronic.cfg.hardware.roboarm.franka_fake,
+    gripper=positronic.cfg.hardware.gripper.robotiq_fake,
+    cameras=positronic.cfg.hardware.camera.droid_fake,
+)
+droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
-def yam(robot_arm, cameras):
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
+)
+def yam(robot_arm, cameras, video_encoder):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -56,12 +66,12 @@ def yam(robot_arm, cameras):
         descriptor='yam',
         observations=observations,
         commands=commands,
-        # One driver, one handler: the YAM chain carries its own fingers
-        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 
@@ -70,14 +80,15 @@ def yam(robot_arm, cameras):
     right_channel='can1',
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
-    mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras, video_encoder):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
@@ -91,7 +102,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
 
     arms = {
         side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
-        for side, channel in (('left', left_channel), ('right', right_channel))
+        for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
     observations = {
         **{f'{keys.ROBOT_STATE}.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
@@ -113,12 +124,16 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_handlers={f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={
+            **{f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+            **{f'{eval_keys.GRIPPER}.{s}': arm.sync_grip for s, arm in arms.items()},
+        },
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
-        meta_source=arms['left'].robot_meta,
+        meta_source=arms[keys.LEFT_ARM].robot_meta,
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 

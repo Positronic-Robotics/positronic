@@ -116,7 +116,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   lerobot)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" lerobot expert_only \
@@ -124,7 +124,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
@@ -137,7 +137,7 @@ case "$VENDOR" in
     # The run trains in the rig's default frame, so the checkpoint declares no transform.
     SERVE_SUBCMD=(
       ee
-      --pipeline.source.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
+      --model.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
       --pipeline.ee_frame=None
     )
     ;;
@@ -147,7 +147,7 @@ case "$VENDOR" in
       "--output_path=$CKPT_DIR" \
       "--exp_name=$EXP_NAME" \
       --num_train_steps=200 --save_steps=100 2>&1)
-    SERVE_SUBCMD=(droid --pipeline.source.model_source="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(droid --model.model_source="$CKPT_DIR$EXP_NAME/")
     ;;
 esac
 echo "$TRAIN_OUT" >> "$LOG"
@@ -209,14 +209,15 @@ esac
 RESP=""
 CODE=""
 for i in $(seq 1 50); do
-  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" || true)
+  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -X POST -H "Authorization: Bearer $AUTH_TOKEN" \
+    "$SERVE_URL/api/v1/keepalive" || true)
   CODE=${OUT##*$'\n'}
   if [ "$CODE" = "200" ]; then RESP=${OUT%$'\n'*}; break; fi
   sleep 30
 done
 STATUS=0
 if [ "$CODE" = "200" ]; then
-  note "models: $RESP"
+  note "keepalive: $RESP"
   # That was an HTTP route. Sessions are WebSockets, and a managed ingress can carry the two differently,
   # so the endpoint answers the same assertions the suite otherwise makes against a server of its own.
   if POSITRONIC_ENDPOINT_WIRE=websocket_tls POSITRONIC_ENDPOINT_HOST="${SERVE_URL#https://}" \

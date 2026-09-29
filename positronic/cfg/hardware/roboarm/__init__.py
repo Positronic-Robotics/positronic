@@ -2,6 +2,7 @@ import configuronic as cfn
 
 import positronic.cfg.hardware.motors
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.franka_fake import FakeFranka
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -55,6 +56,7 @@ def franka(
 
 
 franka_droid = franka.override(load=(0.9, [0.0, 0.0, 0.057], [0.002768, 0, 0, 0, 0.003149, 0, 0, 0, 0.000564]))
+franka_fake = cfn.Config(FakeFranka)
 
 
 @cfn.config(ip='192.168.1.10', relative_dynamics_factor=0.5)

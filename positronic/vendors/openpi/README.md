@@ -105,15 +105,15 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 ```bash
 # Default pipeline (ee codec). `--pipeline.ee_frame=None` says the checkpoint speaks the rig's `default`
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
-  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=None
 
-# Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
+# Pretrained DROID model (pi05_droid) — preset model (public checkpoint + config) and pipeline (codec)
 docker compose run --rm --service-ports openpi-server droid
 
 # DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
@@ -133,39 +133,55 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - subcommand: Named policy pipeline (`serve` is `ee`). Picks the server-side codec and, for `droid` /
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
-- `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
+- `--model.checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
   (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
   `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
-- `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
+- `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
+- `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--websocket.served_address.port`: (Optional) WebSocket wire port (default: 8000)
 - `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=<path>`: (Optional) bind the
   WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
 - `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
-- `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--model.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
+
+### Serving More Than One Policy On One GPU
+
+The server starts its OpenPI subprocess with `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so JAX allocates on
+demand. JAX otherwise takes ~75% of the device at its first use, and a second server on that GPU then fails
+with `RESOURCE_EXHAUSTED` while `nvidia-smi` reports the device almost free.
+
+`XLA_PYTHON_CLIENT_MEM_FRACTION` caps what one server allocates when preallocation is off. Set it
+per container when you co-host N policies. Leave it unset for one policy: a cap that is too low makes a large
+model fail with the same `RESOURCE_EXHAUSTED`. Three policies held 30.4 GB together on an 80 GB H100 with
+`XLA_PYTHON_CLIENT_MEM_FRACTION=.25`.
+
+The `openpi-server-8001` service is a second server on the same machine, on host port 8001:
+
+```bash
+docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
+  -v ~/checkpoints:/checkpoints openpi-server-8001 ee \
+  --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --pipeline.ee_frame=None
+```
 
 ### API Endpoints
 
 The server exposes the following endpoints:
 
-**GET `/api/v1/models`**
-- Returns list of available checkpoints
-- Response: `{"models": ["checkpoint-1000", "checkpoint-2000", ...]}`
+**POST `/api/v1/keepalive`**
+- Resets the server's idle timer, and answers once the model has loaded and warmed
+- Response: `{"alive_seconds": 1800}`, or `{"alive_seconds": null}` for a server with no idle timeout
 
 **WebSocket `/api/v1/session`**
-- Default session (uses latest checkpoint)
+- Session with the checkpoint the server serves: `--model.checkpoint`, else the latest
 - Sends metadata on connection, then enters inference loop
 - Client sends serialized observations, server responds with serialized actions
 
-**WebSocket `/api/v1/session/{checkpoint_id}`**
-- Session with specific checkpoint
-- Same protocol as default session
-
 **Session parameters:** query params on the session URL tune the serving pipeline per session — each key
 is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
-be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
+be JSON literals; the model is fixed at launch, and a session param cannot reach it. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
@@ -211,25 +227,24 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 **Solutions:**
 1. Verify server is running with `--service-ports` flag (exposes port 8000)
 2. Check firewall settings allow connections on port 8000
-3. Try `curl http://localhost:8000/api/v1/models` to verify server is responsive
+3. Try `curl -X POST http://localhost:8000/api/v1/keepalive` to verify server is responsive
 4. Check server logs for startup errors
 
 ### Checkpoint not found
 
-**Problem:** Server returns "Checkpoint not found" error
+**Problem:** Server fails at startup: it finds no checkpoint, or cannot download the one it names
 
 **Solutions:**
-1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
-3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
-4. If using specific checkpoint, verify the checkpoint ID exists
+1. Verify the `--model.checkpoints_dir` path is correct (should end with experiment directory)
+2. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
+3. If using `--model.checkpoint`, verify the checkpoint ID exists
 
 ### Checkpoint directory one level too deep
 
 **Problem:** Server exits with "No checkpoint found in `<dir>`: it is a single checkpoint, not a checkpoints directory"
 
 **Solutions:**
-1. `--pipeline.source.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
+1. `--model.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
    subdirectories — drop the trailing checkpoint number from the path
 2. A directory holding `_CHECKPOINT_METADATA`, `assets`, `params` and `train_state` is one checkpoint; its
    parent is the experiment directory
