@@ -67,8 +67,7 @@ def yam(robot_arm, cameras, video_encoder):
         descriptor='yam',
         observations=observations,
         commands=commands,
-        # One driver, one handler: the YAM chain carries its own fingers
-        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
@@ -82,20 +81,20 @@ def yam(robot_arm, cameras, video_encoder):
     right_channel='can1',
     park_after_idle_s=60.0,
     park_tuning={
-        'left': positronic.cfg.hardware.roboarm.yam_park_tuning,
-        'right': positronic.cfg.hardware.roboarm.yam_park_tuning,
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
     },
     move_tuning={
-        'left': positronic.cfg.hardware.roboarm.yam_move_tuning,
-        'right': positronic.cfg.hardware.roboarm.yam_move_tuning,
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
     },
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
-    mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
-        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
-        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
     video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
@@ -128,7 +127,7 @@ def yam_bimanual(
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
         )
-        for side, channel in (('left', left_channel), ('right', right_channel))
+        for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
     observations = {
         **{f'{keys.ROBOT_STATE}.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
@@ -150,10 +149,13 @@ def yam_bimanual(
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_handlers={f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={
+            **{f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+            **{f'{eval_keys.GRIPPER}.{s}': arm.sync_grip for s, arm in arms.items()},
+        },
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
-        meta_source=arms['left'].robot_meta,
+        meta_source=arms[keys.LEFT_ARM].robot_meta,
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
         video_encoder=video_encoder,

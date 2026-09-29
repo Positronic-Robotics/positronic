@@ -24,7 +24,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -199,7 +199,7 @@ class _Arm(DriverRun[command.CommandType]):
         return self.vendor.get_observations()
 
     @staticmethod
-    def _grip(obs: dict[str, np.ndarray]) -> float:
+    def read_grip(obs: dict[str, np.ndarray]) -> float:
         """Convert measured open width to the closed-fraction grip convention."""
         return 1.0 - float(obs[_GRIPPER_POS][0])
 
@@ -213,7 +213,7 @@ class _Arm(DriverRun[command.CommandType]):
         # rules-allow: swallowed-error — in shutdown a failed report must not stop the park
         try:
             self.out.emit(self.state)
-            self.grip_out.emit(self._grip(obs))
+            self.grip_out.emit(self.read_grip(obs))
         except Exception:
             if not self._shutting_down:
                 raise
@@ -230,7 +230,7 @@ class _Arm(DriverRun[command.CommandType]):
         obs = self.observations()
         self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
         self.publish(obs)
-        return np.asarray(obs[_JOINT_POS], dtype=np.float64), self._grip(obs)
+        return np.asarray(obs[_JOINT_POS], dtype=np.float64), self.read_grip(obs)
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""
@@ -259,7 +259,7 @@ class _Arm(DriverRun[command.CommandType]):
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tuning: SettleTuning) -> bool:
         if not np.all(np.abs(obs[_JOINT_POS] - target) < tuning.tolerance_rad):
             return False
-        return abs(self._grip(obs) - grip) < tuning.grip_tolerance
+        return abs(self.read_grip(obs) - grip) < tuning.grip_tolerance
 
     def _move_timeout(
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
@@ -270,7 +270,7 @@ class _Arm(DriverRun[command.CommandType]):
             f'joint error {joint_error:.4f} rad (tolerance {tolerance_rad:.4f}) after '
             f'{timeout_s:g}s; target={target}, measured={obs[_JOINT_POS]}, '
             f'max joint speed={joint_speed:.4f} rad/s; '
-            f'grip target={grip:.3f}, measured={self._grip(obs):.3f}'
+            f'grip target={grip:.3f}, measured={self.read_grip(obs):.3f}'
         )
 
     def _ramp(
@@ -362,7 +362,7 @@ class _Arm(DriverRun[command.CommandType]):
             raise TimeoutError(
                 f'the arm rests {np.max(np.abs(obs[_JOINT_POS] - goal)):.4f} rad from {goal} '
                 f'(tolerance {tuning.tolerance_rad:.4f}); reference={reference}, measured={obs[_JOINT_POS]}, '
-                f'grip target={grip:.3f}, measured={self._grip(obs):.3f}'
+                f'grip target={grip:.3f}, measured={self.read_grip(obs):.3f}'
             )
         except Exception:
             self.moves.errored = True
@@ -405,7 +405,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._shutting_down = True
         hold_target = None
         try:
-            joints, grip, ended = yield from self.park(self._grip(self.observations()), interrupt_on_stop=False)
+            joints, grip, ended = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
             if ended is self._Park.PARKED:
                 return
             hold_target = joints, grip
@@ -532,7 +532,7 @@ class Robot(pimm.ControlSystem):
     ``base_pose`` places the arm base in the world frame (identity = arm-base frame): IK targets are pulled
     back through it and the emitted ``ee_pose`` is pushed forward, so a bimanual embodiment can mount both
     arms in the training world frame. The gripper shares the CAN chain, so the arm driver carries the
-    ``grip``/``target_grip`` ports (SO-101 precedent).
+    ``grip``/``target_grip``/``sync_grip`` ports (SO-101 precedent).
     """
 
     shutdown_policy = pimm.ShutdownPolicy.WAIT_FOR_COMPLETION
@@ -572,6 +572,7 @@ class Robot(pimm.ControlSystem):
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
+        self.sync_grip = pimm.calls.ControlSystemHandler[float, None](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -632,36 +633,37 @@ class Robot(pimm.ControlSystem):
         self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
         """Park on startup, then answer commands and park when idle until ``should_stop``."""
-        joints, grip, _ = yield from arm.park(arm._grip(arm.observations()))
+        joints, grip, _ = yield from arm.park(arm.read_grip(arm.observations()))
         serving = _Serving(joints, grip)
         try:
-            while not should_stop.value:
-                asked, q = self._take_request(arm, serving, clock)
-                yield from self._dispatch(arm, serving, asked, q, clock)
-                if (step := self._advance_parking(serving)) is not None:
+            with Moves[float](self.sync_grip, self.target_grip) as fingers:
+                while not should_stop.value:
+                    asked, q = self._take_request(arm, fingers, serving, clock)
+                    yield from self._dispatch(arm, serving, asked, q, clock)
+                    if (step := self._advance_parking(serving)) is None:
+                        arm.command_target(serving.q_target, serving.grip_target)
+                        # Synchronous moves can take seconds; publish a fresh observation.
+                        arm.publish(arm.observations())
+                        step = arm.limiter.wait()
+                    fingers.answer()  # the width a settled finger move is answered with is published
                     yield step
-                    continue
-                arm.command_target(serving.q_target, serving.grip_target)
-                # Synchronous moves can take seconds; publish a fresh observation.
-                arm.publish(arm.observations())
-                yield arm.limiter.wait()
         finally:
             if serving.parking is not None:
                 serving.parking.close()
 
     def _take_request(
-        self, arm: _Arm, serving: _Serving, clock: pimm.Clock
+        self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
     ) -> tuple[pimm.calls.Call | command.CommandType | None, np.ndarray]:
         """Read the grip and the next request, and return the request with the joints. Either one stops an idle park."""
-        grip = pimm.value_updated(self.target_grip)
         asked = arm.moves.next_request()
         with self._answer_failed_setup(asked):
+            grip = grip_setpoint(fingers, arm.read_grip(arm.observations()), clock.now())
             if serving.parking is not None and (grip is not None or asked is not None):
                 serving.parking.close()
                 serving.parking = None
                 serving.q_target, serving.grip_target = arm.hold_where_it_stopped()
             if grip is not None:
-                serving.grip_target = float(grip)
+                serving.grip_target = grip
                 serving.idle_since = clock.now()
             return asked, arm.observations()[_JOINT_POS]
 
@@ -682,7 +684,7 @@ class Robot(pimm.ControlSystem):
                 serving.q_target = arm.to_joints(asked, q)
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
-            serving.parking = arm.park(arm._grip(arm.observations()))
+            serving.parking = arm.park(arm.read_grip(arm.observations()))
             serving.idle_since = None
 
     @staticmethod

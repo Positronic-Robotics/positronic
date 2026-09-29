@@ -1,8 +1,9 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
-# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
-# this trial runs in is ready, drawn by whichever handler the embodiment binds.
+# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}`` and its grippers
+# ``gripper.{side}``. ``SCENE`` means the world this trial runs in is ready, drawn by whichever handler the
+# embodiment binds.
 ARM = 'arm'
 GRIPPER = 'gripper'
 SCENE = 'scene'
@@ -42,15 +43,14 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# How well the loop kept the trajectory's schedule, per command channel, keyed
-# f'{SCHEDULE}.{keys.ROBOT_COMMAND}.{DROPPED}'. The harness owns every key under ``SCHEDULE``.
-# ``DROPPED`` counts a waypoint that came due and went out on no round.
+# The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
+# ``DROPPED`` counts a due waypoint that a later waypoint replaced.
 SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
-# Milliseconds. A percentile is floored to the whole millisecond, and the harness's top bin saturates, so a
-# percentile reading that bound is a lower bound; ``LATE_MAX_MS`` is exact.
+# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'
+GAP_MAX_MS = 'gap_max_ms'

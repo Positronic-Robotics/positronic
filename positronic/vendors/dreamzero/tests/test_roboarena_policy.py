@@ -335,6 +335,18 @@ class TestTheWire:
         for socket in sockets:
             socket.close.assert_called_once()
 
+    def test_each_episode_s_handshake_carries_the_policy_s_headers(self):
+        headers = {'Authorization': 'Bearer run-token'}
+        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
+
+        with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
+            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            run = runtime.start(policy)
+            runtime.close()
+            run.close()
+
+        assert dial.call_args.kwargs['additional_headers'] == headers
+
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""
         second = announced(**{wire.RESOLUTION: [144, 256]})
