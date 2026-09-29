@@ -224,6 +224,12 @@ class FakeMat:
         return np.zeros((2, 2, 4), dtype=np.uint8)
 
 
+LOST_AT = 1.0
+RECOVERY_TIME = 10.0
+LISTED_AGAIN_AT = 18.0
+NEVER = float('inf')
+
+
 def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: RecordingEmitter) -> pimm.Run[None]:
     """The driver's `run` loop for the camera `SERIAL`, bound to ``sdk``."""
     module.sl.__dict__.update(
@@ -237,7 +243,7 @@ def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: RecordingEmit
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
     )
-    camera = module.SLCamera(serial_number=SERIAL)
+    camera = module.SLCamera(serial_number=SERIAL, max_recovery_time_sec=RECOVERY_TIME)
     camera.frame._bind(frames)
     return camera.run(stop, sdk.clock)
 
@@ -257,12 +263,6 @@ def _returned(loop: pimm.Run[None]) -> bool:
 
 def _frame_times(frames: RecordingEmitter) -> list[float]:
     return [ts for ts, _ in frames.emitted]
-
-
-LOST_AT = 1.0
-RECOVERY_TIME = 10.0  # the driver's default `max_recovery_time_sec`
-LISTED_AGAIN_AT = 18.0
-NEVER = float('inf')
 
 
 def test_a_camera_lost_past_the_recovery_time_is_reopened_and_its_frames_resume(zed_module):
