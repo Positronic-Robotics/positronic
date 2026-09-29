@@ -2,6 +2,7 @@
 
 import enum
 import importlib.util
+import inspect
 import sys
 import types
 from contextlib import nullcontext
@@ -12,6 +13,8 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
+from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.tests.testing_coutils import RecordingEmitter
 
 SERIAL = 39567055
 ZED_PATH = Path(__file__).parents[1] / 'zed.py'
@@ -221,23 +224,7 @@ class FakeMat:
         return np.zeros((2, 2, 4), dtype=np.uint8)
 
 
-class StopFlag(pimm.SignalReceiver[bool]):
-    def __init__(self):
-        self.raised = False
-
-    def read(self) -> pimm.Message[bool]:
-        return pimm.Message(self.raised)
-
-
-class FrameLog(pimm.SignalEmitter):
-    def __init__(self):
-        self.times: list[float] = []
-
-    def emit(self, data, ts=-1):
-        self.times.append(ts)
-
-
-def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: FrameLog) -> pimm.Run[None]:
+def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: RecordingEmitter) -> pimm.Run[None]:
     """The driver's `run` loop for the camera `SERIAL`, bound to ``sdk``."""
     module.sl.__dict__.update(
         ERROR_CODE=ErrorCode,
@@ -255,14 +242,21 @@ def _camera_loop(module, sdk: DroppingSdk, stop: StopFlag, frames: FrameLog) -> 
     return camera.run(stop, sdk.clock)
 
 
-def _returns_before(loop: pimm.Run[None], clock: MockClock, until: float) -> bool:
-    """Drive ``loop`` on ``clock`` until the clock reaches ``until``."""
+def _drive(loop: pimm.Run[None], clock: MockClock, until: float) -> None:
+    """Drive ``loop`` on ``clock`` until the clock reaches ``until`` or the loop returns."""
     for command in loop:
         assert isinstance(command, pimm.Sleep)
         clock.advance(command.seconds)
         if clock.now() >= until:
-            return False
-    return True
+            return
+
+
+def _returned(loop: pimm.Run[None]) -> bool:
+    return inspect.getgeneratorstate(loop) == inspect.GEN_CLOSED
+
+
+def _frame_times(frames: RecordingEmitter) -> list[float]:
+    return [ts for ts, _ in frames.emitted]
 
 
 LOST_AT = 1.0
@@ -272,51 +266,57 @@ NEVER = float('inf')
 
 
 def test_a_camera_lost_past_the_recovery_time_is_reopened_and_its_frames_resume(zed_module):
-    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT)
     loop = _camera_loop(zed_module, sdk, stop, frames)
-    assert not _returns_before(loop, clock, 30.0)
+    _drive(loop, clock, until=30.0)
+    assert not _returned(loop)
     lost, reopened = sdk.cameras
     assert lost.closed_at is not None and lost.closed_at >= LOST_AT + RECOVERY_TIME
     assert reopened.opened_at is not None and reopened.opened_at >= LISTED_AGAIN_AT
-    assert not [t for t in frames.times if LOST_AT < t < LISTED_AGAIN_AT]
-    assert max(frames.times) > reopened.opened_at
+    assert not [t for t in _frame_times(frames) if LOST_AT < t < LISTED_AGAIN_AT]
+    assert max(_frame_times(frames)) > reopened.opened_at
     assert sdk.reboots == []
 
 
 def test_the_loop_does_not_return_while_the_camera_stays_away(zed_module):
-    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=NEVER)
     loop = _camera_loop(zed_module, sdk, stop, frames)
-    assert not _returns_before(loop, clock, 600.0)
-    assert max(frames.times) < LOST_AT + 0.02
+    _drive(loop, clock, until=600.0)
+    assert not _returned(loop)
+    assert max(_frame_times(frames)) < LOST_AT + 0.02
     assert len(sdk.cameras) == 1
 
 
 def test_a_camera_the_sdk_recovers_inside_the_recovery_time_is_not_reopened(zed_module):
-    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=3.0, sdk_recovers_at=LOST_AT + RECOVERY_TIME - 0.5)
     loop = _camera_loop(zed_module, sdk, stop, frames)
-    assert not _returns_before(loop, clock, 30.0)
+    _drive(loop, clock, until=30.0)
+    assert not _returned(loop)
     (camera,) = sdk.cameras
     assert camera.closed_at is None
-    assert max(frames.times) > LOST_AT + RECOVERY_TIME
+    assert max(_frame_times(frames)) > LOST_AT + RECOVERY_TIME
 
 
 def test_a_reopen_that_fails_is_tried_again_until_the_camera_opens(zed_module):
-    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT, failed_reopens=3)
     loop = _camera_loop(zed_module, sdk, stop, frames)
-    assert not _returns_before(loop, clock, 40.0)
+    _drive(loop, clock, until=40.0)
+    assert not _returned(loop)
     lost, failed, reopened = sdk.cameras
     assert failed.opened_at is None and failed.closed_at is not None
-    assert reopened.opened_at is not None and max(frames.times) > reopened.opened_at
+    assert reopened.opened_at is not None and max(_frame_times(frames)) > reopened.opened_at
 
 
 def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
-    clock, stop, frames = MockClock(), StopFlag(), FrameLog()
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=NEVER)
     loop = _camera_loop(zed_module, sdk, stop, frames)
-    assert not _returns_before(loop, clock, 20.0)
-    stop.raised = True
-    assert _returns_before(loop, clock, clock.now() + 1.0)
+    _drive(loop, clock, until=20.0)
+    assert not _returned(loop)
+    stop.stopped = True
+    _drive(loop, clock, until=clock.now() + 1.0)
+    assert _returned(loop)
