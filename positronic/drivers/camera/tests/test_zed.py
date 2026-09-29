@@ -271,12 +271,12 @@ def test_a_camera_lost_past_the_recovery_time_is_reopened_and_its_frames_resume(
     loop = _camera_loop(zed_module, sdk, stop, frames)
     _drive(loop, clock, until=30.0)
     assert not _returned(loop)
-    lost, reopened = sdk.cameras
+    lost, refused, reopened = sdk.cameras
     assert lost.closed_at is not None and lost.closed_at >= LOST_AT + RECOVERY_TIME
+    assert refused.opened_at is None and sdk.reboots == [SERIAL]
     assert reopened.opened_at is not None and reopened.opened_at >= LISTED_AGAIN_AT
     assert not [t for t in _frame_times(frames) if LOST_AT < t < LISTED_AGAIN_AT]
     assert max(_frame_times(frames)) > reopened.opened_at
-    assert sdk.reboots == []
 
 
 def test_the_loop_does_not_return_while_the_camera_stays_away(zed_module):
@@ -286,7 +286,8 @@ def test_the_loop_does_not_return_while_the_camera_stays_away(zed_module):
     _drive(loop, clock, until=600.0)
     assert not _returned(loop)
     assert max(_frame_times(frames)) < LOST_AT + 0.02
-    assert len(sdk.cameras) == 1
+    lost, refused = sdk.cameras
+    assert refused.opened_at is None
 
 
 def test_a_camera_the_sdk_recovers_inside_the_recovery_time_is_not_reopened(zed_module):
@@ -306,8 +307,8 @@ def test_a_reopen_that_fails_is_tried_again_until_the_camera_opens(zed_module):
     loop = _camera_loop(zed_module, sdk, stop, frames)
     _drive(loop, clock, until=40.0)
     assert not _returned(loop)
-    lost, failed, reopened = sdk.cameras
-    assert failed.opened_at is None and failed.closed_at is not None
+    lost, *failed, reopened = sdk.cameras
+    assert failed and all(c.opened_at is None and c.closed_at is not None for c in failed)
     assert reopened.opened_at is not None and max(_frame_times(frames)) > reopened.opened_at
 
 
@@ -317,6 +318,29 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     loop = _camera_loop(zed_module, sdk, stop, frames)
     _drive(loop, clock, until=20.0)
     assert not _returned(loop)
+    stop.stopped = True
+    _drive(loop, clock, until=clock.now() + 1.0)
+    assert _returned(loop)
+
+
+def test_a_camera_absent_at_start_up_opens_once_it_is_listed_and_its_frames_start(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=0.0, listed_at=5.0)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    _drive(loop, clock, until=20.0)
+    assert not _returned(loop)
+    opened = sdk.cameras[-1]
+    assert opened.opened_at is not None and opened.opened_at >= 5.0
+    assert min(_frame_times(frames)) >= opened.opened_at
+
+
+def test_the_world_stopping_while_the_first_open_fails_ends_the_loop(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=0.0, listed_at=NEVER)
+    loop = _camera_loop(zed_module, sdk, stop, frames)
+    _drive(loop, clock, until=20.0)
+    assert not _returned(loop)
+    assert not frames.emitted
     stop.stopped = True
     _drive(loop, clock, until=clock.now() + 1.0)
     assert _returned(loop)

@@ -139,25 +139,25 @@ class SLCamera(pimm.ControlSystem):
                 raise CameraOpenError(failure)
             yield from SLCamera._reboot_and_reopen(zed, init_params, reboot_serial, failure)
 
-    def _new_camera(self):
-        return sl.CameraOne() if self._mono else sl.Camera()
-
-    def _reopen(
-        self, lost, init_params, listed_serial: int | None, should_stop: pimm.SignalReceiver
+    def _open_new_camera(
+        self, init_params, listed_serial: int | None, should_stop: pimm.SignalReceiver
     ) -> Generator[pimm.Sleep, None, 'sl.Camera | sl.CameraOne | None']:
-        """Close ``lost`` and open a new camera once ``listed_serial`` is listed; ``None`` if the world stops first."""
-        lost.close()
+        """Open a new camera, until one opens; ``None`` if the world stops first.
+
+        After a failed open, the next one waits until ``listed_serial`` is listed.
+        """
         while not should_stop.value:
-            if listed_serial is None or self._is_listed(listed_serial):
-                zed = self._new_camera()
-                try:
-                    yield from self._open_under_device_lock(zed, init_params, listed_serial)
-                    return zed
-                except CameraOpenError as e:
-                    # A camera that does not open yet is tried again: only the world stopping ends the driver.
-                    logger.error('Camera %s did not open, trying again: %s', self._serial_number, e)
-                    zed.close()
+            zed = sl.CameraOne() if self._mono else sl.Camera()
+            try:
+                yield from self._open_under_device_lock(zed, init_params, listed_serial)
+                return zed
+            except CameraOpenError as e:
+                # A camera that does not open yet is tried again: only the world stopping ends the driver.
+                logger.error('Camera %s did not open, trying again: %s', self._serial_number, e)
+                zed.close()
             yield pimm.Sleep(self.DEVICE_LIST_POLL_SEC)
+            while listed_serial is not None and not self._is_listed(listed_serial) and not should_stop.value:
+                yield pimm.Sleep(self.DEVICE_LIST_POLL_SEC)
         return None
 
     def _init_params(self, depth_mode):
@@ -227,10 +227,11 @@ class SLCamera(pimm.ControlSystem):
                 'Set depth_mask=True to enable depth mask output.'
             )
 
-        zed = self._new_camera()
         # The serial `sl.Camera` lists and reboots. A mono camera is an `sl.CameraOne`, so it has none here.
         listed_serial = None if self._mono else self._serial_number
-        yield from self._open_under_device_lock(zed, init_params, listed_serial)
+        zed = yield from self._open_new_camera(init_params, listed_serial, should_stop)
+        if zed is None:
+            return
 
         self.recovery_start_time = None
 
@@ -248,7 +249,8 @@ class SLCamera(pimm.ControlSystem):
                         self.max_recovery_time_sec,
                         self._serial_number,
                     )
-                    zed = yield from self._reopen(zed, init_params, listed_serial, should_stop)
+                    zed.close()
+                    zed = yield from self._open_new_camera(init_params, listed_serial, should_stop)
                     if zed is None:
                         return
                     logger.info(
