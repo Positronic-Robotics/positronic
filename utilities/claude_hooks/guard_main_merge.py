@@ -948,7 +948,7 @@ def main() -> int:
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         payload = None
     if not isinstance(payload, dict):
-        # The tool name is unreadable too, so the raw text is searched for the MCP prefix.
+        # The raw text is searched for the MCP prefix, since the tool name is unreadable too.
         return _refuse(MCP_UNREADABLE_MSG) if GITHUB_MCP_PREFIX in raw else 0
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
