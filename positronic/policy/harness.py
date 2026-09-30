@@ -327,8 +327,8 @@ class Harness(pimm.ControlSystem):
                 if call is not None:
                     payload = None
                     discarded = None
-                    # rules-allow: swallowed-error — the caller gets the error as its answer, and a device that
-                    # gives no data ends only its episode.
+                    # rules-allow: swallowed-error — the error is this call's answer, and a device with no data
+                    # ends only its episode.
                     try:
                         payload = yield from self._run_episode(clock, should_stop, call.request)
                     except ObservationError as e:
