@@ -413,6 +413,9 @@ cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusa
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
 
+A session recovers a connection that drops before the server's first answer. A later drop raises
+`wire.PeerDisconnected`.
+
 ## Vendor Implementations
 
 Every vendor ships a model config plus named pipelines and serves them through the one `PolicyServer`:

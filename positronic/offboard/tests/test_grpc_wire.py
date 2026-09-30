@@ -450,8 +450,13 @@ def chatty_client(monkeypatch) -> None:
 
 
 def _silent_then_infer(served: Served) -> list[dict]:
+    """An inference, a silence no frame crosses, and the inference after it.
+
+    The silence follows an answer, so a lost session reaches the caller.
+    """
     session = InferenceClient(*served.grpc()).new_session()
     try:
+        session.infer({'image': 'test'})
         time.sleep(_SILENCE_SEC)
         return session.infer({'image': 'test'})
     finally:
