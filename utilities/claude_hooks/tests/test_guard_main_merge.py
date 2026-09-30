@@ -657,6 +657,16 @@ def test_a_commit_onto_main_is_refused_when_the_guarded_repository_cannot_be_rea
 
 
 @pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_that_names_no_branch_is_refused(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'path': 'x', 'message': 'm'}) is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_that_names_no_branch_on_another_repository_is_untouched(tool):
+    assert mcp_verdict(tool, {**OTHER_REPO_ARGS, 'path': 'x', 'message': 'm'}) is None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
 def test_a_commit_onto_main_that_names_no_repository_is_refused(tool):
     assert mcp_verdict(tool, {'branch': 'main', 'message': 'm'}) is not None
 
@@ -683,6 +693,7 @@ def test_a_later_tool_of_the_same_shape_is_caught_without_being_named():
         ('mcp__github__create_pull_request', {**GUARDED_REPO_ARGS, 'base': 'main', 'head': 'feature-x'}),
         ('mcp__github__update_pull_request', {**GUARDED_REPO_ARGS, 'pullNumber': 566, 'base': 'main'}),
         ('mcp__github__list_branches', GUARDED_REPO_ARGS),
+        ('mcp__github__create_branch', {**GUARDED_REPO_ARGS, 'branch': 'feature-y', 'from_branch': 'main'}),
         ('mcp__tracker__create_ticket', {'title': 'merge the branch onto main'}),
         ('Bash', {'command': 'gh pr merge 566'}),
     ],

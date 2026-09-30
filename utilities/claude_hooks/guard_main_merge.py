@@ -452,14 +452,16 @@ def consume_merge_allow(
     return True
 
 
-# Membership is a shape read off the call, not a list of tool names. A tool whose name carries
-# `branch` and names a pull request merges the base into the head, which can be the guarded branch.
+# Membership is a shape read off the call, not a list of tool names. A call carrying a commit
+# `message` and no `branch` commits to the default branch. A tool whose name carries `branch` and
+# names a pull request merges the base into the head, which can be the guarded branch.
 GITHUB_MCP_PREFIX = 'mcp__github__'
 MERGE_VERB = 'merge'
 BRANCH_VERB = 'branch'
 MCP_OWNER = 'owner'
 MCP_REPO = 'repo'
 MCP_BRANCH = 'branch'
+MCP_MESSAGE = 'message'
 MCP_PULL_NUMBER = 'pullNumber'
 
 
@@ -502,7 +504,8 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
     # treated as a write onto this repository.
     if slug and guarded_slug and slug != guarded_slug:
         return None
-    if str(arguments.get(MCP_BRANCH) or '') == GUARDED_BRANCH:
+    branch = str(arguments.get(MCP_BRANCH) or '')
+    if branch == GUARDED_BRANCH or (not branch and MCP_MESSAGE in arguments):
         return MCP_BRANCH_WRITE_MSG.format(tool=tool, branch=GUARDED_BRANCH)
     if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
         return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
