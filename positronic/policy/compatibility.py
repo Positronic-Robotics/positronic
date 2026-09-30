@@ -11,7 +11,7 @@ from typing import Any, overload
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import ARGS, NAME, SEQ, VERSION, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codec import Codec
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 

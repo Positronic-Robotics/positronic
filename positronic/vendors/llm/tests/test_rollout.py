@@ -14,7 +14,7 @@ from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.layers import PauseOnUnavailable
+from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion

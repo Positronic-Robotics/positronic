@@ -35,7 +35,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import Harness, Rollout
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
 
