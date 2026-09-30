@@ -111,7 +111,7 @@ Something has to say when an episode starts and when it finishes. There are two 
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 
-**A stale device ends only its episode.** On a real rig, an observation that brings no new message for longer than `MAX_OBSERVATION_AGE_SEC` (1 s) aborts the episode before the policy reads it. The recorder discards the episode, and the driver's ask fails with `StaleObservation`. An observation that has sent nothing yet is stale too. The harness keeps serving asks, so the next ask runs once every device sends again.
+**A device that gives no data ends only its episode.** A device driver emits an `ObservationError` on its observation signal while the device gives no data, for example after a camera drops off the USB bus. The harness discards the running episode before the policy reads that value: the recorder discards the episode, and the ask fails with that `ObservationError`. The device driver repairs its device. The harness keeps serving asks, and the next ask runs once the signal carries data again. A device driver that stops emitting without an `ObservationError` leaves the policy on the last value it sent.
 
 ## Recording and Replay
 

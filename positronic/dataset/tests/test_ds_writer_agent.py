@@ -13,6 +13,7 @@ from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers import ObservationError
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
@@ -210,6 +211,25 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 99), ('a', 7)]
+
+
+def test_an_input_that_carries_an_observation_error_records_nothing(world):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(emitters['a'].emit, ObservationError('absent')), 0.001),  # on the channel when the episode opens
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        (partial(emitters['a'].emit, 7), 0.001),
+        (partial(emitters['a'].emit, ObservationError('lost')), 0.001),
+        (partial(emitters['a'].emit, 8), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 7), ('a', 8)]
 
 
 def test_time_mode_message_uses_signal_timestamp(world):

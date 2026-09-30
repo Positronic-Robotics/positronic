@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
+from positronic.drivers import ObservationError
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -170,6 +171,7 @@ class DsWriterAgent(pimm.ControlSystem):
     timestamped after STOP — whatever the next trial's prepare moves, or sensor
     data the async real path queues — are dropped, and ABORT discards the
     episode. Invalid or out-of-order commands are ignored with a log message.
+    An input that carries an ``ObservationError`` records nothing.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -240,7 +242,9 @@ class DsWriterAgent(pimm.ControlSystem):
         """
         for name, reader in self._inputs.items():
             msg = reader.read() if opening else pimm.read_updated(reader)
-            if msg is not None and (before is None or msg.ts <= before):
+            if msg is None or isinstance(msg.data, ObservationError):
+                continue
+            if before is None or msg.ts <= before:
                 self._record(ep_writer, name, msg, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):

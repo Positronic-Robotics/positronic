@@ -1,6 +1,5 @@
 """Timing contracts for processor execution and simulated chunk playback."""
 
-import pickle
 import threading
 import time
 from contextlib import contextmanager
@@ -23,6 +22,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
+from positronic.drivers import ObservationError
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
@@ -35,7 +35,7 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import Harness, Rollout, StaleObservation
+from positronic.policy.harness import Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -416,32 +416,28 @@ class Positions(Policy):
             self.closed = True
 
 
-@pytest.mark.parametrize(
-    'simulated, updated_at_ns, aborted', [(False, None, True), (False, 1_400_000_000, False), (True, None, False)]
-)
-def test_a_real_rig_aborts_the_episode_before_the_policy_reads_a_stale_observation(
-    episode_harness, simulated, updated_at_ns, aborted
-):
+@pytest.mark.parametrize('lost', [True, False])
+def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(episode_harness, lost):
     h = episode_harness
-    h.harness._embodiment = replace(h.embodiment, simulated=simulated)
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
     policy = Positions()
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('move', None), policy, None))
     next(h.loop)
-    if updated_at_ns is not None:
-        h.world.clock.advance_to_ns(updated_at_ns)
-        h.observation.emit(2)
-    h.world.clock.advance_to_ns(1_500_000_000)  # the next step reads 1.5 s after the first one
+    error = ObservationError('camera lost')
+    if lost:
+        h.observation.emit(error)
+    h.world.clock.advance_to_ns(5_000_000_000)  # no new data for 5 s either way
     next(h.loop)
     records = [command.type for _, command in h.records.values]
-    if not aborted:
+    if not lost:
         assert not answer.done()
-        assert len(policy.seen) == 2
+        assert policy.seen == [1, 1]
         assert records == [DsWriterCommandType.START_EPISODE]
         return
-    with pytest.raises(StaleObservation, match=f'{POSITION} 1.5 s old') as error:
+    with pytest.raises(ObservationError) as raised:
         answer.result()
-    assert pickle.loads(pickle.dumps(error.value)).ages_sec == {POSITION: 1.5}
+    assert raised.value is error
     assert policy.seen == [1]
     assert policy.closed
     assert records == [DsWriterCommandType.START_EPISODE, DsWriterCommandType.ABORT_EPISODE]
@@ -449,17 +445,13 @@ def test_a_real_rig_aborts_the_episode_before_the_policy_reads_a_stale_observati
     assert isinstance(next(h.loop), pimm.Sleep)
 
 
-def test_an_episode_asked_before_an_observation_arrives_aborts_and_the_next_one_runs(episode_harness):
+def test_an_ask_while_an_observation_carries_an_error_is_refused_and_the_next_one_runs(episode_harness):
     h = episode_harness
-    h.harness._embodiment = replace(h.embodiment, simulated=False)
     policy = Positions()
-    h.manual.emit({MOTOR: 3})
-    next(h.loop)
-    assert h.commands.values == [(0, 3)]
-
+    h.observation.emit(ObservationError('camera absent'))
     refused = h.caller(Rollout(Task('move', None), policy, None))
     next(h.loop)
-    with pytest.raises(StaleObservation, match=f'{POSITION} never seen'):
+    with pytest.raises(ObservationError, match='camera absent'):
         refused.result()
     assert policy.seen == []
 
@@ -468,35 +460,6 @@ def test_an_episode_asked_before_an_observation_arrives_aborts_and_the_next_one_
     next(h.loop)
     assert policy.seen == [1]
     assert not accepted.done()
-
-
-@pytest.mark.parametrize('recovered', [True, False])
-def test_an_observation_that_drops_between_episodes_aborts_the_next_one_only_while_still_stale(
-    episode_harness, recovered
-):
-    h = episode_harness
-    h.harness._embodiment = replace(h.embodiment, simulated=False)
-    policy = Positions()
-    h.observation.emit(1)
-    first = h.caller(Rollout(Task('move', None), policy, None))
-    next(h.loop)
-    h.done.emit({eval_keys.SUCCESS: True})
-    next(h.loop)
-    next(h.loop)
-    assert first.result()[eval_keys.SUCCESS] is True
-
-    h.world.clock.advance_to_ns(5_000_000_000)
-    if recovered:
-        h.observation.emit(2)
-    second = h.caller(Rollout(Task('move', None), policy, None))
-    next(h.loop)
-    if recovered:
-        assert policy.seen == [1, 2]
-        assert not second.done()
-    else:
-        with pytest.raises(StaleObservation, match=f'{POSITION} 5.0 s old'):
-            second.result()
-        assert policy.seen == [1]
 
 
 @contextmanager

@@ -1,5 +1,4 @@
 import logging
-import math
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers import ObservationError
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -25,25 +25,6 @@ from positronic.utils import flatten_dict, frozen_view
 POLL_PERIOD_SEC = 0.1
 MIN_POLL_PERIOD_SEC = 0.005
 MAX_POLL_PERIOD_SEC = 1.0
-
-# On a real rig, an observation that brings no new message for longer than this aborts the running episode.
-MAX_OBSERVATION_AGE_SEC = 1.0
-
-
-class StaleObservation(RuntimeError):
-    """The answer to an episode the harness aborted on a stale observation. The episode records nothing."""
-
-    def __init__(self, ages_sec: dict[str, float]):
-        # An exception that crosses a process boundary is rebuilt from its ``args``.
-        super().__init__(ages_sec)
-        self.ages_sec = ages_sec
-
-    def __str__(self) -> str:
-        ages = ', '.join(
-            f'{name} never seen' if math.isinf(age) else f'{name} {age:.1f} s old'
-            for name, age in sorted(self.ages_sec.items())
-        )
-        return f'Aborted the episode on stale observations: {ages}'
 
 
 @dataclass
@@ -112,16 +93,14 @@ class Harness(pimm.ControlSystem):
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
     Its answer carries the terminal payload. Between episodes, manual commands pass through.
-    On a real rig, a stale observation aborts the episode before the policy reads it, and the answer
-    raises ``StaleObservation``. The harness keeps serving calls.
+    An ``ObservationError`` on an observation discards the episode before the policy reads it, and the answer
+    raises that error. The harness keeps serving calls.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
         self._embodiment = embodiment
         self._static_meta = static_meta or {}
         self._obs_by_signal: dict[str, dict[str, Any]] = {}
-        # On the harness's clock, not ``Message.ts``: a driver can stamp that on its device's clock, as the ZED does.
-        self._updated_at_ns: dict[str, int] = {}
         self._telemetry = _EpisodeTelemetry()
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
@@ -172,54 +151,22 @@ class Harness(pimm.ControlSystem):
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
-        Return ``None`` if a required signal has no message. Conversion errors propagate.
+        Return ``None`` if a required signal has no message. Raise the ``ObservationError`` a signal carries.
+        Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
         """
-        return self._to_obs(task, self._read_messages(step_ms), step_ms)
-
-    def _observe(self, task: Task, now_ns: int, step_ms: dict[str, float]) -> Obs | None:
-        """``read_obs``, raising ``StaleObservation`` before a stale observation reaches the policy."""
-        messages = self._read_messages(step_ms)
-        for name, message in messages.items():
-            if message is not None and message.updated:
-                self._updated_at_ns[name] = now_ns
-        if stale := self._stale_ages_sec(now_ns):
-            raise StaleObservation(stale)
-        return self._to_obs(task, messages, step_ms)
-
-    def _stale_ages_sec(self, now_ns: int) -> dict[str, float]:
-        """The age of each observation with no new message for over ``MAX_OBSERVATION_AGE_SEC``.
-
-        An observation that never updated has an infinite age. A simulated rig is not checked: a simulator
-        can emit nothing before a trial's first step.
-        """
-        if self._embodiment.simulated:
-            return {}
-        ages = {
-            name: (now_ns - self._updated_at_ns[name]) / 1e9 if name in self._updated_at_ns else math.inf
-            for name in self._embodiment.observations
-        }
-        return {name: age for name, age in ages.items() if age > MAX_OBSERVATION_AGE_SEC}
-
-    def _read_messages(self, step_ms: dict[str, float]) -> dict[str, pimm.Message[Any] | None]:
-        messages: dict[str, pimm.Message[Any] | None] = {}
-        for name in self._embodiment.observations:
-            read_started_ns = time.perf_counter_ns()
-            messages[name] = self.observations[name].read()
-            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (time.perf_counter_ns() - read_started_ns) / 1e6
-        return messages
-
-    def _to_obs(
-        self, task: Task, messages: dict[str, pimm.Message[Any] | None], step_ms: dict[str, float]
-    ) -> Obs | None:
         inputs: dict[str, Any] = {}
         assert_default_frame(self._statics())
         for name, obs in self._embodiment.observations.items():
-            message = messages[name]
+            read_started_ns = time.perf_counter_ns()
+            message = self.observations[name].read()
+            convert_started_ns = time.perf_counter_ns()
+            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
             if message is None:
-                continue  # cache the other signals anyway: this read cleared their ``updated`` flags
+                return None
+            if isinstance(message.data, ObservationError):
+                raise message.data
             if message.updated or name not in self._obs_by_signal:
-                convert_started_ns = time.perf_counter_ns()
                 value = message.data
                 if obs.serializer is not None:
                     value = obs.serializer(value)
@@ -231,8 +178,6 @@ class Harness(pimm.ControlSystem):
                 converted_ns = time.perf_counter_ns() - convert_started_ns
                 step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = converted_ns / 1e6
             inputs.update(self._obs_by_signal[name])
-        if any(message is None for message in messages.values()):
-            return None
         inputs[keys.TASK] = task.instruction
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
@@ -249,7 +194,7 @@ class Harness(pimm.ControlSystem):
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
                 observe_started_ns = time.perf_counter_ns()
-                obs = self._observe(task, runtime.time_ns, step_ms)
+                obs = self.read_obs(task, step_ms)
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
@@ -342,7 +287,7 @@ class Harness(pimm.ControlSystem):
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
             )
-        except StaleObservation:
+        except ObservationError:
             self.deadline_ns.emit(None)
             self.ds_command.emit(DsWriterCommand.ABORT())
             raise
@@ -381,18 +326,18 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.done)
                 if call is not None:
                     payload = None
-                    aborted = None
-                    # rules-allow: swallowed-error — the caller gets the error as its answer, and a stale device ends
-                    # only its episode.
+                    discarded = None
+                    # rules-allow: swallowed-error — the caller gets the error as its answer, and a device that
+                    # gives no data ends only its episode.
                     try:
                         payload = yield from self._run_episode(clock, should_stop, call.request)
-                    except StaleObservation as e:
-                        logging.error(e)
-                        aborted = e
+                    except ObservationError as e:
+                        logging.error(f'Discarded the episode: {e}')
+                        discarded = e
                     finally:
                         self._telemetry.end(clock.now(), partial=True)
                         if payload is None:
-                            call.set_exception(aborted if aborted is not None else pimm.calls.HandlerStopped())
+                            call.set_exception(discarded if discarded is not None else pimm.calls.HandlerStopped())
                     if payload is not None:
                         call.set_result(payload)
                 elif manual is not None:
