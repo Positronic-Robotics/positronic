@@ -32,7 +32,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
 from positronic.policy import Codec
 from positronic.policy.base import ARGS
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
