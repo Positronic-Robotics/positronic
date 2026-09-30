@@ -87,13 +87,11 @@ GIT_DIR_REDIRECT_OPTS = ('--git-dir', '--work-tree', '--namespace')
 # poisons whatever it appears in — a cd's target, a push's refspec.
 SUBST = '\x00subst'
 
-# The branch this repository lands work on, which is the branch both halves of the guard
-# protect. `MAIN_REF_RE` and `switches_to_main` spell it inside a pattern rather than reading it.
 GUARDED_BRANCH = 'main'
 
-# A word that names `main` as a push target or checkout target: `main`, `+main`, `HEAD:main`,
-# `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
-MAIN_REF_RE = re.compile(r'(^|[:/+])main(?![\w/\-])')
+# A word that names the guarded branch as a push target or checkout target: `main`, `+main`,
+# `HEAD:main`, `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
+MAIN_REF_RE = re.compile(rf'(^|[:/+]){re.escape(GUARDED_BRANCH)}(?![\w/\-])')
 
 # gh's own name for the variable that selects a repository, read from the command and from the
 # environment — two places that have to agree with gh and with each other.
@@ -817,7 +815,9 @@ def analyze(  # noqa: C901
 
     def switches_to_main() -> bool:
         return any(
-            sub in ('checkout', 'switch') and not exempt(inv.dir) and any(re.fullmatch(r'\+?main', w) for w in rest)
+            sub in ('checkout', 'switch')
+            and not exempt(inv.dir)
+            and any(w.removeprefix('+') == GUARDED_BRANCH for w in rest)
             for inv, sub, rest in git_invs
         )
 
