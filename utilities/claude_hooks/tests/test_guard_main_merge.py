@@ -576,10 +576,7 @@ def test_end_to_end_subprocess(tmp_path):
 
 
 MERGE_TOOL = 'mcp__github__merge_pull_request'
-# The tools that reach a branch of this repository today. The guard reads a SHAPE rather than this
-# list — `test_a_later_tool_of_the_same_shape_is_caught_without_being_named` is what keeps the
-# enumeration exhaustive — but every one of them is pinned here as well, so a shape that stopped
-# covering one of them fails rather than going quiet.
+# Each is pinned by name beside the shape test, so a shape that stops covering one of them fails.
 BRANCH_WRITE_TOOLS = ['mcp__github__create_or_update_file', 'mcp__github__push_files', 'mcp__github__delete_file']
 GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
 OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
@@ -608,7 +605,6 @@ def test_the_mcp_asks_about_the_pull_request_being_merged():
 
 
 def test_both_halves_spend_one_authorization(tmp_path, as_root, git):
-    """The two paths do not each carry their own idea of what is authorized."""
     write_allow(tmp_path, 566)
 
     def allow(number, slug):
@@ -655,7 +651,6 @@ def test_another_repository_runs_its_own_branch_contract(tool):
 
 
 def test_a_later_tool_of_the_same_shape_is_caught_without_being_named():
-    """The enumeration is a shape, so a tool the MCP grows tomorrow is guarded the day it appears."""
     assert mcp_verdict('mcp__github__replace_branch_contents', {**GUARDED_REPO_ARGS, 'branch': 'main'}) is not None
     assert mcp_verdict('mcp__github__merge_branch', {**GUARDED_REPO_ARGS, 'base': 'main'}) is not None
 
@@ -690,7 +685,6 @@ def guarded_clone(tmp_path):
 
 
 def test_the_mcp_merge_is_refused_end_to_end(guarded_clone):
-    """The hole this closes: the same merge the shell path refuses, arriving as a tool call."""
     r = run_hook({'tool_name': MERGE_TOOL, 'tool_input': merge_args()}, guarded_clone, guarded_clone)
     assert r.returncode == 2 and 'BLOCKED' in r.stderr and '!allow_merge' in r.stderr
 
@@ -708,8 +702,7 @@ def test_an_mcp_read_is_allowed_end_to_end(guarded_clone):
 
 
 @pytest.mark.parametrize('arguments,expected', [({'command': 'git push'}, 2), ({'command': 'ls'}, 0), ({}, 0)])
-def test_the_command_half_is_unchanged_end_to_end(arguments, expected, guarded_clone):
-    """A Bash payload decides exactly what it decided before the MCP half existed."""
+def test_a_bash_payload_is_judged_as_a_command_end_to_end(arguments, expected, guarded_clone):
     payload = {'tool_name': 'Bash', 'tool_input': arguments}
     assert run_hook(payload, guarded_clone, guarded_clone).returncode == expected
 
@@ -728,7 +721,6 @@ def test_a_payload_the_guard_cannot_read_refuses_only_where_a_merge_could_hide(b
 
 
 def test_a_gate_that_cannot_answer_refuses(monkeypatch, capsys, guarded_clone):
-    """An authorization gate fails CLOSED: a crash in it must not become an allow."""
     monkeypatch.setattr(gmm, 'analyze_mcp', lambda *a, **k: 1 / 0)
     monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(guarded_clone))
     monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({'tool_name': MERGE_TOOL, 'tool_input': merge_args()})))

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook guarding this repo's `main` from the agent's Bash tool and from
-the GitHub MCP.
+"""Claude Code PreToolUse hook guarding this repo's `main` from the agent's Bash tool and the GitHub MCP.
 
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
 receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`).
 
-The GitHub MCP reaches the same branch without a shell, so it is read too and answers to the same
-receipt — see `analyze_mcp`. Everything above analyzes a COMMAND; that half is untouched.
+A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
+`main` is refused (`analyze_mcp`).
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -451,29 +450,11 @@ def consume_merge_allow(
     return True
 
 
-# The GitHub MCP puts this repository's `main` one tool call away, with no command for anything
-# above to read: `mcp__github__merge_pull_request` lands a pull request through the API, and
-# `push_files` and its siblings commit straight onto a named branch. Naming those tools would leave
-# the class open — the tool list is the MCP's to change, not ours — so membership is a SHAPE read
-# off the call rather than a list someone has to keep current:
-#
-#   * a call naming `branch` writes to that branch, so naming the guarded branch of the guarded
-#     repository is a direct commit onto `main` (`create_or_update_file`, `push_files` and
-#     `delete_file` today, and anything later spelling its target the same way);
-#   * a call whose tool name carries `merge` lands one branch on another, so it answers to the
-#     receipt `gh pr merge` answers to, spent through the same `consume_merge_allow`
-#     (`merge_pull_request` today).
-#
-# The shape errs toward refusing: a later READ tool with `merge` in its name is refused too, which
-# costs a message telling the caller to use the shell rather than a merge nobody authorized.
-#
-# Considered and left out, each because it cannot itself put a commit on `main`: `update_pull_request`
-# (its `base` decides where a merge WOULD land, and that merge is still gated), `update_pull_request_branch`
-# (writes the pull request's head, which is never its own base), `create_branch` (GitHub refuses to
-# create a branch that exists), and every read tool.
+# A GitHub MCP call reaches a branch in two shapes, read off the call and not off a list of tool
+# names: a call naming `branch` writes that branch; a tool whose name carries `merge` lands one branch
+# on another. A read whose name carries `merge` is refused with it.
 GITHUB_MCP_PREFIX = 'mcp__github__'
 MERGE_VERB = 'merge'
-# The MCP's own argument names, which is how a call says what it acts on.
 MCP_OWNER = 'owner'
 MCP_REPO = 'repo'
 MCP_BRANCH = 'branch'
@@ -487,10 +468,9 @@ def _mcp_slug(arguments: dict) -> str:
 
 
 def _mcp_pull_number(arguments: dict) -> int | None:
-    """The pull request the call names, or None when nothing it carries is one.
+    """The pull request the call names, or None when it names none.
 
-    JSON has one number type, so an integral float is the same number written differently; a bool
-    is an int to Python and names no pull request.
+    A bool is an `int` to Python and names no pull request; an integral float is JSON's spelling of an int.
     """
     number = arguments.get(MCP_PULL_NUMBER)
     if isinstance(number, bool):
@@ -508,12 +488,10 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
         return None
     guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
     if MERGE_VERB in tool.removeprefix(GITHUB_MCP_PREFIX):
-        # Refused wherever it points, exactly as `gh pr merge` is: an authorization names one pull
-        # request of one repository, so a merge of anything else has nothing that could permit it.
-        # The authorization is consulted last, so a refusal on any other ground spends nothing.
         number = _mcp_pull_number(arguments)
         if number is None:
             return MCP_UNNUMBERED_MSG.format(tool=tool)
+        # The receipt is consulted last: consulting it spends it.
         if not guarded_slug or slug != guarded_slug or not allow_merge(number, guarded_slug):
             return MCP_MERGE_MSG.format(tool=tool)
         return None
@@ -944,14 +922,11 @@ def _refuse(message: str) -> int:
 
 
 def main() -> int:
-    """The hook protocol: exit 2 with a message on stderr to refuse the call, 0 to allow it.
+    """Exit 2 with a message on stderr to refuse the call, 0 to allow it.
 
-    The two halves fail in opposite directions, deliberately. The command half is a LINT over text
-    a human still has to have typed, and it has always allowed what it could not read. The MCP half
-    is an AUTHORIZATION gate: nothing else stands between that call and `main`, so an answer it
-    cannot compute is a refusal, not a shrug. There is no environment kill switch for either — one
-    the agent can set is not a gate — so a guard that refuses wrongly is fixed here, in the file the
-    refusal names.
+    A command the guard cannot read is allowed. A GitHub MCP call it cannot read is refused, since
+    nothing else stands between that call and `main`. No environment variable disables the guard: a
+    switch the agent can set is not a gate.
     """
     raw = sys.stdin.read()
     try:
@@ -959,8 +934,7 @@ def main() -> int:
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         payload = None
     if not isinstance(payload, dict):
-        # Which half this belonged to is exactly what cannot be read. A payload whose text names the
-        # GitHub MCP might carry a merge, so it is refused; anything else keeps the historical allow.
+        # The tool name is unreadable too, so the raw text is searched for the MCP prefix.
         return _refuse(MCP_UNREADABLE_MSG) if GITHUB_MCP_PREFIX in raw else 0
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))

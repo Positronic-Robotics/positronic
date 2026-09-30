@@ -26,7 +26,7 @@ def tool_name(payload: dict) -> str:
 
 
 def tool_input(payload: dict) -> dict:
-    """The arguments a tool call carries, or {} when it carries none readable as arguments."""
+    """The arguments a tool call carries, or {} when the payload holds no dict of them."""
     arguments = payload.get(TOOL_INPUT)
     return arguments if isinstance(arguments, dict) else {}
 
