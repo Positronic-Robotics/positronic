@@ -452,11 +452,8 @@ def consume_merge_allow(
     return True
 
 
-# A GitHub MCP call reaches a branch in three shapes, read off the call and not off a list of tool
-# names: a call naming `branch` writes that branch; a tool whose name carries `merge` lands one branch
-# on another; a tool whose name carries `branch` and names a pull request merges the base into that
-# pull request's head, which can be the guarded branch. A read whose name carries one of those words
-# is refused with it.
+# Membership is a shape read off the call, not a list of tool names. A tool whose name carries
+# `branch` and names a pull request merges the base into the head, which can be the guarded branch.
 GITHUB_MCP_PREFIX = 'mcp__github__'
 MERGE_VERB = 'merge'
 BRANCH_VERB = 'branch'
@@ -939,8 +936,8 @@ def main() -> int:
     """Exit 2 with a message on stderr to refuse the call, 0 to allow it.
 
     A command the guard cannot read is allowed. A GitHub MCP call it cannot read is refused, since
-    nothing else stands between that call and `main`. No environment variable disables the guard: a
-    switch the agent can set is not a gate.
+    nothing else stands between that call and `main`. No environment variable disables the guard,
+    since the agent could set it.
     """
     raw = sys.stdin.read()
     try:
