@@ -68,6 +68,10 @@ MCP_BRANCH_WRITE_MSG = (
     'BLOCKED: {tool} commits straight onto `{branch}` of this repository. Put the change on a'
     ' branch of its own and open a pull request.'
 )
+MCP_UPDATE_BRANCH_MSG = (
+    'BLOCKED: {tool} merges the base of a pull request into its head, which can be `{branch}`.'
+    ' Rebase the branch in a worktree and push it instead.'
+)
 MCP_UNREADABLE_MSG = (
     'BLOCKED: this GitHub MCP call could not be read, so the guard cannot tell whether it merges.'
     ' Run the merge as `gh pr merge <number>` in Bash instead, where the command is read and a'
@@ -448,11 +452,14 @@ def consume_merge_allow(
     return True
 
 
-# A GitHub MCP call reaches a branch in two shapes, read off the call and not off a list of tool
+# A GitHub MCP call reaches a branch in three shapes, read off the call and not off a list of tool
 # names: a call naming `branch` writes that branch; a tool whose name carries `merge` lands one branch
-# on another. A read whose name carries `merge` is refused with it.
+# on another; a tool whose name carries `branch` and names a pull request merges the base into that
+# pull request's head, which can be the guarded branch. A read whose name carries one of those words
+# is refused with it.
 GITHUB_MCP_PREFIX = 'mcp__github__'
 MERGE_VERB = 'merge'
+BRANCH_VERB = 'branch'
 MCP_OWNER = 'owner'
 MCP_REPO = 'repo'
 MCP_BRANCH = 'branch'
@@ -484,8 +491,9 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
     """The deny message for a GitHub MCP call, or None to allow it."""
     if not tool.startswith(GITHUB_MCP_PREFIX):
         return None
+    verb = tool.removeprefix(GITHUB_MCP_PREFIX)
     guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
-    if MERGE_VERB in tool.removeprefix(GITHUB_MCP_PREFIX):
+    if MERGE_VERB in verb:
         number = _mcp_pull_number(arguments)
         if number is None:
             return MCP_UNNUMBERED_MSG.format(tool=tool)
@@ -493,8 +501,14 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
         if not guarded_slug or slug != guarded_slug or not allow_merge(number, guarded_slug):
             return MCP_MERGE_MSG.format(tool=tool)
         return None
-    if slug and slug == guarded_slug and str(arguments.get(MCP_BRANCH) or '') == GUARDED_BRANCH:
+    # A write the guard cannot place — no repository named, or none to compare it against — is
+    # treated as a write onto this repository.
+    if slug and guarded_slug and slug != guarded_slug:
+        return None
+    if str(arguments.get(MCP_BRANCH) or '') == GUARDED_BRANCH:
         return MCP_BRANCH_WRITE_MSG.format(tool=tool, branch=GUARDED_BRANCH)
+    if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
+        return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
     return None
 
 

@@ -576,6 +576,7 @@ def test_end_to_end_subprocess(tmp_path):
 
 
 MERGE_TOOL = 'mcp__github__merge_pull_request'
+UPDATE_BRANCH_TOOL = 'mcp__github__update_pull_request_branch'
 # Each is pinned by name beside the shape test, so a shape that stops covering one of them fails.
 BRANCH_WRITE_TOOLS = ['mcp__github__create_or_update_file', 'mcp__github__push_files', 'mcp__github__delete_file']
 GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
@@ -650,9 +651,28 @@ def test_another_repository_runs_its_own_branch_contract(tool):
     assert mcp_verdict(tool, {**OTHER_REPO_ARGS, 'branch': 'main', 'message': 'm'}) is None
 
 
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_onto_main_is_refused_when_the_guarded_repository_cannot_be_read(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'branch': 'main', 'message': 'm'}, guarded='') is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_onto_main_that_names_no_repository_is_refused(tool):
+    assert mcp_verdict(tool, {'branch': 'main', 'message': 'm'}) is not None
+
+
+def test_a_pull_request_branch_update_of_this_repository_is_refused():
+    assert mcp_verdict(UPDATE_BRANCH_TOOL, {**GUARDED_REPO_ARGS, 'pullNumber': 566}) is not None
+
+
+def test_a_pull_request_branch_update_of_another_repository_is_untouched():
+    assert mcp_verdict(UPDATE_BRANCH_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}) is None
+
+
 def test_a_later_tool_of_the_same_shape_is_caught_without_being_named():
     assert mcp_verdict('mcp__github__replace_branch_contents', {**GUARDED_REPO_ARGS, 'branch': 'main'}) is not None
     assert mcp_verdict('mcp__github__merge_branch', {**GUARDED_REPO_ARGS, 'base': 'main'}) is not None
+    assert mcp_verdict('mcp__github__sync_pull_request_branch', {**GUARDED_REPO_ARGS, 'pullNumber': 566}) is not None
 
 
 @pytest.mark.parametrize(
@@ -661,7 +681,8 @@ def test_a_later_tool_of_the_same_shape_is_caught_without_being_named():
         ('mcp__github__get_file_contents', {**GUARDED_REPO_ARGS, 'path': 'x'}),
         ('mcp__github__list_pull_requests', GUARDED_REPO_ARGS),
         ('mcp__github__create_pull_request', {**GUARDED_REPO_ARGS, 'base': 'main', 'head': 'feature-x'}),
-        ('mcp__github__update_pull_request_branch', {**GUARDED_REPO_ARGS, 'pullNumber': 566}),
+        ('mcp__github__update_pull_request', {**GUARDED_REPO_ARGS, 'pullNumber': 566, 'base': 'main'}),
+        ('mcp__github__list_branches', GUARDED_REPO_ARGS),
         ('mcp__tracker__create_ticket', {'title': 'merge the branch onto main'}),
         ('Bash', {'command': 'gh pr merge 566'}),
     ],
