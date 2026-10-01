@@ -82,11 +82,11 @@ jobs:
           awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 50e9) }'
 
       # The environment is the locked set of the groups the server runs on, and the server's modules import with
-      # no network.
-      - name: Check the environment offline
+      # no network. The check reads the network: uv fetches the git dependencies to read their metadata.
+      - name: Check the environment
         run: |
           image=positro/cosmos3-nano:local
-          docker run --rm --network none --entrypoint uv "$image" sync --locked --offline --check \
+          docker run --rm --entrypoint uv "$image" sync --locked --check \
             --all-extras --group=cu130-torch213-train --group=policy-server
           docker run --rm --network none --entrypoint python "$image" \
             -c 'import cosmos_framework.scripts.action_policy_server_robolab'
