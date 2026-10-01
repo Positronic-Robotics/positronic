@@ -125,9 +125,8 @@ the server.
   a wrong token, and serves `token`. It proves the readiness call and each path in
   `SESSION_PATHS_OF_WIRE`, so it covers `websocket` and `roboarena`.
 
-The probe makes each readiness call in a forked child with a memory limit, and kills the child at the
-deadline. A server that trickles or floods its answer then costs one deadline and none of the caller's
-memory. The child needs Linux. On another system `readiness_of` raises `NotImplementedError`.
+Each readiness call runs in a forked child that the probe kills at the deadline, so `probe` needs
+Linux. On another system `readiness_of` raises `NotImplementedError`.
 
 ## What each consumer pays
 

@@ -1,9 +1,8 @@
 """Whether a policy server serves, and whether its bearer-token gate holds.
 
 The readiness call is the server's own wire: its keepalive call, and its probe where it serves none.
-The server can be an image the caller did not write, so each readiness call runs in a forked child
-process that is killed at a wall-clock deadline and holds a memory limit. That needs Linux: on macOS a
-forked child can abort in a system library, and the limit reads `/proc`.
+Each readiness call runs in a forked Linux child that holds a memory limit and is killed at a
+wall-clock deadline, so a server the caller did not write cannot hold the caller.
 """
 
 import logging
@@ -136,6 +135,7 @@ def _ask_in_child(ask: Callable[[], Answer], deadline_s: float, where: str) -> A
     A killed child reads nothing more, so a trickling or a flooding server spends one deadline at most,
     and none of this process's memory.
     """
+    # The memory limit reads `/proc`, and on macOS a forked child can abort in a system library.
     if sys.platform != 'linux':
         raise NotImplementedError(f'a readiness call runs in a forked child, which needs Linux, not {sys.platform}')
     read_end, write_end = os.pipe()
