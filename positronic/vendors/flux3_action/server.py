@@ -46,9 +46,6 @@ SERVER_CONFIG: dict[str, Any] = {
 }
 
 Handle = Callable[[websockets.asyncio.server.ServerConnection], Awaitable[None]]
-ProcessRequest = Callable[
-    [websockets.asyncio.server.ServerConnection, websockets.http11.Request], websockets.http11.Response | None
-]
 
 
 def run_token(environ: Mapping[str, str]) -> str | None:
@@ -71,33 +68,20 @@ def carries_token(headers: Mapping[str, str], token: str | None) -> bool:
     return hmac.compare_digest(presented.encode(), f'Bearer {token}'.encode())
 
 
-def gated(process_request: ProcessRequest, token: str | None) -> ProcessRequest:
-    """`process_request`, behind a 401 for a request that does not carry `token`."""
+def server(handle: Handle, host: str, port: int, token: str | None):
+    """The server behind `token`, with the transport settings of BFL's `serve_async`. It binds only when entered."""
 
-    def check(connection, request):
+    def answer_before_handshake(
+        connection: websockets.asyncio.server.ServerConnection, request: websockets.http11.Request
+    ) -> websockets.http11.Response | None:
         if not carries_token(request.headers, token):
             return connection.respond(http.HTTPStatus.UNAUTHORIZED, 'Invalid or missing bearer token\n')
-        return process_request(connection, request)
+        if request.path == HEALTH_PATH:
+            return connection.respond(http.HTTPStatus.OK, 'OK\n')
+        return None
 
-    return check
-
-
-def answer_health(
-    connection: websockets.asyncio.server.ServerConnection, request: websockets.http11.Request
-) -> websockets.http11.Response | None:
-    """A 200 on `HEALTH_PATH`. Every other request goes on to the WebSocket handshake."""
-    if request.path == HEALTH_PATH:
-        return connection.respond(http.HTTPStatus.OK, 'OK\n')
-    return None
-
-
-def server(handle: Handle, host: str, port: int, token: str | None):
-    """The server behind `token`, with the transport settings of BFL's `serve_async`.
-
-    It binds only when entered. `main` enters it after the policy is loaded and warm.
-    """
     return websockets.asyncio.server.serve(
-        handle, host, port, compression=None, max_size=None, process_request=gated(answer_health, token)
+        handle, host, port, compression=None, max_size=None, process_request=answer_before_handshake
     )
 
 
@@ -138,6 +122,7 @@ def main(argv: list[str] | None = None) -> None:
         flush=True,
     )
     handle = functools.partial(robolab._handle, adapter=adapter, metadata=metadata)
+    # The port binds after the warm-up, so `HEALTH_PATH` answers only once the model can serve.
     asyncio.run(serve_forever(handle, args.host, args.port, token))
 
 
