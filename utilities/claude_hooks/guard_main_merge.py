@@ -541,16 +541,21 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
     return None
 
 
-GH_API_TIMEOUT_S = 30
+# The whole stack lookup, every `gh api` call together, finishes inside the hook's own timeout in
+# `.claude/settings.json`: a hook killed at its deadline returns no verdict.
+STACK_LOOKUP_BUDGET_S = 25
 
 
 class StackLookupError(RuntimeError):
     """What a merge takes is unknown: the GitHub stack of its pull request cannot be read."""
 
 
-def _gh_json(path: str):
+def _gh_json(path: str, deadline: float):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise StackLookupError(f'`gh api {path}` did not run: the stack lookup ran out of time')
     try:
-        done = subprocess.run(['gh', 'api', path], capture_output=True, text=True, timeout=GH_API_TIMEOUT_S)
+        done = subprocess.run(['gh', 'api', path], capture_output=True, text=True, timeout=remaining)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise StackLookupError(f'`gh api {path}` did not run: {e}') from None
     if done.returncode != 0:
@@ -567,13 +572,14 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     GitHub merges a pull request in a stack together with every open one below it. The stack
     order comes from the chain of base refs: the stack API does not state the order of its members.
     """
-    stacks = gh_json(f'repos/{guarded_slug}/stacks?pull_request={number}')
+    deadline = time.monotonic() + STACK_LOOKUP_BUDGET_S
+    stacks = gh_json(f'repos/{guarded_slug}/stacks?pull_request={number}', deadline)
     if not stacks:
         return []
     try:
         stack = stacks[0]
         head_of = {pr['number']: pr['head']['ref'] for pr in stack['pull_requests'] if pr['state'] == 'open'}
-        number_on_base = {gh_json(f'repos/{guarded_slug}/pulls/{n}')['base']['ref']: n for n in head_of}
+        number_on_base = {gh_json(f'repos/{guarded_slug}/pulls/{n}', deadline)['base']['ref']: n for n in head_of}
         ref = stack['base']['ref']
     except (KeyError, TypeError, IndexError) as e:
         raise StackLookupError(f'the stack of #{number} has an unexpected shape: {e!r}') from None
