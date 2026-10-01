@@ -4,7 +4,9 @@
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
-receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`).
+receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`). A pull
+request in a GitHub stack merges together with every open one below it, so that merge needs a receipt
+for each of them (see `merged_along_with`).
 
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
@@ -76,6 +78,14 @@ MCP_UNREADABLE_MSG = (
     'BLOCKED: this GitHub MCP call could not be read, so the guard cannot tell whether it merges.'
     ' Run the merge as `gh pr merge <number>` in Bash instead, where the command is read and a'
     ' `!allow_merge <pr>` receipt applies.'
+)
+STACKED_MERGE_MSG = (
+    'BLOCKED: #{number} is in a GitHub stack, so its merge also merges {below}. A named human authorizes each'
+    ' pull request the merge takes from chat with `!allow_merge <pr>`. Not authorized: {missing}.'
+)
+STACK_LOOKUP_MSG = (
+    'BLOCKED: the guard cannot tell which pull requests the merge of #{number} takes: {reason}.'
+    ' Get the stack from GitHub before you try the merge again.'
 )
 
 # git global options that consume the following argument in their space-separated form
@@ -405,6 +415,42 @@ def _written_by_root(path: Path, directory: Path) -> bool:
     return file_stat.st_uid == 0 and dir_stat.st_uid == 0 and not dir_stat.st_mode & 0o022
 
 
+def _honoured_receipt_id(number: int, guarded_slug: str, directory: Path, now: float | None) -> str | None:
+    """The id of a live receipt a human wrote for this pull request, or None."""
+    path = directory / RECEIPT_NAME.format(number=number)
+    if not _written_by_root(path, directory):
+        return None
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if receipt.get(RECEIPT_NUMBER) != number:
+        return None
+    repo = str(receipt.get(RECEIPT_REPO) or '').casefold()
+    slug = guarded_slug.casefold()
+    if repo and repo != slug and repo != slug.rpartition('/')[2]:
+        return None
+    issued_at, ttl = receipt.get(RECEIPT_ISSUED_AT, 0), receipt.get(RECEIPT_TTL_S, 0)
+    if (now if now is not None else time.time()) - issued_at >= ttl:
+        return None
+    identifier = str(receipt.get(RECEIPT_ID) or '')
+    if not re.fullmatch(r'\w{4,64}', identifier):
+        return None
+    return identifier
+
+
+def merge_authorized(
+    number: int,
+    guarded_slug: str,
+    directory: Path = MERGE_ALLOW_DIR,
+    spent_dir: Path = MERGE_SPENT_DIR,
+    now: float | None = None,
+) -> bool:
+    """Whether a human has authorized merging this pull request, without spending the authorization."""
+    identifier = _honoured_receipt_id(number, guarded_slug, directory, now)
+    return identifier is not None and not (spent_dir / f'pr{number}-{identifier}').exists()
+
+
 def consume_merge_allow(
     number: int,
     guarded_slug: str,
@@ -423,24 +469,8 @@ def consume_merge_allow(
     An empty repo in the receipt names only a number, which resolves against the guarded
     repository.
     """
-    path = directory / RECEIPT_NAME.format(number=number)
-    if not _written_by_root(path, directory):
-        return False
-    try:
-        receipt = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if receipt.get(RECEIPT_NUMBER) != number:
-        return False
-    repo = str(receipt.get(RECEIPT_REPO) or '').casefold()
-    slug = guarded_slug.casefold()
-    if repo and repo != slug and repo != slug.rpartition('/')[2]:
-        return False
-    issued_at, ttl = receipt.get(RECEIPT_ISSUED_AT, 0), receipt.get(RECEIPT_TTL_S, 0)
-    if (now if now is not None else time.time()) - issued_at >= ttl:
-        return False
-    identifier = str(receipt.get(RECEIPT_ID) or '')
-    if not re.fullmatch(r'\w{4,64}', identifier):
+    identifier = _honoured_receipt_id(number, guarded_slug, directory, now)
+    if identifier is None:
         return False
     spent = spent_dir / f'pr{number}-{identifier}'
     spent_dir.mkdir(parents=True, exist_ok=True)
@@ -510,6 +540,51 @@ def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consu
     if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
         return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
     return None
+
+
+GH_API_TIMEOUT_S = 30
+
+
+class StackLookupError(RuntimeError):
+    """The GitHub stack of a pull request cannot be read, so what its merge takes is unknown."""
+
+
+def _gh_json(path: str):
+    try:
+        done = subprocess.run(['gh', 'api', path], capture_output=True, text=True, timeout=GH_API_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise StackLookupError(f'`gh api {path}` did not run: {e}') from None
+    if done.returncode != 0:
+        raise StackLookupError(f'`gh api {path}` failed: {done.stderr.strip()[:300]}')
+    try:
+        return json.loads(done.stdout)
+    except json.JSONDecodeError as e:
+        raise StackLookupError(f'`gh api {path}` returned no JSON: {e}') from None
+
+
+def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[int]:
+    """The open pull requests that a merge of `number` also merges, bottom of the stack first.
+
+    GitHub merges a pull request in a stack together with every open one below it. The stack
+    API does not state the order of its members, so the order comes from the chain of base refs.
+    """
+    stacks = gh_json(f'repos/{guarded_slug}/stacks?pull_request={number}')
+    if not stacks:
+        return []
+    try:
+        stack = stacks[0]
+        head_of = {pr['number']: pr['head']['ref'] for pr in stack['pull_requests'] if pr['state'] == 'open'}
+        number_on_base = {gh_json(f'repos/{guarded_slug}/pulls/{n}')['base']['ref']: n for n in head_of}
+        ref = stack['base']['ref']
+    except (KeyError, TypeError, IndexError) as e:
+        raise StackLookupError(f'the stack of #{number} has an unexpected shape: {e!r}') from None
+    chain = []
+    while ref in number_on_base and len(chain) < len(head_of):
+        chain.append(number_on_base[ref])
+        ref = head_of[chain[-1]]
+    if number not in chain:
+        raise StackLookupError(f'the open pull requests of the stack of #{number} do not form one chain from its base')
+    return chain[: chain.index(number)]
 
 
 def _carries_substitution(cmd: str) -> bool:
@@ -804,6 +879,8 @@ def analyze(  # noqa: C901
     in_substitution=False,
     allow_merge=consume_merge_allow,
     gh_repo_env='',
+    authorized=merge_authorized,
+    stack_below=merged_along_with,
 ) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
@@ -812,7 +889,19 @@ def analyze(  # noqa: C901
     # guards against pathological nesting.
     if _depth < 8:
         for body in _substitution_bodies(_strip_heredoc_bodies(cmd)):
-            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, True, allow_merge, gh_repo_env)
+            deny = analyze(
+                body,
+                cwd,
+                guarded_slug,
+                git,
+                path_exists,
+                _depth + 1,
+                True,
+                allow_merge,
+                gh_repo_env,
+                authorized,
+                stack_below,
+            )
             if deny:
                 return deny
     invs = parse_invocations(cmd, cwd, path_exists)
@@ -894,9 +983,29 @@ def analyze(  # noqa: C901
             if deny:
                 return deny
 
-    if pending_merge is not None and not allow_merge(pending_merge, guarded_slug):
+    if pending_merge is not None:
+        return _authorize_merge(pending_merge, guarded_slug, allow_merge, authorized, stack_below)
+    return None
+
+
+def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, stack_below) -> str | None:
+    """The deny message for a merge of `number`, or None after spending one authorization per pull request it takes."""
+    if not authorized(number, guarded_slug):
+        return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+    try:
+        below = stack_below(number, guarded_slug)
+    except StackLookupError as e:
+        return STACK_LOOKUP_MSG.format(number=number, reason=e)
+    missing = [n for n in below if not authorized(n, guarded_slug)]
+    if missing:
+        return STACKED_MERGE_MSG.format(number=number, below=_pr_list(below), missing=_pr_list(missing))
+    if not all(allow_merge(n, guarded_slug) for n in [*below, number]):
         return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
     return None
+
+
+def _pr_list(numbers: list[int]) -> str:
+    return ', '.join(f'#{n}' for n in numbers)
 
 
 def _check_push_refspecs(rest: list[str], to_main: bool) -> str | None:
