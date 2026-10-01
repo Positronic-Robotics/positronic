@@ -18,7 +18,7 @@ def test_the_fake_droid_builds_without_the_vendor_packages():
     built = embodiment.droid_fake.instantiate()
 
     assert set(built.observations) == {keys.ROBOT_STATE, keys.GRIP, *camera.droid}
-    assert set(built.ready_handlers) == {eval_keys.ARM}
+    assert set(built.ready_handlers) == {eval_keys.ARM, *camera.droid}
 
 
 def test_the_fake_droid_declares_what_the_real_droid_declares():
