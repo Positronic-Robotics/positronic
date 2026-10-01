@@ -488,7 +488,7 @@ def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
 def fake_github(stack_members, bases, stack_base='main'):
     """A `gh api` stand-in serving one stack: members as (number, head ref, state), and each base ref."""
 
-    def gh_json(path):
+    def gh_json(path, deadline):
         if '/stacks?' in path:
             if stack_members is None:
                 return []
@@ -525,6 +525,19 @@ def test_a_merged_layer_is_not_taken_again():
 def test_a_stack_whose_open_layers_form_no_chain_is_unreadable():
     with pytest.raises(gmm.StackLookupError):
         gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, {101: 'main', 102: 'x', 103: 'b'}))
+
+
+def test_a_stack_lookup_out_of_time_is_unreadable_without_running_gh(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('gh ran past the deadline'))
+    with pytest.raises(gmm.StackLookupError):
+        gmm._gh_json('repos/o/r/pulls/1', deadline=0)
+
+
+def test_the_stack_lookup_finishes_inside_the_hook_timeout():
+    settings = json.loads((Path(__file__).parents[3] / '.claude' / 'settings.json').read_text())
+    hooks = [h for entry in settings['hooks']['PreToolUse'] for h in entry['hooks']]
+    (guard,) = [h for h in hooks if h['command'].endswith('guard_main_merge.py"')]
+    assert gmm.STACK_LOOKUP_BUDGET_S < guard['timeout']
 
 
 def test_merge_authorized_does_not_spend_the_receipt(tmp_path, as_root):
