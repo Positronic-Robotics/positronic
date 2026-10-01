@@ -1,8 +1,4 @@
-"""What counts as a policy server that serves, and whether its token gate holds.
-
-The readiness calls run against real servers on loopback, because the property under test is a
-wall-clock and a memory bound against a server that misbehaves, and no fake can hold that.
-"""
+"""What counts as a policy server that serves, and whether its token gate holds."""
 
 import json
 import logging
@@ -19,7 +15,7 @@ from positronic_wire import probe
 from positronic_wire.grpc import GrpcClientWire
 from positronic_wire.probe import Answer, Gate
 from positronic_wire.roboarena import RoboarenaClientWire
-from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWire
+from positronic_wire.websocket import WebsocketClientWire, WebsocketTlsClientWire, WebsocketUnixClientWire
 from positronic_wire.wire import (
     ALIVE_SECONDS,
     AUTH_HEADER,
@@ -48,6 +44,7 @@ _ROBOARENA = RoboarenaClientWire()
 class _Wire:
     """A client wire answering one readiness call as a test says, recording the probe's timeout."""
 
+    NAME = WebsocketClientWire.NAME
     keepalive_raises: Exception | None = None
     probed: Refusal | None = None
     keepalive_takes_s: float = 0.0
@@ -128,6 +125,14 @@ def test_any_other_answer_settles_the_question(answer):
 def test_a_wire_that_dials_no_host_and_port_has_no_address_on_one():
     with pytest.raises(ValueError, match='websocket_unix'):
         probe.address_on(WebsocketUnixClientWire(), '127.0.0.1', 8000)
+
+
+def test_a_readiness_call_refuses_a_wire_whose_refusals_chain_the_status_the_server_sent():
+    """A gated gRPC server's `PERMISSION_DENIED` arrives as the cause, which reads as no answer."""
+    with pytest.raises(ValueError, match='not grpc'):
+        probe.readiness_of(GrpcClientWire(), '127.0.0.1', 8000, 1.0)
+    with pytest.raises(ValueError, match='not grpc'):
+        probe.answer_of(GrpcClientWire(), HostPortAddress('127.0.0.1', 8000, SESSION_PATH, ''), None, 1.0)
 
 
 def test_a_readiness_call_refuses_a_system_other_than_linux(monkeypatch):
@@ -233,6 +238,16 @@ def test_a_redirect_is_an_answer_and_reaches_no_other_origin():
     host, port = _served(redirects)
     assert probe.readiness_of(_WEBSOCKET, host, port, 5.0, {AUTH_HEADER: bearer('tok')}) is Answer.final
     assert reached == [], 'nothing reached the other origin'
+
+
+@forks
+def test_a_tls_readiness_call_sends_nothing_in_the_clear():
+    """Nothing here presents a certificate, so the handshake fails before a request goes out."""
+    asked: list[bytes] = []
+    host, port = _served(_answering(b'HTTP/1.1 200 OK', asked))
+    headers = {AUTH_HEADER: bearer('SECRET-TOKEN')}
+    assert probe.readiness_of(WebsocketTlsClientWire(), host, port, 5.0, headers) is Answer.silent
+    assert all(b'SECRET-TOKEN' not in request for request in asked)
 
 
 @forks

@@ -21,7 +21,7 @@ from http import HTTPStatus
 from typing import Any
 
 from positronic_wire.roboarena import RoboarenaAddress, RoboarenaClientWire, TextAnswer
-from positronic_wire.websocket import WebsocketClientWire
+from positronic_wire.websocket import WebsocketClientWire, WebsocketTlsClientWire
 from positronic_wire.wire import (
     AUTH_HEADER,
     SESSION_PATH,
@@ -65,6 +65,10 @@ class Answer(Enum):
 # What a policy server itself answers its readiness call with, whether or not the caller holds its token.
 POLICY_ANSWERS = frozenset({Answer.admitted, Answer.no_keepalive, Answer.refused})
 
+# The wires a readiness call reads. Each refuses with a library error as the cause only where no server
+# answered. The gRPC wires do not: every refusal they raise chains the status the server sent.
+READINESS_WIRES = frozenset({WebsocketClientWire.NAME, WebsocketTlsClientWire.NAME, RoboarenaClientWire.NAME})
+
 # What a readiness call's child may map beyond what it inherits: room for the wire's thread stack and a
 # TLS context. A flooding answer ends the child when it reaches this.
 CHILD_HEADROOM_BYTES = 64 * 1024 * 1024
@@ -83,17 +87,23 @@ def _answer_of_refusal(refusal: Refusal, *, answered: bool) -> Answer:
     return {Refusal.COLD: Answer.cold, Refusal.FORBIDDEN: Answer.refused, Refusal.FINAL: Answer.final}[refusal]
 
 
+def _require_readiness_wire(wire: ClientWire[Any]) -> None:
+    if wire.NAME not in READINESS_WIRES:
+        raise ValueError(f'a readiness call reads the wires {", ".join(sorted(READINESS_WIRES))}, not {wire.NAME}')
+
+
 def answer_of(
     wire: ClientWire[Any], address: SessionAddress, headers: Mapping[str, str] | None, timeout: float
 ) -> Answer:
     """What the server at `address` answers one readiness call on `wire` with, in this process.
 
     The keepalive call, and the wire's probe where the server serves none. `timeout` bounds each phase
-    as the wire times it, not the whole call.
+    as the wire times it, not the whole call. `wire` is one of `READINESS_WIRES`.
 
     FOOTGUN: `ConnectRefused` does not say whether a server answered, so this reads its cause. A wire
-    gives the library error as the cause, and a refusal read off a status has none.
+    in `READINESS_WIRES` gives the library error as the cause, and a refusal read off a status has none.
     """
+    _require_readiness_wire(wire)
     started = time.monotonic()
     try:
         wire.keepalive(address, headers, timeout)
@@ -194,6 +204,7 @@ def readiness_of(
     FOOTGUN: the child is forked. In a caller with other threads it can block on a lock one of them held
     at the fork, and then reads as `Answer.silent` at the deadline.
     """
+    _require_readiness_wire(wire)
     address = address_on(wire, host, port)
     return _ask_in_child(lambda: answer_of(wire, address, headers, deadline_s), deadline_s, f'{host}:{port}')
 

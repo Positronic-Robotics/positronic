@@ -41,7 +41,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
-| `positronic_wire.probe` | `readiness_of`, `serving` and `gate`, which say whether a policy server is up and whether its token gate holds; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `warming`, `answer_of`, the same call in this process, `address_on`, `Gate`, `status_of`, the status line one bounded GET reads, `SESSION_PATHS_OF_WIRE`, `MODEL_SESSION_PATH`, `ROBOARENA_SESSION_PATH` and `CHILD_HEADROOM_BYTES` |
+| `positronic_wire.probe` | `readiness_of`, `serving` and `gate`, which say whether a policy server is up and whether its token gate holds; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `READINESS_WIRES`, the wires a readiness call reads, `warming`, `answer_of`, the same call in this process, `address_on`, `Gate`, `status_of`, the status line one bounded GET reads, `SESSION_PATHS_OF_WIRE`, `MODEL_SESSION_PATH`, `ROBOARENA_SESSION_PATH` and `CHILD_HEADROOM_BYTES` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
 `websocket_wire.WebsocketWire`, `grpc_wire.GrpcWire`, the session protocol, `InferenceClient` and
@@ -115,12 +115,13 @@ before it dials, and names both in the refusal.
 
 ## Proving a policy server
 
-`probe` answers two questions about a policy server on a host and a port. The caller need not trust
-the server.
+`probe` tells whether a policy server on a host and a port is up, and whether its token gate holds.
+The caller need not trust the server.
 
 - `serving(wire, host, port, deadline_s)` — whether the server is up. The readiness call is the
   keepalive call, or the wire's probe where the server serves no keepalive call. Any answer except
-  one to wait on (`Answer.cold`, `Answer.silent`) counts, a refusal included.
+  one to wait on (`Answer.cold`, `Answer.silent`) counts, a refusal included. It reads the wires in
+  `READINESS_WIRES`: `websocket`, `websocket_tls` and `roboarena`.
 - `gate(wire, host, port, token, deadline_s)` — whether every route refuses a caller with no token or
   a wrong token, and serves `token`. It proves the readiness call and each path in
   `SESSION_PATHS_OF_WIRE`, so it covers `websocket` and `roboarena`.
