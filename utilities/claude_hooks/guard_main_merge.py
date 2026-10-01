@@ -4,9 +4,8 @@
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
-receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`). A pull
-request in a GitHub stack merges together with every open one below it, so that merge needs a receipt
-for each of them (see `merged_along_with`).
+receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`). A merge
+needs a receipt for each pull request it takes (see `merged_along_with`).
 
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
@@ -546,7 +545,7 @@ GH_API_TIMEOUT_S = 30
 
 
 class StackLookupError(RuntimeError):
-    """The GitHub stack of a pull request cannot be read, so what its merge takes is unknown."""
+    """What a merge takes is unknown: the GitHub stack of its pull request cannot be read."""
 
 
 def _gh_json(path: str):
@@ -566,7 +565,7 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     """The open pull requests that a merge of `number` also merges, bottom of the stack first.
 
     GitHub merges a pull request in a stack together with every open one below it. The stack
-    API does not state the order of its members, so the order comes from the chain of base refs.
+    order comes from the chain of base refs: the stack API does not state the order of its members.
     """
     stacks = gh_json(f'repos/{guarded_slug}/stacks?pull_request={number}')
     if not stacks:
