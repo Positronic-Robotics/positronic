@@ -12,7 +12,6 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers import ObservationError
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -93,7 +92,7 @@ class Harness(pimm.ControlSystem):
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
     Its answer carries the terminal payload. Between episodes, manual commands pass through.
-    An ``ObservationError`` on an observation discards the episode before the policy reads it, and the answer
+    A ``pimm.SignalError`` on an observation discards the episode before the policy reads it, and the answer
     raises that error. The harness keeps serving calls.
     """
 
@@ -151,7 +150,7 @@ class Harness(pimm.ControlSystem):
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
-        Return ``None`` if a required signal has no message. Raise the ``ObservationError`` a signal carries.
+        Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
         Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
         """
@@ -164,8 +163,9 @@ class Harness(pimm.ControlSystem):
             step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
             if message is None:
                 return None
-            if isinstance(message.data, ObservationError):
-                raise message.data
+            if isinstance(message.data, pimm.SignalError):
+                # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
+                raise message.data.with_traceback(None)
             if message.updated or name not in self._obs_by_signal:
                 value = message.data
                 if obs.serializer is not None:
@@ -287,7 +287,7 @@ class Harness(pimm.ControlSystem):
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
             )
-        except ObservationError:
+        except pimm.SignalError:
             self.deadline_ns.emit(None)
             self.ds_command.emit(DsWriterCommand.ABORT())
             raise
@@ -331,7 +331,7 @@ class Harness(pimm.ControlSystem):
                     # ends only its episode.
                     try:
                         payload = yield from self._run_episode(clock, should_stop, call.request)
-                    except ObservationError as e:
+                    except pimm.SignalError as e:
                         logging.error(f'Discarded the episode: {e}')
                         discarded = e
                     finally:

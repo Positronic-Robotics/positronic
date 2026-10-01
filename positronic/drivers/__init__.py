@@ -10,10 +10,6 @@ __path__ = _extend_path(__path__, __name__)
 HARDWARE_EXTRA_HINT = 'Re-run with the hardware extra:\n  uv run --locked --extra hardware ...\n'
 
 
-class ObservationError(Exception):
-    """The value a driver emits on an observation signal while its device gives no data."""
-
-
 @contextmanager
 def vendor_import(
     package: str, description: str, hint: str = HARDWARE_EXTRA_HINT, platforms: tuple[str, ...] = ()

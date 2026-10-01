@@ -2,6 +2,7 @@
 
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
@@ -22,7 +23,6 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
-from positronic.drivers import ObservationError
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
@@ -424,7 +424,7 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('move', None), policy, None))
     next(h.loop)
-    error = ObservationError('camera lost')
+    error = pimm.SignalError('camera lost')
     if lost:
         h.observation.emit(error)
     h.world.clock.advance_to_ns(5_000_000_000)  # no new data for 5 s either way
@@ -435,7 +435,7 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
         assert policy.seen == [1, 1]
         assert records == [DsWriterCommandType.START_EPISODE]
         return
-    with pytest.raises(ObservationError) as raised:
+    with pytest.raises(pimm.SignalError) as raised:
         answer.result()
     assert raised.value is error
     assert policy.seen == [1]
@@ -448,10 +448,10 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
 def test_an_ask_while_an_observation_carries_an_error_is_refused_and_the_next_one_runs(episode_harness):
     h = episode_harness
     policy = Positions()
-    h.observation.emit(ObservationError('camera absent'))
+    h.observation.emit(pimm.SignalError('camera absent'))
     refused = h.caller(Rollout(Task('move', None), policy, None))
     next(h.loop)
-    with pytest.raises(ObservationError, match='camera absent'):
+    with pytest.raises(pimm.SignalError, match='camera absent'):
         refused.result()
     assert policy.seen == []
 
@@ -460,6 +460,20 @@ def test_an_ask_while_an_observation_carries_an_error_is_refused_and_the_next_on
     next(h.loop)
     assert policy.seen == [1]
     assert not accepted.done()
+
+
+def test_each_ask_refused_on_one_error_starts_a_new_traceback(episode_harness):
+    h = episode_harness
+    error = pimm.SignalError('camera absent')
+    h.observation.emit(error)
+    depths = []
+    for _ in range(3):
+        refused = h.caller(Rollout(Task('move', None), Positions(), None))
+        next(h.loop)
+        with pytest.raises(pimm.SignalError):
+            refused.result()
+        depths.append(len(traceback.extract_tb(error.__traceback__)))
+    assert depths[0] == depths[-1]
 
 
 @contextmanager
