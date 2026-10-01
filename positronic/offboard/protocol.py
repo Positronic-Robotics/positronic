@@ -19,13 +19,6 @@ from positronic.utils import serialization
 from positronic.utils.versions import Version
 
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
-AUTH_HEADER = 'Authorization'
-
-
-def bearer(token: str) -> str:
-    """The authorization header value for a bearer token."""
-    return f'Bearer {token}'
-
 
 # The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
 # and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
