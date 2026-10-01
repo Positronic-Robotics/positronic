@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read a public image's manifest digest and compressed size the way the platform does: anonymously.
 # Pin the digest it prints, as `--policy-image=<repo>@<digest>`. The platform counts the size it
-# prints against its 30 GB budget.
+# prints against its 50 GB budget.
 #
 # Usage
 #   docker/read_image_digest.sh <you>/<image>:<tag>          # a Docker Hub repository

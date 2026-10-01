@@ -25,9 +25,9 @@ VRAM_MIB = 40448
 # The unpacked budgets count every entry of every layer: its size rounded up to a whole
 # `IMAGE_BLOCK_BYTES` block, and at least one block, against `UNPACKED_IMAGE_BYTES`; one entry against
 # `IMAGE_FILES`. All three live in an image store of `IMAGE_STORE_BYTES`.
-COMPRESSED_IMAGE_BYTES = 30 * 10**9
-UNPACKED_IMAGE_BYTES = 75 * 10**9
-IMAGE_FILES = 4_500_000
+COMPRESSED_IMAGE_BYTES = 50 * 10**9
+UNPACKED_IMAGE_BYTES = 55 * 10**9
+IMAGE_FILES = 3_300_000
 IMAGE_BLOCK_BYTES = 4096
 IMAGE_STORE_BYTES = 120 * 2**30
 
