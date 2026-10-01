@@ -64,11 +64,13 @@ RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cos
 RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00005-of-00007*'])"
 RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00006-of-00007*'])"
 RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00007-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['vae/*', 'vision_encoder/*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['vision_encoder/*'])"
 # The rest: the configs, the tokenizer and the model card. FOOTGUN: take no `allow_patterns` here. The loader
 # skips the hub tokenizer `Qwen/Qwen3-VL-8B-Instruct` only while five root files sit beside the weights:
 # `preprocessor_config.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.json` and `merges.txt`.
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID')"
+# `vae/` holds the Wan2.2 VAE again, in the diffusers layout: the loader drops every weight outside
+# `transformer/` and `vision_encoder/` (`inference/model.py`), and the tokenizer loads the Wan2.2 file below.
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', ignore_patterns=['vae/diffusion_pytorch_model.safetensors'])"
 
 # The Wan2.2 VAE the tokenizer loads, at the repository, revision and file NVIDIA's code names. The model card
 # carries its licence. FOOTGUN: a by-revision download writes no `refs/main`; this loader names the revision.
