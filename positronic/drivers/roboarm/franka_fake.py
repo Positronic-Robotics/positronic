@@ -11,6 +11,7 @@ class FakeFranka(pimm.ControlSystem):
     def __init__(self) -> None:
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         self.state = pimm.ControlSystemEmitter[State](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
