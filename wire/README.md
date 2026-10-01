@@ -41,7 +41,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
-| `positronic_wire.probe` | `readiness_of` and `serving`, which say whether a policy server is up; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `READINESS_WIRES`, the wires a readiness call reads, `warming`, `answer_of`, the same call in this process, `address_on` and `CHILD_HEADROOM_BYTES` |
+| `positronic_wire.probe` | `readiness_of` and `serving`, which say whether a policy server is up; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `READINESS_WIRES`, the wires a readiness call reads, `not_up_yet`, `answer_of`, the same call in this process, `address_on` and `CHILD_HEADROOM_BYTES` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
 `websocket_wire.WebsocketWire`, `grpc_wire.GrpcWire`, the session protocol, `InferenceClient` and

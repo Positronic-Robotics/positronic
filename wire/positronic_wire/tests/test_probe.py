@@ -111,13 +111,13 @@ def test_a_refusal_a_library_error_caused_is_no_answer(refusal):
 
 @pytest.mark.parametrize('answer', [Answer.cold, Answer.silent])
 def test_an_answer_to_wait_on_leaves_the_server_coming_up(answer):
-    assert probe.warming(answer) is True
+    assert probe.not_up_yet(answer) is True
 
 
 @pytest.mark.parametrize('answer', [Answer.admitted, Answer.no_keepalive, Answer.refused, Answer.final])
 def test_any_other_answer_settles_the_question(answer):
     """A refused token and a wrong server are verdicts, and waiting on either one only spends the deadline."""
-    assert probe.warming(answer) is False
+    assert probe.not_up_yet(answer) is False
 
 
 def test_a_wire_that_dials_no_host_and_port_has_no_address_on_one():
@@ -154,8 +154,8 @@ def _served(*handlers: Callable[[socket.socket], None]) -> tuple[str, int]:
                 conn, _ = listener.accept()
                 with conn:
                     handler(conn)
-        except OSError:
-            pass
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the probe's child was killed at its deadline, mid-answer
         finally:
             listener.close()
 

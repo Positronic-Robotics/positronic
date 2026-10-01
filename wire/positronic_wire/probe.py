@@ -116,7 +116,8 @@ def _report_of(ask: Callable[[], Answer]) -> str:
     except (ValueError, LookupError, TypeError, MemoryError, TextAnswer) as unreadable:
         # A body the wire cannot decode, a text greeting, or a flood: the server answered, and no retry changes it.
         return f'{Answer.final.value}\n{unreadable!r}'
-    except Exception as failed:  # noqa: BLE001 — a raise would die with the child; the parent logs this report
+    # rules-allow: swallowed-error — a raise dies with the child; the parent logs this report at ERROR.
+    except Exception as failed:  # noqa: BLE001
         return f'{_RAISED}\n{failed!r}'
 
 
@@ -190,11 +191,10 @@ def readiness_of(
     return _ask_in_child(lambda: answer_of(wire, address, headers, deadline_s), deadline_s, f'{host}:{port}')
 
 
-def warming(answer: Answer) -> bool:
-    """Whether this answer leaves the server still coming up.
+def not_up_yet(answer: Answer) -> bool:
+    """Whether this answer leaves the server still coming up: an answer asking to retry, or no answer.
 
-    True for an answer asking to retry and for no answer. Any other answer settles it: a refused token
-    is a verdict, and waiting on it only spends the deadline.
+    Any other answer settles it. A refusal is a verdict, and waiting on it only spends the deadline.
     """
     return answer in (Answer.cold, Answer.silent)
 
@@ -205,7 +205,7 @@ def serving(wire: ClientWire[Any], host: str, port: int, deadline_s: float) -> b
     A refusal counts, because the server sent it.
     """
     answer = readiness_of(wire, host, port, deadline_s)
-    if warming(answer):
+    if not_up_yet(answer):
         _logger.debug('%s:%d answered its readiness call %s: not up yet', host, port, answer.value)
         return False
     _logger.info('%s:%d answered its readiness call %s: the server is up', host, port, answer.value)
