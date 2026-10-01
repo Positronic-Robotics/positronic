@@ -84,10 +84,10 @@ ENV HF_HUB_OFFLINE=1 \
 RUN UV_OFFLINE=1 UV_NO_CACHE=1 python -c "from cosmos_framework.utils.checkpoint_db import CheckpointDirHf, CheckpointFileHf; print(CheckpointDirHf(repository='nvidia/Cosmos3-Nano-Policy-DROID', revision='main').download()); print(CheckpointFileHf(repository='Wan-AI/Wan2.2-TI2V-5B', revision='921dbaf3f1674a56f47e83fb80a34bac8a8f203e', filename='Wan2.2_VAE.pth').download())"
 
 # The licences beside the notice, where a recipient of the image finds them. The OpenMDW-1.1 agreement is the
-# one NVIDIA's repository carries; positronic's LICENSE is the Apache License 2.0 text.
+# one NVIDIA's repository carries.
 COPY positronic/vendors/cosmos3/NOTICE positronic/vendors/cosmos3/server.py /opt/cosmos3/
-COPY LICENSE /opt/cosmos3/LICENSE-Apache-2.0
 RUN cp /workspace/LICENSE /opt/cosmos3/LICENSE-OpenMDW-1.1 \
+ && curl -fsSL https://www.apache.org/licenses/LICENSE-2.0.txt -o /opt/cosmos3/LICENSE-Apache-2.0 \
  && python -c "import sys; sys.path.insert(0, '/opt/cosmos3'); import server; \
 from openpi_server.websocket_policy_server import _health_check"
 
