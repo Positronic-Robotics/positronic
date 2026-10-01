@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Generator, Iterator
+from enum import Enum, auto
 from typing import Literal
 
 import numpy as np
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 class CameraOpenError(RuntimeError):
     """The SDK did not open the camera."""
+
+
+class GrabOutcome(Enum):
+    """What one grab of the camera did."""
+
+    SENT = auto()
+    NO_IMAGE = auto()  # the grab succeeded, and the SDK gave no image
+    LOST = auto()  # the grab failed, and the camera holds the error
 
 
 class SLCamera(pimm.ControlSystem):
@@ -194,7 +203,7 @@ class SLCamera(pimm.ControlSystem):
             self._camera.close()
             self._camera = None
         yield from self._open_or_hold(should_stop)
-        if self._error is None and self._grab_frame(clock):
+        if self._error is None and self._grab_frame(clock) is GrabOutcome.SENT:
             call.set_result(None)
             return
         error = self._error
@@ -250,18 +259,18 @@ class SLCamera(pimm.ControlSystem):
     def _depth_mode(self):
         return getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
 
-    def _grab_frame(self, clock: pimm.Clock) -> bool:
-        """Grab and send one frame, and return whether it did. Hold the error when the grab fails."""
+    def _grab_frame(self, clock: pimm.Clock) -> GrabOutcome:
+        """Grab and send one frame. Hold the error when the grab fails."""
         camera = self._camera
         assert camera is not None, 'a camera that holds no error is open'
         result = camera.grab()
         if result != sl.ERROR_CODE.SUCCESS:
             self._hold(pimm.SignalError(f'Camera {self._serial_number} is lost: {result}'))
-            return False
+            return GrabOutcome.LOST
         image = sl.Mat()
         ts_s = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds() / 1e9
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
-            return False
+            return GrabOutcome.NO_IMAGE
         # The images are in BGRA format, convert to RGB
         np_image = image.get_data()[:, :, [2, 1, 0]]
 
@@ -275,7 +284,7 @@ class SLCamera(pimm.ControlSystem):
         # Only retrieve depth data if depth is enabled and at least one depth channel is connected
         if self._depth_mode != sl.DEPTH_MODE.NONE and (self.depth.num_bound > 0 or self.depth_mask.num_bound > 0):
             self._emit_depth(camera, ts_s)
-        return True
+        return GrabOutcome.SENT
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         fps_counter = pimm.utils.RateCounter('Camera')
