@@ -111,7 +111,7 @@ push-galaxea: tag-galaxea
 	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
 	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
 
-# Not in `build` or `push`: it needs most of a CI runner's disk, so CI builds it in a job of its own.
+# Not in `build` or `push`: CI builds it in a workflow of its own, only when its recipe changes.
 build-flux3-action:
 	docker build --platform linux/amd64 -f Dockerfile.flux3-action -t $(IMAGE_NAME_FLUX3_ACTION):local ..
 

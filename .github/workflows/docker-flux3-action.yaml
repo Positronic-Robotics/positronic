@@ -1,7 +1,7 @@
 name: Build and Push the FLUX 3 Action Image
 
-# A job of its own: the image needs most of a runner's disk, and each build downloads 25 GB of weights.
-# So it runs only when its recipe changes. A pull request builds and checks the image; main also pushes it.
+# A workflow of its own, so the 34 GB image is built only when its recipe changes: each build downloads 25 GB
+# of weights and pushes new layers. A pull request builds and checks the image; main also pushes it.
 on:
   pull_request:
     branches:
@@ -34,28 +34,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The image is about 34 GB on disk, and a push compresses each layer as it streams.
       - name: Free disk space
         run: |
-          df -h / /mnt
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost /usr/lib/jvm \
-            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL"
+          sudo rm -rf /usr/lib/jvm
           sudo docker system prune -af || true
-          df -h / /mnt
-
-      # The image is about 34 GB on disk. The overlay2 store holds each layer once, and a push compresses it as it
-      # streams. The containerd store also holds a compressed copy of each layer.
-      - name: Put Docker's storage on /mnt
-        run: |
-          sudo systemctl stop docker docker.socket
-          config=/etc/docker/daemon.json
-          current=$(sudo cat "$config" 2>/dev/null || echo '{}')
-          echo "$current" \
-            | jq '. + {"data-root": "/mnt/docker", "features": {"containerd-snapshotter": false}}' \
-            | sudo tee "$config"
-          sudo systemctl start docker
           docker info --format 'data root {{.DockerRootDir}}, storage driver {{.Driver}}'
-          df -h / /mnt
+          df -h /
 
       - name: Build
         working-directory: docker
@@ -64,7 +54,7 @@ jobs:
       - name: Check the image
         run: |
           image=positro/flux3-action:local
-          df -h / /mnt
+          df -h /
           docker image inspect "$image" --format 'uncompressed bytes {{.Size}}'
           # The server reads the token before the model loads, so a token no header can carry stops it at once.
           if docker run --rm --network none -e AUTH_TOKEN='two words' "$image" 2> refusal.log; then
