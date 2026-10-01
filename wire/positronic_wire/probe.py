@@ -100,12 +100,12 @@ def answer_of(
 
 
 def _limit_memory() -> None:
-    """Hold this process to what it maps now, plus `CHILD_HEADROOM_BYTES`."""
+    """Hold this process to what it maps now, plus `CHILD_HEADROOM_BYTES`, inside the limits it inherits."""
     with open('/proc/self/statm') as statm:
         mapped = int(statm.read().split()[0]) * os.sysconf('SC_PAGE_SIZE')
-    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-    limit = mapped + CHILD_HEADROOM_BYTES
-    resource.setrlimit(resource.RLIMIT_AS, (limit if hard == resource.RLIM_INFINITY else min(limit, hard), hard))
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    inherited = [cap for cap in (soft, hard) if cap != resource.RLIM_INFINITY]
+    resource.setrlimit(resource.RLIMIT_AS, (min([mapped + CHILD_HEADROOM_BYTES, *inherited]), hard))
 
 
 def _report_of(ask: Callable[[], Answer]) -> str:
@@ -188,6 +188,8 @@ def readiness_of(
     """
     _require_readiness_wire(wire)
     address = address_on(wire, host, port)
+    if deadline_s <= 0:
+        return Answer.silent
     return _ask_in_child(lambda: answer_of(wire, address, headers, deadline_s), deadline_s, f'{host}:{port}')
 
 

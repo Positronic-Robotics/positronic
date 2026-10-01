@@ -3,6 +3,7 @@
 import json
 import logging
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -303,6 +304,31 @@ def test_a_server_flooding_its_answer_is_cut_off_by_the_childs_memory_limit():
     while not sent and time.monotonic() < deadline:
         time.sleep(0.05)
     assert sent and sent[0] < 16 * probe.CHILD_HEADROOM_BYTES
+
+
+@forks
+@pytest.mark.parametrize('deadline_s', [0.0, -1.0], ids=['spent', 'past'])
+def test_a_deadline_already_spent_asks_nothing_and_is_no_answer(deadline_s):
+    asked: list[bytes] = []
+    host, port = _served(_answering(b'HTTP/1.1 200 OK', asked, json.dumps({ALIVE_SECONDS: 60}).encode()))
+    assert probe.readiness_of(_WEBSOCKET, host, port, deadline_s) is Answer.silent
+    assert asked == []
+
+
+@forks
+def test_the_childs_memory_limit_keeps_a_lower_limit_it_inherits():
+    """A caller's own `ulimit -v` stays in force in the child, below the headroom the probe allows."""
+    code = (
+        'import os, resource\n'
+        'from positronic_wire import probe\n'
+        "mapped = int(open('/proc/self/statm').read().split()[0]) * os.sysconf('SC_PAGE_SIZE')\n"
+        'inherited = mapped + probe.CHILD_HEADROOM_BYTES // 2\n'
+        'resource.setrlimit(resource.RLIMIT_AS, (inherited, resource.RLIM_INFINITY))\n'
+        'probe._limit_memory()\n'
+        'print(resource.getrlimit(resource.RLIMIT_AS)[0] <= inherited)\n'
+    )
+    ran = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True, timeout=60)
+    assert ran.stdout.strip() == 'True'
 
 
 @forks
