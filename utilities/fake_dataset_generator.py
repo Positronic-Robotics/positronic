@@ -12,11 +12,12 @@ from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, T
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
 
 # --- Metadata Templates ---
 
 ACT_META = {
-    'inference.policy.type': 'act',
+    f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': 'act',
     'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
     'inference.observation.lerobot_features': {
@@ -28,7 +29,7 @@ ACT_META = {
 }
 
 GROOT_META = {
-    'inference.policy.type': 'groot',
+    f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': 'groot',
     'inference.observation.name': 'groot_ee_absolute',
     'inference.action.name': 'absolute_position',
     'inference.observation.gr00t_modality': {
@@ -52,7 +53,7 @@ GROOT_META = {
 }
 
 OPENPI_META = {
-    'inference.policy.type': 'openpi',
+    f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': 'openpi',
     'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
 }
