@@ -12,6 +12,10 @@ class NoValueException(Exception):
     pass
 
 
+class SignalError(Exception):
+    """The value an emitter sends in place of data while its signal has no valid value."""
+
+
 @dataclass
 class Message(Generic[T]):
     """
@@ -25,6 +29,14 @@ class Message(Generic[T]):
     data: T
     ts: int = -1  # -1 means no value
     updated: bool = True
+
+
+def _message_value(msg: Message[T]) -> T:
+    """The data of ``msg``. Raises the data when it is a ``SignalError``."""
+    if isinstance(msg.data, SignalError):
+        # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
+        raise msg.data.with_traceback(None)
+    return msg.data
 
 
 class SignalEmitter(ABC, Generic[T]):
@@ -50,11 +62,11 @@ class SignalReceiver(ABC, Generic[T]):
     @final
     @property
     def value(self) -> T:
-        """Returns the current value of the signal."""
+        """Returns the current value of the signal. Raises the ``SignalError`` that the signal carries."""
         msg = self.read()
         if msg is None:
             raise NoValueException
-        return msg.data
+        return _message_value(msg)
 
 
 class NoOpEmitter(SignalEmitter[T]):
