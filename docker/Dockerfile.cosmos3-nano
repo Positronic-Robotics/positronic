@@ -1,0 +1,99 @@
+# syntax=docker/dockerfile:1.7
+# Cosmos3-Nano-Policy-DROID with NVIDIA's action server, its environment, and the two Hugging Face repositories
+# it loads, in one image. It serves the roboarena wire on port 8000 behind the run's bearer token, with no
+# arguments and no network. docs/submit-a-policy-image.md § Cosmos3-Nano says what it serves and its licences.
+#
+# Usage
+#   make -C docker build-cosmos3-nano                                  # positro/cosmos3-nano:local
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.cosmos3-nano -t docker.io/<you>/cosmos3-nano:v1 --push .
+#   docker run --rm --network none -e AUTH_TOKEN='two words' positro/cosmos3-nano:local   # refused at once
+#
+# The build context is the repository root. It needs no credential: no repository it reads is gated. It
+# downloads 36 GB of weights.
+
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ffmpeg git git-lfs tree wget \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.12.2 /uv /uvx /usr/local/bin/
+
+# NVIDIA's code at the commit this recipe is read against. The lock pins torch 2.13.0+cu130.
+ARG COSMOS_FRAMEWORK_REV=12c8a7832fb378e0e2cf7f6b7ebe7a82b729764b
+WORKDIR /workspace
+RUN git clone https://github.com/NVIDIA/cosmos-framework.git . \
+ && git checkout "$COSMOS_FRAMEWORK_REV" \
+ && rm -rf .git
+
+# One environment, with the groups the server runs on. The uv cache goes in the same layer.
+RUN uv sync --locked --all-extras --group=cu130-torch213-train --group=policy-server \
+ && uv cache clean
+ENV PATH="/workspace/.venv/bin:$PATH" \
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+# FOOTGUN: the server resolves each repository through `uv run … hf download` (`utils/checkpoint_db.py`),
+# which builds a fresh environment from PyPI at every start unless IMAGINAIRE_HF_CLI_ENVIRONMENT names one.
+# With no network that start dies before it serves.
+ENV IMAGINAIRE_HF_CLI_ENVIRONMENT=/opt/hf-cli
+RUN UV_PROJECT_ENVIRONMENT=$IMAGINAIRE_HF_CLI_ENVIRONMENT \
+      uv sync --project cosmos_framework/utils/hf_cli --locked --no-default-groups \
+ && uv cache clean
+
+# The server loads the gated `nvidia/Cosmos-Guardrail1` at setup. Its runners serve only the video and text
+# generation paths; the action server's `infer` reaches neither, so turning them off changes no action.
+RUN sed -i "s/^\(\s*\)guardrails: bool = True/\1guardrails: bool = False/" cosmos_framework/inference/common/args.py \
+ && grep -q "guardrails: bool = False" cosmos_framework/inference/common/args.py
+
+# The server sends `metadata={}` on connect, and a roboarena client needs the whole server config. The action
+# space follows `--action-space`; a space with no roboarena name stops the server before it serves. 360x640 per
+# view composes to the 540x640 frame the model conditions on.
+RUN sed -i 's/metadata={}/metadata={"image_resolution": [360, 640], "needs_wrist_camera": True, "n_external_cameras": 2, "needs_stereo_camera": False, "needs_session_id": False, "action_space": {"joint_pos": "joint_position"}[args.action_space]}/' cosmos_framework/scripts/action_policy_server_robolab.py \
+ && grep -q '"action_space": {"joint_pos": "joint_position"}\[args.action_space\]' cosmos_framework/scripts/action_policy_server_robolab.py
+
+ENV HF_HOME=/workspace/.cache/huggingface
+
+# One shard per layer. FOOTGUN: a registry can refuse a 31 GB layer.
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00001-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00002-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00003-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00004-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00005-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00006-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00007-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['vae/*', 'vision_encoder/*'])"
+# The rest: the configs, the tokenizer and the model card. FOOTGUN: take no `allow_patterns` here. The loader
+# skips the hub tokenizer `Qwen/Qwen3-VL-8B-Instruct` only while five root files sit beside the weights:
+# `preprocessor_config.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.json` and `merges.txt`.
+RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID')"
+
+# The Wan2.2 VAE the tokenizer loads, at the repository, revision and file NVIDIA's code names. The model card
+# carries its licence. FOOTGUN: a by-revision download writes no `refs/main`; this loader names the revision.
+RUN python -c "from huggingface_hub import snapshot_download as d; d('Wan-AI/Wan2.2-TI2V-5B', revision='921dbaf3f1674a56f47e83fb80a34bac8a8f203e', allow_patterns=['Wan2.2_VAE.pth', 'README.md'])"
+
+# A start that would resolve the Hub ends at model load, not on weights other than the ones this image holds.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTHONUNBUFFERED=1
+
+# Both repositories resolve as the server resolves them, with no package index and no uv cache. A resolve that
+# needs the network fails the build here.
+RUN UV_OFFLINE=1 UV_NO_CACHE=1 python -c "from cosmos_framework.utils.checkpoint_db import CheckpointDirHf, CheckpointFileHf; print(CheckpointDirHf(repository='nvidia/Cosmos3-Nano-Policy-DROID', revision='main').download()); print(CheckpointFileHf(repository='Wan-AI/Wan2.2-TI2V-5B', revision='921dbaf3f1674a56f47e83fb80a34bac8a8f203e', filename='Wan2.2_VAE.pth').download())"
+
+# The licences beside the notice, where a recipient of the image finds them. The OpenMDW-1.1 agreement is the
+# one NVIDIA's repository carries; positronic's LICENSE is the Apache License 2.0 text.
+COPY positronic/vendors/cosmos3/NOTICE positronic/vendors/cosmos3/server.py /opt/cosmos3/
+COPY LICENSE /opt/cosmos3/LICENSE-Apache-2.0
+RUN cp /workspace/LICENSE /opt/cosmos3/LICENSE-OpenMDW-1.1 \
+ && python -c "import sys; sys.path.insert(0, '/opt/cosmos3'); import server; \
+from openpi_server.websocket_policy_server import _health_check"
+
+EXPOSE 8000
+
+CMD ["python", "/opt/cosmos3/server.py"]
+
+LABEL org.opencontainers.image.title="cosmos3-nano" \
+    org.opencontainers.image.description="Cosmos3-Nano-Policy-DROID and the Wan2.2 VAE it loads, with NVIDIA's action server, served over the roboarena wire behind AUTH_TOKEN. Guardrails off. OpenMDW-1.1 and Apache-2.0: see /opt/cosmos3/NOTICE." \
+    org.opencontainers.image.licenses="LicenseRef-OpenMDW-1.1 AND Apache-2.0" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"

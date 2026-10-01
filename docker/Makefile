@@ -1,5 +1,6 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 .PHONY: build-galaxea tag-galaxea push-galaxea
+.PHONY: build-cosmos3-nano tag-cosmos3-nano push-cosmos3-nano
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -9,6 +10,7 @@ IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
 IMAGE_NAME_GALAXEA := positro/galaxea
+IMAGE_NAME_COSMOS3_NANO := positro/cosmos3-nano
 
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
 
@@ -50,6 +52,7 @@ help:
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
+	@echo "  make build-cosmos3-nano  Build the Cosmos3-Nano image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -107,6 +110,24 @@ tag-galaxea: build-galaxea
 push-galaxea: tag-galaxea
 	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
 	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+
+# Not in `build` or `push`: CI builds it in a workflow of its own, only when its recipe changes.
+build-cosmos3-nano:
+	docker build --platform linux/amd64 -f Dockerfile.cosmos3-nano -t $(IMAGE_NAME_COSMOS3_NANO):local ..
+
+tag-cosmos3-nano: build-cosmos3-nano
+	docker tag $(IMAGE_NAME_COSMOS3_NANO):local $(IMAGE_NAME_COSMOS3_NANO):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_COSMOS3_NANO):local $(IMAGE_NAME_COSMOS3_NANO):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_COSMOS3_NANO):local $(IMAGE_NAME_COSMOS3_NANO):latest
+endif
+
+push-cosmos3-nano: tag-cosmos3-nano
+	docker push $(IMAGE_NAME_COSMOS3_NANO):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_COSMOS3_NANO):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_COSMOS3_NANO):latest
+endif
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -283,6 +304,9 @@ clean:
 	-docker rmi $(IMAGE_NAME_GALAXEA):local
 	-docker rmi $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):local
+	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(GIT_SHA)
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
 prune:
