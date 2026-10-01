@@ -58,19 +58,6 @@ _BINARY_FRAME = 0x2
 _TEXT_FRAME = 0x1
 
 
-def _budget_until(deadline_s: float) -> Callable[[], float]:
-    """What is left of a `deadline_s` clock started now. Never zero, which would set a socket non-blocking."""
-    deadline = time.monotonic() + deadline_s
-
-    def budget() -> float:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            raise TimeoutError(f'the {deadline_s:g} s budget is spent')
-        return left
-
-    return budget
-
-
 def _resolved(host: str, port: int, budget: Callable[[], float]) -> list[tuple[Any, ...]]:
     """The addresses `host` resolves to, inside the budget.
 
@@ -120,15 +107,6 @@ def _request(method: str, path: str, host_header: str, headers: Mapping[str, str
     return ('\r\n'.join(lines) + '\r\n\r\n').encode('latin-1')
 
 
-def _to_close(_answer: bytes) -> bool:
-    """Never enough: the answer to a request that asks to close ends where the server closes."""
-    return False
-
-
-def _head_read(answer: bytes) -> bool:
-    return b'\r\n\r\n' in answer
-
-
 def _status_line(answer: bytes) -> int | None:
     """The status code out of `HTTP/1.x NNN …`, or None from anything that is not that.
 
@@ -142,16 +120,10 @@ def _status_line(answer: bytes) -> int | None:
     return int(fields[1])
 
 
-def _announcement_read(answer: bytes) -> bool:
-    """Whether `answer` holds the head of an answer to an upgrade, and the first frame byte where it upgraded."""
-    head, found, frames = answer.partition(b'\r\n\r\n')
-    return bool(found) and (_status_line(head) != HTTPStatus.SWITCHING_PROTOCOLS or len(frames) > 0)
-
-
 def _answer_to(
-    host: str, port: int, request: bytes, budget: Callable[[], float], *, tls: bool, enough: Callable[[bytes], bool]
+    host: str, port: int, request: bytes, budget: Callable[[], float], *, tls: bool, whole: Callable[[bytes], bool]
 ) -> bytes:
-    """What the server on `host:port` answers `request` with: the bytes read until `enough` holds, the
+    """What the server on `host:port` answers `request` with: the bytes read until `whole` holds, the
     server closes, or `_MAX_ANSWER_BYTES`. Raises `OSError` where the connection fails or the budget runs out.
 
     A redirect is returned as its status and never followed, so the caller's headers reach only this origin.
@@ -164,7 +136,7 @@ def _answer_to(
         sock.settimeout(budget())
         sock.sendall(request)
         answer = b''
-        while len(answer) < _MAX_ANSWER_BYTES and not enough(answer):
+        while len(answer) < _MAX_ANSWER_BYTES and not whole(answer):
             sock.settimeout(budget())
             chunk = sock.recv(_MAX_ANSWER_BYTES - len(answer))
             if not chunk:
@@ -206,6 +178,15 @@ def _carries_alive_seconds(answer: bytes) -> bool:
     return alive is None or isinstance(alive, int)
 
 
+def _whole_only_at_close(_answer: bytes) -> bool:
+    """False: the answer to a request that asks to close is whole where the server closes."""
+    return False
+
+
+def _head_whole(answer: bytes) -> bool:
+    return b'\r\n\r\n' in answer
+
+
 def _positronic_answer(
     host: str, port: int, headers: Mapping[str, str], budget: Callable[[], float], *, tls: bool, default_port: int
 ) -> Answer:
@@ -213,7 +194,7 @@ def _positronic_answer(
     host_header = netloc(HostPortAddress(host, port, '', ''), default_port)
     asked = {**headers, 'Content-Length': '0', 'Connection': 'close'}
     keepalive = _request('POST', KEEPALIVE_PATH, host_header, asked)
-    answer = _answer_to(host, port, keepalive, budget, tls=tls, enough=_to_close)
+    answer = _answer_to(host, port, keepalive, budget, tls=tls, whole=_whole_only_at_close)
     status = _status_line(answer)
     if status == HTTPStatus.OK:
         return Answer.admitted if _carries_alive_seconds(answer) else Answer.final
@@ -221,16 +202,22 @@ def _positronic_answer(
         return _answer_of_status(status)
     # A server without the keepalive call answers it 404, and refuses an upgrade on its root with 403.
     upgrade = _request('GET', '/', host_header, {**headers, **_UPGRADE})
-    status = _status_line(_answer_to(host, port, upgrade, budget, tls=tls, enough=_head_read))
+    status = _status_line(_answer_to(host, port, upgrade, budget, tls=tls, whole=_head_whole))
     if status in (HTTPStatus.FORBIDDEN, HTTPStatus.SWITCHING_PROTOCOLS):
         return Answer.no_keepalive
     return _answer_of_status(status)
 
 
+def _announcement_whole(answer: bytes) -> bool:
+    """Whether `answer` holds the head of an answer to an upgrade, and the first frame byte where it upgraded."""
+    head, found, frames = answer.partition(b'\r\n\r\n')
+    return bool(found) and (_status_line(head) != HTTPStatus.SWITCHING_PROTOCOLS or len(frames) > 0)
+
+
 def _roboarena_answer(host: str, port: int, headers: Mapping[str, str], budget: Callable[[], float]) -> Answer:
     """The upgrade on the root, and the first frame, which a roboarena server announces itself with."""
     upgrade = _request('GET', '/', f'{bracket_ipv6(host)}:{port}', {**headers, **_UPGRADE})
-    answer = _answer_to(host, port, upgrade, budget, tls=False, enough=_announcement_read)
+    answer = _answer_to(host, port, upgrade, budget, tls=False, whole=_announcement_whole)
     status = _status_line(answer)
     if status != HTTPStatus.SWITCHING_PROTOCOLS:
         return _answer_of_status(status)
@@ -252,6 +239,19 @@ _READINESS_CALLS: dict[str, Callable[[str, int, Mapping[str, str], Callable[[], 
     RoboarenaClientWire.NAME: _roboarena_answer,
 }
 READINESS_WIRES = frozenset(_READINESS_CALLS)
+
+
+def _budget_until(deadline_s: float) -> Callable[[], float]:
+    """What is left of a `deadline_s` clock started now. Never zero, which would set a socket non-blocking."""
+    deadline = time.monotonic() + deadline_s
+
+    def budget() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f'the {deadline_s:g} s budget is spent')
+        return left
+
+    return budget
 
 
 def readiness_of(

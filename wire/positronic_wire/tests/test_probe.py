@@ -66,7 +66,7 @@ def _trickling(ended: list[float]):
         for byte in b'HTTP/1.1 200 OK':
             try:
                 conn.sendall(bytes([byte]))
-            except OSError:
+            except (BrokenPipeError, ConnectionResetError):
                 break
             time.sleep(0.15)
         ended.append(time.monotonic())

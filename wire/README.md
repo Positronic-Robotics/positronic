@@ -116,8 +116,7 @@ before it dials, and names both in the refusal.
 ## Whether a policy server is up
 
 `probe.serving(wire, host, port, deadline_s)` tells whether a policy server on a host and a port is
-up, for a caller that need not trust the server. The `probe` module states what the readiness call is
-on each wire and how its answer reads.
+up, for a caller that need not trust the server.
 
 ## What each consumer pays
 
