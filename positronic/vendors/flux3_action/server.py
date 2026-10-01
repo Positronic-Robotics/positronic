@@ -33,8 +33,8 @@ HEALTH_PATH = '/healthz'
 
 # What a roboarena client reads on connect. The client encodes each view at this (height, width), and BFL
 # composes the wrist view above the two exteriors at half size into the 540x640 frame it pads to its canvas.
-# rules-allow: hardcoded-keys — the roboarena wire's own field names; tests/test_server.py pins each to
-# positronic's client.
+# rules-allow: hardcoded-keys — the roboarena wire's own field names, and positronic is not installed where
+# this file runs.
 SERVER_CONFIG: dict[str, Any] = {
     'image_resolution': [360, 640],
     'needs_wrist_camera': True,

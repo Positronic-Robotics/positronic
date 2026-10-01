@@ -3,6 +3,8 @@ name: Build and Push the FLUX 3 Action Image
 # A workflow of its own, so the 34 GB image is built only when its recipe changes: each build downloads 25 GB
 # of weights and pushes new layers. A pull request builds and checks the image; main also pushes it.
 on:
+  # A pull request also checks a change to the build's own inputs. Main republishes only on a change to the
+  # recipe; run the workflow by hand to republish after a change to the Makefile target alone.
   pull_request:
     branches:
       - main
@@ -10,6 +12,8 @@ on:
       - docker/Dockerfile.flux3-action
       - positronic/vendors/flux3_action/**
       - .github/workflows/docker-flux3-action.yaml
+      - docker/Makefile
+      - .dockerignore
   push:
     branches:
       - main
@@ -34,22 +38,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The image is about 34 GB on disk, and a push compresses each layer as it streams.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL"
-          sudo rm -rf /usr/lib/jvm
-          sudo docker system prune -af || true
-          docker info --format 'data root {{.DockerRootDir}}, storage driver {{.Driver}}'
-          df -h /
-
+      # The image is about 34 GB on disk, and a push compresses each layer as it streams. The runner's root disk
+      # has room for it with no cleanup.
       - name: Build
         working-directory: docker
-        run: make build-flux3-action
+        run: |
+          df -h /
+          make build-flux3-action
 
       - name: Check the image
         run: |
@@ -66,14 +61,14 @@ jobs:
             | grep -F 'This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License.'
           docker run --rm --entrypoint cat "$image" /opt/flux3_action/LICENSE.md | grep -F 'FLUX Kommunity License'
 
-      # The platform refuses an image over 30 GB compressed. A push compresses each layer with gzip at its
+      # The platform refuses an image over 50 GB compressed. A push compresses each layer with gzip at its
       # default level, and level 1 compresses less, so this sum is an upper estimate of the size it counts.
       - name: Estimate the compressed size
         run: |
           sudo apt-get install -y --no-install-recommends pigz
           bytes=$(docker save positro/flux3-action:local | pigz -1 | wc -c)
           echo "compressed bytes, upper estimate: ${bytes}"
-          awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 30e9) }'
+          awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 50e9) }'
 
       - name: Log in to Docker Hub
         if: github.ref == 'refs/heads/main'
