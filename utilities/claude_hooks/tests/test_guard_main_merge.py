@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import guard_main_merge as gmm  # noqa: E402
+import hook_payload  # noqa: E402
 
 POSITRONIC_URL = 'git@github.com:Positronic-Robotics/positronic.git'
 INFRA_URL = 'git@gh-infra:someone/agent_infra.git'
@@ -535,7 +536,7 @@ def test_a_stack_lookup_out_of_time_is_unreadable_without_running_gh(monkeypatch
 
 def test_the_stack_lookup_finishes_inside_the_hook_timeout():
     settings = json.loads((Path(__file__).parents[3] / '.claude' / 'settings.json').read_text())
-    hooks = [h for entry in settings['hooks']['PreToolUse'] for h in entry['hooks']]
+    hooks = [h for entry in settings['hooks'][hook_payload.PRE_TOOL_USE] for h in entry['hooks']]
     (guard,) = [h for h in hooks if h['command'].endswith('guard_main_merge.py"')]
     assert gmm.STACK_LOOKUP_BUDGET_S < guard['timeout']
 
