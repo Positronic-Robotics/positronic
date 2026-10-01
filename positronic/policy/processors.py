@@ -317,6 +317,10 @@ class RTCSchedule(Policy):
 
     `infer` gets the observation and the prefix, in the command format that `infer`
     returns, and converts both to the model's format.
+
+    Only a model with absolute actions works with this policy. No codec converts a
+    command back to a relative model action, so the prefix cannot be given to a
+    model with relative actions.
     """
 
     def __init__(self, fps: float, call_after_sec: float, prefix_duration: PrefixDuration) -> None:
