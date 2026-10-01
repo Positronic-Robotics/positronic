@@ -155,8 +155,10 @@ holds each value below. The platform runs every image under them.
   block, and at least one block. The file count counts every entry of every layer: files,
   directories, links and deletions. A file that a later layer replaces or deletes counts in each
   layer that carries it.
-- The image store holds the compressed layers beside the unpacked ones, the writable layer of the
-  container and its log. An image inside both budgets leaves the writable layer about 14 GB.
+- The image store is an ext4 filesystem. Its metadata and the 5% that ext4 keeps for root leave
+  119.78 GB that any writer can use. It holds the compressed layers beside the unpacked ones, the
+  writable layer of the container and its log, so an image inside both budgets leaves the writable
+  layer about 14.5 GB. A process that runs as root in the container can also use the 6 GiB reserve.
 - An image over a budget fails with `image_too_large`, charged. A container over its memory is
   killed, and the run fails with `policy_oom`. The other limits slow the server, or stop it with
   `policy_setup_crash` or `policy_inference_crash`.
