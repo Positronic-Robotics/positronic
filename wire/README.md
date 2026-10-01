@@ -116,13 +116,8 @@ before it dials, and names both in the refusal.
 ## Whether a policy server is up
 
 `probe.serving(wire, host, port, deadline_s)` tells whether a policy server on a host and a port is
-up. The caller need not trust the server. On `websocket` and `websocket_tls` the readiness call is the
-keepalive call, and the upgrade on the root where the server serves no keepalive call. On `roboarena`
-it is the upgrade on the root and the first frame. Any answer except one to wait on (`Answer.cold`,
-`Answer.silent`) counts, a refusal included.
-
-Each readiness call is one exchange on a raw socket, under one wall-clock deadline that covers the name
-lookup, and with a cap on the bytes it reads.
+up, for a caller that need not trust the server. The `probe` module states what the readiness call is
+on each wire and how its answer reads.
 
 ## What each consumer pays
 
