@@ -32,7 +32,6 @@ class SLCamera(pimm.ControlSystem):
         depth_mode: Literal['none', 'near', 'far', 'high', 'ultra'] = 'none',
         max_depth: float = 10,
         depth_mask: bool = False,
-        max_recovery_time_sec: float = 10,
         image_enhancement: bool = False,
         mono: bool = False,
     ):
@@ -48,7 +47,6 @@ class SLCamera(pimm.ControlSystem):
             max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
                         -Inf will be set to 0. All values above this will be set to max_depth.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
-            max_recovery_time_sec: (float) Time without frames after which the camera is closed and opened again.
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
         """
@@ -66,7 +64,6 @@ class SLCamera(pimm.ControlSystem):
         self._mono = mono
 
         self.max_depth = max_depth
-        self.max_recovery_time_sec = max_recovery_time_sec
 
         # Main frame channel (always present)
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
@@ -79,8 +76,17 @@ class SLCamera(pimm.ControlSystem):
         self.depth_mask: pimm.ControlSystemEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
 
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
+        # its last frame
+        self._camera: sl.Camera | sl.CameraOne | None = None
+        self._error: pimm.SignalError | None = None
+        self._frame_at: float | None = None
+
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
+    # A ready call reopens a camera whose last frame is older than this.
+    STALE_FRAME_SEC = 1.0
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -93,7 +99,9 @@ class SLCamera(pimm.ControlSystem):
         return error_code == sl.ERROR_CODE.CAMERA_NOT_DETECTED or not SLCamera._is_listed(serial)
 
     @staticmethod
-    def _reboot_and_reopen(zed, init_params, serial: int, failure: str) -> Iterator[pimm.Sleep]:
+    def _reboot_and_reopen(
+        zed, init_params, serial: int, failure: str, should_stop: pimm.SignalReceiver
+    ) -> Iterator[pimm.Sleep]:
         """Reboot the camera over its HID half, with no replug, wait until the SDK lists it again, and open it once.
 
         The SDK refuses the reboot for a model that does not support it, such as the ZED Mini.
@@ -106,6 +114,8 @@ class SLCamera(pimm.ControlSystem):
         for _ in range(SLCamera.REBOOTED_CAMERA_MAX_POLLS):
             if SLCamera._is_listed(serial):
                 break
+            if should_stop.value:
+                raise CameraOpenError(f'{failure}; the world stopped before camera {serial} was listed again')
             yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
         else:
             raise CameraOpenError(f'{failure}; camera {serial} is still not listed after its reboot')
@@ -117,7 +127,9 @@ class SLCamera(pimm.ControlSystem):
         logger.info(f'Opened camera {serial} after its reboot')
 
     @staticmethod
-    def _open_under_device_lock(zed, init_params, reboot_serial: int | None) -> Iterator[pimm.Sleep]:
+    def _open_under_device_lock(
+        zed, init_params, reboot_serial: int | None, should_stop: pimm.SignalReceiver
+    ) -> Iterator[pimm.Sleep]:
         """Open the camera, retrying: the lock binds only openers that take it, so an open can still lose the bus.
 
         When the retries fail and the SDK cannot find the camera ``reboot_serial`` names, the camera is rebooted once
@@ -131,36 +143,67 @@ class SLCamera(pimm.ControlSystem):
             if error_code == sl.ERROR_CODE.SUCCESS:
                 return
             logger.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
-            if attempt < OPEN_ATTEMPTS:
+            if attempt < OPEN_ATTEMPTS and not should_stop.value:
                 yield pimm.Sleep(OPEN_RETRY_SEC)
                 continue
-            failure = f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}'
-            if reboot_serial is None or not SLCamera._lost_by_the_sdk(error_code, reboot_serial):
+            failure = f'Failed to open camera after {attempt} attempts: {error_code}'
+            if should_stop.value or reboot_serial is None or not SLCamera._lost_by_the_sdk(error_code, reboot_serial):
                 raise CameraOpenError(failure)
-            yield from SLCamera._reboot_and_reopen(zed, init_params, reboot_serial, failure)
+            yield from SLCamera._reboot_and_reopen(zed, init_params, reboot_serial, failure, should_stop)
 
-    def _open_new_camera(
-        self, init_params, listed_serial: int | None, should_stop: pimm.SignalReceiver
-    ) -> Generator[pimm.Sleep, None, 'sl.Camera | sl.CameraOne | None']:
-        """Open a new camera, until one opens; ``None`` if the world stops first.
+    def _open_camera(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, 'sl.Camera | sl.CameraOne']:
+        """Open a new camera object through the open path. Raise ``CameraOpenError`` when it does not open."""
+        zed = sl.CameraOne() if self._mono else sl.Camera()
+        # The serial `sl.Camera` lists and reboots. A mono camera is an `sl.CameraOne`, so it has none here.
+        reboot_serial = None if self._mono else self._serial_number
+        try:
+            yield from self._open_under_device_lock(zed, self._init_params(), reboot_serial, should_stop)
+        except CameraOpenError:
+            zed.close()
+            raise
+        return zed
 
-        After a failed open, the next one waits until ``listed_serial`` is listed.
+    def _hold(self, error: pimm.SignalError) -> pimm.SignalError:
+        """Keep ``error`` until a ready call repairs the camera, and send it on every channel in place of data."""
+        logger.error('Camera %s holds an error until it is asked to be ready: %s', self._serial_number, error)
+        self._error = error
+        for emitter in (self.frame, self.depth, self.depth_mask):
+            emitter.emit(error)
+        return error
+
+    def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
+        """Open a new camera and clear the error, or hold the error that the open path raises."""
+        try:
+            self._camera = yield from self._open_camera(should_stop)
+        except CameraOpenError as e:
+            self._hold(pimm.SignalError(f'Camera {self._serial_number} did not open: {e}'))
+            return
+        self._error = None
+
+    def _make_ready(
+        self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, None]:
+        """Answer ``call`` at once while the last frame is recent.
+
+        Otherwise reopen the camera, and answer once it sends a frame, or with the error that it holds.
         """
-        while not should_stop.value:
-            zed = sl.CameraOne() if self._mono else sl.Camera()
-            try:
-                yield from self._open_under_device_lock(zed, init_params, listed_serial)
-                return zed
-            except CameraOpenError as e:
-                # A camera that does not open yet is tried again: only the world stopping ends the driver.
-                logger.error('Camera %s did not open, trying again: %s', self._serial_number, e)
-                zed.close()
-            yield pimm.Sleep(self.DEVICE_LIST_POLL_SEC)
-            while listed_serial is not None and not self._is_listed(listed_serial) and not should_stop.value:
-                yield pimm.Sleep(self.DEVICE_LIST_POLL_SEC)
-        return None
+        if self._error is None and self._frame_at is not None and clock.now() - self._frame_at <= self.STALE_FRAME_SEC:
+            call.set_result(None)
+            return
+        logger.info('Reopening camera %s to make it ready', self._serial_number)
+        if self._camera is not None:
+            self._camera.close()
+            self._camera = None
+        yield from self._open_or_hold(should_stop)
+        if self._error is None and self._grab_frame(clock):
+            call.set_result(None)
+            return
+        error = self._error
+        if error is None:
+            error = self._hold(pimm.SignalError(f'Camera {self._serial_number} opened and sent no frame'))
+        call.set_exception(error)
 
-    def _init_params(self, depth_mode):
+    def _init_params(self):
         init_params = sl.InitParametersOne() if self._mono else sl.InitParameters()
         init_params.camera_resolution = getattr(sl.RESOLUTION, self._resolution_name.upper())
         if self._fps is not None:
@@ -171,7 +214,7 @@ class SLCamera(pimm.ControlSystem):
         init_params.sdk_verbose = 1
         init_params.async_grab_camera_recovery = True
         if not self._mono:
-            init_params.depth_mode = depth_mode
+            init_params.depth_mode = self._depth_mode
             init_params.enable_image_enhancement = self._image_enhancement
         return init_params
 
@@ -200,22 +243,51 @@ class SLCamera(pimm.ControlSystem):
             self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
             self.depth.emit(self._depth_adapter, time=capture_time)
 
+    @property
+    def _view(self):
+        return getattr(sl.VIEW, self._view_name.upper())
+
+    @property
+    def _depth_mode(self):
+        return getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
+
+    def _grab_frame(self, clock: pimm.Clock) -> bool:
+        """Grab and send one frame, and return whether it did. Hold the error when the grab fails."""
+        camera = self._camera
+        assert camera is not None, 'a camera that holds no error is open'
+        result = camera.grab()
+        if result != sl.ERROR_CODE.SUCCESS:
+            self._hold(pimm.SignalError(f'Camera {self._serial_number} is lost: {result}'))
+            return False
+        image = sl.Mat()
+        capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
+        if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
+            return False
+        # The images are in BGRA format, convert to RGB
+        np_image = image.get_data()[:, :, [2, 1, 0]]
+
+        # Emit main frame (either single view or side-by-side)
+        # Note: For side-by-side, we emit the full (H, W*2, 3) image
+        # Consumer is responsible for splitting if needed
+        self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
+        self.frame.emit(self._frame_adapter, time=capture_time)
+        self._frame_at = clock.now()
+
+        # Only retrieve depth data if depth is enabled and at least one depth channel is connected
+        if self._depth_mode != sl.DEPTH_MODE.NONE and (self.depth.num_bound > 0 or self.depth_mask.num_bound > 0):
+            self._emit_depth(camera, capture_time)
+        return True
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        SUCCESS = sl.ERROR_CODE.SUCCESS
-        TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
         fps_counter = pimm.utils.RateCounter('Camera')
 
         if self._mono and (self._view_name != 'left' or self._depth_mode_name != 'none' or self._image_enhancement):
             raise RuntimeError('mono cameras support only view="left", depth_mode="none" and no image enhancement')
 
-        view = getattr(sl.VIEW, self._view_name.upper())
-        depth_mode = getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
-        init_params = self._init_params(depth_mode)
-
-        depth_mask_enabled = depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
+        depth_mask_enabled = self._depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
 
         # Runtime validation: check if depth channels are connected but not enabled
-        if self.depth.num_bound > 0 and depth_mode == sl.DEPTH_MODE.NONE:
+        if self.depth.num_bound > 0 and self._depth_mode == sl.DEPTH_MODE.NONE:
             raise RuntimeError(
                 'depth channel is connected but depth_mode is "none". '
                 'Set depth_mode to "near", "far", "high", or "ultra" to enable depth.'
@@ -227,64 +299,13 @@ class SLCamera(pimm.ControlSystem):
                 'Set depth_mask=True to enable depth mask output.'
             )
 
-        # The serial `sl.Camera` lists and reboots. A mono camera is an `sl.CameraOne`, so it has none here.
-        listed_serial = None if self._mono else self._serial_number
-        zed = yield from self._open_new_camera(init_params, listed_serial, should_stop)
-        if zed is None:
-            return
-
-        self.recovery_start_time = None
-
+        yield from self._open_or_hold(should_stop)
         while not should_stop.value:
-            result = zed.grab()
-            if result != SUCCESS:
-                if self.recovery_start_time is None:
-                    logger.warning(
-                        'Camera lost with error code %s, starting recovery of camera %s', result, self._serial_number
-                    )
-                    self.recovery_start_time = clock.now()
-                if clock.now() - self.recovery_start_time > self.max_recovery_time_sec:
-                    logger.error(
-                        'Recovery time exceeded %s seconds, reopening camera %s',
-                        self.max_recovery_time_sec,
-                        self._serial_number,
-                    )
-                    zed.close()
-                    zed = yield from self._open_new_camera(init_params, listed_serial, should_stop)
-                    if zed is None:
-                        return
-                    logger.info(
-                        'Reopened camera %s after %.2f seconds without frames',
-                        self._serial_number,
-                        clock.now() - self.recovery_start_time,
-                    )
-                    self.recovery_start_time = None
-                    continue
-                yield pimm.Sleep(0.01)
-                continue
-
-            if self.recovery_start_time is not None:
-                logger.info(f'Camera recovered after {clock.now() - self.recovery_start_time:.2f} seconds')
-                self.recovery_start_time = None
-
-            image = sl.Mat()
-            capture_time = pimm.Time(**{CAPTURE_TIME: zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds()})
-            if zed.retrieve_image(image, view) == SUCCESS:
-                # The images are in BGRA format, convert to RGB
-                np_image = image.get_data()[:, :, [2, 1, 0]]
-
-                # Emit main frame (either single view or side-by-side)
-                # Note: For side-by-side, we emit the full (H, W*2, 3) image
-                # Consumer is responsible for splitting if needed
-                self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
-                self.frame.emit(self._frame_adapter, time=capture_time)
-
-                # Handle depth if enabled and connected
-                if depth_mode != sl.DEPTH_MODE.NONE:
-                    # Only retrieve depth data if at least one depth channel is connected
-                    if self.depth.num_bound > 0 or self.depth_mask.num_bound > 0:
-                        self._emit_depth(zed, capture_time)
-
-            fps_counter.tick()
+            for call in self.ready.incoming():
+                yield from self._make_ready(call, clock, should_stop)
+            if self._error is None:
+                self._grab_frame(clock)
+                fps_counter.tick()
             yield pimm.Sleep(0.01)
-        zed.close()
+        if self._camera is not None:
+            self._camera.close()
