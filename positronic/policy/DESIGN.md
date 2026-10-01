@@ -301,8 +301,7 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
-The runtime owns every server session. A server is an address and the rules of
-its wire, and it holds no connection. `runtime.start(server)` opens one session
+The runtime owns every server session. `runtime.start(server)` opens one session
 per episode, before the timed part of the episode. It starts the client stack
 that the session declares, with the session as the stack's inference function.
 The session identifies the episode's calls and owns any server-side episode
@@ -386,7 +385,7 @@ class Answer(ABC, Generic[T]):
 ### The runtime
 
 ```python
-# One runtime per episode. Each run gets a view of it with its own metadata section.
+# One runtime shared by the runs in an episode.
 class Runtime(ABC):
     @cached_property
     def metadata(self) -> dict[str, Any]: ...
@@ -397,7 +396,6 @@ class Runtime(ABC):
     @property
     def tick(self) -> int: ...
 
-    # A server opens a session, and the stack it declares starts with the session as its only argument.
     def start(
         self, processor: Processor[InputT, OutputT] | Server, /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT]: ...
@@ -410,18 +408,15 @@ class Runtime(ABC):
 ### Servers and sessions
 
 ```python
-# An address and the rules of its wire. It holds no connection.
 class Server(ABC):
     def open(self) -> Session: ...
 
     def meta(self) -> dict[str, Any]: ...
 
 
-# One episode's connection. The runtime opens it, calls it, and closes it.
 class Session(ABC):
     local_stack: Policy
 
-    # One inference.
     def __call__(self, obs: Obs) -> Any: ...
 
     def close(self) -> None: ...

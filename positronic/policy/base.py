@@ -81,8 +81,7 @@ class Runtime(ABC):
     def metadata(self) -> dict[str, Any]:
         """This run's section of the episode metadata, written on the control thread.
 
-        The recording overrides definition values with it. A run started by another run writes in a section of
-        its parent's, named by its start index.
+        The recording overrides definition values with it.
         """
         return {}
 
@@ -159,7 +158,7 @@ class Runtime(ABC):
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
 
     def _runtime_for_run(self) -> Runtime:
-        """The view a run started here receives. The run the episode starts writes at the top level."""
+        """The view a run started here receives."""
         return _RunRuntime(self, self.metadata)
 
 
