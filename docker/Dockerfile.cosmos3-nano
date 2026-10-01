@@ -55,26 +55,30 @@ RUN sed -i 's/metadata={}/metadata={"image_resolution": [360, 640], "needs_wrist
  && grep -q '"action_space": {"joint_pos": "joint_position"}\[args.action_space\]' cosmos_framework/scripts/action_policy_server_robolab.py
 
 ENV HF_HOME=/workspace/.cache/huggingface
+# The policy repository, and the Wan2.2 VAE at the repository and revision NVIDIA's code names for it.
+ARG POLICY_REPO=nvidia/Cosmos3-Nano-Policy-DROID
+ARG VAE_REPO=Wan-AI/Wan2.2-TI2V-5B
+ARG VAE_REVISION=921dbaf3f1674a56f47e83fb80a34bac8a8f203e
 
 # One shard per layer. FOOTGUN: a registry can refuse a 31 GB layer.
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00001-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00002-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00003-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00004-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00005-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00006-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['transformer/*-00007-of-00007*'])"
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', allow_patterns=['vision_encoder/*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00001-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00002-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00003-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00004-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00005-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00006-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['transformer/*-00007-of-00007*'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', allow_patterns=['vision_encoder/*'])"
 # The rest: the configs, the tokenizer and the model card. FOOTGUN: take no `allow_patterns` here. The loader
 # skips the hub tokenizer `Qwen/Qwen3-VL-8B-Instruct` only while five root files sit beside the weights:
 # `preprocessor_config.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.json` and `merges.txt`.
 # `vae/` holds the Wan2.2 VAE again, in the diffusers layout: the loader drops every weight outside
 # `transformer/` and `vision_encoder/` (`inference/model.py`), and the tokenizer loads the Wan2.2 file below.
-RUN python -c "from huggingface_hub import snapshot_download as d; d('nvidia/Cosmos3-Nano-Policy-DROID', ignore_patterns=['vae/diffusion_pytorch_model.safetensors'])"
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', ignore_patterns=['vae/diffusion_pytorch_model.safetensors'])"
 
-# The Wan2.2 VAE the tokenizer loads, at the repository, revision and file NVIDIA's code names. The model card
-# carries its licence. FOOTGUN: a by-revision download writes no `refs/main`; this loader names the revision.
-RUN python -c "from huggingface_hub import snapshot_download as d; d('Wan-AI/Wan2.2-TI2V-5B', revision='921dbaf3f1674a56f47e83fb80a34bac8a8f203e', allow_patterns=['Wan2.2_VAE.pth', 'README.md'])"
+# The Wan2.2 VAE file the tokenizer loads, and the model card that carries its licence. FOOTGUN: a by-revision
+# download writes no `refs/main`; this loader names the revision.
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$VAE_REPO', revision='$VAE_REVISION', allow_patterns=['Wan2.2_VAE.pth', 'README.md'])"
 
 # A start that would resolve the Hub ends at model load, not on weights other than the ones this image holds.
 ENV HF_HUB_OFFLINE=1 \
@@ -83,7 +87,7 @@ ENV HF_HUB_OFFLINE=1 \
 
 # Both repositories resolve as the server resolves them, with no package index and no uv cache. A resolve that
 # needs the network fails the build here.
-RUN UV_OFFLINE=1 UV_NO_CACHE=1 python -c "from cosmos_framework.utils.checkpoint_db import CheckpointDirHf, CheckpointFileHf; print(CheckpointDirHf(repository='nvidia/Cosmos3-Nano-Policy-DROID', revision='main').download()); print(CheckpointFileHf(repository='Wan-AI/Wan2.2-TI2V-5B', revision='921dbaf3f1674a56f47e83fb80a34bac8a8f203e', filename='Wan2.2_VAE.pth').download())"
+RUN UV_OFFLINE=1 UV_NO_CACHE=1 python -c "from cosmos_framework.utils.checkpoint_db import CheckpointDirHf, CheckpointFileHf; print(CheckpointDirHf(repository='$POLICY_REPO', revision='main').download()); print(CheckpointFileHf(repository='$VAE_REPO', revision='$VAE_REVISION', filename='Wan2.2_VAE.pth').download())"
 
 # The licences beside the notice, where a recipient of the image finds them. The OpenMDW-1.1 agreement is the
 # one NVIDIA's repository carries.
