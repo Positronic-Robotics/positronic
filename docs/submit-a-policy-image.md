@@ -95,7 +95,8 @@ The weights are under the
 of Black Forest Labs. Read it before you use the image. Its main terms:
 
 - Use the model for non-commercial purposes only: research, testing and evaluation outside
-  production. Commercial or production use needs a licence from Black Forest Labs.
+  production. Commercial or production use needs a licence from Black Forest Labs. The one exception:
+  a user with less than US$5 million revenue a year may use the outputs commercially.
 - Do not use the outputs of the model to improve another model that does a similar job. A recorded
   episode is an output.
 - Black Forest Labs grants the rights to use the model to you directly, under the licence.
