@@ -100,7 +100,8 @@ uv run positronic eval run --eval=<eval> \
    `policy_image_digest`. The run uses those bytes.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
    (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 30 GB
-   (`image_too_large`). Both are charged to your quota.
+   (`image_too_large`). Both are charged to your quota. The image has two more budgets, in
+   [The container](#the-container).
 3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
    server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
    run's bearer token. An image with no start command runs the base image's `CMD ["bash"]`, which
@@ -114,7 +115,51 @@ uv run positronic eval run --eval=<eval> \
 7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
    refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
    your own must do the same.
-8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM.
+8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
+   limits in [The container](#the-container).
+
+## The container
+
+[`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)
+holds each value below. The platform runs every image under them.
+
+| Limit | Value | Constant |
+|---|---|---|
+| The port the server listens on | 8000 | `POLICY_PORT` |
+| The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
+| The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
+| The GPU slice | `3g.40gb` | `MIG_PROFILE` |
+| VRAM | 40448 MiB | `VRAM_MIB` |
+| The compressed image | 30 GB | `COMPRESSED_IMAGE_BYTES` |
+| The unpacked image | 75 GB | `UNPACKED_IMAGE_BYTES` |
+| The files in the image | 4,500,000 | `IMAGE_FILES` |
+| The block an unpacked entry is counted in | 4096 bytes | `IMAGE_BLOCK_BYTES` |
+| The image store | 120 GiB | `IMAGE_STORE_BYTES` |
+| Memory, with no swap | 150 GiB | `MEMORY_BYTES` |
+| CPUs | 14 | `CPUS` |
+| Processes and threads | 4,096 | `PIDS` |
+| The container log | 200 MiB | `LOG_BYTES` |
+| Disk reads | 500 MiB/s | `DISK_READ_BYTES_PER_S` |
+| Disk writes | 100 MiB/s | `DISK_WRITE_BYTES_PER_S` |
+| Disk read operations | 2,000/s | `DISK_READ_IOPS` |
+| Disk write operations | 1,000/s | `DISK_WRITE_IOPS` |
+| The send rate | 500 Mbit/s | `SEND_BITS_PER_S` |
+| The send burst | 5 MiB | `SEND_BURST_BYTES` |
+
+- The container has no Linux capabilities and runs with `no-new-privileges`. It has no route out,
+  and a name lookup gets no answer. `docker_limit_flags(disk)` gives the `docker run` flags that set
+  the limits. The send rate is a policer on the host, and a packet above it is dropped.
+- The compressed size is the config blob and every layer, as the registry stores them
+  (`ImageManifest.compressed_size`).
+- The unpacked size counts every entry of every layer: its size rounded up to a whole 4096-byte
+  block, and at least one block. The file count counts every entry of every layer: files,
+  directories, links and deletions. A file that a later layer replaces or deletes counts in each
+  layer that carries it.
+- The image store holds the compressed layers beside the unpacked ones, the writable layer of the
+  container and its log. An image inside both budgets leaves the writable layer about 14 GB.
+- An image over a budget fails with `image_too_large`, charged. A container over its memory is
+  killed, and the run fails with `policy_oom`. The other limits slow the server, or stop it with
+  `policy_setup_crash` or `policy_inference_crash`.
 
 ## Test the image before you submit
 
