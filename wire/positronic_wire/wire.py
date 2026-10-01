@@ -19,13 +19,6 @@ SESSION_PATH = f'{API_PATH}/session'
 # The keepalive route beside the session, and the key its JSON answer carries the seconds under.
 KEEPALIVE_PATH = f'{API_PATH}/keepalive'
 ALIVE_SECONDS = 'alive_seconds'
-# The header a caller presents its bearer token in. A gated server checks it on every route.
-AUTH_HEADER = 'Authorization'
-
-
-def bearer(token: str) -> str:
-    """The ``AUTH_HEADER`` value that presents ``token``."""
-    return f'Bearer {token}'
 
 
 def bracket_ipv6(host: str) -> str:

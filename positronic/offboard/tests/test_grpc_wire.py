@@ -24,11 +24,11 @@ from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption,
 from cryptography.x509.oid import NameOID
 from positronic_wire import grpc as client_grpc
 from positronic_wire import wire
-from positronic_wire.wire import AUTH_HEADER, bearer
 
 from positronic.offboard import grpc_wire, protocol
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import ConnectRetries, InferenceClient
+from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import Served, StartServer
 from positronic.policy.base import SEQ

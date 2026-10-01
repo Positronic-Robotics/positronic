@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 
 import configuronic as cfn
-from positronic_wire.wire import AUTH_HEADER, SESSION_PATH, HostPortAddress, UnixSocketAddress, bearer
+from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
-from positronic.offboard.protocol import AUTH_TOKEN_ENV
+from positronic.offboard.protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import RemotePolicy
 from positronic.utils import nebius
 

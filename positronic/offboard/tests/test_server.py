@@ -18,7 +18,6 @@ import pytest
 from positronic_wire import probe, registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
-from positronic_wire.wire import AUTH_HEADER, bearer
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.http11 import Response
@@ -28,7 +27,7 @@ from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol, server_wire, websocket_wire
 from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
-from positronic.offboard.server import AUTH_TOKEN_ENV, PolicyServer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
@@ -874,16 +873,13 @@ def test_server_without_a_token_serves_open(stub_server):
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='a readiness call forks, which the probe runs on Linux only')
-def test_a_gated_server_holds_the_gate_the_probe_proves(start_server, make_mock_model):
+def test_a_gated_server_is_up_to_the_readiness_probe(start_server, make_mock_model):
+    """A readiness call with no token is refused, and a refusal is an answer from the server."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
-    assert probe.gate(client_websocket.WebsocketClientWire(), host, port, _TOKEN, 5.0) is probe.Gate.holds
-
-
-@pytest.mark.skipif(sys.platform != 'linux', reason='a readiness call forks, which the probe runs on Linux only')
-def test_a_server_without_a_token_is_an_open_gate(stub_server):
-    host, port, _server, _policy = stub_server
-    assert probe.gate(client_websocket.WebsocketClientWire(), host, port, _TOKEN, 5.0) is probe.Gate.open
+    ws = client_websocket.WebsocketClientWire()
+    assert probe.readiness_of(ws, host, port, 5.0) is probe.Answer.refused
+    assert probe.serving(ws, host, port, 5.0)
 
 
 @pytest.mark.parametrize(

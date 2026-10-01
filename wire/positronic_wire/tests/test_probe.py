@@ -1,4 +1,4 @@
-"""What counts as a policy server that serves, and whether its token gate holds."""
+"""What counts as a policy server that serves."""
 
 import json
 import logging
@@ -13,19 +13,17 @@ from http import HTTPStatus
 import pytest
 from positronic_wire import probe
 from positronic_wire.grpc import GrpcClientWire
-from positronic_wire.probe import Answer, Gate
+from positronic_wire.probe import Answer
 from positronic_wire.roboarena import RoboarenaClientWire
 from positronic_wire.websocket import WebsocketClientWire, WebsocketTlsClientWire, WebsocketUnixClientWire
 from positronic_wire.wire import (
     ALIVE_SECONDS,
-    AUTH_HEADER,
     KEEPALIVE_PATH,
     SESSION_PATH,
     ConnectRefused,
     HostPortAddress,
     KeepaliveUnsupported,
     Refusal,
-    bearer,
 )
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
@@ -128,7 +126,7 @@ def test_a_wire_that_dials_no_host_and_port_has_no_address_on_one():
 
 
 def test_a_readiness_call_refuses_a_wire_whose_refusals_chain_the_status_the_server_sent():
-    """A gated gRPC server's `PERMISSION_DENIED` arrives as the cause, which reads as no answer."""
+    """A gRPC server's `PERMISSION_DENIED` arrives as the cause, which reads as no answer."""
     with pytest.raises(ValueError, match='not grpc'):
         probe.readiness_of(GrpcClientWire(), '127.0.0.1', 8000, 1.0)
     with pytest.raises(ValueError, match='not grpc'):
@@ -203,12 +201,16 @@ def test_the_readiness_call_is_a_post_to_the_keepalive_route_that_states_no_body
     assert b'Content-Length: 0\r\n' in asked[0]
 
 
+# A header a caller sends with its readiness call.
+_HEADER = ('X-Caller', 'SECRET-VALUE')
+
+
 @forks
-def test_a_keepalive_answer_admits_the_caller_and_the_token_travels_as_a_bearer():
+def test_a_keepalive_answer_admits_the_caller_and_carries_its_headers():
     asked: list[bytes] = []
     host, port = _served(_answering(b'HTTP/1.1 200 OK', asked, json.dumps({ALIVE_SECONDS: 60}).encode()))
-    assert probe.readiness_of(_WEBSOCKET, host, port, 5.0, {AUTH_HEADER: bearer('tok')}) is Answer.admitted
-    assert f'{AUTH_HEADER}: {bearer("tok")}\r\n'.encode() in asked[0]
+    assert probe.readiness_of(_WEBSOCKET, host, port, 5.0, dict([_HEADER])) is Answer.admitted
+    assert f'{_HEADER[0]}: {_HEADER[1]}\r\n'.encode() in asked[0]
 
 
 @forks
@@ -225,8 +227,8 @@ def test_a_keepalive_answer_the_wire_cannot_read_is_final():
 
 @forks
 def test_a_redirect_is_an_answer_and_reaches_no_other_origin():
-    """A client that followed one would copy the bearer onto the redirected request and hand it to
-    whichever host the server named."""
+    """A client that followed one would copy the caller's headers onto the redirected request and hand
+    them to whichever host the server named."""
     reached: list[bytes] = []
     elsewhere_host, elsewhere_port = _served(_answering(b'HTTP/1.1 200 OK', reached))
 
@@ -236,7 +238,7 @@ def test_a_redirect_is_an_answer_and_reaches_no_other_origin():
         conn.sendall(f'HTTP/1.1 302 Found\r\nLocation: {location}\r\ncontent-length: 0\r\n\r\n'.encode())
 
     host, port = _served(redirects)
-    assert probe.readiness_of(_WEBSOCKET, host, port, 5.0, {AUTH_HEADER: bearer('tok')}) is Answer.final
+    assert probe.readiness_of(_WEBSOCKET, host, port, 5.0, dict([_HEADER])) is Answer.final
     assert reached == [], 'nothing reached the other origin'
 
 
@@ -245,9 +247,8 @@ def test_a_tls_readiness_call_sends_nothing_in_the_clear():
     """Nothing here presents a certificate, so the handshake fails before a request goes out."""
     asked: list[bytes] = []
     host, port = _served(_answering(b'HTTP/1.1 200 OK', asked))
-    headers = {AUTH_HEADER: bearer('SECRET-TOKEN')}
-    assert probe.readiness_of(WebsocketTlsClientWire(), host, port, 5.0, headers) is Answer.silent
-    assert all(b'SECRET-TOKEN' not in request for request in asked)
+    assert probe.readiness_of(WebsocketTlsClientWire(), host, port, 5.0, dict([_HEADER])) is Answer.silent
+    assert all(_HEADER[1].encode() not in request for request in asked)
 
 
 @forks
@@ -335,240 +336,7 @@ def test_a_server_is_up_once_its_answer_is_not_one_to_wait_on(head, up):
     assert probe.serving(_WEBSOCKET, host, port, 5.0) is up
 
 
-# ─── the GET the gate's session probes send ──────────────────────────────────
-
-
-def test_a_server_that_answers_is_read_off_its_status_line():
-    host, port = _served(_answering(b'HTTP/1.1 401 Unauthorized', []))
-    assert probe.status_of(host, port, '/', {}, 5.0) == HTTPStatus.UNAUTHORIZED
-
-
-def test_a_session_probe_trickling_its_headers_cannot_outlast_the_deadline():
-    host, port = _served(_trickling([]))
-    started = time.monotonic()
-    assert probe.status_of(host, port, '/', {}, 0.3) is None
-    assert time.monotonic() - started < 2.0, 'the deadline did not end it'
-
-
-def test_a_name_answering_with_several_addresses_gets_one_budget_between_them(monkeypatch):
-    """`socket.create_connection` arms its timeout per address, so a name with four records would spend
-    four budgets in connect alone before anything read the clock."""
-    tried: list = []
-
-    class Blackhole(socket.socket):
-        """Accepts the connect and answers nothing, which is what a budget has to end."""
-
-        def connect(self, address):
-            tried.append(address)
-            time.sleep(self.gettimeout() or 0.0)
-            raise TimeoutError('timed out')
-
-    records = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (f'192.0.2.{n}', 443)) for n in (1, 2, 3, 4)]
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: records)
-    monkeypatch.setattr(socket, 'socket', Blackhole)
-
-    started = time.monotonic()
-    assert probe.status_of('endpoint.example', 443, '/', {}, 0.4) is None
-    elapsed = time.monotonic() - started
-    assert elapsed < 1.2, f'{len(tried)} addresses spent {elapsed:.1f}s of a 0.4s budget'
-
-
-def test_a_refused_connection_is_no_status():
-    listener = socket.socket()
-    listener.bind(('127.0.0.1', 0))
-    host, port = listener.getsockname()
-    listener.close()
-    assert probe.status_of(host, port, '/', {}, 1.0) is None
-
-
-def test_something_that_is_not_http_on_the_port_is_no_status():
-    def handler(conn: socket.socket) -> None:
-        conn.recv(4096)
-        conn.sendall(b'not http at all\r\n')
-
-    host, port = _served(handler)
-    assert probe.status_of(host, port, '/', {}, 5.0) is None
-
-
-@pytest.mark.parametrize(
-    'status_field',
-    [b'2000', b'20', b'', b'9' * 5000, b'20x'],
-    ids=['four-digits', 'two-digits', 'empty', 'past-the-int-limit', 'not-digits'],
-)
-def test_a_status_field_that_is_not_three_digits_is_no_status(status_field):
-    """At 5000 digits `isdigit` passes and `int` refuses, so a server could raise out of a probe and into
-    the caller's loop."""
-
-    def handler(conn: socket.socket) -> None:
-        conn.recv(4096)
-        conn.sendall(b'HTTP/1.1 ' + status_field + b' Whatever\r\n\r\n')
-
-    host, port = _served(handler)
-    assert probe.status_of(host, port, '/', {}, 5.0) is None
-
-
-def test_the_host_header_names_an_ipv6_literal_in_brackets():
-    asked: list[bytes] = []
-    listener = socket.socket(socket.AF_INET6)
-    try:
-        listener.bind(('::1', 0))
-    except OSError:
-        pytest.skip('this host has no IPv6 loopback')
-    listener.listen(1)
-    port = listener.getsockname()[1]
-
-    def answer() -> None:
-        conn, _ = listener.accept()
-        with conn:
-            _answering(b'HTTP/1.1 403 Forbidden', asked)(conn)
-        listener.close()
-
-    threading.Thread(target=answer, daemon=True).start()
-    assert probe.status_of('::1', port, '/', {}, 5.0) == HTTPStatus.FORBIDDEN
-    assert f'Host: [::1]:{port}\r\n'.encode() in asked[0]
-
-
-# ─── the gate, on a server shaped like a positronic one ──────────────────────
-
-_TOKEN = 'tok'
-_KEEPALIVE = 'keepalive'
-
-
-@dataclass
-class _Positronic:
-    """A loopback server answering the readiness call and the session upgrade the way a gated positronic
-    server does, with the deviations a test names.
-
-    `opens` names routes that serve any caller, `refuses` names routes that refuse the server's own token.
-    A route is `_KEEPALIVE` or a session path. A server without the keepalive call answers it 404.
-    """
-
-    keepalive: bool = True
-    opens: frozenset[str] = frozenset()
-    refuses: frozenset[str] = frozenset()
-    authorizations: list[str] = field(default_factory=list)
-
-    def answer(self, method: str, path: str, authorization: str) -> bytes:
-        self.authorizations.append(authorization)
-        route = _KEEPALIVE if (method, path) == ('POST', KEEPALIVE_PATH) else path
-        own = authorization == bearer(_TOKEN) and route not in self.refuses
-        served = own or route in self.opens
-        if route == _KEEPALIVE:
-            if not self.keepalive:
-                return b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n'
-            if served:
-                body = json.dumps({ALIVE_SECONDS: 60}).encode()
-                return b'HTTP/1.1 200 OK\r\ncontent-length: %d\r\n\r\n' % len(body) + body
-            return b'HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n'
-        if served and route in probe.SESSION_PATHS_OF_WIRE[WebsocketClientWire.NAME]:
-            return b'HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n'
-        # A positronic server refuses every other upgrade with 403: the root, and a caller with no valid token.
-        return b'HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n'
-
-    def handle(self, conn: socket.socket) -> None:
-        request = b''
-        while b'\r\n\r\n' not in request:
-            chunk = conn.recv(4096)
-            if not chunk:
-                return
-            request += chunk
-        line, *header_lines = request.split(b'\r\n\r\n', 1)[0].decode().split('\r\n')
-        method, path, _version = line.split(' ', 2)
-        headers = {name.lower(): value.strip() for name, _, value in (h.partition(':') for h in header_lines)}
-        conn.sendall(self.answer(method, path, headers.get(AUTH_HEADER.lower(), '')))
-
-
-@pytest.fixture
-def positronic_like() -> Iterator[Callable[..., tuple[_Positronic, str, int]]]:
-    """Serves a `_Positronic` on loopback, one thread per connection, until the test ends."""
-    listeners: list[socket.socket] = []
-
-    def start(**deviations) -> tuple[_Positronic, str, int]:
-        server = _Positronic(**deviations)
-        listener = socket.socket()
-        listener.bind(('127.0.0.1', 0))
-        listener.listen(16)
-        listeners.append(listener)
-
-        def accept_each() -> None:
-            while True:
-                try:
-                    conn, _ = listener.accept()
-                except OSError:
-                    return
-                threading.Thread(target=_close_after, args=(server.handle, conn), daemon=True).start()
-
-        threading.Thread(target=accept_each, daemon=True).start()
-        host, port = listener.getsockname()
-        return server, host, port
-
-    yield start
-    for listener in listeners:
-        listener.close()
-
-
-def _close_after(handle: Callable[[socket.socket], None], conn: socket.socket) -> None:
-    with conn:
-        handle(conn)
-
-
-def _verdict(started: tuple[_Positronic, str, int], *, prove_own_token: bool = True) -> Gate:
-    _server, host, port = started
-    return probe.gate(_WEBSOCKET, host, port, _TOKEN, 5.0, prove_own_token=prove_own_token)
-
-
-# Each way a route serves a caller with no valid token.
-_SERVES_A_STRANGER = [
-    pytest.param(frozenset({_KEEPALIVE}), id='keepalive'),
-    pytest.param(frozenset({SESSION_PATH}), id='session'),
-    pytest.param(frozenset({probe.MODEL_SESSION_PATH}), id='model-session'),
-]
-
-
-@forks
-@pytest.mark.parametrize('keepalive', [True, False], ids=['keepalive', 'no-keepalive'])
-def test_a_gate_that_refuses_strangers_and_serves_the_server_holds(positronic_like, keepalive):
-    assert _verdict(positronic_like(keepalive=keepalive)) is Gate.holds
-
-
-@forks
-@pytest.mark.parametrize('opens', _SERVES_A_STRANGER)
-def test_a_route_that_serves_a_caller_with_no_valid_token_is_an_open_gate(positronic_like, opens):
-    assert _verdict(positronic_like(opens=opens)) is Gate.open
-
-
-@forks
-def test_a_server_without_the_keepalive_call_is_caught_open_on_its_session_route(positronic_like):
-    assert _verdict(positronic_like(keepalive=False, opens=frozenset({SESSION_PATH}))) is Gate.open
-
-
-@forks
-@pytest.mark.parametrize('refuses', [frozenset({_KEEPALIVE}), frozenset({SESSION_PATH})], ids=['keepalive', 'session'])
-def test_a_route_that_does_not_serve_the_servers_own_token_is_a_rejected_token(positronic_like, refuses):
-    assert _verdict(positronic_like(refuses=refuses)) is Gate.token_rejected
-
-
-@forks
-def test_a_gate_already_proven_presents_the_servers_own_token_on_no_route(positronic_like):
-    """The own-token session probe upgrades, so it takes a session: a server serving one at a time refuses
-    its client while a probe holds it."""
-    started = positronic_like()
-    assert _verdict(started, prove_own_token=False) is Gate.holds
-    assert bearer(_TOKEN) not in started[0].authorizations
-
-
-@forks
-@pytest.mark.parametrize('opens', _SERVES_A_STRANGER)
-def test_a_gate_already_proven_still_catches_a_route_that_serves_a_stranger(positronic_like, opens):
-    assert _verdict(positronic_like(opens=opens), prove_own_token=False) is Gate.open
-
-
-def test_the_gate_names_the_wires_it_proves_when_asked_of_another():
-    with pytest.raises(ValueError, match='websocket, roboarena'):
-        probe.gate(GrpcClientWire(), '127.0.0.1', 8000, _TOKEN, 1.0)
-
-
-# ─── the gate, on a roboarena server ─────────────────────────────────────────
+# ─── a roboarena server ──────────────────────────────────────────────────────
 
 
 def _announce(connection: ServerConnection) -> None:
@@ -580,24 +348,17 @@ def _announce(connection: ServerConnection) -> None:
         pass
 
 
-def _roboarena_gate(admits: Callable[[str], bool]):
-    """A `process_request` that refuses a handshake whose bearer `admits` refuses, with 401."""
-
-    def process_request(_connection: ServerConnection, request: Request) -> Response | None:
-        if admits(request.headers.get(AUTH_HEADER, '')):
-            return None
-        return Response(HTTPStatus.UNAUTHORIZED, 'Unauthorized', Headers(), b'')
-
-    return process_request
+def _refuses_every_handshake(_connection: ServerConnection, _request: Request) -> Response:
+    return Response(HTTPStatus.UNAUTHORIZED, 'Unauthorized', Headers(), b'')
 
 
 @pytest.fixture
-def roboarena_on() -> Iterator[Callable[[Callable[[str], bool]], tuple[str, int]]]:
-    """Serves a roboarena server behind a gate that admits a bearer `admits` takes, until the test ends."""
+def roboarena_on() -> Iterator[Callable[..., tuple[str, int]]]:
+    """Serves a roboarena server on loopback until the test ends; `process_request` may refuse a handshake."""
     servers = []
 
-    def start(admits: Callable[[str], bool]) -> tuple[str, int]:
-        server = serve(_announce, '127.0.0.1', 0, process_request=_roboarena_gate(admits))
+    def start(process_request=None) -> tuple[str, int]:
+        server = serve(_announce, '127.0.0.1', 0, process_request=process_request)
         servers.append(server)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server.socket.getsockname()
@@ -608,19 +369,15 @@ def roboarena_on() -> Iterator[Callable[[Callable[[str], bool]], tuple[str, int]
 
 
 @forks
-def test_a_roboarena_gate_that_refuses_strangers_and_serves_the_server_holds(roboarena_on):
-    host, port = roboarena_on(lambda held: held == bearer(_TOKEN))
+def test_a_roboarena_server_that_announces_itself_serves_no_keepalive_call(roboarena_on):
+    host, port = roboarena_on()
+    assert probe.readiness_of(_ROBOARENA, host, port, 5.0) is Answer.no_keepalive
     assert probe.serving(_ROBOARENA, host, port, 5.0)
-    assert probe.gate(_ROBOARENA, host, port, _TOKEN, 5.0) is Gate.holds
 
 
 @forks
-def test_a_roboarena_server_with_no_gate_is_an_open_gate(roboarena_on):
-    host, port = roboarena_on(lambda held: True)
-    assert probe.gate(_ROBOARENA, host, port, _TOKEN, 5.0) is Gate.open
-
-
-@forks
-def test_a_roboarena_server_that_refuses_its_own_token_is_a_rejected_token(roboarena_on):
-    host, port = roboarena_on(lambda held: False)
-    assert probe.gate(_ROBOARENA, host, port, _TOKEN, 5.0) is Gate.token_rejected
+def test_a_roboarena_server_that_refuses_the_handshake_is_up(roboarena_on):
+    """It refuses with 401, which no retry changes: a server answered."""
+    host, port = roboarena_on(_refuses_every_handshake)
+    assert probe.readiness_of(_ROBOARENA, host, port, 5.0) is Answer.final
+    assert probe.serving(_ROBOARENA, host, port, 5.0)
