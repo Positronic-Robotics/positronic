@@ -92,8 +92,7 @@ class Harness(pimm.ControlSystem):
     handles completions before advancing time, including unrestricted chains of calls at one instant.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
-    Its answer carries the terminal payload. A stop before either discards the recording.
-    Between episodes, manual commands pass through.
+    Its answer carries the terminal payload. Between episodes, manual commands pass through.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
