@@ -25,7 +25,7 @@ from .spec import from_spec
 class Session(ABC):
     """One episode's connection to a server: the stack the server declares for the rig, and one inference per call.
 
-    The runtime opens it at episode start and makes one call at a time. It closes the session after the last call.
+    The runtime makes one call at a time.
     """
 
     local_stack: Policy

@@ -114,7 +114,6 @@ class Runtime(ABC):
 
     @cached_property
     def _sessions(self) -> list[Session]:
-        """The server sessions of the episode, which close after its submitted work drains."""
         return []
 
     @overload
@@ -128,8 +127,6 @@ class Runtime(ABC):
     def start(self, processor: Processor[Any, Any] | Server, /, *args: Any, **kwargs: Any) -> ProcessorRun[Any, Any]:
         """Create and prime an episode generator. The caller owns its closure.
 
-        For a server, open a session and start the stack it declares, with the session as its inference function.
-        The episode's runtime closes the session after its submitted work drains.
         Bind telemetry before starting processors; timing wrappers are selected at startup.
         """
         if not isinstance(processor, Processor):

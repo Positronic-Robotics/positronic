@@ -1,7 +1,7 @@
 """Shared policy metadata and observation field names."""
 
-# The harness records a policy's ``meta`` under ``POLICY_META``. A wire server puts its handshake metadata under
-# ``SERVER`` as sent, so a ``prompt`` there is not the task. ``TYPE`` names the policy, or the vendor under ``SERVER``.
+# ``TYPE`` names the policy, or the vendor under ``SERVER``. ``SERVER`` holds a wire server's handshake metadata as
+# sent, so a ``prompt`` there is not the task.
 TYPE = 'type'
 CHECKPOINT_PATH = 'checkpoint_path'
 EXPERIMENT_NAME = 'experiment_name'
