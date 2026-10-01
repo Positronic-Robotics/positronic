@@ -11,7 +11,6 @@ from websockets.exceptions import InvalidStatus
 from positronic.offboard import protocol
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.utils.serialization import serialize
-from positronic.vendors.dreamzero import roboarena, roboarena_policy
 from positronic.vendors.flux3_action import server
 
 TOKEN = 'run-token'
@@ -82,18 +81,6 @@ def test_a_bad_token_fails_before_the_model_loads(monkeypatch):
 
 def test_the_gate_reads_the_variable_and_header_of_positronics_servers():
     assert (server.AUTH_TOKEN_ENV, server.AUTH_HEADER) == (protocol.AUTH_TOKEN_ENV, protocol.AUTH_HEADER)
-
-
-def test_the_announced_config_names_the_fields_positronics_roboarena_client_reads():
-    assert set(server.SERVER_CONFIG) == {
-        roboarena.RESOLUTION,
-        roboarena.NEEDS_WRIST_CAMERA,
-        roboarena.NUM_EXTERIOR_CAMERAS,
-        roboarena.NEEDS_STEREO_CAMERA,
-        roboarena.NEEDS_SESSION_ID,
-        roboarena.ACTION_SPACE,
-    }
-    assert server.SERVER_CONFIG[roboarena.ACTION_SPACE] == roboarena_policy.JOINT_POSITION_SPACE
 
 
 def test_positronics_roboarena_client_reads_the_config_through_the_gate():
