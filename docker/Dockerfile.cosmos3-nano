@@ -49,6 +49,8 @@ RUN sed -i "s/^\(\s*\)guardrails: bool = True/\1guardrails: bool = False/" cosmo
 # The server sends `metadata={}` on connect, and a roboarena client needs the whole server config. The action
 # space follows `--action-space`; a space with no roboarena name stops the server before it serves. 360x640 per
 # view composes to the 540x640 frame the model conditions on.
+# rules-allow: hardcoded-keys — the roboarena wire's own field names, written into NVIDIA's code; positronic is
+# not installed in the image.
 RUN sed -i 's/metadata={}/metadata={"image_resolution": [360, 640], "needs_wrist_camera": True, "n_external_cameras": 2, "needs_stereo_camera": False, "needs_session_id": False, "action_space": {"joint_pos": "joint_position"}[args.action_space]}/' cosmos_framework/scripts/action_policy_server_robolab.py \
  && grep -q '"action_space": {"joint_pos": "joint_position"}\[args.action_space\]' cosmos_framework/scripts/action_policy_server_robolab.py
 
