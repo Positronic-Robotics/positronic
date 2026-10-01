@@ -77,9 +77,17 @@ def no_allow(number, guarded_slug):
     return False
 
 
-def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env=''):
+def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None):
     return gmm.analyze(
-        cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge, gh_repo_env=gh_repo_env
+        cmd,
+        cwd,
+        GUARDED,
+        git,
+        path_exists=fake_path_exists,
+        allow_merge=allow_merge,
+        gh_repo_env=gh_repo_env,
+        authorized=authorized or (lambda *_: True),
+        stack_below=stack_below or (lambda *_: []),
     )
 
 
@@ -424,6 +432,106 @@ def test_a_command_merging_two_pull_requests_is_refused(git):
     )
     assert verdict is not None and 'one pull request per command' in verdict
     assert asked == []
+
+
+def test_a_stacked_merge_spends_an_authorization_for_each_pull_request_it_takes(git):
+    spent = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        stack_below=lambda n, slug: [101, 102],
+    )
+    assert denial is None
+    assert spent == [101, 102, 103]
+
+
+def test_a_stacked_merge_names_the_pull_requests_below_it_with_no_authorization(git):
+    spent = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n != 101,
+        stack_below=lambda n, slug: [101, 102],
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial and '#101, #102' in denial
+    assert spent == []
+
+
+def test_a_merge_whose_stack_cannot_be_read_is_refused_and_spends_nothing(git):
+    spent = []
+
+    def unreadable(number, slug):
+        raise gmm.StackLookupError('`gh api` failed')
+
+    denial = verdict(
+        git, 'gh pr merge 103', allow_merge=lambda n, slug: spent.append(n) or True, stack_below=unreadable
+    )
+    assert denial is not None and 'cannot tell which pull requests' in denial
+    assert spent == []
+
+
+def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
+    read = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: True,
+        authorized=lambda n, slug: False,
+        stack_below=lambda n, slug: read.append(n) or [],
+    )
+    assert denial is not None
+    assert read == []
+
+
+def fake_github(stack_members, bases, stack_base='main'):
+    """A `gh api` stand-in serving one stack: members as (number, head ref, state), and each base ref."""
+
+    def gh_json(path):
+        if '/stacks?' in path:
+            if stack_members is None:
+                return []
+            prs = [{'number': n, 'head': {'ref': h}, 'state': st} for n, h, st in stack_members]
+            return [{'number': 1, 'base': {'ref': stack_base}, 'pull_requests': prs}]
+        return {'base': {'ref': bases[int(path.rpartition('/')[2])]}}
+
+    return gh_json
+
+
+STACK_TOP_FIRST = [(103, 'c', 'open'), (101, 'a', 'open'), (102, 'b', 'open')]
+STACK_BASES = {101: 'main', 102: 'a', 103: 'b'}
+
+
+def test_a_pull_request_outside_any_stack_merges_alone():
+    assert gmm.merged_along_with(566, GUARDED, gh_json=fake_github(None, {})) == []
+
+
+def test_a_stacked_merge_takes_the_open_pull_requests_below_it_in_base_order():
+    assert gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, STACK_BASES)) == [101, 102]
+
+
+def test_a_stacked_merge_does_not_take_the_pull_requests_above_it():
+    gh = fake_github(STACK_TOP_FIRST, STACK_BASES)
+    assert gmm.merged_along_with(102, GUARDED, gh_json=gh) == [101]
+    assert gmm.merged_along_with(101, GUARDED, gh_json=gh) == []
+
+
+def test_a_merged_layer_is_not_taken_again():
+    members = [(101, 'a', 'closed'), (102, 'b', 'open'), (103, 'c', 'open')]
+    assert gmm.merged_along_with(103, GUARDED, gh_json=fake_github(members, {102: 'main', 103: 'b'})) == [102]
+
+
+def test_a_stack_whose_open_layers_form_no_chain_is_unreadable():
+    with pytest.raises(gmm.StackLookupError):
+        gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, {101: 'main', 102: 'x', 103: 'b'}))
+
+
+def test_merge_authorized_does_not_spend_the_receipt(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert gmm.merge_authorized(566, GUARDED, tmp_path, tmp_path / 'spent', now=1_000_060)
+    assert consume(566, tmp_path)
+    assert not gmm.merge_authorized(566, GUARDED, tmp_path, tmp_path / 'spent', now=1_000_060)
 
 
 def test_a_quoted_gh_repo_assignment_is_read_as_the_shell_reads_it(git):
