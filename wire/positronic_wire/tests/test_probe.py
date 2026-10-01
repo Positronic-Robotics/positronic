@@ -1,5 +1,6 @@
 """What counts as a policy server that serves."""
 
+import errno
 import json
 import socket
 import threading
@@ -165,7 +166,9 @@ def test_the_host_header_names_an_ipv6_literal_in_brackets():
     asked: list[bytes] = []
     try:
         host, port = _served(_answering(b'HTTP/1.1 401 Unauthorized', asked), family=socket.AF_INET6)
-    except OSError:
+    except OSError as refused:
+        if refused.errno not in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT):
+            raise
         pytest.skip('this host has no IPv6 loopback')
     assert probe.readiness_of(_WEBSOCKET, host, port, 5.0) is Answer.refused
     assert f'Host: [::1]:{port}\r\n'.encode() in asked[0]
@@ -256,7 +259,7 @@ def test_a_server_flooding_its_answer_is_cut_off_by_the_byte_cap():
             conn.sendall(b'HTTP/1.1 200 OK\r\n\r\n')
             while True:
                 conn.sendall(b'x' * 65536)
-        except OSError:
+        except (BrokenPipeError, ConnectionResetError):
             stopped.append(time.monotonic())
 
     host, port = _served(flood)
