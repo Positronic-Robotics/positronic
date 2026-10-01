@@ -6,7 +6,6 @@ import os
 import pathlib
 import socket
 import stat
-import sys
 import threading
 import time
 import urllib.parse
@@ -872,7 +871,6 @@ def test_server_without_a_token_serves_open(stub_server):
     session.close()
 
 
-@pytest.mark.skipif(sys.platform != 'linux', reason='a readiness call forks, which the probe runs on Linux only')
 def test_a_gated_server_is_up_to_the_readiness_probe(start_server, make_mock_model):
     """A readiness call with no token is refused, and a refusal is an answer from the server."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})

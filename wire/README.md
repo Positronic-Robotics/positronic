@@ -41,7 +41,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
-| `positronic_wire.probe` | `readiness_of` and `serving`, which say whether a policy server is up; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `READINESS_WIRES`, the wires a readiness call reads, `not_up_yet`, `answer_of`, the same call in this process, `address_on` and `CHILD_HEADROOM_BYTES` |
+| `positronic_wire.probe` | `readiness_of` and `serving`, which say whether a policy server is up; `Answer`, what one readiness call came back with, `POLICY_ANSWERS`, `READINESS_WIRES`, the wires a readiness call speaks, and `not_up_yet` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
 `websocket_wire.WebsocketWire`, `grpc_wire.GrpcWire`, the session protocol, `InferenceClient` and
@@ -116,13 +116,13 @@ before it dials, and names both in the refusal.
 ## Whether a policy server is up
 
 `probe.serving(wire, host, port, deadline_s)` tells whether a policy server on a host and a port is
-up. The caller need not trust the server. The readiness call is the keepalive call, or the wire's
-probe where the server serves no keepalive call. Any answer except one to wait on (`Answer.cold`,
-`Answer.silent`) counts, a refusal included. It reads the wires in `READINESS_WIRES`: `websocket`,
-`websocket_tls` and `roboarena`.
+up. The caller need not trust the server. On `websocket` and `websocket_tls` the readiness call is the
+keepalive call, and the upgrade on the root where the server serves no keepalive call. On `roboarena`
+it is the upgrade on the root and the first frame. Any answer except one to wait on (`Answer.cold`,
+`Answer.silent`) counts, a refusal included.
 
-Each readiness call runs in a forked child that the probe kills at the deadline, so `probe` needs
-Linux. On another system `readiness_of` raises `NotImplementedError`.
+Each readiness call is one exchange on a raw socket, under one wall-clock deadline that covers the name
+lookup, and with a cap on the bytes it reads.
 
 ## What each consumer pays
 
@@ -131,7 +131,7 @@ Linux. On another system `readiness_of` raises `NotImplementedError`.
 | A rig client, and `positronic` itself | Every verb, the session protocol, the policy stack | `positronic`, which pins `positronic-wire` exactly |
 | A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire` alone: `grpcio`, `websockets` and nothing else |
 | A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` alone |
-| A host that runs a policy server and waits for it before it sends sessions | `probe.serving` | `positronic-wire` alone, on Linux |
+| A host that runs a policy server and waits for it before it sends sessions | `probe.serving` | `positronic-wire` alone |
 | A server | The server side | `positronic` |
 
 A consumer whose lockfile already carries `grpcio` (through a cloud SDK) and `websockets` (through
