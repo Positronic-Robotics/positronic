@@ -1,9 +1,7 @@
 """Serve FLUX 3 Action's DROID policy over the roboarena wire, behind the run's bearer token.
 
-`docker/Dockerfile.flux3-action` runs this file in Black Forest Labs' own environment, which has
-`flux_action`, torch and websockets and no positronic, so it imports nothing from positronic. It loads the
-policy as `flux-action serve-robolab` does and answers each session with BFL's handler. It adds the whole
-roboarena server config to the handshake, and a `/healthz` route that answers once the model is warm.
+It runs in Black Forest Labs' own environment, so it imports nothing from positronic. It answers each
+session with BFL's handler, and adds the whole roboarena config to the handshake and a `/healthz` route.
 
 Usage
   python server.py --checkpoint black-forest-labs/flux-3-action-droid --revision <commit> \
