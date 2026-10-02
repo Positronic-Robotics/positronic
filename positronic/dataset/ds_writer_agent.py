@@ -118,7 +118,7 @@ class _Recording:
         if cmd.output_path not in self._datasets:  # a dataset numbers its episodes, off the disk it holds
             ds_writer = self._dataset_factory(cmd.output_path)
             self._datasets[cmd.output_path] = self._open_datasets.enter_context(ds_writer)
-        self.writer = self._datasets[cmd.output_path].new_episode(timeline=RECORDED_TIME)
+        self.writer = self._datasets[cmd.output_path].new_episode()
         self._set_statics(self.writer, cmd.static_data)
         logger.info(f'DsWriterAgent: [START] {self._episode_path(self.writer)}')
 

@@ -17,14 +17,10 @@ from fastapi.testclient import TestClient
 
 from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME
-from positronic.dataset.vector import SimpleSignalWriter
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
-    EPISODE_DURATION,
     FILTER_VALUES,
     GROUP_FILTERS,
     GROUP_INDEX_FILE,
@@ -662,7 +658,7 @@ class _Statics:
     def __getitem__(self, index: int) -> SimpleNamespace:
         if index >= len(self):
             raise IndexError(index)
-        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=lambda timeline: 0)
+        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=0)
 
 
 ASSISTED = 'assisted'
@@ -727,7 +723,7 @@ def test_a_second_holder_of_the_app_state_waits_for_the_first():
     assert second_holds.is_set()
 
 
-def _configure(ep_table_cfg, group_tables, *, duration_timeline=RECORDED_TIME):
+def _configure(ep_table_cfg, group_tables):
     configure_tables(
         root='',
         cache_dir=Path(),
@@ -736,33 +732,7 @@ def _configure(ep_table_cfg, group_tables, *, duration_timeline=RECORDED_TIME):
         home_page=None,
         max_resolution=64,
         max_hz=0,
-        duration_timeline=duration_timeline,
     )
-
-
-def test_episode_table_duration_uses_configured_timeline_and_invalidates_cache(tmp_path):
-    with LocalDatasetWriter(tmp_path / 'dataset') as dataset_writer:
-        with dataset_writer.new_episode(timeline='world') as writer:
-            writer.append('pose', 1, {'world': 0})
-            writer.append('pose', 2, {'world': 2_000_000_000})
-            with SimpleSignalWriter(writer.path / 'events.parquet', timeline='wall') as signal_writer:
-                signal_writer.append(1, {'wall': 1_000_000_000_000})
-                signal_writer.append(2, {'wall': 1_005_000_000_000})
-    with app_state_restored():
-        app_state['dataset'] = LocalDataset(tmp_path / 'dataset')
-        app_state['loading_state'] = False
-        client = TestClient(app)
-        for timeline, duration in [('world', 2.0), ('wall', 5.0), ('absent', 0.0)]:
-            _configure({EPISODE_DURATION: ColumnConfig(label='Duration')}, None, duration_timeline=timeline)
-            response = client.get('/api/episodes')
-            assert response.status_code == 200
-            assert response.json()['episodes'][0][1] == [duration]
-
-
-@pytest.mark.parametrize('timeline', ['', '  '])
-def test_episode_table_requires_a_named_duration_timeline(timeline):
-    with app_state_restored(), pytest.raises(ValueError, match='non-empty'):
-        _configure({}, None, duration_timeline=timeline)
 
 
 def test_a_group_key_that_is_no_episode_column_is_refused():

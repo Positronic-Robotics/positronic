@@ -1020,6 +1020,22 @@
         ],
         "./positronic/cfg/analysis.py": [
             {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 60,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 60,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 21,
@@ -1060,6 +1076,14 @@
                 "range": {
                     "startColumn": 33,
                     "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 53,
+                    "endColumn": 82,
                     "lineCount": 1
                 }
             }
@@ -1278,6 +1302,14 @@
                     "endColumn": 35,
                     "lineCount": 1
                 }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
             }
         ],
         "./positronic/dataset/ds_writer_agent.py": [
@@ -1309,6 +1341,22 @@
             }
         ],
         "./positronic/dataset/episode.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 32,
+                    "endColumn": 44,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 39,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
             {
                 "code": "reportIncompatibleMethodOverride",
                 "range": {
@@ -1398,6 +1446,22 @@
         ],
         "./positronic/dataset/signal.py": [
             {
+                "code": "reportReturnType",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIncompatibleMethodOverride",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 45,
@@ -1410,6 +1474,30 @@
                 "range": {
                     "startColumn": 41,
                     "endColumn": 44,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIncompatibleMethodOverride",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIndexIssue",
+                "range": {
+                    "startColumn": 26,
+                    "endColumn": 55,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 35,
+                    "endColumn": 73,
                     "lineCount": 1
                 }
             },
@@ -1442,6 +1530,22 @@
                 "range": {
                     "startColumn": 20,
                     "endColumn": 26,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 83,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 58,
+                    "endColumn": 68,
                     "lineCount": 1
                 }
             }
@@ -2286,9 +2390,65 @@
                     "endColumn": 19,
                     "lineCount": 1
                 }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 17,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
             }
         ],
         "./positronic/dataset/tests/test_signal.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIndexIssue",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 27,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 27,
+                    "lineCount": 1
+                }
+            },
             {
                 "code": "reportArgumentType",
                 "range": {
@@ -2330,6 +2490,40 @@
                 }
             }
         ],
+        "./positronic/dataset/tests/test_video.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIndexIssue",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./positronic/dataset/tests/utils.py": [
             {
                 "code": "reportIncompatibleMethodOverride",
@@ -2360,6 +2554,14 @@
                 "range": {
                     "startColumn": 56,
                     "endColumn": 64,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 54,
+                    "endColumn": 92,
                     "lineCount": 1
                 }
             }
@@ -2400,7 +2602,33 @@
                 }
             }
         ],
+        "./positronic/dataset/transforms/quality.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 32,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./positronic/dataset/transforms/signals.py": [
+            {
+                "code": "reportIndexIssue",
+                "range": {
+                    "startColumn": 28,
+                    "endColumn": 58,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportIndexIssue",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            },
             {
                 "code": "reportOptionalSubscript",
                 "range": {
@@ -2420,8 +2648,48 @@
             {
                 "code": "reportArgumentType",
                 "range": {
+                    "startColumn": 39,
+                    "endColumn": 72,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 66,
+                    "endColumn": 71,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
                     "startColumn": 31,
                     "endColumn": 64,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportRedeclaration",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 14,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 63,
+                    "endColumn": 65,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 66,
+                    "endColumn": 68,
                     "lineCount": 1
                 }
             },
@@ -2516,6 +2784,24 @@
                 }
             }
         ],
+        "./positronic/dataset/transforms/tests/test_episode.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 57,
+                    "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 60,
+                    "endColumn": 91,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./positronic/dataset/transforms/tests/test_image.py": [
             {
                 "code": "reportArgumentType",
@@ -2526,10 +2812,138 @@
                 }
             },
             {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 39,
+                    "endColumn": 44,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 42,
                     "endColumn": 45,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 18,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 18,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 27,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 27,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 10,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 10,
+                    "endColumn": 23,
                     "lineCount": 1
                 }
             }
@@ -4050,6 +4464,22 @@
             {
                 "code": "reportArgumentType",
                 "range": {
+                    "startColumn": 73,
+                    "endColumn": 83,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 97,
+                    "endColumn": 107,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
                     "startColumn": 30,
                     "endColumn": 72,
                     "lineCount": 1
@@ -4060,6 +4490,14 @@
             {
                 "code": "reportArgumentType",
                 "range": {
+                    "startColumn": 34,
+                    "endColumn": 108,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
                     "startColumn": 30,
                     "endColumn": 40,
                     "lineCount": 1
@@ -4067,6 +4505,14 @@
             }
         ],
         "./positronic/policy/observation.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 78,
+                    "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
             {
                 "code": "reportIncompatibleMethodOverride",
                 "range": {
@@ -4504,6 +4950,38 @@
                 "range": {
                     "startColumn": 37,
                     "endColumn": 44,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 33,
                     "lineCount": 1
                 }
             }

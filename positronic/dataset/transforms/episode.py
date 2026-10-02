@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from typing import Any, final
 
-from positronic.dataset.signal import validate_timeline
 from positronic.dataset.transforms import signals
 from positronic.dataset.transforms.signals import NpSignal
 from positronic.utils import merge_dicts
@@ -89,7 +88,7 @@ class Derive(EpisodeTransform):
 
     Example:
         Derive(
-            state=Concat('joint_q', 'ee_pose', timeline='recorded'),
+            state=Concat('joint_q', 'ee_pose'),
             label=FromValue('pick_place')
         )
     """
@@ -261,20 +260,18 @@ class Concat:
     This is a callable helper (not an EpisodeTransform) typically used within Derive.
 
     Example:
-        Derive(ee_pose=Concat('ee_translation', 'ee_quaternion', timeline='recorded'))
+        Derive(ee_pose=Concat('ee_translation', 'ee_quaternion'))
     """
 
-    def __init__(self, *features: str, timeline: str) -> None:
+    def __init__(self, *features: str) -> None:
         """
         Args:
             *features: Episode keys to concatenate in order
         """
-        validate_timeline(timeline)
-        self._timeline = timeline
         self._features = features
 
     def __call__(self, episode: Episode) -> NpSignal:
-        return signals.concat(*[episode[k] for k in self._features], timeline=self._timeline)
+        return signals.concat(*[episode[k] for k in self._features])
 
 
 class FromValue:

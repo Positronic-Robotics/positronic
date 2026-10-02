@@ -4,7 +4,6 @@ import pytest
 import positronic.drivers.roboarm.command as cmd_module
 from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import frame_transform
@@ -156,9 +155,9 @@ def test_training_encoder_maps_both_poses_forward():
         data={
             roboarm_keys.URDF: FRANKA_URDF,
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2), timeline=RECORDED_TIME),
-            keys.TARGET_EE_POSE: DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2), timeline=RECORDED_TIME),
-            keys.GRIP: DummySignal(ts, np.array([0.0, 1.0]), timeline=RECORDED_TIME),
+            keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
+            keys.TARGET_EE_POSE: DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
+            keys.GRIP: DummySignal(ts, np.array([0.0, 1.0])),
         }
     )
 
@@ -171,9 +170,7 @@ def test_training_encoder_maps_both_poses_forward():
 
 
 def _episode(**statics):
-    return EpisodeContainer(
-        data={keys.EE_POSE: DummySignal([1000, 2000], np.zeros((2, 7)), timeline=RECORDED_TIME), **statics}
-    )
+    return EpisodeContainer(data={keys.EE_POSE: DummySignal([1000, 2000], np.zeros((2, 7))), **statics})
 
 
 def test_training_encoder_rejects_poses_anchored_elsewhere():
@@ -205,8 +202,8 @@ def test_training_encoder_skips_absent_command_pose():
         data={
             roboarm_keys.URDF: FRANKA_URDF,
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2), timeline=RECORDED_TIME),
-            keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32), timeline=RECORDED_TIME),
+            keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
+            keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
         }
     )
 

@@ -1,7 +1,7 @@
 import numpy as np
 
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.signal import IndicesLike, RealNumericArrayLike, Signal, is_realnum_dtype, validate_timeline
+from positronic.dataset.signal import IndicesLike, RealNumericArrayLike, Signal, is_realnum_dtype
 from positronic.dataset.transforms import Elementwise, EpisodeTransform
 
 
@@ -11,9 +11,7 @@ class DummySignal(Signal[int]):
     Used to validate core Signal's generic indexing/time logic and views.
     """
 
-    def __init__(self, timestamps, values, *, timeline: str):
-        validate_timeline(timeline)
-        self._timeline = timeline
+    def __init__(self, timestamps, values):
         ts_arr = np.asarray(timestamps, dtype=np.int64)
         vals_arr = np.asarray(values)
         assert ts_arr.ndim == 1
@@ -21,15 +19,10 @@ class DummySignal(Signal[int]):
         self._ts = ts_arr
         self._vals = vals_arr
 
-    @property
-    def timeline(self) -> str:
-        return self._timeline
-
     def __len__(self) -> int:
         return int(self._ts.shape[0])
 
-    def _ts_at(self, index_or_indices: IndicesLike, *, timeline: str) -> np.ndarray:
-        self._check_timeline(timeline)
+    def _ts_at(self, index_or_indices: IndicesLike) -> np.ndarray:
         idxs = np.asarray(index_or_indices, dtype=np.int64)
         if idxs.size == 0:
             return np.array([], dtype=np.int64)
@@ -41,8 +34,7 @@ class DummySignal(Signal[int]):
             return []
         return self._vals[idxs]
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike, *, timeline: str) -> np.ndarray:
-        self._check_timeline(timeline)
+    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> np.ndarray:
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)

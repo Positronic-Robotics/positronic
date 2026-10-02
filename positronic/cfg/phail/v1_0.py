@@ -20,10 +20,9 @@ from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTE
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
-from positronic.server.positronic_server import EPISODE_DURATION, GroupTableConfig
 from positronic.server.positronic_server import ColumnConfig as C
+from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
@@ -54,7 +53,7 @@ teleop_unified = transform.override(
 def episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        EPISODE_DURATION: C(label='Duration', format='%.0f sec'),
+        '__duration__': C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }
@@ -63,7 +62,7 @@ def episodes_table():
 @cfn.config()
 def group_by_task():
     def group_fn(episodes: list[Episode]):
-        duration = sum(ep.duration_ns(RECORDED_TIME) / 1e9 / 3600 for ep in episodes)
+        duration = sum(ep.duration_ns / 1e9 / 3600 for ep in episodes)
         return {'task': episodes[0][keys.TASK], 'duration': duration, 'count': len(episodes)}
 
     format_table = {

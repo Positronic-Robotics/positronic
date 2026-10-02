@@ -3,7 +3,6 @@ import pytest
 import pimm
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter, drive_until
 
@@ -25,19 +24,13 @@ def create_agent(outputs: dict[str, RecordingEmitter]) -> tuple[DsPlayerAgent, M
     return agent, command_receiver, finished
 
 
-@pytest.mark.parametrize('timeline', [RECORDED_TIME, 'world'])
-def test_replays_signals_in_time_order(world, timeline):
+def test_replays_signals_in_time_order(world):
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(
-        data={
-            'a': DummySignal([1000, 3000], ['a1', 'a2'], timeline=timeline),
-            'b': DummySignal([2000], ['b1'], timeline=timeline),
-        }
-    )
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 3000], ['a1', 'a2']), 'b': DummySignal([2000], ['b1'])})
 
-    start_cmd = DsPlayerStartCommand(episode, start_ts=1000, timeline=timeline)
+    start_cmd = DsPlayerStartCommand(episode, start_ts=1000)
     command_receiver.push(start_cmd)
 
     scheduler = world.interleave(agent.run)
@@ -59,13 +52,10 @@ def test_start_ts_defaults_to_episode_start(world):
     agent, command_receiver, finished = create_agent(outputs)
 
     episode = EpisodeContainer(
-        data={
-            'a': DummySignal([1000, 3000], ['drop', 'keep'], timeline=RECORDED_TIME),
-            'b': DummySignal([2000], ['b1'], timeline=RECORDED_TIME),
-        }
+        data={'a': DummySignal([1000, 3000], ['drop', 'keep']), 'b': DummySignal([2000], ['b1'])}
     )
 
-    command_receiver.push(DsPlayerStartCommand(episode, timeline=RECORDED_TIME))
+    command_receiver.push(DsPlayerStartCommand(episode))
 
     scheduler = world.interleave(agent.run)
 
@@ -85,10 +75,8 @@ def test_respects_end_timestamp(world):
     outputs = {'a': RecordingEmitter()}
     agent, command_receiver, _ = create_agent(outputs)
 
-    episode = EpisodeContainer(
-        data={'a': DummySignal([1000, 2000, 3000], ['first', 'excluded', 'after'], timeline=RECORDED_TIME)}
-    )
-    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, end_ts=2000, timeline=RECORDED_TIME))
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 2000, 3000], ['first', 'excluded', 'after'])})
+    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, end_ts=2000))
 
     scheduler = world.interleave(agent.run)
 
@@ -101,8 +89,8 @@ def test_abort_stops_without_emitting_finished(world):
     outputs = {'a': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(data={'a': DummySignal([1000, 2000], ['first', 'second'], timeline=RECORDED_TIME)})
-    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, timeline=RECORDED_TIME))
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 2000], ['first', 'second'])})
+    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000))
 
     scheduler = world.interleave(agent.run)
 
@@ -128,9 +116,9 @@ def test_raises_for_static_only_output(world):
     outputs = {'static': RecordingEmitter()}
     agent, command_receiver, _ = create_agent(outputs)
 
-    episode = EpisodeContainer(data={'dynamic': DummySignal([1000], [1], timeline=RECORDED_TIME), 'static': 42})
+    episode = EpisodeContainer(data={'dynamic': DummySignal([1000], [1]), 'static': 42})
 
-    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, timeline=RECORDED_TIME))
+    command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000))
 
     scheduler = world.interleave(agent.run)
 

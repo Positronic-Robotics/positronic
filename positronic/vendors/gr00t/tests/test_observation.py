@@ -8,7 +8,6 @@ from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import models
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
@@ -35,8 +34,7 @@ def observation():
 def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation):
     codec = config()
     episode = EpisodeContainer({
-        name: value if name == keys.TASK else DummySignal([0, 1], [value, value], timeline=RECORDED_TIME)
-        for name, value in observation.items()
+        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
     })
     training = codec.training_encoder(episode)
     encoded = codec.encode(observation)
@@ -53,11 +51,11 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
 def test_training_episode_materializes_without_requiring_a_recorded_task(observation, task):
     observation.pop(keys.TASK)
-    fields = {name: DummySignal([0, 1], [value, value], timeline=RECORDED_TIME) for name, value in observation.items()}
+    fields = {name: DummySignal([0, 1], [value, value]) for name, value in observation.items()}
     if task is not None:
         fields[keys.TASK] = task
     training = droid().training_encoder(EpisodeContainer(fields))
-    frame = training.time(RECORDED_TIME)[np.array([0], dtype=np.int64)]
+    frame = training.time[np.array([0], dtype=np.int64)]
     assert frame[keys.TASK] == (task or '')
 
 
@@ -76,8 +74,7 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
     monkeypatch.setattr(gr00t, 'STATE_DIMS', dict(reversed(list(gr00t.STATE_DIMS.items()))))
     codec = droid()
     episode = EpisodeContainer({
-        name: value if name == keys.TASK else DummySignal([0, 1], [value, value], timeline=RECORDED_TIME)
-        for name, value in observation.items()
+        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
     })
     encoder = codec.training_encoder
     encoded = encoder(episode)

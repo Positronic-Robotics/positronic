@@ -9,11 +9,10 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
-from positronic.server.positronic_server import EPISODE_DURATION, GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import ColumnConfig as C
+from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
 
 from . import analysis as analysis_cfg
@@ -31,7 +30,7 @@ def eval_table():
     """
     return {
         '__index__': C(label='#', format='%d'),
-        EPISODE_DURATION: C(label='Duration', format='%.2f sec'),
+        '__duration__': C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
         eval_keys.SUCCESS: C(
             label='Pass',
@@ -49,7 +48,7 @@ def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    return items / (ep.duration_ns(RECORDED_TIME) / 1e9 / 3600)
+    return items / (ep.duration_ns / 1e9 / 3600)
 
 
 finetune_ds = ds.transform.override(
@@ -98,7 +97,7 @@ ft_eval_ds = ds.transform.override(
 def finetune_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        EPISODE_DURATION: C(label='Duration', format='%.0f sec'),
+        '__duration__': C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'units': C(label='Units'),
         'uph': C(label='UPH', format='%.1f'),
@@ -111,7 +110,7 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            duration += ep.duration_ns(RECORDED_TIME) / 1e9 / 3600
+            duration += ep.duration_ns / 1e9 / 3600
             units += ep['units']
 
         result = {'task': episodes[0][keys.TASK]}

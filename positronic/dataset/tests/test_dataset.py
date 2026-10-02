@@ -15,7 +15,7 @@ def episode_ids(episodes):
 def build_dataset_with_signal(root: Path, values: list[int]) -> LocalDataset:
     with LocalDatasetWriter(root) as w:
         for i, value in enumerate(values):
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', value)
                 ew.append('signal', np.array([value], dtype=np.float32), {RECORDED_TIME: 10_000 + i})
     return LocalDataset(root)

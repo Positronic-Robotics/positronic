@@ -10,7 +10,6 @@ from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
@@ -129,7 +128,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert episode[eval_keys.TERMINATED] is False
         assert eval_keys.ENDED_BY not in episode
         assert eval_keys.SUCCESS not in episode
-        assert episode.duration_ns(RECORDED_TIME) / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
+        assert episode.duration_ns / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
         assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
         assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']

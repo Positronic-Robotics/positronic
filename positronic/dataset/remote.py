@@ -12,9 +12,7 @@ from positronic.utils.serialization import deserialize
 
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer
-from .signal import TIMELINE_KEY, IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, validate_timeline
-
-DATASET_API_PREFIX = '/api/v2'
+from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 
 T = TypeVar('T')
 
@@ -39,50 +37,41 @@ class DatasetClient:
             self._session = None
 
     def get_dataset_info(self) -> dict:
-        r = self.session.get(f'{DATASET_API_PREFIX}/dataset/info')
+        r = self.session.get('/api/v1/dataset/info')
         r.raise_for_status()
         return r.json()
 
     def get_episode_info(self, index: int) -> dict:
-        r = self.session.get(f'{DATASET_API_PREFIX}/episodes/{index}/info')
+        r = self.session.get(f'/api/v1/episodes/{index}/info')
         r.raise_for_status()
         info = r.json()
         info['static'] = deserialize(bytes.fromhex(info['static']))
         return info
 
-    def get_signal_timestamps(self, ep: int, sig: str, indices: IndicesLike, *, timeline: str) -> np.ndarray:
-        r = self.session.post(
-            f'{DATASET_API_PREFIX}/episodes/{ep}/signals/{sig}/timestamps',
-            json={**_encode_indices(indices), TIMELINE_KEY: timeline},
-        )
+    def get_signal_timestamps(self, ep: int, sig: str, indices: IndicesLike) -> np.ndarray:
+        r = self.session.post(f'/api/v1/episodes/{ep}/signals/{sig}/timestamps', json=_encode_indices(indices))
         r.raise_for_status()
         return np.array(r.json()['timestamps'], dtype=np.int64)
 
     def get_signal_values(self, ep: int, sig: str, indices: IndicesLike) -> list:
         r = self.session.post(
-            f'{DATASET_API_PREFIX}/episodes/{ep}/signals/{sig}/values',
+            f'/api/v1/episodes/{ep}/signals/{sig}/values',
             json=_encode_indices(indices),
             headers={'Accept': 'application/msgpack'},
         )
         r.raise_for_status()
         return deserialize(r.content)
 
-    def search_signal_timestamps(
-        self, ep: int, sig: str, ts_array: RealNumericArrayLike, *, timeline: str
-    ) -> np.ndarray:
+    def search_signal_timestamps(self, ep: int, sig: str, ts_array: RealNumericArrayLike) -> np.ndarray:
         r = self.session.post(
-            f'{DATASET_API_PREFIX}/episodes/{ep}/signals/{sig}/search',
-            json={'timestamps': np.asarray(ts_array).tolist(), TIMELINE_KEY: timeline},
+            f'/api/v1/episodes/{ep}/signals/{sig}/search', json={'timestamps': np.asarray(ts_array).tolist()}
         )
         r.raise_for_status()
         return np.array(r.json()['indices'], dtype=np.int64)
 
-    def sample_episode(self, ep: int, timestamps: np.ndarray, *, timeline: str) -> dict:
+    def sample_episode(self, ep: int, timestamps: np.ndarray) -> dict:
         """Batch sample all signals at given timestamps."""
-        r = self.session.post(
-            f'{DATASET_API_PREFIX}/episodes/{ep}/sample',
-            json={'timestamps': timestamps.tolist(), TIMELINE_KEY: timeline},
-        )
+        r = self.session.post(f'/api/v1/episodes/{ep}/sample', json={'timestamps': timestamps.tolist()})
         r.raise_for_status()
         data = r.json()
         result = deserialize(bytes.fromhex(data['static']))
@@ -91,7 +80,7 @@ class DatasetClient:
         return result
 
     def stream_encoded(self, ep: int, sig: str) -> Iterator[bytes]:
-        with self.session.stream('GET', f'{DATASET_API_PREFIX}/episodes/{ep}/signals/{sig}/encoded') as r:
+        with self.session.stream('GET', f'/api/v1/episodes/{ep}/signals/{sig}/encoded') as r:
             r.raise_for_status()
             yield from r.iter_bytes(chunk_size=64 * 1024)
 
@@ -113,20 +102,13 @@ class RemoteSignal(Signal[T]):
         meta: SignalMeta,
         length: int,
         encoding_format: str | None,
-        timeline: str,
     ):
-        validate_timeline(timeline)
-        self._timeline = timeline
         self._client = client
         self._episode_index = episode_index
         self._signal_name = signal_name
         self._meta_cached = meta
         self._length = length
         self._encoding_format = encoding_format
-
-    @property
-    def timeline(self) -> str:
-        return self._timeline
 
     def __len__(self) -> int:
         return self._length
@@ -135,18 +117,14 @@ class RemoteSignal(Signal[T]):
     def meta(self) -> SignalMeta:
         return self._meta_cached
 
-    def _ts_at(self, indices: IndicesLike, *, timeline: str) -> np.ndarray:
-        self._check_timeline(timeline)
-        return self._client.get_signal_timestamps(self._episode_index, self._signal_name, indices, timeline=timeline)
+    def _ts_at(self, indices: IndicesLike) -> np.ndarray:
+        return self._client.get_signal_timestamps(self._episode_index, self._signal_name, indices)
 
     def _values_at(self, indices: IndicesLike) -> Sequence[T]:
         return self._client.get_signal_values(self._episode_index, self._signal_name, indices)
 
-    def _search_ts(self, ts_array: RealNumericArrayLike, *, timeline: str) -> np.ndarray:
-        self._check_timeline(timeline)
-        return self._client.search_signal_timestamps(
-            self._episode_index, self._signal_name, ts_array, timeline=timeline
-        )
+    def _search_ts(self, ts_array: RealNumericArrayLike) -> np.ndarray:
+        return self._client.search_signal_timestamps(self._episode_index, self._signal_name, ts_array)
 
     @property
     def encoding_format(self) -> str | None:
@@ -161,15 +139,13 @@ class RemoteSignal(Signal[T]):
 class _RemoteEpisodeTimeIndexer:
     """Optimized time indexer using batch API for array access."""
 
-    def __init__(self, episode: RemoteEpisode, timeline: str):
-        validate_timeline(timeline)
-        self._timeline = timeline
+    def __init__(self, episode: RemoteEpisode):
         self._episode = episode
 
     def __getitem__(self, timestamps):
         if isinstance(timestamps, np.ndarray):
-            return self._episode._client.sample_episode(self._episode._index, timestamps, timeline=self._timeline)
-        return _EpisodeTimeIndexer(self._episode, self._timeline)[timestamps]
+            return self._episode._client.sample_episode(self._episode._index, timestamps)
+        return _EpisodeTimeIndexer(self._episode)[timestamps]
 
 
 class RemoteEpisode(Episode):
@@ -208,13 +184,7 @@ class RemoteEpisode(Episode):
                     kind=Kind(sig_info['kind']),
                 )
                 self._signals[name] = RemoteSignal(
-                    self._client,
-                    self._index,
-                    name,
-                    sig_meta,
-                    sig_info['length'],
-                    sig_info.get('encoding_format'),
-                    sig_info[TIMELINE_KEY],
+                    self._client, self._index, name, sig_meta, sig_info['length'], sig_info.get('encoding_format')
                 )
             return self._signals[name]
         raise KeyError(f"'{name}' not found in episode {self._index}")
@@ -223,8 +193,9 @@ class RemoteEpisode(Episode):
     def meta(self) -> dict:
         return dict(self._ensure_info()['meta'])
 
-    def time(self, timeline: str):
-        return _RemoteEpisodeTimeIndexer(self, timeline)
+    @property
+    def time(self):
+        return _RemoteEpisodeTimeIndexer(self)
 
 
 class RemoteDataset(Dataset):

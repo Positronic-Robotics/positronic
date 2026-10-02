@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 
 from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
@@ -34,7 +35,7 @@ from .episode import (
     _static_decode_hook,
     _StaticEncoder,
 )
-from .signal import Signal, Timestamps, validate_timeline
+from .signal import RECORDED_TIME, Signal, Timestamps, validate_timeline
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
@@ -86,7 +87,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
-        timeline: str,
+        timeline: str = RECORDED_TIME,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -200,6 +201,37 @@ class DiskEpisodeWriter(EpisodeWriter):
             )
         self._static_items[name] = data
 
+    def _scan_timestamps(self) -> tuple[int | None, int | None]:
+        """Scan parquet files for min/max timestamps."""
+        first_ts: int | None = None
+        last_ts: int | None = None
+
+        for parquet_file in self._path.glob('*.parquet'):
+            try:
+                schema = pq.read_schema(parquet_file)
+                # Vector signals use 'timestamp', video frames use 'ts_ns'
+                if 'timestamp' in schema.names:
+                    col_name = 'timestamp'
+                elif 'ts_ns' in schema.names:
+                    col_name = 'ts_ns'
+                else:
+                    continue
+
+                table = pq.read_table(parquet_file, columns=[col_name])
+                timestamps = table[col_name].to_pylist()
+                if not timestamps:
+                    continue
+
+                file_first, file_last = min(timestamps), max(timestamps)
+                if first_ts is None or file_first > first_ts:
+                    first_ts = file_first
+                if last_ts is None or file_last > last_ts:
+                    last_ts = file_last
+            except Exception:
+                continue
+
+        return first_ts, last_ts
+
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
         if exc_type is not None and not self._aborted:
@@ -219,6 +251,11 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._aborted:
             return
         self._finished = True
+
+        # Compute duration by scanning parquet files
+        first_ts, last_ts = self._scan_timestamps()
+        if first_ts is not None and last_ts is not None:
+            self._meta['duration_ns'] = int(last_ts - first_ts)
 
         # Write all static items into a single static.json
         episode_json = self._path / 'static.json'
@@ -277,6 +314,7 @@ class DiskEpisode(Episode):
         self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None
+        self._cached_duration_ns: int | None = None
 
         # Discover available signal files but do not instantiate readers yet
         used_names: set[str] = set()
@@ -379,7 +417,9 @@ class DiskEpisode(Episode):
                     except Exception:
                         pass
 
-            meta.pop('duration_ns', None)
+            # duration_ns is a first-class Episode property, not meta.
+            # Extract it as a private cache for DiskEpisode.duration_ns.
+            self._cached_duration_ns = meta.pop('duration_ns', None)
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
@@ -394,6 +434,15 @@ class DiskEpisode(Episode):
 
             self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
+
+    @property
+    def duration_ns(self):
+        # Fast path: use cached value from meta.json (written at recording time)
+        _ = self.meta  # ensure meta is loaded
+        if self._cached_duration_ns is not None:
+            return self._cached_duration_ns
+        # Fallback: compute from signals (expensive, for old episodes without cached value)
+        return super().duration_ns
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
@@ -486,7 +535,7 @@ class LocalDatasetWriter(DatasetWriter):
         return max_id + 1
 
     def new_episode(
-        self, *, timeline: str, created_ts_ns: int | None = None, uid: str | None = None
+        self, *, timeline: str = RECORDED_TIME, created_ts_ns: int | None = None, uid: str | None = None
     ) -> DiskEpisodeWriter:
         """Create a new episode writer.
 

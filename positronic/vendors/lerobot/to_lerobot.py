@@ -28,7 +28,6 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.dataset.signal import RECORDED_TIME, validate_timeline
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES
 
 
@@ -53,20 +52,18 @@ def seconds_to_str(seconds: float) -> str:
 
 
 class EpisodeDictDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset: Dataset, fps: int, *, timeline: str):
-        validate_timeline(timeline)
+    def __init__(self, dataset: Dataset, fps: int):
         self.dataset = dataset
         self.fps = fps
-        self.timeline = timeline
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        start, finish = episode.start_ts(self.timeline), episode.last_ts(self.timeline)
+        start, finish = episode.start_ts, episode.last_ts
         timestamps = np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)
-        return episode.time(self.timeline)[timestamps]
+        return episode.time[timestamps]
 
 
 def _collate_fn(x):
@@ -74,21 +71,13 @@ def _collate_fn(x):
 
 
 def append_data_to_dataset(
-    lr_dataset: LeRobotDataset,
-    p_dataset: Dataset,
-    fps,
-    task=None,
-    num_workers=16,
-    share=1.0,
-    seed=42,
-    *,
-    timeline: str = RECORDED_TIME,
+    lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16, share=1.0, seed=42
 ):
-    episode_dataset = EpisodeDictDataset(p_dataset, fps=fps, timeline=timeline)
     _raise_fd_limit()
     lr_dataset.start_image_writer()
     total_length_sec = 0
 
+    episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
     if share < 1.0:
         n = len(episode_dataset)
         k = max(1, round(n * share))
@@ -121,16 +110,8 @@ def append_data_to_dataset(
 
 @cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42)
 def convert_to_lerobot_dataset(
-    output_dir: str,
-    fps: int | None,
-    video: bool,
-    dataset: Dataset,
-    task=None,
-    share=1.0,
-    seed=42,
-    timeline: str = RECORDED_TIME,
+    output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42
 ):
-    validate_timeline(timeline)
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -147,17 +128,12 @@ def convert_to_lerobot_dataset(
     )
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
-    append_data_to_dataset(
-        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, timeline=timeline
-    )
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
 @cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42)
-def append_data_to_lerobot_dataset(
-    output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42, timeline: str = RECORDED_TIME
-):
-    validate_timeline(timeline)
+def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42):
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -166,9 +142,7 @@ def append_data_to_lerobot_dataset(
 
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
-    append_data_to_dataset(
-        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, timeline=timeline
-    )
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
     logging.info(f'Dataset extended and saved to {output_dir}')
 
 

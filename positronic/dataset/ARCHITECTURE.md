@@ -25,6 +25,10 @@ An Episode has three kinds of data with distinct roles:
 
 - **Meta** (`episode.meta`) is *about* the episode — recording facts like `created_ts_ns`, `schema_version`, `writer`. Meta is not part of episode content, not in `keys()`, and transforms pass it through unchanged. Meta keys are optional and may vary by implementation (e.g. `size_mb` exists for disk episodes, may not for others).
 
+Writers choose one primary timeline at construction (`recorded` by default), receive all timestamps
+in one mapping per append, and persist the primary name in Parquet schema metadata. Timestamp names
+are fixed per signal. The read API uses the primary timestamp column.
+
 ## Identity
 
 Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — the identity contract. Episodes lacking a stamped uid derive a stable `ts-<created_ts_ns>` one from their recording timestamp, which is equally immutable and travels with the episode. Position in a `Dataset` is *access*, not identity: `FilterDataset`/`ConcatDataset` renumber episodes freely. The uid is *reference* — stable across views, processes, copies, and exports. Because transforms pass meta through unchanged, a transformed episode keeps its recording's uid: it is a view of the same recording event.
@@ -36,22 +40,11 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 - One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
-## Timelines
-
-Each signal exposes one primary timestamp coordinate, selected when its writer is constructed.
-An episode writer selects one primary timeline for every signal appended through it.
-Appends supply one mapping of non-empty timeline names to timestamps, including the primary timeline;
-additional coordinates are stored alongside it. The set of names is fixed per signal. Time queries and bounds
-require that exact name; no timeline is implicit. Episode queries filter out signals without the
-requested timeline. Transforms that align or offset time require a name and reject mismatched signals.
-Parquet schema metadata persists the name; recordings without it expose their existing timestamp
-column as `recorded`. This compatibility name makes no claim about which clock produced the data.
-
 ## Episode properties
 
-`duration_ns(timeline)`, `start_ts(timeline)`, `last_ts(timeline)` are **first-class methods on Episode**, derived only from signals on the named timeline. They are never stored in meta. If a transform changes signals, these properties reflect the change.
+`duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
 
-Implementations may cache these values per timeline internally, but this is a private optimization — `episode.meta` must not expose `duration_ns`. Disk episodes derive bounds from signal footers; unqualified duration caches in legacy meta files are ignored.
+Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
 
 ## Laziness
 

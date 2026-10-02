@@ -5,7 +5,6 @@ import positronic.drivers.roboarm.command as cmd_module
 from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
@@ -68,10 +67,7 @@ def test_absolute_position_action_encode_decode_quat():
 
     pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
 
-    ep = EpisodeContainer({
-        obs_keys.TARGET_EE_POSE: DummySignal(ts, pose, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, g, timeline=RECORDED_TIME),
-    })
+    ep = EpisodeContainer({obs_keys.TARGET_EE_POSE: DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
     act = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
     sig = act._encode_episode(ep)
@@ -94,10 +90,7 @@ def test_absolute_joints_action_encode_decode():
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     g = [0.5, 0.6]
 
-    ep = EpisodeContainer({
-        obs_keys.TARGET_JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, g, timeline=RECORDED_TIME),
-    })
+    ep = EpisodeContainer({obs_keys.TARGET_JOINTS: DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
 
     act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
     sig = act._encode_episode(ep)
@@ -141,12 +134,12 @@ def test_composed_training_encoder_uses_parallel():
     img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
 
     ep = EpisodeContainer({
-        obs_keys.JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        obs_keys.GRIP: DummySignal(ts, grip, timeline=RECORDED_TIME),
-        obs_keys.TARGET_JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, grip, timeline=RECORDED_TIME),
-        obs_keys.WRIST_IMAGE: DummySignal(ts, img, timeline=RECORDED_TIME),
-        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img, timeline=RECORDED_TIME),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, grip),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, grip),
+        obs_keys.WRIST_IMAGE: DummySignal(ts, img),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
         obs_keys.TASK: 'test',
     })
 
@@ -193,10 +186,7 @@ def test_binarize_grip_inference():
 
 def test_binarize_grip_training():
     ts = [1000, 2000]
-    ep = EpisodeContainer({
-        obs_keys.GRIP: DummySignal(ts, [0.3, 0.8], timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, [0.7, 0.2], timeline=RECORDED_TIME),
-    })
+    ep = EpisodeContainer({obs_keys.GRIP: DummySignal(ts, [0.3, 0.8]), 'target_grip': DummySignal(ts, [0.7, 0.2])})
 
     binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     result = binarize.training_encoder(ep)
@@ -208,10 +198,7 @@ def test_binarize_grip_training():
 
 def test_binarize_grip_training_respects_threshold():
     ts = [1000]
-    ep = EpisodeContainer({
-        obs_keys.GRIP: DummySignal(ts, [0.4], timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, [0.4], timeline=RECORDED_TIME),
-    })
+    ep = EpisodeContainer({obs_keys.GRIP: DummySignal(ts, [0.4]), 'target_grip': DummySignal(ts, [0.4])})
 
     keys = (obs_keys.GRIP, 'target_grip')
     default = BinarizeGripTraining(keys)
@@ -227,10 +214,7 @@ def test_binarize_grip_training_composed_with_action_codec():
     ts = [1000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
 
-    ep = EpisodeContainer({
-        obs_keys.TARGET_JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, [0.7], timeline=RECORDED_TIME),
-    })
+    ep = EpisodeContainer({obs_keys.TARGET_JOINTS: DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
 
     binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
@@ -304,12 +288,12 @@ def test_sequential_into_parallel_training():
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
 
     ep = EpisodeContainer({
-        obs_keys.JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        obs_keys.GRIP: DummySignal(ts, [0.7], timeline=RECORDED_TIME),
-        obs_keys.TARGET_JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, [0.3], timeline=RECORDED_TIME),
-        obs_keys.WRIST_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)], timeline=RECORDED_TIME),
-        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)], timeline=RECORDED_TIME),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, [0.7]),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, [0.3]),
+        obs_keys.WRIST_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
     })
 
     obs = ObservationCodec(
@@ -340,12 +324,12 @@ def test_compose_training_encoder_produces_only_derived_keys():
     img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
 
     ep = EpisodeContainer({
-        obs_keys.JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        obs_keys.GRIP: DummySignal(ts, grip, timeline=RECORDED_TIME),
-        obs_keys.TARGET_JOINTS: DummySignal(ts, joints, timeline=RECORDED_TIME),
-        'target_grip': DummySignal(ts, grip, timeline=RECORDED_TIME),
-        obs_keys.WRIST_IMAGE: DummySignal(ts, img, timeline=RECORDED_TIME),
-        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img, timeline=RECORDED_TIME),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, grip),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, grip),
+        obs_keys.WRIST_IMAGE: DummySignal(ts, img),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
         obs_keys.TASK: 'test',
     })
 

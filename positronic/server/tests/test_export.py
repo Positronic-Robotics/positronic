@@ -42,7 +42,6 @@ from positronic.server.export import (
 )
 from positronic.server.positronic_server import (
     DOWNLOAD_LINK,
-    EPISODE_DURATION,
     MAX_COMPONENT_BYTES,
     VIEWER_DIR,
     Attribution,
@@ -101,7 +100,7 @@ def a_dataset(root: Path, *statics: dict) -> Dataset:
     """One episode per static-value dict, each four joint samples long."""
     with LocalDatasetWriter(root) as writer:
         for static in statics:
-            with writer.new_episode(timeline=RECORDED_TIME) as episode:
+            with writer.new_episode() as episode:
                 for name, value in static.items():
                     episode.set_static(name, value)
                 for step in range(4):
@@ -140,23 +139,6 @@ def an_export(dataset, out, **overrides):
 
 def paths_of(files) -> set[str]:
     return {str(file.path) for file in files}
-
-
-def test_export_table_uses_the_selected_duration_timeline(tmp_path):
-    root = tmp_path / 'dataset'
-    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode(timeline='world') as writer:
-        writer.append(keys.JOINTS, np.zeros(2), {'world': 1_000_000_000})
-        writer.append(keys.JOINTS, np.ones(2), {'world': 4_000_000_000})
-    out = tmp_path / 'out'
-    export_static(
-        load_all_datasets(root),
-        out,
-        assets=False,
-        ep_table_cfg={EPISODE_DURATION: ColumnConfig(label='Duration')},
-        duration_timeline='world',
-    )
-    table = json.loads((out / 'api' / 'episodes.json').read_text())
-    assert table['episodes'][0][1] == [3.0]
 
 
 def test_a_page_is_a_directory_with_an_index_file_and_an_api_response_is_json(dataset, tmp_path):

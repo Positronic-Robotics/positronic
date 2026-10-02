@@ -3,7 +3,6 @@ import pytest
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import TransformedDataset
 
 from ...tests.utils import DummySignal, DummyTransform
@@ -25,7 +24,7 @@ class _DummyDataset(Dataset):
 
 
 def test_transformed_dataset_wraps_episode_with_transforms():
-    sig_simple = DummySignal([1000, 2000, 3000, 4000, 5000], [10, 20, 30, 40, 50], timeline=RECORDED_TIME)
+    sig_simple = DummySignal([1000, 2000, 3000, 4000, 5000], [10, 20, 30, 40, 50])
     base_meta = {'a': sig_simple.meta, 's': sig_simple.meta}
     episode = EpisodeContainer(data={'s': sig_simple, 'id': 99}, meta=base_meta)
     dataset = _DummyDataset([episode])
@@ -46,7 +45,7 @@ def test_transformed_dataset_wraps_episode_with_transforms():
 
 
 def test_transformed_dataset_pass_through_selected_keys():
-    sig_simple = DummySignal([1000, 2000], [10, 20], timeline=RECORDED_TIME)
+    sig_simple = DummySignal([1000, 2000], [10, 20])
     episode = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'keep', 'skip': 'drop'})
     dataset = _DummyDataset([episode])
     tf = DummyTransform(operations={'a': ('s', lambda x: x * 10), 's': ('s', lambda x: x + 1)}, pass_through=['note'])
@@ -67,7 +66,7 @@ def test_transformed_dataset_sequence_indices_return_transformed_episodes():
     for idx in range(3):
         ts = [1000, 2000]
         values = [idx * 10 + 1, idx * 10 + 2]
-        sig = DummySignal(ts, values, timeline=RECORDED_TIME)
+        sig = DummySignal(ts, values)
         episodes.append(EpisodeContainer(data={'s': sig, 'id': idx}))
 
     dataset = _DummyDataset(episodes)

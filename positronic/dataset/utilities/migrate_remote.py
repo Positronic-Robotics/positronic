@@ -20,43 +20,17 @@ import pyarrow.parquet as pq
 import tqdm
 
 from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import META_CREATED_TS_NS, META_UID, Episode
+from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
-from positronic.dataset.vector import PARQUET_ENCODING_FORMAT
-
-
-def _write_episode(episode: Episode, writer: LocalDatasetWriter) -> None:
-    timelines = {
-        signal.timeline
-        for signal in episode.signals.values()
-        if not isinstance(signal, SupportsEncodedRepresentation) or signal.encoding_format is None
-    }
-    if len(timelines) > 1:
-        raise ValueError(f'Signals rewritten during migration must share a primary timeline: {sorted(timelines)}')
-    meta = episode.meta
-    with writer.new_episode(
-        timeline=next(iter(timelines), RECORDED_TIME),
-        created_ts_ns=meta.get(META_CREATED_TS_NS),
-        uid=meta.get(META_UID),
-    ) as ew:
-        for key, value in episode.static.items():
-            ew.set_static(key, value)
-
-        for key, signal in episode.signals.items():
-            if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
-                _write_encoded_signal(signal, ew.path, key)
-            else:
-                _write_raw_signal(signal, ew, key)
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     """Migrate any dataset to local or S3 storage.
 
-    Signals with encoded representations (Parquet or video) are transferred as raw bytes
-    without re-encoding. Signals written from decoded values must share a primary
-    timeline. Static fields are materialized into static.json.
+    Signals with encoded representations (e.g. video) are transferred as raw bytes
+    without re-encoding. Static fields are materialized into static.json.
 
     Returns the number of episodes written.
     """
@@ -65,7 +39,16 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
 
     with LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
-            _write_episode(episode, writer)
+            meta = episode.meta
+            with writer.new_episode(created_ts_ns=meta.get(META_CREATED_TS_NS), uid=meta.get(META_UID)) as ew:
+                for key, value in episode.static.items():
+                    ew.set_static(key, value)
+
+                for key, signal in episode.signals.items():
+                    if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
+                        _write_encoded_signal(signal, ew.path, key)
+                    else:
+                        _write_raw_signal(signal, ew, key)
             count += 1
 
     return count
@@ -77,9 +60,9 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         end = min(i + chunk_size, len(signal))
         indices = list(range(i, end))
         values = signal._values_at(indices)
-        timestamps = signal._ts_at(indices, timeline=signal.timeline)
+        timestamps = signal._ts_at(indices)
         for v, ts in zip(values, timestamps, strict=True):
-            ew.append(key, v, {signal.timeline: ts})
+            ew.append(key, v, {RECORDED_TIME: ts})
 
 
 def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
@@ -92,10 +75,6 @@ def _write_encoded_signal(signal, episode_path: Path, signal_name: str) -> None:
     fmt = signal.encoding_format
     if fmt == 'positronic.video.v1':
         _write_video_v1(signal.iter_encoded_chunks(), episode_path, signal_name)
-    elif fmt == PARQUET_ENCODING_FORMAT:
-        with (episode_path / f'{signal_name}.parquet').open('wb') as file:
-            for chunk in signal.iter_encoded_chunks():
-                file.write(chunk)
     else:
         raise ValueError(f'Unknown encoding format: {fmt}')
 

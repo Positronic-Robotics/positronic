@@ -21,7 +21,6 @@ from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -928,9 +927,9 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert isinstance(episode, Episode)
     commands = episode[MOTOR]
     assert list(commands.values()) == [1, 2, 1]
-    np.testing.assert_array_equal(np.diff(list(commands.keys(RECORDED_TIME))), [100_000_000, 100_000_000])
+    np.testing.assert_array_equal(np.diff(list(commands.keys())), [100_000_000, 100_000_000])
     positions = episode[POSITION]
-    recorded = dict(zip(positions.keys(RECORDED_TIME), positions.values(), strict=True))
+    recorded = dict(zip(positions.keys(), positions.values(), strict=True))
     assert recorded
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))

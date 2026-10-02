@@ -25,7 +25,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     with LocalDatasetWriter(root) as w:
         # Create three episodes with minimal content
         for i in range(3):
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', i)
                 ew.append('a', i, {RECORDED_TIME: 1000 + i})
 
@@ -43,7 +43,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 
     # Restart writer and keep appending
     with LocalDatasetWriter(root) as w2:
-        with w2.new_episode(timeline=RECORDED_TIME) as ew:
+        with w2.new_episode() as ew:
             ew.set_static('id', 3)
 
     ds2 = LocalDataset(root)
@@ -55,11 +55,11 @@ def test_local_dataset_writer_appends_existing(tmp_path):
     root = tmp_path / 'append'
 
     writer = LocalDatasetWriter(root)
-    with writer.new_episode(timeline=RECORDED_TIME) as episode:
+    with writer.new_episode() as episode:
         episode.append('test_signal', np.array([1.0], dtype=np.float32), {RECORDED_TIME: 1})
 
     writer = LocalDatasetWriter(root)
-    with writer.new_episode(timeline=RECORDED_TIME) as episode:
+    with writer.new_episode() as episode:
         episode.append('test_signal', np.array([2.0], dtype=np.float32), {RECORDED_TIME: 2})
 
     ds = LocalDataset(root)
@@ -79,11 +79,11 @@ def test_local_dataset_writer_appends_existing(tmp_path):
 def test_local_dataset_ignores_unfinished_episodes(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as w:
-        with w.new_episode(timeline=RECORDED_TIME) as ew:
+        with w.new_episode() as ew:
             ew.set_static('id', 0)
 
     writer = LocalDatasetWriter(root)
-    unfinished = writer.new_episode(timeline=RECORDED_TIME)
+    unfinished = writer.new_episode()
     marker = unfinished.path / UNFINISHED_MARKER
     assert marker.exists()
 
@@ -97,7 +97,7 @@ def test_local_dataset_handles_block_rollover(tmp_path):
     with LocalDatasetWriter(root) as w:
         # Create 1001 empty episodes (static-only) to cross a block boundary
         for i in range(1001):
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', i)
 
     # Check directories for episode 0 and 1000
@@ -168,7 +168,7 @@ def test_homedir_resolution(tmp_path):
     with tempfile.TemporaryDirectory(dir=home) as tmpdir:
         actual_root = Path(tmpdir) / 'ds'
         with LocalDatasetWriter(actual_root) as w:
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', 42)
 
         # Test LocalDataset with ~ path
@@ -181,7 +181,7 @@ def test_homedir_resolution(tmp_path):
 
         # Test LocalDatasetWriter with ~ path
         with LocalDatasetWriter(tilde_path) as w:
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', 43)
 
         ds2 = LocalDataset(actual_root)
@@ -446,7 +446,7 @@ def test_episode_meta_has_unique_uid(tmp_path):
 
 def test_new_episode_carries_provided_uid(tmp_path):
     with LocalDatasetWriter(tmp_path / 'ds') as w:
-        with w.new_episode(uid='source-uid', timeline=RECORDED_TIME) as ew:
+        with w.new_episode(uid='source-uid') as ew:
             ew.set_static('id', 0)
     assert LocalDataset(tmp_path / 'ds')[0].meta['uid'] == 'source-uid'
 

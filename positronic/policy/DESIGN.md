@@ -326,23 +326,6 @@ remain children of the call that submitted them. These are wall-clock timings,
 independent of simulation charging. Parent durations include synchronous children
 and should not be added to them.
 
-### Recording requirements
-
-Policy logging must capture processor and codec inputs, outputs, and optional implementation
-data in the same dataset as robot signals. This includes remote request and session identifiers,
-numbers, and images. Records carry call identity and parent relationships so Rerun can display
-the policy stack alongside the robot episode.
-
-Each signal declares its own timelines, identified by non-empty strings. Every time query names
-its timelines explicitly; there is no default timeline. An episode query includes only signals
-containing every requested timeline, and applies all `<=` conditions to the same sample.
-
-Within a signal, every timeline is non-decreasing and at least one strictly increases on each
-append. Timestamps that cannot satisfy that contract are payload, not timelines.
-
-One recorder owns the episode. Local and remote records enter the same recording path;
-server contributions travel in inference responses. Deferred transfer is an optimization.
-
 ## API
 
 The core interfaces below are abridged from [base.py](base.py),

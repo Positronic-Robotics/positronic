@@ -6,8 +6,11 @@ The CLI defined here reads a configured source dataset—most often a
 ``update_v0_1_0`` transformation around specified local dataset,
 but you are welcome to use your own transformations with ``original_ds`` config entry.
 
-Stored Parquet and video signals are copied without decoding. Transformed
-signals are materialized and must share one primary timeline.
+Most signals are copied sample-by-sample; however, video signals require
+special handling. Instead of materialising individual frames, the underlying
+``VideoSignal`` files (the encoded video and its frame index) are copied
+verbatim so the resulting dataset preserves the original video assets without
+re-encoding.
 
 Example:
 
@@ -15,18 +18,26 @@ Example:
         --output_path /path/to/export_root
 """
 
+import shutil
 from pathlib import Path
 
 import configuronic as cfn
-import pos3
+import tqdm
 
 from positronic import keys
 from positronic.dataset import Dataset
-from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
-from positronic.dataset.utilities.migrate_remote import migrate_dataset
+from positronic.dataset.video import VideoSignal
+
+
+def _discover_image_signals(dataset: Dataset) -> list[str]:
+    """Inspect episodes to find signals carrying image data."""
+    episode = dataset[0]
+    image_keys = [name for name, signal in episode.signals.items() if signal.kind == Kind.IMAGE]
+    return image_keys
 
 
 @cfn.config()
@@ -35,13 +46,9 @@ def update_v0_1_0(path: str):
         LocalDataset(Path(path)),
         Group(
             Derive(**{
-                'controller_positions.right': Concat(
-                    'right_controller_translation', 'right_controller_quaternion', timeline=RECORDED_TIME
-                ),
-                'robot_commands.pose': Concat(
-                    'target_robot_position_translation', 'target_robot_position_quaternion', timeline=RECORDED_TIME
-                ),
-                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion', timeline=RECORDED_TIME),
+                'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
+                'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
+                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
                 'task': FromValue('Pick up the green cube and place it on the red cube.'),
             }),
             Rename(**{
@@ -58,9 +65,23 @@ def update_v0_1_0(path: str):
 
 
 @cfn.config(original_ds=update_v0_1_0)
-@pos3.with_mirror()
-def main(output_path: str, original_ds: Dataset):
-    migrate_dataset(original_ds, output_path)
+def main(output_path: str, original_ds: Dataset | None = None):
+    root = Path(output_path)
+    with LocalDatasetWriter(root) as writer:
+        for episode in tqdm.tqdm(original_ds):
+            with writer.new_episode() as ew:
+                for key, value in episode.static.items():
+                    ew.set_static(key, value)
+
+                for key, signal in episode.signals.items():
+                    if signal.kind == Kind.IMAGE:
+                        assert isinstance(signal, VideoSignal)
+                        shutil.copy(signal.video_path, ew.path / signal.video_path.name)
+                        shutil.copy(signal.frames_index_path, ew.path / signal.frames_index_path.name)
+                        continue
+
+                    for value, ts in signal:
+                        ew.append(key, value, {RECORDED_TIME: ts})
 
 
 if __name__ == '__main__':

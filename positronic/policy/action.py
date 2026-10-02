@@ -3,7 +3,7 @@ import numpy as np
 from positronic import geom, keys
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME, Signal
+from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
@@ -36,7 +36,7 @@ class AbsolutePositionAction(Codec):
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
-        return transforms.concat(pose, episode[self.tgt_grip_key], dtype=np.float32, timeline=RECORDED_TIME)
+        return transforms.concat(pose, episode[self.tgt_grip_key], dtype=np.float32)
 
     @property
     def training_encoder(self):
@@ -77,9 +77,7 @@ class AbsoluteJointsAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointPosition(positions=joint_positions), keys.TARGET_GRIP: target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        return transforms.concat(
-            episode[self.tgt_joints_key], episode[self.tgt_grip_key], dtype=np.float32, timeline=RECORDED_TIME
-        )
+        return transforms.concat(episode[self.tgt_joints_key], episode[self.tgt_grip_key], dtype=np.float32)
 
     @property
     def training_encoder(self):

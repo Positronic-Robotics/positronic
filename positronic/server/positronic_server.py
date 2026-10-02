@@ -39,7 +39,6 @@ from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import RECORDED_TIME, validate_timeline
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
@@ -87,7 +86,6 @@ app_state: dict[str, object] = {
     'root': '',
     'cache_dir': '',
     'episode_keys': {},
-    'duration_timeline': RECORDED_TIME,
     'max_resolution': DEFAULT_MAX_RESOLUTION,
     'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
@@ -695,9 +693,6 @@ def filter_spelling(value: object) -> str | None:
     return None if value is None else str(value)
 
 
-EPISODE_DURATION = '__duration__'
-
-
 @app.get(f'/{API_ROUTE}/episodes')
 @require_dataset
 async def api_episodes(request: Request):
@@ -707,7 +702,6 @@ async def api_episodes(request: Request):
 
     ds = app_state.get('dataset')
     config = app_state['episode_table_cfg']
-    timeline = cast(str, app_state['duration_timeline'])
     columns, formatters, defaults = parse_table_cfg(config)
     filters = {k: v for k, v in request.query_params.items() if v}
 
@@ -715,7 +709,7 @@ async def api_episodes(request: Request):
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
     ep_it = (
-        {'__episode_index__': i, '__meta__': ep.meta, EPISODE_DURATION: ep.duration_ns(timeline) / 1e9, **ep.static}
+        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
         for i, ep in enumerate(ds)
         if matches(ep)
     )
@@ -919,7 +913,7 @@ async def api_episode_rrd(episode_id: int):
 def default_table() -> TableConfig:
     return {
         '__index__': ColumnConfig(label='#', format='%d'),
-        EPISODE_DURATION: ColumnConfig(label='Duration', format='%.2f sec'),
+        '__duration__': ColumnConfig(label='Duration', format='%.2f sec'),
         'task': ColumnConfig(label='Task', filter=True),
     }
 
@@ -1032,19 +1026,16 @@ def configure_tables(
     home_page: str | None,
     max_resolution: int,
     max_hz: float,
-    duration_timeline: str = RECORDED_TIME,
 ) -> None:
     """Set what the tables show and how a recording is built.
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
-    Episode durations use `duration_timeline`; signals without that timeline do not contribute.
     A recording's videos are re-encoded down to `max_resolution` on the long side, and its videos and its
     numeric signals are thinned to `max_hz`; 0 keeps every frame and every sample. `root` is the dataset
     path the pages report, and the recordings are cached under `cache_dir`. A table response cached under
     the previous settings is dropped.
     """
-    validate_timeline(duration_timeline)
     episode_columns = set(ep_table_cfg or {})
     for name, cfg in (group_tables or {}).items():
         if not _is_one_path_segment(name):
@@ -1064,7 +1055,6 @@ def configure_tables(
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['episode_table_cfg'] = ep_table_cfg or {}
-    app_state['duration_timeline'] = duration_timeline
     app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
@@ -1094,7 +1084,6 @@ def main(
     base_href: str = '/',
     title: str = '',
     show_paths: bool = True,
-    duration_timeline: str = RECORDED_TIME,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -1145,7 +1134,6 @@ def main(
         base_href: Path at the server root that every page link and API call resolves against
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
-        duration_timeline: Named timeline used for episode-table durations
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -1161,7 +1149,6 @@ def main(
         home_page=home_page,
         max_resolution=max_resolution,
         max_hz=max_hz,
-        duration_timeline=duration_timeline,
     )
     configure_pages(base_href=base_href, title=title, show_paths=show_paths)
     app_state['loading_state'] = True

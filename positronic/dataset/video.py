@@ -26,7 +26,6 @@ from .signal import (
     SignalWriter,
     Timestamps,
     is_realnum_dtype,
-    validate_timeline,
 )
 
 
@@ -122,7 +121,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         gop_size: int = 30,
         fps: int = 100,
         *,
-        timeline: str,
+        timeline: str = RECORDED_TIME,
     ):
         """Initialize VideoSignalWriter.
 
@@ -132,6 +131,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             encoder: The encoder that writes the video file
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
+            timeline: Name of the primary timeline.
         """
         super().__init__(timeline=timeline)
         self.video_path = video_path
@@ -371,18 +371,8 @@ class VideoSignal(Signal[np.ndarray]):
         # TODO: Profile it to find the best default threshold
         self._seek_threshold = seek_threshold or 30
 
-        self._timeline: str | None = None
         self._timestamps = None
         self._navigator: _VideoNavigator | None = None
-
-    @property
-    def timeline(self) -> str:
-        if self._timeline is None:
-            metadata = pq.read_schema(self.frames_index_path).metadata or {}
-            name: str = metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
-            validate_timeline(name)
-            self._timeline = name
-        return self._timeline
 
     def _load_timestamps(self):
         """Lazily load timestamps from the index file."""
@@ -414,8 +404,7 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f'Could not decode frame {index}')
 
-    def _ts_at(self, index_or_indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
-        self._check_timeline(timeline)
+    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
@@ -451,8 +440,7 @@ class VideoSignal(Signal[np.ndarray]):
             idxs = np.asarray(index_or_indices, dtype=np.int64)
         return VideoSignal._LazyFrames(self, idxs)
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
-        self._check_timeline(timeline)
+    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
         self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:

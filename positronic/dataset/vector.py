@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -16,11 +16,9 @@ from .signal import (
     SignalWriter,
     Timestamps,
     is_realnum_dtype,
-    validate_timeline,
 )
 
 T = TypeVar('T')
-PARQUET_ENCODING_FORMAT = 'positronic.parquet.v1'
 
 
 class SimpleSignal(Signal[T]):
@@ -34,19 +32,9 @@ class SimpleSignal(Signal[T]):
     def __init__(self, filepath: Path):
         """Initialize Signal reader from a parquet file."""
         self.filepath = filepath
-        self._timeline: str | None = None
         self._timestamps: np.ndarray | None = None
         self._values: np.ndarray | None = None
         self._bounds: tuple[int, int, int] | None = None  # (first_ts, last_ts, num_rows)
-
-    @property
-    def timeline(self) -> str:
-        if self._timeline is None:
-            metadata = pq.read_schema(self.filepath).metadata or {}
-            name: str = metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
-            validate_timeline(name)
-            self._timeline = name
-        return self._timeline
 
     def _load_bounds(self):
         """Load signal bounds from parquet row-group statistics (reads only the file footer)."""
@@ -97,22 +85,21 @@ class SimpleSignal(Signal[T]):
         self._load_bounds()
         return self._bounds[2]
 
-    def start_ts(self, timeline: str) -> int:
-        self._check_timeline(timeline)
+    @property
+    def start_ts(self) -> int:
         self._load_bounds()
         if self._bounds[2] == 0:
             raise ValueError('Signal is empty')
         return self._bounds[0]
 
-    def last_ts(self, timeline: str) -> int:
-        self._check_timeline(timeline)
+    @property
+    def last_ts(self) -> int:
         self._load_bounds()
         if self._bounds[2] == 0:
             raise ValueError('Signal is empty')
         return self._bounds[1]
 
-    def _ts_at(self, index_or_indices: IndicesLike, *, timeline: str) -> Sequence[int] | np.ndarray:
-        self._check_timeline(timeline)
+    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
@@ -120,8 +107,7 @@ class SimpleSignal(Signal[T]):
         self._load_values()
         return self._values[index_or_indices]
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike, *, timeline: str) -> Sequence[int] | np.ndarray:
-        self._check_timeline(timeline)
+    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
         self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:
@@ -129,16 +115,6 @@ class SimpleSignal(Signal[T]):
         if not is_realnum_dtype(req.dtype):
             raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
         return np.searchsorted(self._timestamps, req, side='right') - 1
-
-    @property
-    def encoding_format(self) -> str:
-        return PARQUET_ENCODING_FORMAT
-
-    def iter_encoded_chunks(self) -> Iterator[bytes]:
-        """Stream the complete Parquet file, including all timestamps and metadata."""
-        with self.filepath.open('rb') as file:
-            while chunk := file.read(64 * 1024):
-                yield chunk
 
 
 class SimpleSignalWriter(SignalWriter[T]):
@@ -150,7 +126,12 @@ class SimpleSignalWriter(SignalWriter[T]):
     """
 
     def __init__(
-        self, filepath: Path, *, timeline: str, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None
+        self,
+        filepath: Path,
+        chunk_size: int = 10000,
+        drop_equal_bytes_threshold: int | None = None,
+        *,
+        timeline: str = RECORDED_TIME,
     ):
         """Initialize Signal writer to save data to a parquet file.
 
@@ -159,6 +140,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
+            timeline: Name of the primary timeline.
         """
         super().__init__(timeline=timeline)
         self.filepath = filepath

@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
 from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
 
@@ -13,7 +12,7 @@ from ...tests.utils import DummySignal, DummyTransform
 def sig_simple():
     ts = [1000, 2000, 3000, 4000, 5000]
     vals = [10, 20, 30, 40, 50]
-    return DummySignal(ts, vals, timeline=RECORDED_TIME)
+    return DummySignal(ts, vals)
 
 
 def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
@@ -190,11 +189,11 @@ def test_identity_transform_empty_returns_original(sig_simple):
 
 def test_concat_helper(sig_simple):
     """Test Concat helper that concatenates signals from an episode."""
-    sig2 = DummySignal([1000, 2000, 3000, 4000, 5000], [100, 200, 300, 400, 500], timeline=RECORDED_TIME)
+    sig2 = DummySignal([1000, 2000, 3000, 4000, 5000], [100, 200, 300, 400, 500])
     ep = EpisodeContainer(data={'s1': sig_simple, 's2': sig2})
 
     # Concatenate s1 and s2
-    concat_fn = Concat('s1', 's2', timeline=RECORDED_TIME)
+    concat_fn = Concat('s1', 's2')
     result = concat_fn(ep)
 
     # Should be a signal with concatenated arrays at each timestamp
@@ -208,11 +207,11 @@ def test_concat_helper(sig_simple):
 
 def test_concat_with_key_func_transform(sig_simple):
     """Test using Concat helper within Derive."""
-    sig2 = DummySignal([1000, 2000, 3000, 4000, 5000], [100, 200, 300, 400, 500], timeline=RECORDED_TIME)
+    sig2 = DummySignal([1000, 2000, 3000, 4000, 5000], [100, 200, 300, 400, 500])
     ep = EpisodeContainer(data={'s1': sig_simple, 's2': sig2})
 
     # Use Concat to create a new concatenated signal
-    tf = Derive(combined=Concat('s1', 's2', timeline=RECORDED_TIME))
+    tf = Derive(combined=Concat('s1', 's2'))
     transformed = tf(ep)
 
     assert 'combined' in transformed.keys()

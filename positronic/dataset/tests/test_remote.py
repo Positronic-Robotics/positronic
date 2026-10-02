@@ -9,21 +9,16 @@ import time
 import httpx
 import numpy as np
 import pos3
-import pyarrow.parquet as pq
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
 from positronic.dataset.edits import EditedEpisode
-from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
 from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
-from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import Derive
-from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
-from positronic.dataset.vector import PARQUET_ENCODING_FORMAT, SimpleSignal, SimpleSignalWriter
+from positronic.dataset.utilities.migrate_remote import migrate_remote_dataset
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
 
@@ -34,7 +29,7 @@ def dataset_with_video(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as w:
         for ep_idx in range(2):
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('task', f'task_{ep_idx}')
                 ew.set_static('episode_id', ep_idx)
 
@@ -45,7 +40,7 @@ def dataset_with_video(tmp_path):
                 # Video signal
                 video_path = ew.path / 'cam.mp4'
                 frames_path = ew.path / 'cam.frames.parquet'
-                with VideoSignalWriter(video_path, frames_path, fps=30, timeline=RECORDED_TIME) as vw:
+                with VideoSignalWriter(video_path, frames_path, fps=30) as vw:
                     for i in range(3):
                         frame = np.full((64, 64, 3), (ep_idx + 1) * 50 + i * 10, dtype=np.uint8)
                         vw.append(frame, {RECORDED_TIME: 1000 + i * 100})
@@ -64,7 +59,7 @@ def test_client(dataset_with_video):
 
 
 def test_dataset_info_endpoint(test_client, dataset_with_video):
-    r = test_client.get('/api/v2/dataset/info')
+    r = test_client.get('/api/v1/dataset/info')
     assert r.status_code == 200
     data = r.json()
     assert data['num_episodes'] == 2
@@ -72,7 +67,7 @@ def test_dataset_info_endpoint(test_client, dataset_with_video):
 
 
 def test_episode_info_endpoint(test_client):
-    r = test_client.get('/api/v2/episodes/0/info')
+    r = test_client.get('/api/v1/episodes/0/info')
     assert r.status_code == 200
     data = r.json()
     static = deserialize(bytes.fromhex(data['static']))
@@ -86,30 +81,26 @@ def test_episode_info_endpoint(test_client):
 
 
 def test_episode_info_not_found(test_client):
-    r = test_client.get('/api/v2/episodes/999/info')
+    r = test_client.get('/api/v1/episodes/999/info')
     assert r.status_code == 404
 
 
 def test_signal_timestamps_endpoint(test_client):
     # Test with indices
-    r = test_client.post(
-        '/api/v2/episodes/0/signals/action/timestamps', json={'timeline': RECORDED_TIME, 'indices': [0, 2, 4]}
-    )
+    r = test_client.post('/api/v1/episodes/0/signals/action/timestamps', json={'indices': [0, 2, 4]})
     assert r.status_code == 200
     data = r.json()
     assert data['timestamps'] == [1000, 1200, 1400]
 
     # Test with slice
-    r = test_client.post(
-        '/api/v2/episodes/0/signals/action/timestamps', json={'timeline': RECORDED_TIME, 'slice': [0, 3, None]}
-    )
+    r = test_client.post('/api/v1/episodes/0/signals/action/timestamps', json={'slice': [0, 3, None]})
     assert r.status_code == 200
     data = r.json()
     assert data['timestamps'] == [1000, 1100, 1200]
 
 
 def test_signal_values_endpoint(test_client):
-    r = test_client.post('/api/v2/episodes/0/signals/action/values', json={'indices': [0, 1]})
+    r = test_client.post('/api/v1/episodes/0/signals/action/values', json={'indices': [0, 1]})
     assert r.status_code == 200
     values = deserialize(r.content)
     assert len(values) == 2
@@ -118,38 +109,26 @@ def test_signal_values_endpoint(test_client):
 
 
 def test_signal_search_endpoint(test_client):
-    r = test_client.post(
-        '/api/v2/episodes/0/signals/action/search', json={'timeline': RECORDED_TIME, 'timestamps': [1050, 1150]}
-    )
+    r = test_client.post('/api/v1/episodes/0/signals/action/search', json={'timestamps': [1050, 1150]})
     assert r.status_code == 200
     data = r.json()
     assert data['indices'] == [0, 1]
 
 
 def test_signal_encoded_endpoint(test_client):
-    r = test_client.get('/api/v2/episodes/0/signals/cam/encoded')
+    r = test_client.get('/api/v1/episodes/0/signals/cam/encoded')
     assert r.status_code == 200
     assert r.headers['x-encoding-format'] == 'positronic.video.v1'
     assert len(r.content) > 0
 
 
-def test_signal_parquet_encoded_endpoint(test_client, dataset_with_video):
-    r = test_client.get('/api/v2/episodes/0/signals/action/encoded')
-    assert r.status_code == 200
-    assert r.headers['x-encoding-format'] == PARQUET_ENCODING_FORMAT
-    signal = dataset_with_video[0]['action']
-    assert isinstance(signal, SimpleSignal)
-    assert r.content == signal.filepath.read_bytes()
-
-
-def test_signal_encoded_not_supported(test_client, dataset_with_video, monkeypatch):
-    monkeypatch.setattr(remote_server, '_get_signal', lambda ep, sig: dataset_with_video[ep][sig][:])
-    r = test_client.get('/api/v2/episodes/0/signals/action/encoded')
+def test_signal_encoded_not_supported(test_client):
+    r = test_client.get('/api/v1/episodes/0/signals/action/encoded')
     assert r.status_code == 400
 
 
 def test_episode_sample_endpoint(test_client):
-    r = test_client.post('/api/v2/episodes/0/sample', json={'timeline': RECORDED_TIME, 'timestamps': [1000, 1100]})
+    r = test_client.post('/api/v1/episodes/0/sample', json={'timestamps': [1000, 1100]})
     assert r.status_code == 200
     data = r.json()
     assert deserialize(bytes.fromhex(data['static']))['task'] == 'task_0'
@@ -181,7 +160,7 @@ def running_server(dataset_with_video):
     # Wait for server to start
     for _ in range(50):
         try:
-            httpx.get(f'http://127.0.0.1:{port}/api/v2/dataset/info', timeout=0.1)
+            httpx.get(f'http://127.0.0.1:{port}/api/v1/dataset/info', timeout=0.1)
             break
         except Exception:
             time.sleep(0.1)
@@ -237,7 +216,7 @@ def test_remote_dataset_time_indexer(running_server):
     with RemoteDataset(running_server) as ds:
         ep = ds[0]
         timestamps = np.array([1000, 1100], dtype=np.int64)
-        result = ep.time(RECORDED_TIME)[timestamps]
+        result = ep.time[timestamps]
         assert 'task' in result
         assert 'action' in result
         assert len(result['action']) == 2
@@ -264,43 +243,6 @@ def test_remote_dataset_iteration(running_server):
 # --- Migration tests ---
 
 
-@pytest.mark.parametrize('over_http', [False, True])
-@pytest.mark.parametrize('legacy', [False, True])
-def test_migration_preserves_complete_parquet_records(tmp_path, monkeypatch, over_http, legacy):
-    source_root = tmp_path / 'source'
-    with LocalDatasetWriter(source_root) as writer, writer.new_episode(timeline='world') as episode:
-        for i in range(3):
-            timestamps = {'world': i * 100, 'message': 1000 + i, 'system': 2000 + i, 'wall': 3000 + i}
-            episode.append('scalar', i, timestamps)
-            episode.append('vector', np.array([i, -i], dtype=np.float32), timestamps)
-    source = LocalDataset(source_root)
-    if legacy:
-        source_episode = source[0]
-        assert isinstance(source_episode, Episode)
-        for signal in source_episode.signals.values():
-            assert isinstance(signal, SimpleSignal)
-            table = pq.read_table(signal.filepath).replace_schema_metadata(None)
-            pq.write_table(table, signal.filepath)
-        source = LocalDataset(source_root)
-
-    monkeypatch.setattr(remote_server, '_dataset', source)
-    with TestClient(remote_server._app) as client, RemoteDataset('http://testserver') as remote, pos3.mirror():
-        monkeypatch.setattr(remote._client, '_session', client)
-        migrate_dataset(remote if over_http else source, str(tmp_path / 'copied'))
-
-    copied = LocalDataset(tmp_path / 'copied')[0]
-    assert isinstance(copied, Episode)
-    source_episode = source[0]
-    assert isinstance(source_episode, Episode)
-    for name, signal in source_episode.signals.items():
-        result = copied.signals[name]
-        assert isinstance(signal, SimpleSignal)
-        assert isinstance(result, SimpleSignal)
-        assert result.filepath.read_bytes() == signal.filepath.read_bytes()
-        assert result.timeline == (RECORDED_TIME if legacy else 'world')
-        np.testing.assert_array_equal(result.values(), signal.values())
-
-
 def test_migrate_remote_dataset_numeric_only(tmp_path):
     """Test migration of dataset with numeric signals only."""
     source_root = tmp_path / 'source'
@@ -308,7 +250,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
 
     with LocalDatasetWriter(source_root) as w:
         for i in range(2):
-            with w.new_episode(timeline=RECORDED_TIME) as ew:
+            with w.new_episode() as ew:
                 ew.set_static('id', i)
                 for j in range(3):
                     ew.append('signal', np.array([j], dtype=np.float32), {RECORDED_TIME: 1000 + j * 100})
@@ -324,7 +266,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
 
     for _ in range(50):
         try:
-            httpx.get(f'http://127.0.0.1:{port}/api/v2/dataset/info', timeout=0.1)
+            httpx.get(f'http://127.0.0.1:{port}/api/v1/dataset/info', timeout=0.1)
             break
         except Exception:
             time.sleep(0.1)
@@ -343,33 +285,6 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
     signal = dest_ds[0]['signal']
     assert len(signal) == 3
     np.testing.assert_allclose(signal[0][0], [0])
-
-
-@pytest.mark.parametrize('second_timeline', ['world', 'wall'])
-def test_migration_requires_rewritten_signals_to_share_a_primary(tmp_path, second_timeline):
-    with LocalDatasetWriter(tmp_path / 'source') as writer, writer.new_episode(timeline='world') as episode:
-        episode.append('a', 1, {'world': 10})
-        with SimpleSignalWriter(episode.path / 'b.parquet', timeline=second_timeline) as signal_writer:
-            signal_writer.append(2, {second_timeline: 20})
-    source = TransformedDataset(
-        LocalDataset(tmp_path / 'source'), Derive(a=lambda ep: ep['a'][:], b=lambda ep: ep['b'][:])
-    )
-    destination = tmp_path / 'copied'
-    with pos3.mirror():
-        if second_timeline == 'world':
-            assert migrate_dataset(source, str(destination)) == 1
-        else:
-            with pytest.raises(ValueError, match='must share a primary timeline'):
-                migrate_dataset(source, str(destination))
-    copied = LocalDataset(destination)
-    assert len(copied) == (1 if second_timeline == 'world' else 0)
-    if second_timeline == 'world':
-        episode = copied[0]
-        assert isinstance(episode, Episode)
-        assert episode['a'].timeline == 'world'
-        assert episode['b'].timeline == 'world'
-        assert episode['a'][0] == (1, 10)
-        assert episode['b'][0] == (2, 20)
 
 
 def test_migrate_remote_dataset_with_video(running_server, tmp_path):
@@ -404,45 +319,3 @@ def test_video_signal_supports_encoded_protocol(dataset_with_video):
     assert cam.encoding_format == 'positronic.video.v1'
     chunks = list(cam.iter_encoded_chunks())
     assert len(chunks) > 0
-
-
-@pytest.mark.parametrize('endpoint,query', [('timestamps', {'indices': [0]}), ('search', {'timestamps': [1000]})])
-@pytest.mark.parametrize('timeline', [None, '', '  ', 'absent'])
-def test_time_endpoints_require_an_existing_named_timeline(test_client, endpoint, query, timeline):
-    if timeline is not None:
-        query = {**query, 'timeline': timeline}
-    response = test_client.post(f'/api/v2/episodes/0/signals/action/{endpoint}', json=query)
-    assert response.status_code == (400 if timeline == 'absent' else 422)
-
-
-def test_remote_sample_filters_signals_by_timeline(tmp_path, monkeypatch):
-    with LocalDatasetWriter(tmp_path / 'named') as writer:
-        with writer.new_episode(timeline='world') as episode:
-            episode.append('a', 1, {'world': 10})
-            with SimpleSignalWriter(episode.path / 'b.parquet', timeline='wall') as signal_writer:
-                signal_writer.append(2, {'wall': 1000})
-            episode.append('cam', np.zeros((32, 32, 3), dtype=np.uint8), {'world': 10})
-    monkeypatch.setattr(remote_server, '_dataset', LocalDataset(tmp_path / 'named'))
-    with TestClient(remote_server._app) as client:
-        info = client.get('/api/v2/episodes/0/info').json()
-        assert info['signals']['a']['timeline'] == 'world'
-        result = client.post('/api/v2/episodes/0/sample', json={'timeline': 'world', 'timestamps': [10]}).json()
-        assert set(result['signals']) == {'a', 'cam'}
-        assert deserialize(bytes.fromhex(result['signals']['a']['values'])) == [1]
-        remote = RemoteDataset('http://testserver')
-        monkeypatch.setattr(remote._client, '_session', client)
-        remote_episode = remote[0]
-        assert isinstance(remote_episode, Episode)
-        signal = remote_episode['a']
-        assert signal.timeline == 'world'
-        assert signal.time('world')[15] == (1, 10)
-        assert list(signal.keys('world')) == [10]
-        assert set(remote_episode.time('world')[np.array([10])]) == {'a', 'cam'}
-        with pos3.mirror():
-            migrate_dataset(remote, str(tmp_path / 'copied'))
-
-    copied = LocalDataset(tmp_path / 'copied')[0]
-    assert isinstance(copied, Episode)
-    assert {name: sig.timeline for name, sig in copied.signals.items()} == {'a': 'world', 'b': 'wall', 'cam': 'world'}
-    assert copied['a'].time('world')[10] == (1, 10)
-    assert copied['cam'].time('world')[10][1] == 10
