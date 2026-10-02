@@ -1,7 +1,7 @@
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from enum import Enum
 from types import MappingProxyType
@@ -117,17 +117,18 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
-    def infer(self, obs: dict[str, Any]) -> Any:
+    def infer(self, obs: dict[str, Any], prefix: Sequence[Mapping[str, Any]] | None = None) -> Any:
         """Send an observation and get the served session's result, with every robot-command channel typed.
 
         ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
-        returned — canonically a list of action dicts, but a bare dict or ``None`` too.
+        returned — canonically a list of action dicts, but a bare dict or ``None`` too. ``prefix`` holds the
+        commands the model continues from, and travels beside the observation.
         """
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
         try:
-            return self._round_trip(obs)
+            return self._round_trip(obs, prefix)
         except wire.PeerDisconnected as dropped:
             # After an answer the server's session holds state for this episode, which a new session lacks.
             if self._reopen is None or self._answered:
@@ -135,7 +136,7 @@ class InferenceSession:
             logger.warning('Inference connection dropped before its first answer (%s); reconnecting', dropped)
             self._adopt(self._reopen())
             # A second drop is a server that cannot serve this observation, and reaches the caller.
-            return self._round_trip(obs)
+            return self._round_trip(obs, prefix)
 
     def _adopt(self, reopened: 'InferenceSession') -> None:
         """Carry on over ``reopened``'s connection, which must serve what this session opened on."""
@@ -145,13 +146,16 @@ class InferenceSession:
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
 
-    def _round_trip(self, obs: dict[str, Any]) -> Any:
+    def _round_trip(self, obs: dict[str, Any], prefix: Sequence[Mapping[str, Any]] | None) -> Any:
         self.served_timing = self.wire_timing = {}
-        request = (
-            obs
-            if self._protocol is protocol.ProtocolVersion.V1
-            else {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
-        )
+        if self._protocol is protocol.ProtocolVersion.V1:
+            if prefix is not None:
+                raise ValueError('A V1 server takes no prefix')
+            request = obs
+        else:
+            request = {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
+            if prefix is not None:
+                request[protocol.PREFIX] = [dict(commands) for commands in prefix]
         serialised = serialise(request)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span

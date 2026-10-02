@@ -22,8 +22,8 @@ from starlette.datastructures import QueryParams
 
 from positronic import telemetry
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.policy.base import Obs
+from positronic.offboard.spec import ACTION_PREFIX, Model, PolicyDeployment
+from positronic.policy.base import Commands, Obs
 
 from . import grpc_wire, protocol, server_wire, websocket_wire
 from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
@@ -47,6 +47,13 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
         dupes = sorted(key for key, n in counts.items() if n > 1)
         raise ValueError(f'Duplicate session param keys: {dupes}')
     return {key: _literal_value(raw) for key, raw in items}
+
+
+def _call_model(model: Model, session_id: str, obs: Obs, prefix: Sequence[Any] | None = None) -> Any:
+    """Call ``model`` with ``prefix`` in the model input under ``ACTION_PREFIX``."""
+    if prefix is not None:
+        obs = {**obs, ACTION_PREFIX: prefix}
+    return model(obs, session_id=session_id)
 
 
 class _ServedTiming:
@@ -85,10 +92,10 @@ class _ServedTiming:
             index += 1
         self._record(key, start_ns, end_ns)
 
-    def infer(self, function: Callable[[Obs], Any], obs: Obs) -> Any:
+    def infer(self, function: Callable[..., Any], obs: Obs, prefix: Sequence[Commands] | None) -> Any:
         """Bind this request's timing for the duration of the call."""
         with telemetry.timings_to(self._record_span):
-            return function(obs)
+            return function(obs) if prefix is None else function(obs, prefix)
 
 
 class PolicyServer:
@@ -175,7 +182,7 @@ class PolicyServer:
         return self._pipeline_cfg.override_data(**params).instantiate()
 
     async def _answer_observations(
-        self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
+        self, conn: server_wire.ServerConnection, infer: Callable[..., Any], session_id: str
     ) -> None:
         """Answer observations until the client ends this session or disconnects."""
         while True:
@@ -189,6 +196,7 @@ class PolicyServer:
                 if request.get(protocol.END_SESSION) is True:
                     return
                 raw_obs = request[protocol.OBSERVATION]
+                prefix = request.get(protocol.PREFIX)
             try:
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
@@ -196,7 +204,7 @@ class PolicyServer:
                     await self._infer_lock.acquire()
                 try:
                     with timing.phase(protocol.TIMING_INFER):
-                        work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, raw_obs))
+                        work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, raw_obs, prefix))
                         try:
                             actions = await asyncio.shield(work)
                         except asyncio.CancelledError:
@@ -232,8 +240,7 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            infer = partial(model, session_id=session_id)
-            infer = telemetry.traced(protocol.MODEL_CALL)(infer)
+            infer = telemetry.traced(protocol.MODEL_CALL)(partial(_call_model, model, session_id))
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
             try:

@@ -28,7 +28,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Obs, ProcessorRun, Step
+from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Commands, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -85,6 +85,10 @@ class Codec:
     def _decode_single(self, data: dict) -> dict:
         return {}
 
+    def encode_commands(self, commands: cabc.Sequence[Commands]) -> list[dict]:
+        """``commands`` in the format ``decode`` reads, for a codec that converts a command back."""
+        raise ValueError(f'{type(self).__name__} cannot convert a command back to the format it decodes')
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         return Derive()
@@ -94,18 +98,19 @@ class Codec:
         return {}
 
     @overload
-    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
+    def wrap(self, function: cabc.Callable[..., Any]) -> cabc.Callable[..., Any]: ...
 
     @overload
     def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
 
     def wrap(
-        self, function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
-    ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        self, function: cabc.Callable[..., Any] | ProcessorRun[Obs, Any]
+    ) -> cabc.Callable[..., Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
-        wrapped dependency, including closing it when it is a generator.
+        Steps retain their wake-up time; only nonempty commands are decoded. A call with a prefix of
+        commands passes ``encode_commands(prefix)`` to the callable. The caller owns the wrapped
+        dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -117,9 +122,9 @@ class Codec:
         )(self.encode)
 
         @telemetry.traced(telemetry.component_name(self))
-        def call(obs: Obs) -> Any:
+        def call(obs: Obs, prefix: cabc.Sequence[Commands] | None = None) -> Any:
             encoded = encode(dict(obs))
-            result = function(encoded)
+            result = function(encoded) if prefix is None else function(encoded, self.encode_commands(prefix))
             if isinstance(result, Step):
                 return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
             return self.decode(result) if result is not None else None
@@ -193,6 +198,9 @@ class _ComposedCodec(Codec):
     def decode(self, data):
         return self._left.decode(self._right.decode(data))
 
+    def encode_commands(self, commands):
+        return self._right.encode_commands(self._left.encode_commands(commands))
+
     @property
     def training_encoder(self):
         return self._left.training_encoder | self._right.training_encoder
@@ -231,6 +239,11 @@ class _ParallelCodec(Codec):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
         return {**left_out, **right_out}
 
+    def encode_commands(self, commands):
+        left_out = self._left.encode_commands(commands)
+        right_out = self._right.encode_commands(commands)
+        return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
+
     @property
     def training_encoder(self):
         return self._left.training_encoder & self._right.training_encoder
@@ -256,6 +269,9 @@ class Metadata(Codec):
 
     def decode(self, data):
         return data
+
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -290,6 +306,9 @@ class BinarizeGripTraining(Codec):
 
     def _decode_single(self, data: dict) -> dict:
         return data
+
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -340,6 +359,9 @@ class BinarizeGripInference(Codec):
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     def to_spec(self):
         return {
             NAME: self.WIRE_NAME,
@@ -376,6 +398,9 @@ class FlipGrip(Codec):
         if obs_keys.TARGET_GRIP in data:
             data[obs_keys.TARGET_GRIP] = 1.0 - data[obs_keys.TARGET_GRIP]
         return data
+
+    def encode_commands(self, commands):
+        return [self._decode_single(dict(c)) for c in commands]
 
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
@@ -455,6 +480,9 @@ class RestrictImageSize(Codec):
 
     def decode(self, data):
         return data
+
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -545,6 +573,9 @@ class ChangeEEFrame(Codec):
     def _decode_single(self, data: dict) -> dict:
         return self._apply(data, self._transform.inv)
 
+    def encode_commands(self, commands):
+        return [self._apply(dict(c), self._transform) for c in commands]
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         return ChangeEEFrame._ChangeEpisodeFrames(self)
@@ -584,3 +615,6 @@ class SetControlMode(Codec):
             if obs_keys.is_robot_command(key) and isinstance(cmd, command.CommandType)
         }
         return {**data, **stamped} if stamped else data
+
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
