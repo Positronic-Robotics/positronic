@@ -20,7 +20,7 @@ from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.dreamzero import codecs, roboarena
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing
@@ -170,15 +170,17 @@ class RoboarenaEndpoint:
 class RoboarenaPolicy(Policy):
     """A policy served by the roboarena server at `address`, with the DROID codec in front of it.
 
-    Each episode opens its own connection. The codec's geometry and the cameras it sends come from the config
-    the server announces on that connection, so the stack is built when the episode starts.
+    Each episode opens its own connection, with `headers` on its handshake. The codec's geometry and the cameras
+    it sends come from the config the server announces on that connection, so the stack is built when the episode
+    starts.
     """
 
-    def __init__(self, address: roboarena_wire.RoboarenaAddress):
+    def __init__(self, address: roboarena_wire.RoboarenaAddress, headers: Mapping[str, str] | None = None):
         self._address = address
+        self._headers = headers
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        client = RoboarenaClient(self._address.host, self._address.port)
+        client = RoboarenaClient(self._address.host, self._address.port, self._headers)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.
         connection_lock = Lock()
         config = client.connect()

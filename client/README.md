@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.15.0"
+uv add "positronic-platform-client==0.16.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -65,8 +65,14 @@ it names, and the caller must be a member of that org. The org's approvals decid
 tasks and the endpoint kinds it may use. `nebius_competition` names one eval and one image
 endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
 
+`rig_shape` names the embodiment a plan that states its tasks runs on: `franka`, a single-arm Franka,
+or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platform picks the rig of
+that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
+names a `rig_shape` other than `franka`. The gateway refuses `sim`.
+
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
+rig_shape: franka                        # franka | yam
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
@@ -134,7 +140,7 @@ Percent-encode a character that `query` refuses: a space is `%20`, and `#` is `%
 JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
 told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
-it on the lab rig, and a `blocked` run waits on what its `reason` names. A plan that states its own
+it on a rig of the shape it names, and a `blocked` run waits on what its `reason` names. A plan that states its own
 tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
 Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the

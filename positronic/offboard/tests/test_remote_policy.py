@@ -1,4 +1,6 @@
 import dataclasses
+import http.server
+import json
 import pathlib
 import threading
 import time
@@ -7,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from positronic_wire import registry, websocket, wire
+from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
@@ -27,7 +29,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -53,6 +55,9 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         return None
+
+    def keepalive(self, address, headers, timeout):
+        raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         self.dials.append((address, headers, open_timeout))
@@ -223,6 +228,192 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert len(fake.dials) == 2 * len(one_session)
 
+    def test_no_attempt_begins_past_the_connect_deadline(self):
+        """An attempt that begins past the deadline runs a whole `open_timeout`, which the caller never granted."""
+        deadline = 1.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 1, f'the loop dialled {len(fake.dials)} times inside a {deadline}s deadline'
+
+    def test_a_wait_that_leaves_budget_still_retries(self):
+        deadline = 3.0
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert len(fake.dials) == 2, f'a {deadline}s deadline took {len(fake.dials)} attempt(s)'
+
+    def test_a_connect_backoff_does_not_sleep_past_the_deadline(self):
+        deadline = 0.5
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+        slept: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            slept.append(seconds)
+            clock[0] += seconds
+
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=sleep),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, connect_deadline=deadline).new_session()
+
+        assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
+
+
+def _ready(session_id: str, meta: dict | None = None) -> bytes:
+    return protocol.serialise({
+        protocol.STATUS: protocol.ServerStatus.READY,
+        protocol.PROTOCOL_VERSION: 2,
+        protocol.META: meta if meta is not None else {'model_name': 'test'},
+        protocol.SESSION_ID: session_id,
+    })
+
+
+def _answer(result) -> bytes:
+    return protocol.serialise({protocol.RESULT: result})
+
+
+def _connection(*received: bytes | Exception) -> MagicMock:
+    """A connection whose ``recv`` returns or raises each of ``received`` in turn."""
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = list(received)
+    return conn
+
+
+def _observations_sent(conn: MagicMock) -> list:
+    return [
+        request[protocol.OBSERVATION]
+        for request in (protocol.deserialise(call.args[0]) for call in conn.send.call_args_list)
+        if protocol.OBSERVATION in request
+    ]
+
+
+class TestADroppedConnectionReconnects:
+    """A connection that drops before the server's first answer opens a new session and sends the observation
+    again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""
+
+    def test_a_drop_before_the_first_answer_sends_the_observation_on_a_new_session(self):
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second'), _answer({'action_data': [1, 2, 3]}))
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        assert session.infer({'image': 'test'}) == {'action_data': [1, 2, 3]}
+
+        dropped.close.assert_called_once()
+        assert _observations_sent(reopened) == [{'image': 'test'}]
+        assert protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
+        assert session.session_id == 'second'
+
+    def test_a_drop_after_an_answer_reaches_the_caller(self):
+        """The server's session held state for the episode, and a new session would start without it."""
+        conn = _connection(_ready('first'), _answer({'action_data': [1]}), wire.PeerDisconnected('dropped'))
+        fake = _FakeWire(conn, _connection(_ready('second')))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'step': 0})
+
+        with pytest.raises(wire.PeerDisconnected, match='dropped'):
+            session.infer({'step': 1})
+
+        assert len(fake.dials) == 1
+
+    def test_a_second_drop_reaches_the_caller(self):
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _connection(_ready('second'), wire.PeerDisconnected('dropped again')),
+        )
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='dropped again'):
+            session.infer({'image': 'test'})
+
+        assert len(fake.dials) == 2
+
+    def test_a_stall_is_not_sent_again(self):
+        """The server may still compute the observation, so a second send doubles the work of a slow backend."""
+        fake = _FakeWire(_connection(_ready('first'), TimeoutError()), _connection(_ready('second')))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(TimeoutError):
+            session.infer({'image': 'test'})
+
+        assert len(fake.dials) == 1
+
+    def test_a_new_session_that_declares_other_metadata_is_refused(self):
+        """The caller built its stack from the first handshake, and the episode records it."""
+        end_ack = protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', {'model_name': 'another'}), end_ack)
+        fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), reopened)
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+            session.infer({'image': 'test'})
+
+        assert _observations_sent(reopened) == []
+        reopened.close.assert_called_once()
+
+    def test_a_reconnect_retries_a_refused_connect(self):
+        """A restarted backend refuses connects for a moment, and the reconnect waits it out."""
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _refused(wire.Refusal.COLD),
+            _connection(_ready('second'), _answer({'action_data': [1]})),
+        )
+        with patch('positronic.offboard.client.time.sleep'):
+            session = InferenceClient(fake, _ADDRESS).new_session()
+            assert session.infer({'image': 'test'}) == {'action_data': [1]}
+
+        assert len(fake.dials) == 3
+
+    def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
+        """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
+        clock = [0.0]
+        loading = protocol.serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: 'loading'})
+
+        def recv_loading(timeout: float | None = None) -> bytes:
+            clock[0] += 5.0
+            assert clock[0] < 100.0, 'the handshake outlived its deadline'
+            return loading
+
+        loads_for_ever = MagicMock(spec=wire.ClientConnection)
+        loads_for_ever.recv.side_effect = recv_loading
+        fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), loads_for_ever)
+        with (
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
+        ):
+            session = InferenceClient(fake, _ADDRESS, reconnect_deadline=20.0).new_session()
+            started = clock[0]
+            with pytest.raises(TimeoutError):
+                session.infer({'image': 'test'})
+
+        assert clock[0] - started <= 20.0
+
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
@@ -352,6 +543,8 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
         assert protocol.SESSION_ID not in first.metadata
         first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
         response = protocol.deserialise(first._conn.recv(timeout=5))
+        # A drop now must not reconnect: the server answered on the session's connection, past ``infer``.
+        first._answered = True
         assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
         assert 'session ID' in response[protocol.ERROR]
         with pytest.raises(wire.PeerDisconnected):
@@ -760,3 +953,81 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
         RemotePolicy('ws', _address('localhost', 8000))
+
+
+class _KeepaliveAnswer(http.server.BaseHTTPRequestHandler):
+    """Answers a keepalive after ``delay_s``, as a server with no idle timeout does."""
+
+    delay_s = 0.0
+
+    def do_POST(self):
+        time.sleep(self.delay_s)
+        body = json.dumps({wire.ALIVE_SECONDS: None}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def keepalive_server():
+    """Starts an HTTP server whose keepalive answers after the delay a test gives; yields its address."""
+    servers: list[http.server.ThreadingHTTPServer] = []
+
+    def start(delay_s: float) -> wire.HostPortAddress:
+        handler = type('Handler', (_KeepaliveAnswer,), {'delay_s': delay_s})
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return wire.HostPortAddress('127.0.0.1', server.server_address[1], wire.SESSION_PATH, '')
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+class TestEveryWireSpendsTheCallersBudgetOnce:
+    """A caller's timeout is one budget: each step of the call takes what the steps before it left."""
+
+    @staticmethod
+    def _clock_after_a_connect_that_took(spent: float):
+        """A clock that reads 0 once, then ``spent``: the connect took ``spent`` seconds."""
+        readings = iter([0.0])
+        return lambda: next(readings, spent)
+
+    def test_the_websocket_wire_times_out_an_answer_the_connect_left_no_time_for(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.5)
+        with (
+            patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.8)),
+            pytest.raises(wire.ConnectRefused),
+        ):
+            websocket.WebsocketClientWire().keepalive(address, None, budget)
+
+    def test_the_websocket_wire_takes_an_answer_inside_what_the_connect_left(self, keepalive_server):
+        budget = 2.0
+        address = keepalive_server(delay_s=0.0)
+        with patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.0)):
+            assert websocket.WebsocketClientWire().keepalive(address, None, budget) is None
+
+    def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
+        budget, on_the_channel = 4.0, 1.0
+        unary = MagicMock(return_value=json.dumps({wire.ALIVE_SECONDS: None}).encode())
+        channel = MagicMock(**{'unary_unary.return_value': unary})
+
+        def a_channel_that_took_its_time(*_args, **_kwargs):
+            time.sleep(on_the_channel)
+            return channel
+
+        with (
+            patch.object(grpc.GrpcClientWire, 'channel', return_value=channel),
+            patch('positronic_wire.grpc._ready_channel', side_effect=a_channel_that_took_its_time),
+        ):
+            grpc.GrpcClientWire().keepalive(_ADDRESS, None, budget)
+
+        given = unary.call_args.kwargs['timeout']
+        assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'

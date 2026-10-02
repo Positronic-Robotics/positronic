@@ -142,7 +142,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
   --model.backbone=wan2.2
 ```
 
-Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<step>"]}`.
+Sanity-check once warm: `curl -X POST http://<h100-host>:8000/api/v1/keepalive` answers.
 
 ### 4. Run sim inference
 
@@ -214,7 +214,7 @@ protocol details in the [Inference Guide](../../../docs/inference.md).
 - **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_layers` re-query
   aligns the chunk schedule with the AR frame-stack window
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
-- **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address)` dials
+- **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address, headers)` dials
   the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side.
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
   configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.

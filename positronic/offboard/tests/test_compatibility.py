@@ -23,7 +23,7 @@ from positronic.policy.base import Step
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version

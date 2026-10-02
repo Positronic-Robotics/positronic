@@ -12,7 +12,8 @@ from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.drivers.roboarm.command import CartesianPosition, Impedance, JointDelta, JointPosition
+from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
 from positronic.policy import spec
@@ -29,8 +30,16 @@ from positronic.policy.codec import (
     SetControlMode,
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    PauseOnUnavailable,
+    PrefixSampling,
+    RTCSchedule,
+    TemporalStack,
+    max_delay,
+    mean_delay,
+)
 from positronic.policy.sequential import Sequential
 
 MOTOR = 'motor'
@@ -191,6 +200,70 @@ def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     clock.advance_to_ns(225_000_000)
     assert run.send({}) == Step({POSITION: 2, MOTOR: 3}, 300_000_000)
     run.close()
+    assert runtime.metadata[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 1
+
+
+def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 100_000_000, 350_000_000, 400_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    assert emitted == [0, 1, 3, 4]
+    prefix = eval_keys.SCHEDULE
+    assert runtime.metadata == {
+        f'{prefix}.{eval_keys.SCHEDULED}': 5,
+        f'{prefix}.{eval_keys.EMITTED}': 4,
+        f'{prefix}.{eval_keys.DROPPED}': 1,
+        f'{prefix}.{eval_keys.LATE_P50_MS}': 0.0,
+        f'{prefix}.{eval_keys.LATE_P90_MS}': pytest.approx(35.0),
+        f'{prefix}.{eval_keys.LATE_MAX_MS}': 50.0,
+        f'{prefix}.{eval_keys.GAP_MAX_MS}': 250.0,
+    }
+    run.close()
+
+
+def test_a_schedule_without_stats_writes_no_metadata(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: [{MOTOR: i} for i in range(5)])
+    for now in (0, 100_000_000, 350_000_000):
+        clock.advance_to_ns(now)
+        run.send({})
+    run.close()
+    assert runtime.metadata == {}
+
+
+def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
+    emitted = []
+    for now in (0, 600_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands[MOTOR])
+    run.close()
+    assert emitted == [0, 0]
+    prefix = eval_keys.SCHEDULE
+    assert runtime.metadata[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
+    assert runtime.metadata[f'{prefix}.{eval_keys.EMITTED}'] == 2
+    assert runtime.metadata[f'{prefix}.{eval_keys.DROPPED}'] == 4
+
+
+@pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
+def test_late_percentiles_match_numpy(execution, late_ms):
+    # The first waypoint is due when the answer is read, so it is never late.
+    runtime, clock = execution
+    chunk = [{MOTOR: i} for i in range(len(late_ms))]
+    run = runtime.start(ChunkedSchedule(fps=1), lambda obs: chunk)
+    for index, late in enumerate(late_ms):
+        clock.advance_to_ns(index * 1_000_000_000 + late * 1_000_000)
+        run.send({})
+    run.close()
+    prefix = eval_keys.SCHEDULE
+    p50, p90 = np.percentile(late_ms, (50, 90))
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P50_MS}'] == pytest.approx(p50)
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_P90_MS}'] == pytest.approx(p90)
+    assert runtime.metadata[f'{prefix}.{eval_keys.LATE_MAX_MS}'] == max(late_ms)
 
 
 def test_horizon_cuts_commands_but_preserves_boundary(execution):
@@ -218,6 +291,228 @@ def test_empty_chunks_request_an_immediate_retry(execution):
         assert run.send({}) == Step({}, now)
     assert requests == [0, 0]
     run.close()
+
+
+PERIOD_NS = 100_000_000
+
+
+class SlowModel:
+    """Answers each call only when the test gives the answer, and records each call."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self.calls: list[tuple[int, list]] = []
+        self.prefixes: list[list] = []
+        self._pending: Future | None = None
+
+    def submit(self, function, obs, prefix):
+        self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
+        self.prefixes.append(list(prefix))
+        self._pending = Future()
+        return _UnchargedAnswer(self._pending)
+
+    def answer(self, name, length=10):
+        self.answer_with([{MOTOR: f'{name}{i}'} for i in range(length)])
+
+    def answer_with(self, actions):
+        assert self._pending is not None
+        self._pending.set_result(actions)
+        self._pending = None
+
+
+def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_sampling=PrefixSampling.PREVIOUS):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    schedule = RTCSchedule(
+        fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration, prefix_sampling=prefix_sampling
+    )
+    run = runtime.start(schedule, Mock())
+
+    def step(index):
+        clock.advance_to_ns(index * PERIOD_NS)
+        return run.send({})
+
+    return model, run, step
+
+
+def test_rtc_follows_the_drawing(execution, monkeypatch):
+    seen_delays = []
+
+    def prefix_duration(delays):
+        seen_delays.append(list(delays))
+        return mean_delay()(delays)
+
+    model, run, step = _rtc(execution, monkeypatch, 0.5, prefix_duration)
+    answers = {3: 'o', 11: 'n'}
+    executed = []
+    try:
+        for index in range(18):
+            if index in answers:
+                model.answer(answers[index])
+            result = step(index)
+            executed.append(result.commands.get(MOTOR, '--'))
+            if index == 3:
+                assert result.resume_at_ns == 4 * PERIOD_NS
+    finally:
+        run.close()
+    assert executed == ['--'] * 3 + [f'o{i}' for i in range(8)] + [f'n{i}' for i in range(3, 10)]
+    assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert seen_delays == [[0.3], [0.3, 0.3]]
+
+
+def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, mean_delay())
+    answers = {1: ('o', 4), 8: ('n', 10)}
+    executed = []
+    try:
+        for index in range(10):
+            if index in answers:
+                model.answer(*answers[index])
+            executed.append(step(index).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (8 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+
+
+@pytest.mark.parametrize(
+    ('prefix_duration', 'prefix'),
+    [(mean_delay(), ['n3', 'n4']), (max_delay(), ['n3', 'n4', 'n5']), (max_delay(max_sec=0.1), ['n3'])],
+)
+def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_duration, prefix):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, prefix_duration)
+    answers = {1: 'o', 6: 'n'}
+    executed = []
+    try:
+        for index in range(7):
+            if index in answers:
+                model.answer(answers[index])
+            executed.append(step(index).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (6 * PERIOD_NS, prefix)]
+
+
+@pytest.mark.parametrize(
+    ('call_after_sec', 'sampling', 'prefix'),
+    [
+        (0.4, PrefixSampling.PREVIOUS, ['o4', 'o5']),
+        (0.4, PrefixSampling.NEXT, ['o4', 'o5']),
+        (0.52, PrefixSampling.PREVIOUS, ['o5']),
+        (0.52, PrefixSampling.NEAREST, ['o5']),
+        (0.52, PrefixSampling.NEXT, []),
+    ],
+)
+def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch, call_after_sec, sampling, prefix):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, lambda delays: 0.5, sampling)
+    _, clock = execution
+    call_ns = round((0.1 + call_after_sec) * 1e9)
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer('o', 6)
+            step(index)
+        clock.advance_to_ns(call_ns)
+        run.send({})
+    finally:
+        run.close()
+    assert model.calls == [(0, []), (call_ns, prefix)]
+
+
+@pytest.mark.parametrize(
+    ('call_after_sec', 'sampling', 'prefix'),
+    [
+        (0.42, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
+        (0.42, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
+        (0.42, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
+        (0.45, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
+        (0.47, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
+        (0.47, PrefixSampling.NEAREST, ['o5', 'o6', 'o7']),
+        (0.47, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
+    ],
+)
+def test_rtc_prefix_reads_the_old_chunk_at_the_new_due_times(execution, monkeypatch, call_after_sec, sampling, prefix):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, lambda delays: 0.3, sampling)
+    _, clock = execution
+    call_ns = round((0.1 + call_after_sec) * 1e9)
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer('o')
+            step(index)
+        clock.advance_to_ns(call_ns)
+        run.send({})
+    finally:
+        run.close()
+    assert model.calls == [(0, []), (call_ns, prefix)]
+
+
+def _interpolation_action(i):
+    return {
+        MOTOR: 10.0 * i,
+        'joints': JointPosition(positions=np.array([i, 2.0 * i])),
+        'pose': CartesianPosition(
+            pose=Transform3D(np.array([i, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.1 * i])))
+        ),
+        'label': f'x{i}',
+    }
+
+
+def test_rtc_interpolates_each_command_type(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.42, lambda delays: 0.1, PrefixSampling.INTERPOLATE)
+    _, clock = execution
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer_with([_interpolation_action(i) for i in range(10)])
+            step(index)
+        clock.advance_to_ns(520_000_000)
+        run.send({})
+    finally:
+        run.close()
+    [action] = model.prefixes[1]
+    assert action[MOTOR] == pytest.approx(42.0)
+    np.testing.assert_allclose(action['joints'].positions, [4.2, 8.4])
+    np.testing.assert_allclose(action['pose'].pose.translation, [4.2, 0.0, 0.0])
+    np.testing.assert_allclose(action['pose'].pose.rotation.as_rotvec, [0.0, 0.0, 0.42])
+    assert action['label'] == 'x4'
+
+
+def test_rtc_interpolation_holds_the_last_old_action_after_its_due_time(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.52, lambda delays: 0.1, PrefixSampling.INTERPOLATE)
+    _, clock = execution
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer_with([_interpolation_action(i) for i in range(6)])
+            step(index)
+        clock.advance_to_ns(620_000_000)
+        run.send({})
+    finally:
+        run.close()
+    [action] = model.prefixes[1]
+    assert action[MOTOR] == 50.0
+
+
+@pytest.mark.parametrize('duration', [mean_delay, max_delay])
+def test_prefix_durations_refuse_a_negative_cap(duration):
+    with pytest.raises(ValueError, match='max_sec'):
+        duration(max_sec=-0.1)
+
+
+@pytest.mark.parametrize(
+    ('prefix_duration', 'expected'),
+    [
+        (mean_delay(last=2), 0.2),
+        (max_delay(last=2), 0.3),
+        (mean_delay(last=2, max_sec=0.15), 0.15),
+        (max_delay(max_sec=0.4), 0.4),
+    ],
+)
+def test_prefix_durations_read_the_last_delays_and_cap_them(prefix_duration, expected):
+    assert prefix_duration([0.9, 0.1, 0.3]) == pytest.approx(expected)
 
 
 IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
@@ -381,6 +676,7 @@ class TestRestrictImageSize:
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        ChunkedSchedule(fps=10, record_stats=False),
         ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],

@@ -226,16 +226,16 @@ The subcommand picks the model and the pipeline. `--model.<path>` reaches anywhe
 ### Checking Server Status
 
 ```bash
-# The checkpoint the server serves
-curl http://localhost:8000/api/v1/models
+# Any answer means the model has loaded and warmed
+curl -X POST http://localhost:8000/api/v1/keepalive
 
 # Example response:
-# {"models": ["30000"]}
+# {"alive_seconds": null}
 ```
 
 ### Long Model Loading
 
-GR00T and OpenPI servers can take 120-300s to load on first startup (model download + weight loading). The server loads before it opens its port, and logs the load progress. `/api/v1/models` answers once the model is ready.
+GR00T and OpenPI servers can take 120-300s to load on first startup (model download + weight loading). The server loads before it opens its port, and logs the load progress. `/api/v1/keepalive` answers once the model is ready.
 
 ## Step 4: Run Inference
 

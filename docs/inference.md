@@ -32,7 +32,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
   --pipeline.ee_frame=None
 ```
 
-Check server: `curl http://localhost:8000/api/v1/models` returns the ID of the checkpoint it serves.
+Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.
 
 **Run inference:**
 ```bash
@@ -82,8 +82,8 @@ Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`
 
 **The server declares data preparation.** Its client stack can contain
 `RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
-`compress_images=True` on the deployment enables JPEG transport. The websocket wire adds no
-other compression: neither end accepts permessage-deflate. The model returns
+The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
+websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 
 **The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`.
