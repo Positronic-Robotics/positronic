@@ -12,7 +12,7 @@ from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.drivers.roboarm.command import CartesianPosition, Impedance, JointDelta, JointPosition
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
@@ -34,6 +34,7 @@ from positronic.policy.observation import ObservationCodec
 from positronic.policy.processors import (
     ChunkedSchedule,
     PauseOnUnavailable,
+    PrefixSampling,
     RTCSchedule,
     TemporalStack,
     max_delay,
@@ -301,24 +302,32 @@ class SlowModel:
     def __init__(self, runtime):
         self._runtime = runtime
         self.calls: list[tuple[int, list]] = []
+        self.prefixes: list[list] = []
         self._pending: Future | None = None
 
     def submit(self, function, obs, prefix):
-        self.calls.append((self._runtime.time_ns, [c[MOTOR] for c in prefix]))
+        self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
+        self.prefixes.append(list(prefix))
         self._pending = Future()
         return _UnchargedAnswer(self._pending)
 
     def answer(self, name, length=10):
+        self.answer_with([{MOTOR: f'{name}{i}'} for i in range(length)])
+
+    def answer_with(self, actions):
         assert self._pending is not None
-        self._pending.set_result([{MOTOR: f'{name}{i}'} for i in range(length)])
+        self._pending.set_result(actions)
         self._pending = None
 
 
-def _rtc(execution, monkeypatch, call_after_sec, prefix_duration):
+def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_sampling=PrefixSampling.PREVIOUS):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    run = runtime.start(RTCSchedule(fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration), Mock())
+    schedule = RTCSchedule(
+        fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration, prefix_sampling=prefix_sampling
+    )
+    run = runtime.start(schedule, Mock())
 
     def step(index):
         clock.advance_to_ns(index * PERIOD_NS)
@@ -386,31 +395,105 @@ def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_du
     assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (6 * PERIOD_NS, prefix)]
 
 
-def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.4, lambda delays: 0.5)
+@pytest.mark.parametrize(
+    ('call_after_sec', 'sampling', 'prefix'),
+    [
+        (0.4, PrefixSampling.PREVIOUS, ['o4', 'o5']),
+        (0.4, PrefixSampling.NEXT, ['o4', 'o5']),
+        (0.52, PrefixSampling.PREVIOUS, ['o5']),
+        (0.52, PrefixSampling.NEAREST, ['o5']),
+        (0.52, PrefixSampling.NEXT, []),
+    ],
+)
+def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch, call_after_sec, sampling, prefix):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, lambda delays: 0.5, sampling)
+    _, clock = execution
+    call_ns = round((0.1 + call_after_sec) * 1e9)
     try:
         for index in range(6):
             if index == 1:
                 model.answer('o', 6)
             step(index)
+        clock.advance_to_ns(call_ns)
+        run.send({})
     finally:
         run.close()
-    assert model.calls == [(0, []), (5 * PERIOD_NS, ['o4', 'o5'])]
+    assert model.calls == [(0, []), (call_ns, prefix)]
 
 
-def test_rtc_prefix_holds_every_old_action_the_robot_executes_before_the_answer(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.45, mean_delay())
+@pytest.mark.parametrize(
+    ('call_after_sec', 'sampling', 'prefix'),
+    [
+        (0.42, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
+        (0.42, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
+        (0.42, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
+        (0.45, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
+        (0.47, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
+        (0.47, PrefixSampling.NEAREST, ['o5', 'o6', 'o7']),
+        (0.47, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
+    ],
+)
+def test_rtc_prefix_reads_the_old_chunk_at_the_new_due_times(execution, monkeypatch, call_after_sec, sampling, prefix):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, lambda delays: 0.3, sampling)
     _, clock = execution
+    call_ns = round((0.1 + call_after_sec) * 1e9)
     try:
         for index in range(6):
             if index == 1:
                 model.answer('o')
             step(index)
-        clock.advance_to_ns(550_000_000)
+        clock.advance_to_ns(call_ns)
         run.send({})
     finally:
         run.close()
-    assert model.calls == [(0, []), (550_000_000, ['o4', 'o5'])]
+    assert model.calls == [(0, []), (call_ns, prefix)]
+
+
+def _interpolation_action(i):
+    return {
+        MOTOR: 10.0 * i,
+        'joints': JointPosition(positions=np.array([i, 2.0 * i])),
+        'pose': CartesianPosition(
+            pose=Transform3D(np.array([i, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.1 * i])))
+        ),
+        'label': f'x{i}',
+    }
+
+
+def test_rtc_interpolates_each_command_type(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.42, lambda delays: 0.1, PrefixSampling.INTERPOLATE)
+    _, clock = execution
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer_with([_interpolation_action(i) for i in range(10)])
+            step(index)
+        clock.advance_to_ns(520_000_000)
+        run.send({})
+    finally:
+        run.close()
+    [action] = model.prefixes[1]
+    assert action[MOTOR] == pytest.approx(42.0)
+    np.testing.assert_allclose(action['joints'].positions, [4.2, 8.4])
+    np.testing.assert_allclose(action['pose'].pose.translation, [4.2, 0.0, 0.0])
+    np.testing.assert_allclose(action['pose'].pose.rotation.as_rotvec, [0.0, 0.0, 0.42])
+    assert action['label'] == 'x4'
+
+
+def test_rtc_interpolation_holds_the_last_old_action_after_its_due_time(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.52, lambda delays: 0.1, PrefixSampling.INTERPOLATE)
+    _, clock = execution
+    try:
+        for index in range(6):
+            if index == 1:
+                model.answer_with([_interpolation_action(i) for i in range(6)])
+            step(index)
+        clock.advance_to_ns(620_000_000)
+        run.send({})
+    finally:
+        run.close()
+    [action] = model.prefixes[1]
+    assert action[MOTOR] == 50.0
 
 
 @pytest.mark.parametrize('duration', [mean_delay, max_delay])

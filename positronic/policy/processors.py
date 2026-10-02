@@ -17,6 +17,7 @@ Describe a local stack without creating episode state::
 from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from enum import Enum
 from math import isfinite
 from statistics import fmean
 from typing import Any, TypeVar
@@ -25,6 +26,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -242,6 +244,50 @@ def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
     return lambda delays: min(max(delays[-last:]), max_sec)
 
 
+class PrefixSampling(Enum):
+    """How `RTCSchedule` reads an old action for a time of the new chunk.
+
+    The new chunk is timed from its call, so its times can fall between two old due times.
+    At 0.52 s, with old actions o5 due at 0.5 s and o6 due at 0.6 s:
+
+    * `PREVIOUS` gives o5, the action that the robot executes at that time.
+    * `NEAREST` gives o5, the action with the closest due time. A tie gives the earlier one.
+    * `NEXT` gives o6, the first action due at or after that time.
+    * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `_interpolate`.
+    """
+
+    PREVIOUS = 'previous'
+    NEAREST = 'nearest'
+    NEXT = 'next'
+    INTERPOLATE = 'interpolate'
+
+
+def _interpolate(before: Commands, after: Commands, fraction: float) -> Commands:
+    """Each command of ``before``, moved ``fraction`` of the way to the same command of ``after``.
+
+    A number, an array and a joint target move on a straight line. A Cartesian target moves its
+    translation on a straight line and its rotation on the shortest arc. Any other command keeps
+    its value from ``before``.
+    """
+    return {name: _interpolate_command(value, after.get(name), fraction) for name, value in before.items()}
+
+
+def _interpolate_command(before: Any, after: Any, fraction: float) -> Any:
+    match before, after:
+        case JointPosition(), JointPosition():
+            return JointPosition(positions=_lerp(before.positions, after.positions, fraction), mode=before.mode)
+        case CartesianPosition(), CartesianPosition():
+            return CartesianPosition(pose=before.pose.interpolate(after.pose, fraction), mode=before.mode)
+        case (int() | float() | np.ndarray(), int() | float() | np.ndarray()) if not isinstance(before, bool):
+            return _lerp(before, after, fraction)
+        case _:
+            return before
+
+
+def _lerp(before: Any, after: Any, fraction: float) -> Any:
+    return before + fraction * (after - before)
+
+
 class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
@@ -258,13 +304,35 @@ class _TimedChunk:
         """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
         return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
 
-    def prefix(self, now_ns: int, duration_sec: float) -> list[Commands]:
-        """The actions that run from ``now_ns`` for ``duration_sec``."""
-        duration_ns = round(duration_sec * 1e9)
-        if duration_ns <= 0:
-            return []
-        end = self._running_index(now_ns + duration_ns - 1) + 1
-        return list(self._actions[self._running_index(now_ns) : end])
+    def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> list[Commands]:
+        """This chunk sampled at ``now_ns + k / fps`` for each k that falls before ``now_ns + duration_sec``.
+
+        Stops at the first time that ``sampling`` gives no action for.
+        """
+        end_ns = now_ns + round(duration_sec * 1e9)
+        prefix: list[Commands] = []
+        while (slot_ns := now_ns + round(len(prefix) * 1e9 / self._fps)) < end_ns:
+            action = self._sample(slot_ns, sampling)
+            if action is None:
+                break
+            prefix.append(action)
+        return prefix
+
+    def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
+        """The action ``sampling`` gives at ``time_ns``, or ``None`` after the chunk ends."""
+        running = self._running_index(time_ns)
+        last = len(self._actions) - 1
+        if running > last:
+            return None
+        if sampling is PrefixSampling.PREVIOUS or (running == last and sampling is not PrefixSampling.NEXT):
+            return self._actions[running]
+        if sampling is PrefixSampling.NEXT:
+            following = running if self._due_ns(running) == time_ns else running + 1
+            return self._actions[following] if following <= last else None
+        since_ns, until_ns = time_ns - self._due_ns(running), self._due_ns(running + 1) - time_ns
+        if sampling is PrefixSampling.NEAREST:
+            return self._actions[running + 1 if until_ns < since_ns else running]
+        return _interpolate(self._actions[running], self._actions[running + 1], since_ns / (since_ns + until_ns))
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
         """The merged commands of every action due by ``now_ns`` and not taken yet."""
@@ -299,11 +367,15 @@ class RTCSchedule(Policy):
     its observation + i / `fps`. The policy executes each action when its due time comes.
 
     `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
-    The call also gets a prefix: the old actions that the policy executes from T1 on,
-    for `prefix_duration(delays)` seconds, but not past the end of the old chunk. The
-    prefix tells the model what the robot does while the model computes. Its length is
-    the delay estimate: the server reads it as the number of prefix actions / `fps`.
-    The server decides how to use the prefix.
+    The call also gets a prefix: the old chunk read at the new chunk's due times T1,
+    T1 + 1 / `fps`, ..., before T1 + `prefix_duration(delays)`, and not past the end of
+    the old chunk. The prefix tells the model what the robot does while the model
+    computes. Its length is the delay estimate: the server reads it as the number of
+    prefix actions / `fps`. The server decides how to use the prefix.
+
+    When T1 falls between two old due times, each new due time falls between two old
+    actions. `prefix_sampling` decides which value the prefix holds there; see
+    `PrefixSampling`. On the grid, as in the drawing, every choice gives the same prefix.
 
     Until the answer arrives, the policy executes the old chunk. When the answer arrives,
     the policy executes the new chunk, from the action that is due now. If the old chunk
@@ -323,7 +395,13 @@ class RTCSchedule(Policy):
     model with relative actions.
     """
 
-    def __init__(self, fps: float, call_after_sec: float, prefix_duration: PrefixDuration) -> None:
+    def __init__(
+        self,
+        fps: float,
+        call_after_sec: float,
+        prefix_duration: PrefixDuration,
+        prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
+    ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if not isfinite(call_after_sec) or call_after_sec < 0:
@@ -331,6 +409,7 @@ class RTCSchedule(Policy):
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
+        self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
         delays: list[float] = []
@@ -351,7 +430,9 @@ class RTCSchedule(Policy):
                     next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    prefix = [] if chunk is None else chunk.prefix(now_ns, self._prefix_duration(delays))
+                    prefix = []
+                    if chunk is not None:
+                        prefix = chunk.prefix(now_ns, self._prefix_duration(delays), self._prefix_sampling)
                     called_at_ns = now_ns
                     answer = runtime.submit(infer, obs, prefix)
 
