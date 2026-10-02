@@ -26,7 +26,6 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -42,6 +41,7 @@ from positronic.policy.base import (
     ProcessorRun,
     Runtime,
     Step,
+    interpolate_commands,
 )
 
 
@@ -254,39 +254,13 @@ class PrefixSampling(Enum):
     * `NEAREST` gives o5, the action with the closest due time. At 0.57 s it gives o6.
       A tie, at 0.55 s, gives the earlier one.
     * `NEXT` gives o6, the first action due at or after that time.
-    * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `_interpolate`.
+    * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `interpolate_commands`.
     """
 
     PREVIOUS = 'previous'
     NEAREST = 'nearest'
     NEXT = 'next'
     INTERPOLATE = 'interpolate'
-
-
-def _interpolate(before: Commands, after: Commands, fraction: float) -> Commands:
-    """Each command of ``before``, moved ``fraction`` of the way to the same command of ``after``.
-
-    A number, an array and a joint target move on a straight line. A Cartesian target moves its
-    translation on a straight line and its rotation on the shortest arc. Any other command keeps
-    its value from ``before``.
-    """
-    return {name: _interpolate_command(value, after.get(name), fraction) for name, value in before.items()}
-
-
-def _interpolate_command(before: Any, after: Any, fraction: float) -> Any:
-    match before, after:
-        case JointPosition(), JointPosition():
-            return JointPosition(positions=_lerp(before.positions, after.positions, fraction), mode=before.mode)
-        case CartesianPosition(), CartesianPosition():
-            return CartesianPosition(pose=before.pose.interpolate(after.pose, fraction), mode=before.mode)
-        case (int() | float() | np.ndarray(), int() | float() | np.ndarray()) if not isinstance(before, bool):
-            return _lerp(before, after, fraction)
-        case _:
-            return before
-
-
-def _lerp(before: Any, after: Any, fraction: float) -> Any:
-    return before + fraction * (after - before)
 
 
 class _TimedChunk:
@@ -333,7 +307,8 @@ class _TimedChunk:
         since_ns, until_ns = time_ns - self._due_ns(running), self._due_ns(running + 1) - time_ns
         if sampling is PrefixSampling.NEAREST:
             return self._actions[running + 1 if until_ns < since_ns else running]
-        return _interpolate(self._actions[running], self._actions[running + 1], since_ns / (since_ns + until_ns))
+        fraction = since_ns / (since_ns + until_ns)
+        return interpolate_commands(self._actions[running], self._actions[running + 1], fraction)
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
         """The merged commands of every action due by ``now_ns`` and not taken yet."""

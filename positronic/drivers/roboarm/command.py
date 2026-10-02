@@ -203,6 +203,22 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
             raise ValueError(f'Unknown command type: {wire["type"]}')
 
 
+def interpolate(before: CommandType, after: CommandType, fraction: float) -> CommandType:
+    """``before`` moved ``fraction`` of the way to ``after``, for a fraction in [0, 1].
+
+    A joint target moves on a straight line. A Cartesian target moves its translation on a straight
+    line and its rotation on the shortest arc. Any other pair gives ``before``.
+    """
+    match before, after:
+        case JointPosition(), JointPosition():
+            positions = before.positions + fraction * (after.positions - before.positions)
+            return JointPosition(positions=positions, mode=before.mode)
+        case CartesianPosition(), CartesianPosition():
+            return CartesianPosition(pose=before.pose.interpolate(after.pose, fraction), mode=before.mode)
+        case _:
+            return before
+
+
 def require_native_mode(cmd: CommandType, embodiment: str) -> None:
     """Raises on a command that pins a control mode: ``embodiment`` runs only its native law."""
     if cmd.mode is not None:

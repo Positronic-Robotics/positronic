@@ -7,10 +7,12 @@ from collections.abc import Callable, Generator, Mapping
 from functools import cached_property, partial
 from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
+import numpy as np
 from attr import dataclass
 from typing_extensions import TypeAliasType
 
 from positronic import telemetry
+from positronic.drivers.roboarm import command
 
 # Structural keys of the wire spec for sequential and parallel composition.
 SEQ = 'seq'
@@ -47,6 +49,25 @@ class Answer(ABC, Generic[T]):
 
 Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
+
+
+def interpolate_commands(before: Commands, after: Commands, fraction: float) -> Commands:
+    """Each command of ``before``, moved ``fraction`` of the way to the same command of ``after``.
+
+    A number and an array move on a straight line. An arm command moves as `command.interpolate`
+    says. Any other command keeps its value from ``before``.
+    """
+    return {name: _interpolate_value(value, after.get(name), fraction) for name, value in before.items()}
+
+
+def _interpolate_value(before: Any, after: Any, fraction: float) -> Any:
+    if isinstance(before, command.CommandType) and isinstance(after, command.CommandType):
+        return command.interpolate(before, after, fraction)
+    if isinstance(before, bool) or not isinstance(before, int | float | np.ndarray):
+        return before
+    if isinstance(after, int | float | np.ndarray):
+        return before + fraction * (after - before)
+    return before
 
 
 @dataclass
