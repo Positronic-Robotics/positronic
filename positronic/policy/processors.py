@@ -251,7 +251,8 @@ class PrefixSampling(Enum):
     At 0.52 s, with old actions o5 due at 0.5 s and o6 due at 0.6 s:
 
     * `PREVIOUS` gives o5, the action that the robot executes at that time.
-    * `NEAREST` gives o5, the action with the closest due time. A tie gives the earlier one.
+    * `NEAREST` gives o5, the action with the closest due time. At 0.57 s it gives o6.
+      A tie, at 0.55 s, gives the earlier one.
     * `NEXT` gives o6, the first action due at or after that time.
     * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `_interpolate`.
     """
