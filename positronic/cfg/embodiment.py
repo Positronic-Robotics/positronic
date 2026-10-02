@@ -150,8 +150,10 @@ yam_bimanual_yambox = yam_bimanual.override(
     gravity_comp_factor=[1.0, 1.1, 1.4, 1.4, 1.0, 1.0],
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
-        'image.wrist_left': positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
-        'image.wrist_right': positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(
+            resolution='svga', fps=30
+        ),
     },
 )
 
