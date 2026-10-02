@@ -63,9 +63,10 @@ Recordings are never modified: edits persist but never compute, transforms compu
 
 ## Writing timestamps
 
-Writers accept one `Timestamps` mapping (`Mapping[str, int]`) per record. The constructor selects
-the primary timeline, defaulting to `"recorded"`; every append must include that name. Timeline names
-must be non-empty strings, and each signal must use the same set of names on every append.
+`Timestamps` describes a record's timestamps on its named timelines. Writers receive these together
+on each append. The constructor selects the primary timeline, defaulting to `"recorded"`; every append
+must include a timestamp on that timeline. Timeline names must be non-empty strings, and each signal
+must use the same set of names on every append.
 The primary timestamp must strictly increase.
 
 ```python
@@ -82,11 +83,12 @@ Additional coordinates are stored but have no query API. Files without primary-n
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
 ```python
+from positronic.dataset import Timestamps
+
 T = TypeVar('T')  # The type of the data we manage
 
 IndicesLike = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike = Sequence[int] | np.ndarray
-Timestamps = Mapping[str, int]
 
 class Signal[T]:
     # Minimal abstract interface (implementations must provide):

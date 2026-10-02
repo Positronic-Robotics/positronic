@@ -25,9 +25,10 @@ An Episode has three kinds of data with distinct roles:
 
 - **Meta** (`episode.meta`) is *about* the episode — recording facts like `created_ts_ns`, `schema_version`, `writer`. Meta is not part of episode content, not in `keys()`, and transforms pass it through unchanged. Meta keys are optional and may vary by implementation (e.g. `size_mb` exists for disk episodes, may not for others).
 
-Writers choose one primary timeline at construction (`recorded` by default), receive all timestamps
-in one mapping per append, and persist the primary name in Parquet schema metadata. Timestamp names
-are fixed per signal. The read API uses the primary timestamp column.
+`Timestamps` describes a record's timestamps on its named timelines. Writers receive these together
+on each append, choose one primary timeline at construction (`recorded` by default), and persist
+the primary name in Parquet schema metadata. Timeline names are fixed per signal. The read API uses
+the primary timestamp column.
 
 ## Identity
 
