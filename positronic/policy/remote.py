@@ -1,5 +1,6 @@
 import collections.abc as cabc
 import logging
+from concurrent.futures import Future, wait
 from contextlib import closing
 from threading import Lock, Thread
 from typing import Any
@@ -77,24 +78,38 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
 
 logger = logging.getLogger(__name__)
 
-# FOOTGUN: the wire's close waits for the server to answer a close handshake, with no bound. A server
-# that never answers blocks the process for ever, so a finished run neither exits nor reports, and a
-# watcher reading liveness calls a dead run healthy. Measured on the yambox bench: ten minutes elapsed
-# against eighteen seconds of CPU, blocked in this one call.
+# FOOTGUN: the session close waits for the server to acknowledge the end of the session, for up to the infer
+# timeout. A finished run stays alive through that wait, and a watcher that reads liveness calls it healthy.
 _CLOSE_TIMEOUT_S = 5.0
 
 
 def _close_within_bound(session: Any) -> None:
-    """Close the session, and abandon the connection if the server does not answer within the bound."""
-    closer = Thread(target=session.close, name='RemotePolicy.close', daemon=True)
-    closer.start()
-    closer.join(_CLOSE_TIMEOUT_S)
-    if closer.is_alive():
-        logger.warning(
-            'The server did not answer the session close within %.1fs; abandoning the connection so the run '
-            'can exit. The socket goes with the process.',
-            _CLOSE_TIMEOUT_S,
-        )
+    """Close the session. A close that the server does not answer within the bound continues in the background."""
+    closed: Future[None] = Future()
+
+    def close() -> None:
+        try:
+            session.close()
+        except BaseException as failure:
+            closed.set_exception(failure)
+        else:
+            closed.set_result(None)
+
+    Thread(target=close, name='RemotePolicy.close', daemon=True).start()
+    if wait([closed], timeout=_CLOSE_TIMEOUT_S).done:
+        closed.result()
+        return
+    logger.warning(
+        'The server did not answer the session close within %.1fs. The run continues. The close continues in the '
+        'background, and the session closes its connection when the server answers or its infer timeout ends.',
+        _CLOSE_TIMEOUT_S,
+    )
+    closed.add_done_callback(_log_late_close_failure)
+
+
+def _log_late_close_failure(closed: Future[None]) -> None:
+    if (failure := closed.exception()) is not None:
+        logger.error('The session close failed after the run continued: %r', failure)
 
 
 class RemotePolicy(Policy):
@@ -103,8 +118,9 @@ class RemotePolicy(Policy):
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
     quality of images sent to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
-    closes the generator; closing the session waits for the server to release its state, then closes
-    the connection. The declared stack determines when client codecs run.
+    closes the generator; closing the session waits for the server to release its state, then closes the
+    connection, and the run waits for that close only up to a bound. The declared stack determines when client
+    codecs run.
     """
 
     def __init__(
