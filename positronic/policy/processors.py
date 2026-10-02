@@ -415,7 +415,7 @@ class RTCSchedule(Policy):
             raise ValueError('fps must be finite and positive')
         if not isfinite(call_after_sec) or call_after_sec < 0:
             raise ValueError('call_after_sec must be finite and not negative')
-        if isinstance(prefix_duration, Mapping):  # the `DelayEstimate` spec a wire spec carries
+        if isinstance(prefix_duration, Mapping):  # a wire spec carries a `DelayEstimate` as its spec
             prefix_duration = DelayEstimate.from_spec(prefix_duration)
         self._fps = fps
         self._call_after_sec = call_after_sec
