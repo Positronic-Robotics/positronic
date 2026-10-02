@@ -1,6 +1,7 @@
 import dataclasses
 import http.server
 import json
+import logging
 import pathlib
 import threading
 import time
@@ -830,6 +831,35 @@ def test_stack_failure_finishes_active_inference_before_closing_session(runtime)
         runtime.close()
         run.close()
     assert order == ['inference finished', 'session closed']
+
+
+def test_a_failed_session_close_reaches_the_caller(runtime):
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.close.side_effect = RuntimeError('Unexpected end-session response')
+    run = runtime.start(policy)
+    with pytest.raises(RuntimeError, match='end-session'):
+        run.close()
+
+
+def test_a_session_close_past_the_bound_lets_the_run_end_and_logs_a_late_failure(runtime, monkeypatch, caplog):
+    monkeypatch.setattr('positronic.policy.remote._CLOSE_TIMEOUT_S', 0.05)
+    release = threading.Event()
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+
+    def close():
+        assert release.wait(5), 'the close was not released'
+        raise TimeoutError('No end-session acknowledgement')
+
+    session.close.side_effect = close
+    run = runtime.start(policy)
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        run.close()
+        assert 'did not answer the session close' in caplog.text
+        release.set()
+        for closer in [thread for thread in threading.enumerate() if thread.name == 'RemotePolicy.close']:
+            closer.join(5)
+    assert 'The session close failed after the run continued' in caplog.text
+    assert 'No end-session acknowledgement' in caplog.text
 
 
 @pytest.mark.parametrize('compressed', [False, True])
