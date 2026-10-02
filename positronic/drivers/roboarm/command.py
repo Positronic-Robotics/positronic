@@ -9,7 +9,7 @@ pinning a mode the driver may not run.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -217,6 +217,25 @@ def interpolate(before: CommandType, after: CommandType, fraction: float) -> Com
             return CartesianPosition(pose=before.pose.interpolate(after.pose, fraction), mode=before.mode)
         case _:
             return before
+
+
+def interpolate_commands(before: Mapping[str, Any], after: Mapping[str, Any], fraction: float) -> dict[str, Any]:
+    """Each command of ``before``, moved ``fraction`` of the way to the same command of ``after``.
+
+    A number and an array move on a straight line. An arm command moves as `interpolate` says. Any
+    other command keeps its value from ``before``.
+    """
+    return {name: _interpolate_value(value, after.get(name), fraction) for name, value in before.items()}
+
+
+def _interpolate_value(before: Any, after: Any, fraction: float) -> Any:
+    if isinstance(before, CommandType) and isinstance(after, CommandType):
+        return interpolate(before, after, fraction)
+    if isinstance(before, bool) or not isinstance(before, int | float | np.ndarray):
+        return before
+    if isinstance(after, int | float | np.ndarray):
+        return before + fraction * (after - before)
+    return before
 
 
 def require_native_mode(cmd: CommandType, embodiment: str) -> None:

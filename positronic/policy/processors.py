@@ -26,6 +26,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import interpolate_commands
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -41,7 +42,6 @@ from positronic.policy.base import (
     ProcessorRun,
     Runtime,
     Step,
-    interpolate_commands,
 )
 
 
