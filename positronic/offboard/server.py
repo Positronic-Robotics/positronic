@@ -10,7 +10,6 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from functools import partial
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
@@ -47,13 +46,6 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
         dupes = sorted(key for key, n in counts.items() if n > 1)
         raise ValueError(f'Duplicate session param keys: {dupes}')
     return {key: _literal_value(raw) for key, raw in items}
-
-
-def _call_model(model: Model, session_id: str, obs: Obs, prefix: Sequence[Any] | None = None) -> Any:
-    """Call ``model`` with ``prefix`` in the model input under ``ACTION_PREFIX``."""
-    if prefix is not None:
-        obs = {**obs, ACTION_PREFIX: prefix}
-    return model(obs, session_id=session_id)
 
 
 class _ServedTiming:
@@ -240,9 +232,14 @@ class PolicyServer:
                 offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            infer = telemetry.traced(protocol.MODEL_CALL)(partial(_call_model, model, session_id))
-            if pipeline.codec is not None:
-                infer = pipeline.codec.wrap(infer)
+
+            @telemetry.traced(protocol.MODEL_CALL)
+            def call_model(obs: Obs, prefix: Sequence[Any] | None = None) -> Any:
+                if prefix is not None:
+                    obs = {**obs, ACTION_PREFIX: prefix}
+                return model(obs, session_id=session_id)
+
+            infer = call_model if pipeline.codec is None else pipeline.codec.wrap(call_model)
             try:
                 await conn.send(
                     serialise({
