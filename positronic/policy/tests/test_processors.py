@@ -190,7 +190,8 @@ def test_pending_inference_is_not_resubmitted_on_each_tick(execution, monkeypatc
             assert run.send({}) == Step({}, now)
         submit.assert_called_once()
         future.set_result([{MOTOR: 1}])
-        assert run.send({}) == Step({MOTOR: 1}, 110_000_000)
+        # The call took 10 ms, so the next one starts 10 ms before the chunk ends.
+        assert run.send({}) == Step({MOTOR: 1}, 100_000_000)
         submit.assert_called_once()
     finally:
         run.close()
@@ -326,7 +327,7 @@ class SlowModel:
         self.prefixes: list[list] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix):
+    def submit(self, function, obs, prefix=()):
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -339,6 +340,82 @@ class SlowModel:
         assert self._pending is not None
         self._pending.set_result(actions)
         self._pending = None
+
+
+def test_a_slow_answer_is_asked_for_when_the_last_waypoint_is_due(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    answers = {2: 'a', 6: 'b', 10: 'c'}
+    executed = []
+    try:
+        for index in range(12):
+            if index in answers:
+                model.answer(answers[index], length=3)
+            clock.advance_to_ns(index * PERIOD_NS)
+            executed.append(run.send({}).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    # Each call takes two periods. The robot holds a chunk's last waypoint for the two periods, not three.
+    assert executed == ['--', '--', 'a0', 'a1', 'a2', '--', 'b0', 'b1', 'b2', '--', 'c0', 'c1']
+    assert [time_ns for time_ns, _ in model.calls] == [0, 4 * PERIOD_NS, 8 * PERIOD_NS]
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
+
+
+def test_a_fast_answer_is_asked_for_its_delay_before_the_chunk_ends(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    try:
+        run.send({})
+        clock.advance_to_ns(50_000_000)
+        model.answer('a', length=3)
+        assert run.send({}) == Step({MOTOR: 'a0'}, 150_000_000)
+        clock.advance_to_ns(250_000_000)
+        # The chunk ends at 350 ms and the last call took 50 ms, so the next call starts at 300 ms.
+        assert run.send({}) == Step({MOTOR: 'a2'}, 300_000_000)
+        clock.advance_to_ns(300_000_000)
+        run.send({})
+        clock.advance_to_ns(320_000_000)
+        model.answer('b', length=3)
+        # The answer is early: the last waypoint keeps its full period.
+        assert run.send({}) == Step({}, 350_000_000)
+        clock.advance_to_ns(350_000_000)
+        assert run.send({}) == Step({MOTOR: 'b0'}, 450_000_000)
+    finally:
+        run.close()
+    assert [time_ns for time_ns, _ in model.calls] == [0, 300_000_000]
+
+
+def test_an_answer_ready_at_the_call_keeps_the_waypoint_that_is_due(execution, monkeypatch):
+    runtime, clock = execution
+    first = Future()
+    answers = iter([first, None])
+
+    def submit(function, obs):
+        pending = next(answers)
+        if pending is None:
+            pending = Future()
+            pending.set_result([{MOTOR: f'b{i}'} for i in range(3)])
+        return _UnchargedAnswer(pending)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    try:
+        run.send({})
+        clock.advance_to_ns(2 * PERIOD_NS)
+        first.set_result([{MOTOR: f'a{i}'} for i in range(3)])
+        executed = []
+        for index in range(2, 7):
+            clock.advance_to_ns(index * PERIOD_NS)
+            executed.append(run.send({}).commands.get(MOTOR, '--'))
+    finally:
+        run.close()
+    # The second call starts at 400 ms, when a2 is due, and its answer is ready in the same round.
+    assert executed == ['a0', 'a1', 'a2', 'b0', 'b1']
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
 
 
 def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_sampling=PrefixSampling.PREVIOUS):

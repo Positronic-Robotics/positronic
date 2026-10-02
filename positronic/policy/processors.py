@@ -95,10 +95,15 @@ class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
     ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
-    command is due when the completed answer is read; subsequent commands are spaced by ``1 / fps``.
-    A chunk of K commands covers K periods, including the final command's execution period.
-    ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
-    At most one call is pending, and another starts when the current chunk's duration ends.
+    command is due when the completed answer is read, but not before the previous chunk's duration ends;
+    subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
+    final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
+    beyond the horizon.
+
+    At most one call is pending. The next call starts the last call's delay before the current chunk's
+    duration ends, so that its answer is due when the chunk ends, but not before the chunk's final command
+    is due: the model always sees the robot after the final command went out. A delay longer than one
+    period therefore costs the robot the delay and not one period more, and a short delay costs nothing.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
     """
@@ -175,26 +180,33 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
+        call_ns = 0
+        called_at_ns = 0
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 planned = None
-                if answer is None and now_ns >= end_ns:
-                    answer = runtime.submit(infer, obs)
+                if answer is None and now_ns >= call_ns:
+                    answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
+                    start_ns = max(now_ns, end_ns)
                     duration_sec = len(chunk) * period_sec
                     if self._horizon_sec is not None:
                         duration_sec = min(duration_sec, self._horizon_sec)
-                    end_ns = now_ns + round(duration_sec * 1e9)
-                    trajectory = deque(
-                        (waypoint, now_ns + round(i * period_sec * 1e9))
+                    end_ns = start_ns + round(duration_sec * 1e9)
+                    waypoints = [
+                        (waypoint, start_ns + round(i * period_sec * 1e9))
                         for i, waypoint in enumerate(chunk)
                         if i * period_sec < duration_sec
-                    )
-                    planned = len(trajectory)
+                    ]
+                    last_due_ns = waypoints[-1][1] if waypoints else start_ns
+                    call_ns = max(last_due_ns, end_ns - (now_ns - called_at_ns))
+                    # An answer that arrives before the chunk ends waits behind the commands that are still due.
+                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
+                    planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
@@ -203,7 +215,7 @@ class ChunkedSchedule(Policy):
                     commands.update(waypoint)
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
-                resume_at_ns = trajectory[0][1] if trajectory else end_ns
+                resume_at_ns = trajectory[0][1] if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
