@@ -17,13 +17,16 @@ Describe a local stack without creating episode state::
 from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from enum import Enum
 from math import isfinite
+from statistics import fmean
 from typing import Any, TypeVar
 
 import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import interpolate_commands
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -216,6 +219,215 @@ class ChunkedSchedule(Policy):
         if not self._record_stats:
             args[self.RECORD_STATS_ARG] = False
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+
+PrefixDuration = Callable[[Sequence[float]], float]
+"""Gets the delays of earlier calls to `infer` in this episode, in seconds, newest last.
+A delay is the time from a call to its answer. Returns the prefix length in seconds."""
+
+
+def mean_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
+    """The mean of the last `last` delays, but not more than `max_sec`."""
+    if last < 1:
+        raise ValueError('last must be at least 1')
+    if not max_sec >= 0:
+        raise ValueError('max_sec must not be negative')
+    return lambda delays: min(fmean(delays[-last:]), max_sec)
+
+
+def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
+    """The longest of the last `last` delays, but not more than `max_sec`. The RTC paper does this."""
+    if last < 1:
+        raise ValueError('last must be at least 1')
+    if not max_sec >= 0:
+        raise ValueError('max_sec must not be negative')
+    return lambda delays: min(max(delays[-last:]), max_sec)
+
+
+class PrefixSampling(Enum):
+    """How `RTCSchedule` reads an old action for a time of the new chunk.
+
+    The new chunk is timed from its call, so its times can fall between two old due times.
+    At 0.52 s, with old actions o5 due at 0.5 s and o6 due at 0.6 s:
+
+    * `PREVIOUS` gives o5, the action that the robot executes at that time.
+    * `NEAREST` gives o5, the action with the closest due time. At 0.57 s it gives o6.
+      A tie, at 0.55 s, gives the earlier one.
+    * `NEXT` gives o6, the first action due at or after that time.
+    * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `interpolate_commands`.
+    """
+
+    PREVIOUS = 'previous'
+    NEAREST = 'nearest'
+    NEXT = 'next'
+    INTERPOLATE = 'interpolate'
+
+
+class _TimedChunk:
+    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
+
+    def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
+        self._actions = actions
+        self._start_ns = start_ns
+        self._fps = fps
+        self._next_index = self._running_index(now_ns)
+
+    def _due_ns(self, index: int) -> int:
+        return self._start_ns + round(index * 1e9 / self._fps)
+
+    def _running_index(self, time_ns: int) -> int:
+        """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
+        return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
+
+    def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> list[Commands]:
+        """This chunk sampled at ``now_ns + k / fps`` for each k that falls before ``now_ns + duration_sec``.
+
+        Stops at the first time that ``sampling`` gives no action for.
+        """
+        end_ns = now_ns + round(duration_sec * 1e9)
+        prefix: list[Commands] = []
+        while (slot_ns := now_ns + round(len(prefix) * 1e9 / self._fps)) < end_ns:
+            action = self._sample(slot_ns, sampling)
+            if action is None:
+                break
+            prefix.append(action)
+        return prefix
+
+    def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
+        """The action ``sampling`` gives at ``time_ns``, or ``None`` after the chunk ends."""
+        running = self._running_index(time_ns)
+        last = len(self._actions) - 1
+        if running > last:
+            return None
+        if sampling is PrefixSampling.PREVIOUS or (running == last and sampling is not PrefixSampling.NEXT):
+            return self._actions[running]
+        if sampling is PrefixSampling.NEXT:
+            following = running if self._due_ns(running) == time_ns else running + 1
+            return self._actions[following] if following <= last else None
+        since_ns, until_ns = time_ns - self._due_ns(running), self._due_ns(running + 1) - time_ns
+        if sampling is PrefixSampling.NEAREST:
+            return self._actions[running + 1 if until_ns < since_ns else running]
+        fraction = since_ns / (since_ns + until_ns)
+        return interpolate_commands(self._actions[running], self._actions[running + 1], fraction)
+
+    def take_due(self, now_ns: int) -> dict[str, Any]:
+        """The merged commands of every action due by ``now_ns`` and not taken yet."""
+        commands: dict[str, Any] = {}
+        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
+            commands.update(self._actions[self._next_index])
+            self._next_index += 1
+        return commands
+
+    def next_due_ns(self) -> int | None:
+        """When the next action not taken yet is due, or ``None`` after the last one."""
+        return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
+
+
+class RTCSchedule(Policy):
+    """Run action chunks from a model, and ask for the next chunk while the current one runs.
+
+        step              0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
+        observation T0    ^
+        inference         |--------|
+        answer                     ^
+        old chunk                  o0 o1 o2 o3 o4 o5 o6 o7 o8 o9
+        call_after_sec             |--------------|
+        observation T1                            ^
+        prefix                                    o5 o6 o7
+        inference                                 |--------|
+        answer                                             ^
+        new chunk                                 n0 n1 n2 n3 n4 n5 n6 n7 n8 n9
+        robot executes    -- -- -- o0 o1 o2 o3 o4 o5 o6 o7 n3 n4 n5 n6 n7 n8 n9
+
+    A chunk holds one action per 1 / `fps` seconds. Its action i is due at the time of
+    its observation + i / `fps`. The policy executes each action when its due time comes.
+
+    `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
+    The call also gets a prefix: the old chunk read at the new chunk's due times T1,
+    T1 + 1 / `fps`, ..., before T1 + `prefix_duration(delays)`, and not past the end of
+    the old chunk. The prefix tells the model what the robot does while the model
+    computes. Its length is the delay estimate: the server reads it as the number of
+    prefix actions / `fps`. The server decides how to use the prefix.
+
+    When T1 falls between two old due times, each new due time falls between two old
+    actions. `prefix_sampling` decides which value the prefix holds there; see
+    `PrefixSampling`. On the grid, as in the drawing, every choice gives the same prefix.
+
+    Until the answer arrives, the policy executes the old chunk. When the answer arrives,
+    the policy executes the new chunk, from the action that is due now. If the old chunk
+    ends before the answer arrives, the policy executes no action until the answer arrives.
+
+    Only one call runs at a time. If an answer arrives more than `call_after_sec` after
+    its observation, the next call starts at once.
+
+    The first call has no old chunk, so its prefix is empty, and the robot executes no
+    action until its answer arrives (-- in the drawing).
+
+    `infer` gets the observation and the prefix, in the command format that `infer`
+    returns, and converts both to the model's format.
+
+    Only a model with absolute actions works with this policy. No codec converts a
+    command back to a relative model action, so the prefix cannot be given to a
+    model with relative actions.
+    """
+
+    def __init__(
+        self,
+        fps: float,
+        call_after_sec: float,
+        prefix_duration: PrefixDuration,
+        prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
+    ) -> None:
+        if not isfinite(fps) or fps <= 0:
+            raise ValueError('fps must be finite and positive')
+        if not isfinite(call_after_sec) or call_after_sec < 0:
+            raise ValueError('call_after_sec must be finite and not negative')
+        self._fps = fps
+        self._call_after_ns = round(call_after_sec * 1e9)
+        self._prefix_duration = prefix_duration
+        self._prefix_sampling = prefix_sampling
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
+        delays: list[float] = []
+        answer: Answer[Sequence[Commands]] | None = None
+        called_at_ns = 0
+        chunk: _TimedChunk | None = None
+        next_call_ns = 0
+        obs = yield
+        try:
+            while True:
+                now_ns = runtime.time_ns
+                if answer is not None and answer.done():
+                    delays.append((now_ns - called_at_ns) / 1e9)
+                    # The first chunk counts from its answer: the robot did not move while it waited.
+                    start_ns = now_ns if chunk is None else called_at_ns
+                    chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
+                    answer = None
+                    next_call_ns = start_ns + self._call_after_ns
+
+                if answer is None and now_ns >= next_call_ns:
+                    prefix = []
+                    if chunk is not None:
+                        prefix = chunk.prefix(now_ns, self._prefix_duration(delays), self._prefix_sampling)
+                    called_at_ns = now_ns
+                    answer = runtime.submit(infer, obs, prefix)
+
+                commands = {} if chunk is None else chunk.take_due(now_ns)
+                next_due_ns = None if chunk is None else chunk.next_due_ns()
+                if answer is not None:
+                    # Pending inference asks for the earliest allowed poll; action cadence is independent.
+                    resume_at_ns = now_ns
+                elif next_due_ns is not None:
+                    resume_at_ns = min(next_call_ns, next_due_ns)
+                else:
+                    resume_at_ns = next_call_ns
+                obs = yield Step(commands, resume_at_ns)
+        finally:
+            if answer is not None:
+                answer.cancel()
+
+    def meta(self) -> dict[str, Any]:
+        return {policy_keys.ACTION_FPS: self._fps}
 
 
 class _StackedObs(Mapping[str, Any]):
