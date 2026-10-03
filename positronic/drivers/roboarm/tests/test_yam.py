@@ -20,7 +20,9 @@ _GRIP_TOL = 0.05
 def chains(monkeypatch) -> dict[str, yam._FakeYam]:
     """The fake chain each driver opens, keyed by its CAN channel."""
     opened: dict[str, yam._FakeYam] = {}
-    monkeypatch.setattr(yam, 'get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam()))
+    monkeypatch.setattr(
+        'i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam())
+    )
     return opened
 
 

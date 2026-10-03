@@ -4,6 +4,23 @@ positronic drives a simulator as an embodiment: the same signals, commands and r
 `env_server/adapter.py` maps between the two. Some of what the adapter needs is known only to the simulator;
 this file states those, and each is a claim to check against the running env.
 
+## What a new integration provides
+
+- **Privileged data.** Record every numeric ground-truth signal the simulator reports, through
+  `Eval.privileged`: its physics state and its task evaluator's metrics, partial progress included. A recorded
+  signal holds a scalar or a 1-D vector per step, so flatten a value with more dimensions.
+- **Seeded scenes.** The trial seed reaches the simulator's reset and draws the whole scene. The task, the
+  seed and the pinned simulator version then rebuild an episode, so the scene is not recorded apart.
+- **Independent episodes.** Each reset starts the robot from its initial pose. Some simulators carry the
+  robot's state into the next reset unless told not to.
+- **The simulator's own budget.** The trial timeout covers the simulator's own episode budget, so a trial is
+  not shorter than the simulator's evaluation assumes.
+- **Camera size.** Render each camera in the shape of the rig's camera, with at least 256 pixels on the short
+  side.
+- **Unreachable poses.** When the solver cannot reach a Cartesian command, log it and hold the arm, as the
+  rig's driver does. The episode goes on.
+- **Success.** The simulator's own evaluator decides success, and the adapter passes its verdict through.
+
 ## The end-effector frame
 
 positronic reports `robot_state.ee_pose` at the frame its model calls `default` (see

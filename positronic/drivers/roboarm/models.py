@@ -197,6 +197,18 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
     }
 
 
+YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
+
+
+def bundled_yam_model() -> dict:
+    """i2rt YAM model metadata: its joint names and the ``DEFAULT_FRAME`` its ``ee_pose`` is measured at."""
+    return {
+        'robot': 'i2rt_yam',
+        roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),
+        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+    }
+
+
 @lru_cache(maxsize=1)
 def bundled_panda_model() -> dict:
     """The bundled simulated Franka panda (arm + hand) for the 3D viewer and offline IK: the panda

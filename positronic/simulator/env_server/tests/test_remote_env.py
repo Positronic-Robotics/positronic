@@ -337,6 +337,11 @@ class TestChannelMapAction:
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['target_grip.right'] == 0.0
 
+    def test_a_vector_on_a_non_robot_channel_passes_through(self):
+        adapter = _CommandOnlyAdapter()
+        action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
+        np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
+
     def test_a_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
@@ -357,6 +362,10 @@ class TestSingleArm:
     def test_the_wire_names_mirror_the_positronic_keys(self):
         assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
         assert protocol.TARGET_GRIP == keys.TARGET_GRIP
+        assert protocol.arm_channel(protocol.ROBOT_COMMAND, 'left') == keys.arm_channel(keys.ROBOT_COMMAND, 'left')
+        assert protocol.ROBOT_STATE == keys.ROBOT_STATE
+        assert protocol.JOINTS_SUFFIX == keys.JOINTS_SUFFIX
+        assert protocol.MOUNTS == eval_keys.MOUNTS
 
     def test_it_returns_the_two_channels(self):
         action = protocol.single_arm(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))

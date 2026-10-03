@@ -13,6 +13,9 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+# What ``server`` and ``protocol`` import beyond the benchmark's own dependencies.
+SERVER_DEPS = ('websockets>=15.0.1', 'msgpack')
+
 
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
