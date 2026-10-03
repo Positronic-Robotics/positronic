@@ -294,10 +294,6 @@ def _bottom_row(ep: DiskEpisode, layout: ReplayLayout) -> list[Any]:
     return _root(_collect_signal_groups(ep), ep, layout).contents[-1].contents
 
 
-def _line_names(view: Any) -> dict[str, list[str]]:
-    return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
-
-
 _GRIP: dict[str, list[str] | dict[str, str]] = {'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP}}
 
 
@@ -331,6 +327,10 @@ def test_a_group_shows_its_charts_as_tabs_under_its_name_where_it_first_appears(
     assert [chart.name for chart in named.contents] == ['Joints', 'Joints Vel']
     assert isinstance(grip, rrb.TimeSeriesView)
     assert grip.name == 'Grip'
+
+
+def _line_names(view: Any) -> dict[str, list[str]]:
+    return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
 
 
 def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):

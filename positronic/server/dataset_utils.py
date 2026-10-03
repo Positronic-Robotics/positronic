@@ -373,31 +373,6 @@ def _trajectory_view(signals: EpisodeSignals, ep: Episode) -> rrb.Spatial3DView:
     )
 
 
-def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
-    """Cameras side by side beside the 3D view, over a grid of every signal."""
-    series_views = _signal_views(signals, placed=set())
-
-    top_items: list[rrb.View | rrb.Container] = []
-    if signals.videos:
-        # Widths in proportion to the aspect ratios give every camera one height.
-        aspects = [signals.camera_aspects[k] for k in signals.videos]
-        top_items.append(rrb.Horizontal(*_image_views(signals), column_shares=aspects))
-    if signals.poses:
-        top_items.append(_trajectory_view(signals, ep))
-
-    rows = []
-    row_shares = []
-    top_share = _camera_row_share(signals) if signals.videos else _NO_CAMERA_TOP_SHARE
-    if top_items:
-        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
-        row_shares.append(top_share)
-    if series_views:
-        series_share = 1 - top_share if top_items else 1.0
-        rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
-        row_shares.append(series_share)
-    return rrb.Vertical(*rows, row_shares=row_shares)
-
-
 def _lines(signals: list[str] | dict[str, str]) -> list[tuple[str | None, str]]:
     """Each line of a chart: its label, None where a list names it by its signal, and its signal."""
     return list(signals.items()) if isinstance(signals, dict) else [(None, signal) for signal in signals]
@@ -461,6 +436,31 @@ def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> 
     if bottom:
         rows.append(rrb.Horizontal(*bottom))
         row_shares.append(bottom_share)
+    return rrb.Vertical(*rows, row_shares=row_shares)
+
+
+def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
+    """Cameras side by side beside the 3D view, over a grid of every signal."""
+    series_views = _signal_views(signals, placed=set())
+
+    top_items: list[rrb.View | rrb.Container] = []
+    if signals.videos:
+        # Widths in proportion to the aspect ratios give every camera one height.
+        aspects = [signals.camera_aspects[k] for k in signals.videos]
+        top_items.append(rrb.Horizontal(*_image_views(signals), column_shares=aspects))
+    if signals.poses:
+        top_items.append(_trajectory_view(signals, ep))
+
+    rows = []
+    row_shares = []
+    top_share = _camera_row_share(signals) if signals.videos else _NO_CAMERA_TOP_SHARE
+    if top_items:
+        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
+        row_shares.append(top_share)
+    if series_views:
+        series_share = 1 - top_share if top_items else 1.0
+        rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
+        row_shares.append(series_share)
     return rrb.Vertical(*rows, row_shares=row_shares)
 
 

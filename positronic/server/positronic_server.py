@@ -857,14 +857,31 @@ async def api_episode_static_field(episode_id: int, field_path: str, request: Re
     raise HTTPException(status_code=400, detail=f'Field {"/".join(key_path)} is not downloadable')
 
 
+@dataclass(frozen=True)
+class _RecordingSettings:
+    """What the app builds each recording from."""
+
+    dataset: Dataset
+    max_hz: float
+    max_resolution: int
+    layout: ReplayLayout | None
+
+
+def _recording_settings() -> _RecordingSettings:
+    return _RecordingSettings(
+        dataset=cast(Dataset, app_state['dataset']),
+        max_hz=cast(float, app_state['max_hz']),
+        max_resolution=cast(int, app_state['max_resolution']),
+        layout=cast(ReplayLayout | None, app_state['layout']),
+    )
+
+
 def _recording_cache_path(episode_id: int) -> Path:
-    _, max_hz, max_resolution, layout = _recording_settings()
-    return _get_rrd_cache_path(episode_id, max_hz, max_resolution, layout)
+    settings = _recording_settings()
+    return _get_rrd_cache_path(episode_id, settings.max_hz, settings.max_resolution, settings.layout)
 
 
-def _recording_chunks_cached(
-    ds: Dataset, episode_id: int, cache_path: Path, *, max_hz: float, max_resolution: int, layout: ReplayLayout | None
-) -> Iterator[bytes]:
+def _recording_chunks_cached(settings: _RecordingSettings, episode_id: int, cache_path: Path) -> Iterator[bytes]:
     """The recording's chunks as they are built, written to `cache_path`; the path names a complete file only."""
     fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
     partial = Path(name)
@@ -872,7 +889,11 @@ def _recording_chunks_cached(
     try:
         with os.fdopen(fd, 'wb') as cache_file:
             for chunk in stream_episode_rrd(
-                ds, episode_id, max_hz=max_hz, max_resolution=max_resolution, layout=layout
+                settings.dataset,
+                episode_id,
+                max_hz=settings.max_hz,
+                max_resolution=settings.max_resolution,
+                layout=settings.layout,
             ):
                 cache_file.write(chunk)
                 yield chunk
@@ -883,24 +904,11 @@ def _recording_chunks_cached(
             partial.unlink(missing_ok=True)
 
 
-def _recording_settings() -> tuple[Dataset, float, int, ReplayLayout | None]:
-    return (
-        cast(Dataset, app_state['dataset']),
-        cast(float, app_state['max_hz']),
-        cast(int, app_state['max_resolution']),
-        cast(ReplayLayout | None, app_state['layout']),
-    )
-
-
 def ensure_episode_rrd(episode_id: int) -> Path:
     """Build the recording of `episode_id` into the cache when the cache holds none, and answer its path."""
     cache_path = _recording_cache_path(episode_id)
     if not cache_path.exists():
-        ds, max_hz, max_resolution, layout = _recording_settings()
-        chunks = _recording_chunks_cached(
-            ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution, layout=layout
-        )
-        for _ in chunks:
+        for _ in _recording_chunks_cached(_recording_settings(), episode_id, cache_path):
             pass
     return cache_path
 
@@ -912,11 +920,8 @@ async def api_episode_rrd(episode_id: int):
     if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
-    ds, max_hz, max_resolution, layout = _recording_settings()
     return StreamingResponse(
-        _recording_chunks_cached(
-            ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution, layout=layout
-        ),
+        _recording_chunks_cached(_recording_settings(), episode_id, cache_path),
         media_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
     )
