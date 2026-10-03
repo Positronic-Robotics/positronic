@@ -166,6 +166,7 @@ sampled = signal.time[Time(world=100):Time(world=250):Time(world=50)]
   batches produce empty views. Each output uses the requested coordinates on queried timelines
   and the selected source record's coordinates on every other timeline.
 - Non-stepped windows carry a sample to `start` when a qualifying record exists and exclude `stop`.
+  With both endpoints supplied, the window is empty unless `start < stop` componentwise.
   An omitted start keeps the first source record. Incompatible ordering after injecting a carried
   timestamp raises `ValueError`.
 - Stepped windows require a named start. Start, stop, and step have the same name set. Each step

@@ -20,6 +20,9 @@ T = TypeVar('T')
 API_PREFIX = '/api/v2'
 TIMESTAMP_VALUES_KEY = 'timestamps'
 SIGNAL_BOUNDS_KEY = 'bounds'
+SIGNAL_KIND_KEY = 'kind'
+SIGNAL_DTYPE_KEY = 'dtype'
+SIGNAL_SHAPE_KEY = 'shape'
 
 
 def encode_times(times: Sequence[Time]) -> dict:
@@ -76,7 +79,11 @@ class DatasetClient:
         r = self.session.get(f'{API_PREFIX}/episodes/{ep}/signals/{sig}/meta')
         r.raise_for_status()
         data = r.json()
-        return SignalMeta(dtype=np.dtype(data['dtype']), shape=tuple(data['shape']), kind=Kind(data['kind']))
+        return SignalMeta(
+            dtype=np.dtype(data[SIGNAL_DTYPE_KEY]),
+            shape=tuple(data[SIGNAL_SHAPE_KEY]),
+            kind=Kind(data[SIGNAL_KIND_KEY]),
+        )
 
     def get_signal_values(self, ep: int, sig: str, indices: IndicesLike) -> list:
         r = self.session.post(

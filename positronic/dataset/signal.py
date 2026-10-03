@@ -268,7 +268,7 @@ class _SignalViewTime(Generic[T]):
                 raise KeyError(f'No record at or before {start}')
             bound = stop if stop is not None else self._signal.bounds(names).finish
             return self[TimeGrid(start, bound, step, inclusive=stop is None)]
-        if not len(self._signal):
+        if not len(self._signal) or (start is not None and stop is not None and not start < stop):
             return _SignalView(self._signal, range(0))
         first = max(0, int(self._signal._search_ts([start])[0])) if start is not None else 0
         start = start if start is not None else self._signal.bounds(names).start

@@ -654,6 +654,24 @@ class TestNamedTimelines:
         with pytest.raises(ValueError):
             signal.time[Time(A=150, B=1200) :]
 
+    @pytest.mark.parametrize(
+        'start, stop',
+        [
+            (Time(A=100, B=200), Time(A=200, B=100)),
+            (Time(B=200, A=100), Time(B=100, A=200)),
+            (Time(A=200, B=100), Time(A=100, B=200)),
+            (Time(A=140, B=140), Time(A=100, B=100)),
+            (Time(A=100, B=100), Time(A=100, B=100)),
+            (Time(A=150, B=150), Time(A=150, B=150)),
+            (Time(A=140), Time(A=100)),
+        ],
+    )
+    @pytest.mark.parametrize('stepped', [False, True])
+    def test_empty_time_intervals(self, start, stop, stepped):
+        signal = DummySignal([[50, 50], [150, 150], [250, 250]], [1, 2, 3], timelines=('A', 'B'))
+        step = Time(**dict.fromkeys(start, 10)) if stepped else None
+        assert list(signal.time[start:stop:step]) == []
+
     def test_stepping_zero_coordinates_and_inclusive_end(self):
         signal = DummySignal([[100, 1000], [200, 1000]], [1, 2], timelines=('A', 'B'))
         assert list(

@@ -15,7 +15,14 @@ from pydantic import BaseModel, StrictInt
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset
-from positronic.dataset.remote import API_PREFIX, SIGNAL_BOUNDS_KEY, encode_times
+from positronic.dataset.remote import (
+    API_PREFIX,
+    SIGNAL_BOUNDS_KEY,
+    SIGNAL_DTYPE_KEY,
+    SIGNAL_KIND_KEY,
+    SIGNAL_SHAPE_KEY,
+    encode_times,
+)
 from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation
 from positronic.dataset.time import Time, validate_timelines
 from positronic.utils.serialization import serialize
@@ -66,7 +73,11 @@ def episode_info(index: int):
 @_app.get(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/meta')
 def signal_meta(ep: int, sig: str):
     signal = _get_signal(ep, sig)
-    return {'kind': signal.kind.value, 'dtype': np.dtype(signal.dtype).str, 'shape': list(signal.shape or ())}
+    return {
+        SIGNAL_KIND_KEY: signal.kind.value,
+        SIGNAL_DTYPE_KEY: np.dtype(signal.dtype).str,
+        SIGNAL_SHAPE_KEY: list(signal.shape or ()),
+    }
 
 
 @_app.post(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/timestamps')
