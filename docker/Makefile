@@ -1,5 +1,6 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 .PHONY: build-galaxea tag-galaxea push-galaxea
+.PHONY: build-flux3-action tag-flux3-action push-flux3-action
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -9,6 +10,7 @@ IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
 IMAGE_NAME_GALAXEA := positro/galaxea
+IMAGE_NAME_FLUX3_ACTION := positro/flux3-action
 
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
 
@@ -50,6 +52,7 @@ help:
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
+	@echo "  make build-flux3-action  Build the FLUX 3 Action image (about 34 GB on disk)"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -107,6 +110,24 @@ tag-galaxea: build-galaxea
 push-galaxea: tag-galaxea
 	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
 	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+
+# Not in `build` or `push`: CI builds it in a workflow of its own, only when its recipe changes.
+build-flux3-action:
+	docker build --platform linux/amd64 -f Dockerfile.flux3-action -t $(IMAGE_NAME_FLUX3_ACTION):local ..
+
+tag-flux3-action: build-flux3-action
+	docker tag $(IMAGE_NAME_FLUX3_ACTION):local $(IMAGE_NAME_FLUX3_ACTION):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_FLUX3_ACTION):local $(IMAGE_NAME_FLUX3_ACTION):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_FLUX3_ACTION):local $(IMAGE_NAME_FLUX3_ACTION):latest
+endif
+
+push-flux3-action: tag-flux3-action
+	docker push $(IMAGE_NAME_FLUX3_ACTION):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_FLUX3_ACTION):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_FLUX3_ACTION):latest
+endif
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -283,6 +304,9 @@ clean:
 	-docker rmi $(IMAGE_NAME_GALAXEA):local
 	-docker rmi $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+	-docker rmi $(IMAGE_NAME_FLUX3_ACTION):local
+	-docker rmi $(IMAGE_NAME_FLUX3_ACTION):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_FLUX3_ACTION):$(GIT_SHA)
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
 prune:

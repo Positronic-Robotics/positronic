@@ -1,0 +1,89 @@
+name: Build and Push the FLUX 3 Action Image
+
+# A pull request builds and checks the image; main also pushes it. Main republishes only on a change to the
+# recipe, because each publish uploads 25 GB of new layers; run the workflow by hand after a Makefile change.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.flux3-action
+      - positronic/vendors/flux3_action/**
+      - .github/workflows/docker-flux3-action.yaml
+      - docker/Makefile
+      - .dockerignore
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.flux3-action
+      - positronic/vendors/flux3_action/**
+      - .github/workflows/docker-flux3-action.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flux3-action-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  flux3-action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        # Adds `-o pipefail`, so a failed `docker save` fails the size check.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The runner's root disk holds the image with no cleanup, and a push compresses each layer as it streams.
+      - name: Build
+        working-directory: docker
+        run: |
+          df -h /
+          make build-flux3-action
+
+      - name: Check the image
+        run: |
+          image=positro/flux3-action:local
+          df -h /
+          docker image inspect "$image" --format 'uncompressed bytes {{.Size}}'
+          # The server reads the token before the model loads, so a token no header can carry stops it at once.
+          if docker run --rm --network none -e AUTH_TOKEN='two words' "$image" 2> refusal.log; then
+            echo 'the server started with a token no header can carry' >&2
+            exit 1
+          fi
+          grep -F AUTH_TOKEN refusal.log
+          docker run --rm --entrypoint cat "$image" /opt/flux3_action/NOTICE \
+            | grep -F 'This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License.'
+          docker run --rm --entrypoint cat "$image" /opt/flux3_action/LICENSE.md | grep -F 'FLUX Kommunity License'
+
+      # The budget is the one docs/submit-a-policy-image.md states. A push compresses each layer with gzip at its
+      # default level, and level 1 compresses less, so this sum is an upper estimate of the size the platform counts.
+      - name: Estimate the compressed size
+        run: |
+          sudo apt-get install -y --no-install-recommends pigz
+          bytes=$(docker save positro/flux3-action:local | pigz -1 | wc -c)
+          echo "compressed bytes, upper estimate: ${bytes}"
+          awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 30e9) }'
+
+      - name: Log in to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        working-directory: docker
+        run: make push-flux3-action IMAGE_TAG=main
+
+      # Reads anonymously, as the platform does, so a repository that is not public fails here.
+      - name: Read the published digest and size
+        if: github.ref == 'refs/heads/main'
+        run: docker/read_image_digest.sh positro/flux3-action:main
