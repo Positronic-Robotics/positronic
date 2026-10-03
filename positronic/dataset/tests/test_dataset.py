@@ -2,10 +2,10 @@ from pathlib import Path
 
 import numpy as np
 
+from positronic.dataset import Timestamps
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME
 
 
 def episode_ids(episodes):
@@ -17,7 +17,7 @@ def build_dataset_with_signal(root: Path, values: list[int]) -> LocalDataset:
         for i, value in enumerate(values):
             with w.new_episode() as ew:
                 ew.set_static('id', value)
-                ew.append('signal', np.array([value], dtype=np.float32), {RECORDED_TIME: 10_000 + i})
+                ew.append('signal', np.array([value], dtype=np.float32), Timestamps(recorded=10_000 + i))
     return LocalDataset(root)
 
 

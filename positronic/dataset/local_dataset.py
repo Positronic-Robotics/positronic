@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
@@ -139,7 +139,7 @@ class DiskEpisodeWriter(EpisodeWriter):
     def path(self) -> Path:
         return self._path
 
-    def append(self, signal_name: str, data: Any, timestamps: Timestamps | Mapping[str, int]) -> None:
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
         """Append data to a named signal.
 
         Args:

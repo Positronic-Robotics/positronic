@@ -32,7 +32,7 @@ class Timestamps(Mapping[str, int]):
 
     __slots__ = ('_coordinates',)
 
-    def __init__(self, timestamps: Mapping[str, SupportsIndex]):
+    def __init__(self, /, **timestamps: SupportsIndex):
         if not timestamps:
             raise ValueError('Timestamps must contain at least one timeline')
         coordinates = {}
@@ -58,7 +58,7 @@ class Timestamps(Mapping[str, int]):
             raise TypeError('Select a timeline name or a tuple of timeline names')
         if not key or len(set(key)) != len(key):
             raise ValueError('Select a nonempty tuple of unique timeline names')
-        return Timestamps({name: self._coordinates[name] for name in key})
+        return Timestamps(**{name: self._coordinates[name] for name in key})
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._coordinates)
@@ -70,7 +70,7 @@ class Timestamps(Mapping[str, int]):
         return key in self._coordinates
 
     def __repr__(self) -> str:
-        return f'Timestamps({dict(self._coordinates)!r})'
+        return f'Timestamps(**{dict(self._coordinates)!r})'
 
     def _validate_timelines(self, other: 'Timestamps') -> None:
         if self._coordinates.keys() != other._coordinates.keys():
@@ -101,13 +101,13 @@ class Timestamps(Mapping[str, int]):
         if not isinstance(other, Timestamps):
             return NotImplemented
         self._validate_timelines(other)
-        return Timestamps({name: value + other[name] for name, value in self.items()})
+        return Timestamps(**{name: value + other[name] for name, value in self.items()})
 
     def __sub__(self, other: 'Timestamps') -> 'Timestamps':
         if not isinstance(other, Timestamps):
             return NotImplemented
         self._validate_timelines(other)
-        return Timestamps({name: value - other[name] for name, value in self.items()})
+        return Timestamps(**{name: value - other[name] for name, value in self.items()})
 
 
 def is_realnum_dtype(dtype) -> bool:
@@ -470,15 +470,14 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     def main_timeline(self) -> str:
         return self._main_timeline
 
-    def _validate_timestamps(self, timestamps: Timestamps | Mapping[str, int]) -> dict[str, int]:
-        for name in timestamps:
-            validate_timeline(name)
+    def _validate_timestamps(self, timestamps: Timestamps) -> None:
+        if not isinstance(timestamps, Timestamps):
+            raise TypeError('Expected Timestamps')
         if self.main_timeline not in timestamps:
             raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
-        return {name: int(ts) for name, ts in timestamps.items()}
 
     @abstractmethod
-    def append(self, data: T, timestamps: Timestamps | Mapping[str, int]) -> None:
+    def append(self, data: T, timestamps: Timestamps) -> None:
         pass
 
     @abstractmethod

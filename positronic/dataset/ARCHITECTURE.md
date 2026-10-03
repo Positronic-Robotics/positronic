@@ -27,7 +27,7 @@ An Episode has three kinds of data with distinct roles:
 
 `Timestamps` holds immutable integer coordinates on a nonempty set of named timelines.
 Ordering and arithmetic match coordinates by name and require identical name sets.
-Writers accept this value or a dictionary on each append. They choose one main timeline at construction
+Writers require this value on each append. They choose one main timeline at construction
 (`recorded` by default) and persist its name in Parquet schema metadata. Timeline names are fixed per signal. The read API
 uses the main timeline's timestamp column.
 `Signal.main_timeline` exposes that name; views and remote access preserve it. Migration and conversion

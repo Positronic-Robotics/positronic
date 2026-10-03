@@ -1,5 +1,4 @@
 import pickle
-from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -33,12 +32,12 @@ def world():
 class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
-        self.appends: list[tuple[str, Any, dict[str, int]]] = []
+        self.appends: list[tuple[str, Any, Timestamps]] = []
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, timestamps: Timestamps | Mapping[str, int]) -> None:
-        self.appends.append((signal_name, data, dict(timestamps)))
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
+        self.appends.append((signal_name, data, timestamps))
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data

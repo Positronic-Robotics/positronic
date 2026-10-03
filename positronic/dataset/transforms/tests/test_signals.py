@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from positronic import geom
+from positronic.dataset import Timestamps
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import (
     Elementwise,
@@ -66,8 +67,8 @@ def _times10(x):
 def test_views_preserve_main_timeline(tmp_path, transform):
     path = tmp_path / 'signal.parquet'
     with SimpleSignalWriter(path, main_timeline='world') as writer:
-        writer.append(1, {'world': 1000})
-        writer.append(2, {'world': 2000})
+        writer.append(1, Timestamps(world=1000))
+        writer.append(2, Timestamps(world=2000))
     assert transform(SimpleSignal(path)).main_timeline == 'world'
 
 
@@ -77,7 +78,7 @@ def test_join_rejects_different_clocks_at_construction(tmp_path, join):
     for main_timeline in [RECORDED_TIME, 'world']:
         path = tmp_path / f'{main_timeline}.parquet'
         with SimpleSignalWriter(path, main_timeline=main_timeline) as writer:
-            writer.append(1, {main_timeline: 1000})
+            writer.append(1, Timestamps(**{main_timeline: 1000}))
         signals.append(SimpleSignal(path))
     with pytest.raises(ValueError, match='different main timelines'):
         join(*signals)
