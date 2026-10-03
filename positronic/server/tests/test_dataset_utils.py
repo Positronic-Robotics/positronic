@@ -359,6 +359,7 @@ class _RawFrameSignal:
         return iter(zip(self._frames, self._times, strict=True))
 
     def timestamps(self, timelines):
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         return [ts[timelines] for ts in self._times]
 
 

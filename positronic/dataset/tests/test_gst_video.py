@@ -112,7 +112,7 @@ def test_every_frame_reads_back_at_its_index_and_timestamp(tmp_path):
 
     assert len(signal) == len(frames)
     np.testing.assert_array_equal(
-        [time[RECORDED_TIME] for time in signal.timestamps((RECORDED_TIME,))],
+        [time[RECORDED_TIME] for time in signal.timestamps(RECORDED_TIME)],
         [1_000_000_000 + i * 33_333_333 for i in range(45)],
     )
     decoded = signal.values()

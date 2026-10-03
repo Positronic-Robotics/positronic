@@ -93,13 +93,13 @@ def build_fixture(episode_dir: Path) -> dict[str, np.ndarray]:
     states = episode[mapping.OBS_SIM_STATE]
     # rules-allow: hardcoded-keys — 'target_grip' is a shared channel awaiting centralization (internal#211).
     commands, grips = episode[keys.TARGET_JOINTS], episode['target_grip']
-    frame_ts = [ts[RECORDED_TIME] for ts in states.timestamps((RECORDED_TIME,))]
+    frame_ts = [ts[RECORDED_TIME] for ts in states.timestamps(RECORDED_TIME)]
     step_ts = frame_ts[1:]  # The first frame is the reset observation.
     played = [np.asarray(value, dtype=np.float32) for value in sample_at(commands, step_ts)]
     grip = [float(np.asarray(value).reshape(-1)[0]) for value in sample_at(grips, step_ts)]
 
     # Stop at the last recorded command; later observations have no recorded commands (internal#130).
-    last_command_ts = commands.bounds((RECORDED_TIME,))[1][RECORDED_TIME]
+    last_command_ts = commands.bounds(RECORDED_TIME)[1][RECORDED_TIME]
     replayable = int(np.searchsorted(step_ts, last_command_ts, side='left')) + 1
 
     steps = np.arange(1, replayable + 1)

@@ -929,11 +929,11 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     commands = episode[MOTOR]
     assert list(commands.values()) == [1, 2, 1]
     np.testing.assert_array_equal(
-        np.diff([ts[RECORDED_TIME] for ts in commands.timestamps((RECORDED_TIME,))]), [100_000_000, 100_000_000]
+        np.diff([ts[RECORDED_TIME] for ts in commands.timestamps(RECORDED_TIME)]), [100_000_000, 100_000_000]
     )
     positions = episode[POSITION]
     recorded = dict(
-        zip([ts[RECORDED_TIME] for ts in positions.timestamps((RECORDED_TIME,))], positions.values(), strict=True)
+        zip([ts[RECORDED_TIME] for ts in positions.timestamps(RECORDED_TIME)], positions.values(), strict=True)
     )
     assert recorded
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)

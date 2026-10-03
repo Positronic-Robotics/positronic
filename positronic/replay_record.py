@@ -159,7 +159,7 @@ def main(
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
             player_cmd.emit(DsPlayerStartCommand(episode))
 
-            first, last = episode.bounds((RECORDED_TIME,))
+            first, last = episode.bounds(RECORDED_TIME)
             p_bar = tqdm.tqdm(total=round((last - first)[RECORDED_TIME] / 1e9, 1), unit='s')
 
             for _ in sim_iter:

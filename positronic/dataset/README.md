@@ -507,5 +507,5 @@ dataset = transforms.TransformedDataset(
 
 episode = dataset[0]
 # Resized view; original imagery untouched
-frame0, _ts = episode['resized_image'].time[episode.bounds((RECORDED_TIME,))[0]]
+frame0, _ts = episode['resized_image'].time[episode.bounds(RECORDED_TIME)[0]]
 ```

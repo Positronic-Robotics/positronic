@@ -64,8 +64,7 @@ def episodes_table():
 def group_by_task():
     def group_fn(episodes: list[Episode]):
         duration = sum(
-            (last - first)[RECORDED_TIME] / 1e9 / 3600
-            for first, last in (ep.bounds((RECORDED_TIME,)) for ep in episodes)
+            (last - first)[RECORDED_TIME] / 1e9 / 3600 for first, last in (ep.bounds(RECORDED_TIME) for ep in episodes)
         )
         return {'task': episodes[0][keys.TASK], 'duration': duration, 'count': len(episodes)}
 

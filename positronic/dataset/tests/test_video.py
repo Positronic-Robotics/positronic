@@ -272,17 +272,17 @@ class TestVideoSignalStartLastTs:
             writer.append(create_frame(30), Time(**{RECORDED_TIME: 4000}))
 
         s = VideoSignal(video_paths['video'], video_paths['frames'])
-        assert s.bounds((RECORDED_TIME,))[0][RECORDED_TIME] == 1000
-        assert s.bounds((RECORDED_TIME,))[1][RECORDED_TIME] == 4000
+        assert s.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1000
+        assert s.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 4000
 
     def test_video_start_last_ts_empty_raises(self, video_paths):
         with VideoSignalWriter(video_paths['video'], video_paths['frames']):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
         with pytest.raises(ValueError):
-            _ = s.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME)[0][RECORDED_TIME]
         with pytest.raises(ValueError):
-            _ = s.bounds((RECORDED_TIME,))[1][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME)[1][RECORDED_TIME]
 
 
 class TestVideoInterface:

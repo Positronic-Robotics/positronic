@@ -83,7 +83,7 @@ def _video_columns(name: str, uri: str, meta: dict) -> dict:
 
 def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> dict:
     step_ns = int(round(1e9 / fps))
-    first, last = episode.bounds((RECORDED_TIME,))
+    first, last = episode.bounds(RECORDED_TIME)
     ts_grid = slice(first, last + Time(**{RECORDED_TIME: 1}), Time(**{RECORDED_TIME: step_ns}))
 
     row: dict[str, Any] = {_column(k): v for k, v in episode.static.items()}

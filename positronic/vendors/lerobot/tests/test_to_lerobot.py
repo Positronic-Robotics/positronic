@@ -44,6 +44,7 @@ class _MockEpisode:
         self.time = _MockTimeIndex(data)
 
     def bounds(self, timelines):
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         return tuple(ts[timelines] for ts in self._bounds)
 
 

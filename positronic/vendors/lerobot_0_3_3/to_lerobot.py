@@ -71,7 +71,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        start, finish = episode.bounds((RECORDED_TIME,))
+        start, finish = episode.bounds(RECORDED_TIME)
         timestamps = [
             Time(**{RECORDED_TIME: ts})
             for ts in np.arange(start[RECORDED_TIME], finish[RECORDED_TIME], 1e9 / self.fps, dtype=np.int64)

@@ -712,7 +712,7 @@ async def api_episodes(request: Request):
     def table_row(i: int, ep: Episode) -> dict:
         duration = 0.0
         if ep.signals:
-            first, last = ep.bounds((RECORDED_TIME,))
+            first, last = ep.bounds(RECORDED_TIME)
             duration = (last - first)[RECORDED_TIME] / 1e9
         return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
 

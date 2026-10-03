@@ -103,8 +103,8 @@ def cube_trace(
     fingers = {model.body(name).id for name in FINGER_BODIES}
     state_signal = episode[state_key]
     times = (
-        np.asarray([time[RECORDED_TIME] for time in state_signal.timestamps((RECORDED_TIME,))], dtype=np.int64)
-        - episode.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
+        np.asarray([time[RECORDED_TIME] for time in state_signal.timestamps(RECORDED_TIME)], dtype=np.int64)
+        - episode.bounds(RECORDED_TIME)[0][RECORDED_TIME]
     )
     if np.any(np.diff(times) > np.ceil(model.opt.timestep * 1e9) + 1):
         raise ValueError(f'{state_key}: recording skips physics steps')
@@ -127,8 +127,8 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
         signal = episode[name]
         trace[name] = np.asarray(list(signal.values()))
         trace[name + TIME_SUFFIX] = (
-            np.asarray([time[RECORDED_TIME] for time in signal.timestamps((RECORDED_TIME,))], dtype=np.int64)
-            - episode.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
+            np.asarray([time[RECORDED_TIME] for time in signal.timestamps(RECORDED_TIME)], dtype=np.int64)
+            - episode.bounds(RECORDED_TIME)[0][RECORDED_TIME]
         )
     for name, values in trace.items():
         if not len(values) or not np.isfinite(values).all():

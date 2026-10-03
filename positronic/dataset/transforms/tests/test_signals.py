@@ -391,9 +391,7 @@ def test_time_offsets_empty_signal(empty_signal):
 def test_time_offsets_very_large_deltas(sig_simple):
     # Negative delta too large: no elements remain
     delta_empty = -(
-        sig_simple.bounds((RECORDED_TIME,))[1][RECORDED_TIME]
-        - sig_simple.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
-        + 1
+        sig_simple.bounds(RECORDED_TIME)[1][RECORDED_TIME] - sig_simple.bounds(RECORDED_TIME)[0][RECORDED_TIME] + 1
     )
     to_empty = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: delta_empty}))
     assert list(to_empty) == []
@@ -402,7 +400,7 @@ def test_time_offsets_very_large_deltas(sig_simple):
 def test_time_offsets_positive_delta_too_large(sig_simple):
     # Positive delta strictly greater than span -> full length, pairs with last
     delta_too_large = (
-        sig_simple.bounds((RECORDED_TIME,))[1][RECORDED_TIME] - sig_simple.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
+        sig_simple.bounds(RECORDED_TIME)[1][RECORDED_TIME] - sig_simple.bounds(RECORDED_TIME)[0][RECORDED_TIME]
     ) + 1
     to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: delta_too_large}))
     assert list(to) == [

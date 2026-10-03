@@ -39,8 +39,8 @@ class TestVectorMeta:
             w.append(2, Time(**{RECORDED_TIME: 2000}))
             w.append(3, Time(**{RECORDED_TIME: 3000}))
         s = SimpleSignal(fp)
-        assert s.bounds((RECORDED_TIME,))[0][RECORDED_TIME] == 1000
-        assert s.bounds((RECORDED_TIME,))[1][RECORDED_TIME] == 3000
+        assert s.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1000
+        assert s.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 3000
 
     def test_vector_start_last_ts_empty_raises(self, tmp_path):
         fp = tmp_path / 'empty.parquet'
@@ -48,9 +48,9 @@ class TestVectorMeta:
             pass
         s = SimpleSignal(fp)
         with pytest.raises(ValueError):
-            _ = s.bounds((RECORDED_TIME,))[0][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME)[0][RECORDED_TIME]
         with pytest.raises(ValueError):
-            _ = s.bounds((RECORDED_TIME,))[1][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME)[1][RECORDED_TIME]
 
 
 class TestSignalWriterAppend:
@@ -215,8 +215,8 @@ def sig_simple():
 
 class TestCoreSignalBasics:
     def test_start_last_ts_basic(self, sig_simple):
-        assert sig_simple.bounds((RECORDED_TIME,))[0][RECORDED_TIME] == 1000
-        assert sig_simple.bounds((RECORDED_TIME,))[1][RECORDED_TIME] == 5000
+        assert sig_simple.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1000
+        assert sig_simple.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 5000
 
     def test_index_scalar_and_negative(self, sig_simple):
         assert sig_simple[0] == (10, Time(**{RECORDED_TIME: 1000}))
@@ -618,7 +618,7 @@ def test_unnamed_legacy_file_queries(tmp_path):
     signal = SimpleSignal(path)
     assert signal.timelines == (RECORDED_TIME,)
     assert signal.time[Time(**{RECORDED_TIME: 150})] == (1, Time(**{RECORDED_TIME: 100}))
-    assert signal.bounds((RECORDED_TIME,)) == (Time(**{RECORDED_TIME: 100}), Time(**{RECORDED_TIME: 200}))
+    assert signal.bounds(RECORDED_TIME) == (Time(**{RECORDED_TIME: 100}), Time(**{RECORDED_TIME: 200}))
 
 
 class TestNamedTimelines:
