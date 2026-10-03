@@ -117,6 +117,8 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 
 **Every device is ready before an episode starts.** Before each episode, the harness calls each handler in `Embodiment.ready_handlers` with no argument, then the prepare handlers that the task names. A healthy device answers at once. A device that holds an error repairs first and answers when it gives data again. A device that cannot repair answers with its error. That error fails the ask, and the harness keeps serving asks. The next ask calls the handler again.
 
+**A device in error is repaired between episodes.** A ready handler and the observation of its device share one name in `Embodiment`. Between episodes, the harness reads each such observation. When it carries a `pimm.SignalError`, the harness calls that handler at once, with no ask. It makes one call at a time, and calls again while the error stays. A ready handler with no observation of its name, such as the Franka arm's, is called only before an episode. An observation in error with no ready handler of its name gets no call.
+
 ## Recording and Replay
 
 Specify `--output_dir` to record runs as Positronic datasets. Recorded data includes robot state, camera feeds, actions, gripper commands, and timing information.
