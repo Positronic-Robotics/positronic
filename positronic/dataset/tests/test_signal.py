@@ -56,11 +56,11 @@ class TestVectorMeta:
 
 class TestSignalWriterAppend:
     def test_append_increasing_timestamps(self, tmp_path):
-        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
+        signal = create_signal(tmp_path, [(42, 1000), (42, 2000), (43, 3000)])
         assert len(signal) == 3
         assert signal[0] == (42, Time(**{RECORDED_TIME: 1000}))
-        assert signal[1] == (43, Time(**{RECORDED_TIME: 2000}))
-        assert signal[2] == (44, Time(**{RECORDED_TIME: 3000}))
+        assert signal[1] == (42, Time(**{RECORDED_TIME: 2000}))
+        assert signal[2] == (43, Time(**{RECORDED_TIME: 3000}))
 
     def test_append_non_increasing_timestamp_raises(self, tmp_path):
         writer = SimpleSignalWriter(tmp_path / 'test.parquet')
@@ -70,31 +70,6 @@ class TestSignalWriterAppend:
                 writer.append(43, Time(**{RECORDED_TIME: 1000}))
             with pytest.raises(ValueError, match='is not increasing'):
                 writer.append(43, Time(**{RECORDED_TIME: 999}))
-
-    def test_drop_equal_bytes_threshold_scalar(self, tmp_path):
-        fp = tmp_path / 'dedupe_scalar.parquet'
-        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32) as w:
-            w.append(42, Time(**{RECORDED_TIME: 1000}))
-            w.append(42, Time(**{RECORDED_TIME: 2000}))  # equal, dropped
-            w.append(43, Time(**{RECORDED_TIME: 3000}))  # different, kept
-        s = SimpleSignal(fp)
-        assert len(s) == 2
-        assert s[0] == (42, Time(**{RECORDED_TIME: 1000}))
-        assert s[1] == (43, Time(**{RECORDED_TIME: 3000}))
-
-    def test_drop_equal_bytes_threshold_numpy_small(self, tmp_path):
-        fp = tmp_path / 'dedupe_array.parquet'
-        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64) as w:
-            w.append(np.array([1, 2, 3], dtype=np.int64), Time(**{RECORDED_TIME: 1000}))
-            w.append(np.array([1, 2, 3], dtype=np.int64), Time(**{RECORDED_TIME: 2000}))  # equal content, dropped
-            w.append(np.array([1, 2, 4], dtype=np.int64), Time(**{RECORDED_TIME: 3000}))  # different, kept
-        s = SimpleSignal(fp)
-        assert len(s) == 2
-        v0, t0 = s[0]
-        v1, t1 = s[1]
-        np.testing.assert_array_equal(v0, [1, 2, 3])
-        np.testing.assert_array_equal(v1, [1, 2, 4])
-        assert (t0, t1) == (Time(**{RECORDED_TIME: 1000}), Time(**{RECORDED_TIME: 3000}))
 
 
 class TestSignalWriterContext:
@@ -185,12 +160,9 @@ class TestVectorInterface:
 
     def test_search_ts_numeric_and_invalid_dtype(self, tmp_path):
         s = create_signal(tmp_path, [(1, 1000), (2, 2000), (3, 3000)])
-        # Select the last coordinate at or before each query.
         idx = s._search_ts([Time(**{RECORDED_TIME: t}) for t in np.array([500, 1500, 2500, 3500], dtype=np.int64)])
         assert np.array_equal(idx, np.array([-1, 0, 1, 2]))
-        # Accept scalar float via list-like contract
         assert s._search_ts([Time(**{RECORDED_TIME: t}) for t in [1999]])[0] == 0
-        # Reject non-numeric dtype
         with pytest.raises(TypeError):
             _ = s._search_ts([Time(**{RECORDED_TIME: t}) for t in np.array(['1000'], dtype=object)])
 
@@ -494,7 +466,6 @@ class TestExtraTimelines:
         table = pq.read_table(fp)
         assert {f'ts.{RECORDED_TIME}', 'value', 'ts.consumer', 'ts.producer'} == set(table.column_names)
 
-        # Verify the data
         assert table[f'ts.{RECORDED_TIME}'].to_pylist() == [1000, 2000, 3000]
         assert table['value'].to_pylist() == [10, 20, 30]
         assert table['ts.producer'].to_pylist() == [900, 1900, 2900]
@@ -549,7 +520,7 @@ class TestExtraTimelines:
         assert table['ts.wall'].to_pylist() == [20, 30, 40]
 
     def test_invalid_timestamps_are_rejected_for_duplicate_values(self, tmp_path):
-        with SimpleSignalWriter(tmp_path / 'signal.parquet', drop_equal_bytes_threshold=32) as writer:
+        with SimpleSignalWriter(tmp_path / 'signal.parquet') as writer:
             writer.append(1, Time(world=10, wall=20))
             with pytest.raises(ValueError, match='Timeline names must be consistent'):
                 writer.append(1, Time(world=20))
@@ -806,8 +777,8 @@ class TestNamedTimelines:
             assert not schema.field(name).nullable
 
     def test_equal_values_still_enforce_coordinate_order(self, tmp_path):
-        path = tmp_path / 'dedup.parquet'
-        with SimpleSignalWriter(path, drop_equal_bytes_threshold=32) as writer:
+        path = tmp_path / 'signal.parquet'
+        with SimpleSignalWriter(path) as writer:
             writer.append(1, Time(A=100, B=1000))
             writer.append(1, Time(A=200, B=1000))
             with pytest.raises(ValueError):
@@ -819,7 +790,7 @@ class TestNamedTimelines:
     def test_equal_values_retain_every_timeline_coordinate(self, tmp_path, chunk_size):
         path = tmp_path / 'coordinates.parquet'
         times = [Time(A=100, B=1000), Time(A=200, B=1100), Time(A=300, B=1200)]
-        with SimpleSignalWriter(path, chunk_size=chunk_size, drop_equal_bytes_threshold=32) as writer:
+        with SimpleSignalWriter(path, chunk_size=chunk_size) as writer:
             for value, time in zip([1, 1, 2], times, strict=True):
                 writer.append(value, time)
         signal = SimpleSignal(path)
