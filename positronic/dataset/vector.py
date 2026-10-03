@@ -166,8 +166,9 @@ class SimpleSignalWriter(SignalWriter[T]):
         Args:
             filepath: Path to the output parquet file
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
-            drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
-                threshold, subsequent appends will drop values equal to the last written value.
+            drop_equal_bytes_threshold: For single-timeline signals, if the first record's byte-size
+                is below this threshold, subsequent appends drop values equal to the last written value.
+                Signals with several timelines retain every record's coordinates.
         """
         super().__init__()
         self.filepath = filepath
@@ -242,9 +243,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         value = self._normalize_value(data)
 
         if self._last_time is None and self._drop_equal_bytes_threshold is not None:
-            size_bytes = self._nbytes(value)
-            if size_bytes < self._drop_equal_bytes_threshold:
-                self._dedupe_enabled = True
+            self._dedupe_enabled = len(timestamps) == 1 and self._nbytes(value) < self._drop_equal_bytes_threshold
 
         self._last_time = timestamps
         if not self._timestamps:

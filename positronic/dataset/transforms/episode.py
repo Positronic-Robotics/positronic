@@ -88,7 +88,7 @@ class Derive(EpisodeTransform):
 
     Example:
         Derive(
-            state=Concat('joint_q', 'ee_pose'),
+            state=Concat('joint_q', 'ee_pose', timelines=('world',)),
             label=FromValue('pick_place')
         )
     """

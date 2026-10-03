@@ -11,6 +11,7 @@ from positronic import keys
 from positronic.cfg import codecs, layers
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
@@ -174,7 +175,9 @@ class DreamZeroActionCodec(Codec):
         return transforms.Elementwise(episode[self._tgt_grip_key], _reshape_grip)
 
     def _encode_action(self, episode: Episode):
-        return transforms.concat(episode[self._tgt_joints_key], episode[self._tgt_grip_key], dtype=np.float32)
+        return transforms.concat(
+            episode[self._tgt_joints_key], episode[self._tgt_grip_key], timelines=(RECORDED_TIME,), dtype=np.float32
+        )
 
     def _decode_single(self, data: dict) -> dict:
         action = data[ACTION]

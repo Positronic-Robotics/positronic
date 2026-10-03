@@ -1,10 +1,25 @@
-"""Tests for DreamZeroObservationCodec."""
+"""Tests for DreamZero observation and action codecs."""
 
 import numpy as np
 import pytest
 
 from positronic import keys
-from positronic.vendors.dreamzero.codecs import DreamZeroObservationCodec
+from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.tests.utils import DummySignal
+from positronic.policy.codec import ACTION
+from positronic.vendors.dreamzero.codecs import DreamZeroActionCodec, DreamZeroObservationCodec
+
+
+def test_training_actions_align_recorded_samples():
+    codec = DreamZeroActionCodec(keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=2)
+    episode = EpisodeContainer({
+        keys.TARGET_JOINTS: DummySignal([100, 300], [[1, 2], [3, 4]]),
+        keys.TARGET_GRIP: DummySignal([100, 200], [0.0, 1.0]),
+    })
+    action = codec.training_encoder(episode)[ACTION]
+    assert list(action.timestamps(RECORDED_TIME)) == [100, 200, 300]
+    np.testing.assert_array_equal(action.values(), [[1, 2, 0], [1, 2, 1], [3, 4, 1]])
 
 
 class TestDreamZeroObservationCodec:
@@ -38,7 +53,6 @@ class TestDreamZeroObservationCodec:
         codec = DreamZeroObservationCodec()
         result = codec.encode(sample_inputs)
 
-        # Images should be resized to 320x180 (W×H) → array shape (176, 320, 3)
         assert result['observation/wrist_image_left'].shape == (176, 320, 3)
         assert result['observation/exterior_image_0_left'].shape == (176, 320, 3)
         assert result['observation/exterior_image_1_left'].shape == (176, 320, 3)

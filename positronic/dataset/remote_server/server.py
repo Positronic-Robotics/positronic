@@ -73,7 +73,12 @@ def signal_meta(ep: int, sig: str):
 def signal_timestamps(ep: int, sig: str, req: TimestampIndicesRequest):
     signal = _get_signal(ep, sig)
     indices = _parse_indices(req)
-    signal._validate_selection(req.timelines)
+    try:
+        signal._validate_selection(req.timelines)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return encode_times(signal._ts_at(indices, req.timelines))
 
 

@@ -805,7 +805,7 @@ class TestNamedTimelines:
         for name in ('ts.A', 'ts.B'):
             assert not schema.field(name).nullable
 
-    def test_deduplication_checks_every_attempt(self, tmp_path):
+    def test_equal_values_still_enforce_coordinate_order(self, tmp_path):
         path = tmp_path / 'dedup.parquet'
         with SimpleSignalWriter(path, drop_equal_bytes_threshold=32) as writer:
             writer.append(1, Time(A=100, B=1000))
@@ -813,7 +813,23 @@ class TestNamedTimelines:
             with pytest.raises(ValueError):
                 writer.append(2, Time(A=150, B=1001))
             writer.append(2, Time(A=200, B=1001))
-        assert len(SimpleSignal(path)) == 2
+        assert len(SimpleSignal(path)) == 3
+
+    @pytest.mark.parametrize('chunk_size', [1, 2, 100])
+    def test_equal_values_retain_every_timeline_coordinate(self, tmp_path, chunk_size):
+        path = tmp_path / 'coordinates.parquet'
+        times = [Time(A=100, B=1000), Time(A=200, B=1100), Time(A=300, B=1200)]
+        with SimpleSignalWriter(path, chunk_size=chunk_size, drop_equal_bytes_threshold=32) as writer:
+            for value, time in zip([1, 1, 2], times, strict=True):
+                writer.append(value, time)
+        signal = SimpleSignal(path)
+        assert list(signal.timestamps(('A', 'B'))) == times
+        assert signal.time[Time(A=250)] == (1, Time(A=200, B=1100))
+        assert signal.time[Time(B=1150)] == (1, Time(A=200, B=1100))
+        assert list(signal.time[[Time(A=150), Time(A=250)]].timestamps(('A', 'B'))) == [
+            Time(A=150, B=1000),
+            Time(A=250, B=1100),
+        ]
 
     def test_legacy_columns_and_unknown_version(self, tmp_path):
 

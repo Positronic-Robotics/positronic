@@ -427,7 +427,7 @@ Typical use cases
 
 ### Building blocks
 - `Elementwise(signal, fn)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
-- `Join(*signals, timelines=("world", "tick"), include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp. Only selected timelines survive; duplicate projected coordinates collapse and incompatible ordering raises `ValueError`. Reference timestamps retain every source coordinate.
+- `Join(*signals, timelines, include_ref_ts=False)`: aligns multiple signals on the required tuple of timeline names with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp. Only selected timelines survive; duplicate projected coordinates collapse and incompatible ordering raises `ValueError`. Reference timestamps retain every source coordinate.
 - `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
 - `TimeOffsets(signal, *offsets, include_ref_ts=False)`: samples values at named `Time` offsets and preserves all base timestamps. Can be used to lookup into "past" or "future".
 
@@ -436,9 +436,9 @@ Transforms operate purely on values; if you need semantic labels, maintain them 
 ### Derived helpers
 Common utilities stack the building blocks to cover frequent needs:
 - `image.resize(...)` and `image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL. Import from `positronic.dataset.transforms.image`.
-- `concat(*signals, timelines=("world",), dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
+- `concat(*signals, timelines, dtype=None)`: align signals with `Join` on the required tuple of timeline names and concatenate their vector values into one array view.
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
-- `pairwise(a, b, op, timelines=("world",))`: join two signals and apply a custom binary operator to every aligned pair.
+- `pairwise(a, b, op, *, timelines)`: join two signals on the required tuple of timeline names and apply a custom binary operator to every aligned pair.
 - `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
 - `view(signal, slice_obj)`: create a zero-copy view that slices each frame (e.g., select quaternion components from a pose vector) while preserving timestamps.
 
@@ -470,7 +470,7 @@ Each transform is responsible for defining which keys are available in the outpu
 - **`Eager(transform)`**: Force eager evaluation of a wrapped transform. Use when you want all values computed upfront (e.g., for debugging or when you know all values will be accessed).
 
 Helper callables (used within `Derive`):
-- **`Concat(*keys, timelines=("world",))`**: Concatenate multiple signals into a single array signal.
+- **`Concat(*keys, timelines)`**: Concatenate multiple signals on the required tuple of timeline names into a single array signal.
 - **`FromValue(value)`**: Return a constant value (useful for adding static labels).
 
 `TransformedEpisode` applies a sequence of transforms lazily—transforms are chained sequentially where each receives the output of the previous one. Transformation happens on first access and results are cached. `TransformedDataset` lifts the same pattern to the dataset level so every retrieved episode is automatically transformed.

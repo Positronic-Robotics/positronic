@@ -110,6 +110,18 @@ def test_signal_timestamps_endpoint(test_client):
     assert data['timestamps'] == [[1000], [1100], [1200]]
 
 
+@pytest.mark.parametrize(
+    'timelines,status',
+    [([], 400), ([''], 400), (['   '], 400), ([RECORDED_TIME, RECORDED_TIME], 400), (['missing'], 404)],
+)
+def test_signal_timestamps_reject_invalid_selectors(test_client, timelines, status):
+    response = test_client.post(
+        '/api/v2/episodes/0/signals/action/timestamps', json={TIMELINES_KEY: timelines, 'indices': [0]}
+    )
+    assert response.status_code == status
+    assert response.json()['detail']
+
+
 def test_signal_values_endpoint(test_client):
     r = test_client.post('/api/v2/episodes/0/signals/action/values', json={'indices': [0, 1]})
     assert r.status_code == 200
