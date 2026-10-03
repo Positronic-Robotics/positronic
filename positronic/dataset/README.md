@@ -384,10 +384,12 @@ Access semantics mirror those of `Signal.time` for selecting timestamps; the epi
 `DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new `Episode` slot and return an `EpisodeWriter` for recording:
 
 ```python
+from positronic.dataset.signal import RECORDED_TIME
+
 with dataset_writer.new_episode() as ew:
     ew.set_static("task", "pick_place")
     ew.set_static("id", 123)
-    ew.append("state", np.array([...]), Time(recorded=ts_ns))
+    ew.append("state", np.array([...]), Time(**{RECORDED_TIME: ts_ns}))
 ```
 
 ### Editing datasets

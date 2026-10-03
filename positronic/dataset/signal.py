@@ -38,6 +38,8 @@ class Time(Mapping[str, int]):
         coordinates = {}
         for name, value in timestamps.items():
             validate_timeline(name)
+            if isinstance(value, bool | np.bool_):
+                raise TypeError('Timeline coordinates must be integers, not booleans')
             coordinates[name] = index(value)
         self._coordinates = MappingProxyType(coordinates)
 
@@ -314,7 +316,7 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
         return self._ts_at(slice(None))
 
     @final
-    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match index_or_slice:
             case int() | np.integer() as idx:
                 if idx < 0:
@@ -346,7 +348,7 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
+    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match ts_or_array:
             case int() | float() | np.floating() as ts:
                 idx = int(self._signal._search_ts([ts])[0])
