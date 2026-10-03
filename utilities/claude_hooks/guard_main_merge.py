@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook guarding this repo's `main` from the agent's Bash tool.
+"""Claude Code PreToolUse hook guarding this repo's `main` from the agent's Bash tool and the GitHub MCP.
 
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
 receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`).
+
+A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
+`main` is refused (`analyze_mcp`).
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -13,9 +16,9 @@ is exempt, unless the push destination itself names the guarded repo. Anything u
 an unexpanded `$dir`, `cd -`, a `cd` inside `( … )` / `{ … }` / a substitution, a dir with no
 origin — stays guarded: fail toward blocking.
 
-Wired in `.claude/settings.json` (PreToolUse, matcher Bash): reads the hook payload on stdin,
-exits 2 with a message on stderr to block, 0 to allow. Stdlib-only so it runs without the
-project venv.
+Wired in `.claude/settings.json` (PreToolUse, matcher `Bash|mcp__github__.*`): reads the hook
+payload on stdin, exits 2 with a message on stderr to block, 0 to allow. Stdlib-only so it runs
+without the project venv.
 """
 
 from __future__ import annotations
@@ -56,6 +59,24 @@ MERGE_EXPANSION_MSG = (
     ' into further arguments, which can select a repository the authorization never named.'
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
+MCP_MERGE_MSG = 'BLOCKED: {tool} is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+MCP_UNNUMBERED_MSG = (
+    'BLOCKED: {tool} names no pull request — an authorization names one pull request, so a merge'
+    ' that names none can never match it.'
+)
+MCP_BRANCH_WRITE_MSG = (
+    'BLOCKED: {tool} commits straight onto `{branch}` of this repository. Put the change on a'
+    ' branch of its own and open a pull request.'
+)
+MCP_UPDATE_BRANCH_MSG = (
+    'BLOCKED: {tool} merges the base of a pull request into its head, which can be `{branch}`.'
+    ' Rebase the branch in a worktree and push it instead.'
+)
+MCP_UNREADABLE_MSG = (
+    'BLOCKED: this GitHub MCP call could not be read, so the guard cannot tell whether it merges.'
+    ' Run the merge as `gh pr merge <number>` in Bash instead, where the command is read and a'
+    ' `!allow_merge <pr>` receipt applies.'
+)
 
 # git global options that consume the following argument in their space-separated form
 GIT_ARG_OPTS = {'-C', '-c', '--namespace', '--git-dir', '--work-tree', '--super-prefix', '--exec-path'}
@@ -70,9 +91,11 @@ GIT_DIR_REDIRECT_OPTS = ('--git-dir', '--work-tree', '--namespace')
 # poisons whatever it appears in — a cd's target, a push's refspec.
 SUBST = '\x00subst'
 
-# A word that names `main` as a push target or checkout target: `main`, `+main`, `HEAD:main`,
-# `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
-MAIN_REF_RE = re.compile(r'(^|[:/+])main(?![\w/\-])')
+GUARDED_BRANCH = 'main'
+
+# A word that names the guarded branch as a push target or checkout target: `main`, `+main`,
+# `HEAD:main`, `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
+MAIN_REF_RE = re.compile(rf'(^|[:/+]){re.escape(GUARDED_BRANCH)}(?![\w/\-])')
 
 # gh's own name for the variable that selects a repository, read from the command and from the
 # environment — two places that have to agree with gh and with each other.
@@ -429,6 +452,66 @@ def consume_merge_allow(
     return True
 
 
+# Membership is a shape read off the call, not a list of tool names. A call carrying a commit
+# `message` and no `branch` commits to the default branch. A tool whose name carries `branch` and
+# names a pull request merges the base into the head, which can be the guarded branch.
+GITHUB_MCP_PREFIX = 'mcp__github__'
+MERGE_VERB = 'merge'
+BRANCH_VERB = 'branch'
+MCP_OWNER = 'owner'
+MCP_REPO = 'repo'
+MCP_BRANCH = 'branch'
+MCP_MESSAGE = 'message'
+MCP_PULL_NUMBER = 'pullNumber'
+
+
+def _mcp_slug(arguments: dict) -> str:
+    """`owner/repo` the call names, casefolded; '' when it names neither."""
+    owner, repo = str(arguments.get(MCP_OWNER) or ''), str(arguments.get(MCP_REPO) or '')
+    return f'{owner}/{repo}'.casefold() if owner and repo else ''
+
+
+def _mcp_pull_number(arguments: dict) -> int | None:
+    """The pull request the call names, or None when it names none.
+
+    A bool is an `int` to Python and names no pull request; an integral float is JSON's spelling of an int.
+    """
+    number = arguments.get(MCP_PULL_NUMBER)
+    if isinstance(number, bool):
+        return None
+    if isinstance(number, int):
+        return number
+    if isinstance(number, float) and number.is_integer():
+        return int(number)
+    return int(number) if isinstance(number, str) and number.isdigit() else None
+
+
+def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consume_merge_allow) -> str | None:
+    """The deny message for a GitHub MCP call, or None to allow it."""
+    if not tool.startswith(GITHUB_MCP_PREFIX):
+        return None
+    verb = tool.removeprefix(GITHUB_MCP_PREFIX)
+    guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
+    if MERGE_VERB in verb:
+        number = _mcp_pull_number(arguments)
+        if number is None:
+            return MCP_UNNUMBERED_MSG.format(tool=tool)
+        # The receipt is consulted last: consulting it spends it.
+        if not guarded_slug or slug != guarded_slug or not allow_merge(number, guarded_slug):
+            return MCP_MERGE_MSG.format(tool=tool)
+        return None
+    # A write the guard cannot place — no repository named, or none to compare it against — is
+    # treated as a write onto this repository.
+    if slug and guarded_slug and slug != guarded_slug:
+        return None
+    branch = str(arguments.get(MCP_BRANCH) or '')
+    if branch == GUARDED_BRANCH or (not branch and MCP_MESSAGE in arguments):
+        return MCP_BRANCH_WRITE_MSG.format(tool=tool, branch=GUARDED_BRANCH)
+    if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
+        return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
+    return None
+
+
 def _carries_substitution(cmd: str) -> bool:
     """Whether `cmd` carries a substitution, or quoting that cannot be read.
 
@@ -742,11 +825,13 @@ def analyze(  # noqa: C901
         return bool(slug) and slug != guarded_slug
 
     def on_main(inv_dir: str | None) -> bool:
-        return True if inv_dir is None else git.branch(inv_dir) == 'main'
+        return True if inv_dir is None else git.branch(inv_dir) == GUARDED_BRANCH
 
     def switches_to_main() -> bool:
         return any(
-            sub in ('checkout', 'switch') and not exempt(inv.dir) and any(re.fullmatch(r'\+?main', w) for w in rest)
+            sub in ('checkout', 'switch')
+            and not exempt(inv.dir)
+            and any(w.removeprefix('+') == GUARDED_BRANCH for w in rest)
             for inv, sub, rest in git_invs
         )
 
@@ -845,22 +930,41 @@ def _check_push_refspecs(rest: list[str], to_main: bool) -> str | None:
     return None
 
 
+def _refuse(message: str) -> int:
+    print(message, file=sys.stderr)
+    return 2
+
+
 def main() -> int:
+    """Exit 2 with a message on stderr to refuse the call, 0 to allow it.
+
+    A command the guard cannot read is allowed. A GitHub MCP call it cannot read is refused, since
+    nothing else stands between that call and `main`. No environment variable disables the guard,
+    since the agent could set it.
+    """
+    raw = sys.stdin.read()
     try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return 0
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict):
+        # The raw text is searched for the MCP prefix, since the tool name is unreadable too.
+        return _refuse(MCP_UNREADABLE_MSG) if GITHUB_MCP_PREFIX in raw else 0
+    git = GitInfo()
+    guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
+    tool = hook_payload.tool_name(payload)
+    if tool.startswith(GITHUB_MCP_PREFIX):
+        try:
+            deny = analyze_mcp(tool, hook_payload.tool_input(payload), guarded_slug)
+        except Exception:  # noqa: BLE001 — a gate that crashes open is worse than one that refuses
+            deny = MCP_UNREADABLE_MSG
+        return _refuse(deny) if deny else 0
     cmd = hook_payload.command(payload)
     if not cmd:
         return 0
     cwd = payload.get(hook_payload.CWD) or os.getcwd()
-    git = GitInfo()
-    guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
     deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
-    if deny:
-        print(deny, file=sys.stderr)
-        return 2
-    return 0
+    return _refuse(deny) if deny else 0
 
 
 if __name__ == '__main__':
