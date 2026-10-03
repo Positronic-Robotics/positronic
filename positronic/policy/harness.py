@@ -218,7 +218,7 @@ class Harness(pimm.ControlSystem):
             return {eval_keys.TERMINATED: False}
         return None
 
-    def _wait_for_next_tick(self, runtime: Executor, resume_at_ns: int | None) -> pimm.Run[tuple[Answer[Any], ...]]:
+    def _wait_for_next_tick(self, runtime: Executor, resume_at_ns: int) -> pimm.Run[tuple[Answer[Any], ...]]:
         """Return completions before advancing time; otherwise follow simulator ticks or poll real time.
 
         Shutdown is checked between episode iterations. Pending inference may delay shutdown;
@@ -233,8 +233,6 @@ class Harness(pimm.ControlSystem):
                     break
                 case WaitStatus.TIMED_OUT:
                     continue
-        if resume_at_ns is None:
-            resume_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9)
         # A positive real-time sleep gives this loop its own wake-up, independent of other loops' timers.
         delay_ns = max(1, resume_at_ns - runtime.time_ns)
         if runtime.has_pending:
@@ -269,9 +267,10 @@ class Harness(pimm.ControlSystem):
             while not should_stop.value and payload is None:
                 if completed or resume_at_ns is None or runtime.time_ns >= resume_at_ns:
                     resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
-                wake_at_ns = resume_at_ns
+                # No complete observation yet: read the sensors again after one poll period.
+                wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
                 if deadline_ns is not None:
-                    wake_at_ns = deadline_ns if wake_at_ns is None else min(wake_at_ns, deadline_ns)
+                    wake_at_ns = min(wake_at_ns, deadline_ns)
                 completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
                 if call := next(self.perform_task.incoming(), None):
                     call.set_exception(RuntimeError('An episode is already running'))
