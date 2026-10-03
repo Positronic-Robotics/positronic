@@ -12,13 +12,15 @@ test that the image starts with the network denied before you submit:
 
 ## Example images
 
-Every `positro/<vendor>` image on Docker Hub carries a vendor stack and an inference server for it.
-Each recipe below adds the weights, an offline environment, `EXPOSE 8000` and a start command:
+Every `positro/<vendor>-base` image on Docker Hub carries a vendor stack. Each recipe below adds the
+weights, the positronic source with an offline environment, `EXPOSE 8000` and a start command. The
+layers go from the least often changed to the most: base, weights, dependencies, source. A source
+change rebuilds and pushes the source layer only. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
-| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi` | `pi05_droid_jointpos`, the public checkpoint |
-| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t` | `nvidia/GR00T-N1.7-DROID` |
+| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
+| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM

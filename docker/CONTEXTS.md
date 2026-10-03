@@ -18,7 +18,7 @@
 | `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 `Dockerfile.submit-openpi` and `Dockerfile.submit-gr00t` build a policy image the platform runs on
-top of `positro/openpi` and `positro/gr00t`: weights baked, offline, serving on `:8000`. See
+top of `positro/openpi-base` and `positro/gr00t-base`: weights baked, offline, serving on `:8000`. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
 
 Build and push all: `make push`
