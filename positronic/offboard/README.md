@@ -169,7 +169,9 @@ This metadata tells the client:
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
-  the chunk's execution horizon. The harness emits each step's commands immediately.
+  the chunk's execution horizon. `RTCSchedule` asks for the next chunk while the current one runs,
+  and sends a prefix of the current chunk with each call. The harness emits each step's commands
+  immediately.
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
   preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
   and decodes whole chunks. Codec specs also support `"par"` composition.
@@ -255,6 +257,10 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
 }
 ```
 
+A request from `RTCSchedule` also holds `"prefix"`: a list of command dicts, in the format of `result`
+below. They are the commands the robot executes while the server computes. A request with no prefix has
+no `prefix` key.
+
 **Server → Client (Actions):**
 
 For the vendor deployments, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
@@ -282,8 +288,9 @@ Every command may carry a `mode`, itself a tagged mapping naming the control law
 }
 ```
 
-The server passes the encoded observation to `model(obs, session_id=...)`; codecs receive only the
-observation. An ID from another connection returns an error and closes the requesting session
+The server passes the encoded observation to `model(obs, session_id=...)`. A server codec converts a
+prefix to the model's action format with `encode_commands`, and the model reads it under `action_prefix`
+in `obs`. Only a codec with absolute actions converts a prefix; any other codec refuses the request. An ID from another connection returns an error and closes the requesting session
 before invoking the model. The other session stays open; no replacement session is created automatically.
 
 #### 4. End the session

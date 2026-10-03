@@ -38,6 +38,9 @@ ERROR = 'error'
 # is acknowledged with the same ID after the model releases the session's state.
 SESSION_ID = 'session_id'
 OBSERVATION = 'observation'
+# The commands a schedule asks the model to continue from, beside the observation. A request with no prefix has no
+# ``PREFIX`` key.
+PREFIX = 'prefix'
 END_SESSION = 'end_session'
 PROTOCOL_VERSION = 'protocol_version'
 

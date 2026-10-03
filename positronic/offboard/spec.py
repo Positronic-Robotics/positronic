@@ -8,6 +8,10 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.policy.base import Obs, Policy
 from positronic.policy.codec import Codec
 
+# The model input key that holds a prefix: the actions the model continues from, in the format it returns.
+# TODO: decide how a model declares that it reads a prefix, and refuse a prefix stack when it does not.
+ACTION_PREFIX = 'action_prefix'
+
 
 class Model(ABC):
     """A loaded inference callable and the resources it owns."""

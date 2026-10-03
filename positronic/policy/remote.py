@@ -15,7 +15,7 @@ from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import Commands, Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
@@ -45,6 +45,7 @@ def round_trip(
     obs: cabc.Mapping[str, Any],
     compress_images: bool,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    prefix: cabc.Sequence[Commands] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
@@ -54,7 +55,7 @@ def round_trip(
         prepared = prepare_obs(obs, compress_images, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
-            return session.infer(prepared)
+            return session.infer(prepared) if prefix is None else session.infer(prepared, prefix)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
             telemetry.set_attrs(span, **served)
@@ -120,9 +121,11 @@ class RemotePolicy(Policy):
             stack = declared_stack(meta, session.protocol_version)
             compress_images = bool(meta.get(offboard_keys.COMPRESS_IMAGES))
 
-            def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+            def infer(
+                obs: cabc.Mapping[str, Any], prefix: cabc.Sequence[Commands] | None = None
+            ) -> list[dict[str, Any]] | dict[str, Any]:
                 with connection_lock:
-                    return round_trip(session, obs, compress_images, self._jpeg_quality)
+                    return round_trip(session, obs, compress_images, self._jpeg_quality, prefix)
 
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield

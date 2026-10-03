@@ -61,6 +61,9 @@ class ObservationCodec(Codec):
     def _decode_single(self, data: dict) -> dict:
         return {}
 
+    def encode_commands(self, commands):
+        return [{} for _ in commands]
+
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
