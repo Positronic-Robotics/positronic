@@ -48,7 +48,11 @@ uv run positronic-data-collection sim \
 
 Open Oculus Browser, navigate to `https://<host-ip>:5005/`. Browser shows "Dangerous connection" warning (expected with self-signed certificates) – click Advanced → Proceed. Click "Enter AR" and approve permissions.
 
-**Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort recording, return the arm to its start pose; in sim the scene is drawn again too), Right trigger (gripper).
+**Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort recording, return the arm to its start pose; in sim the scene is drawn again too), Right trigger (gripper), Left stick press (abort recording, put the arm on its stow pose).
+
+**Left stick press ends a session.** An arm with no brakes is held only while it is driven, so it falls from
+wherever it hangs when the motors stop. The stow pose is the one it can be powered down on. A station names it
+with `--stow_joints`; one that names none leaves the button doing nothing.
 
 ## Collection Workflow
 
