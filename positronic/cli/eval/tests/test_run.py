@@ -11,6 +11,7 @@ import pos3
 import pytest
 
 import pimm
+from pimm.tests.testing import ExitRecorder
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
@@ -56,6 +57,37 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
 
 
+class _FailingPolicy(Policy):
+    """Answers one observation, then fails on the next one."""
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        yield Step({}, runtime.time_ns + 100_000_000)
+        raise ConnectionError('the policy server closed the connection')
+
+
+@pytest.mark.timeout(30.0)
+def test_a_failed_episode_stops_the_env_before_main_raises():
+    events = []
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        control_systems=(ExitRecorder(events),),  # stands in for the env proxy
+        simulated=True,
+    )
+    task = Task(instruction_source='stack', timeout_sec=1.0)
+    try:
+        main(policy=_FailingPolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, [task]))])
+    except ConnectionError:
+        events.append('raised')
+
+    assert events == ['stopped', 'closed', 'raised']
+
+
 class _EpisodeStub(pimm.ControlSystem):
     """Stands in for the harness: records the task it was asked for, and answers a round later."""
 
@@ -86,6 +118,29 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
             pass
 
     assert stub.asked == tasks
+
+
+class _StoppingHandler(pimm.ControlSystem):
+    """Stands in for a harness that stops during an episode: it fails the call it holds, and returns."""
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+
+    def run(self, should_stop, clock):
+        while True:
+            for call in self.perform_task.incoming():
+                call.set_exception(pimm.calls.HandlerStopped())
+                return
+            yield pimm.Sleep(0.01)
+
+
+@pytest.mark.timeout(3.0)
+def test_the_driver_returns_when_the_world_stops_during_an_episode():
+    driver = TaskDriver(partial(iter, [Task(instruction_source='stack', timeout_sec=0.05)]), _IdlePolicy(), None)
+    handler = _StoppingHandler()
+    with pimm.World(virtual_time=True) as world:
+        world.connect(driver.perform_task, handler.perform_task)
+        world.run([driver, handler])
 
 
 # `positronic.cli.eval` exports a command named `run`, which takes the attribute path to this module.

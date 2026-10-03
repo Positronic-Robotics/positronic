@@ -79,6 +79,8 @@ things happened under the hood:
   loop through the `should_stop` signal so they can exit gracefully.
 - A control system RETURNING raises that same signal, background or foreground alike. So stopping
   a world is a supervisor loop returning when it decides the run is over.
+- A main-process control system RAISING an `Exception` raises that same signal too. The others
+  stop through their own exit path, and the world then raises the error again to its caller.
 
 That is the whole workflow: build small `ControlSystem` classes, `connect` their
 signals, and `start` whichever group you want to supervise directly. Everything
