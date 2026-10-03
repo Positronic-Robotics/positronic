@@ -95,9 +95,8 @@ class Harness(pimm.ControlSystem):
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the call with that error, and the episode does not start.
     A ``pimm.SignalError`` on an observation discards the episode before the policy reads it, and the answer
-    raises that error. In both cases the harness keeps serving calls.
-    Between episodes, the harness asks a device to be ready as soon as the observation of the same name carries a
-    ``pimm.SignalError``, one call at a time, and again while the error stays.
+    raises that error. In both cases the harness keeps serving calls. Between episodes it repairs a device in error
+    (``_ready_devices_in_error``).
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
