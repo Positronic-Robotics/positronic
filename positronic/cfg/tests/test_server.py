@@ -5,6 +5,7 @@ import rerun.blueprint as rrb
 
 from positronic import keys
 from positronic.cfg.server import robot_replay_layout
+from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.server.dataset_utils import _build_blueprint, _collect_signal_groups
@@ -31,7 +32,7 @@ def _charted_signals(item: Any) -> set[str]:
 def test_the_robot_replay_layout_charts_every_signal_of_a_single_arm(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for name, width in _ARM_SIGNAL_WIDTHS.items():
-            writer.append(name, np.zeros(width), {RECORDED_TIME: 1000})
+            writer.append(name, np.zeros(width), Time(**{RECORDED_TIME: 1000}))
     ep = DiskEpisode(tmp_path / 'ep')
     layout = robot_replay_layout.instantiate()
 
