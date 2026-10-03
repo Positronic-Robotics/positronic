@@ -20,12 +20,7 @@ from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
-    Chart,
-    ChartGroup,
-    Pane,
     ReplayLayout,
-    Series,
-    TopView,
     _build_blueprint,
     _collect_signal_groups,
     _decimation_indices,
@@ -287,14 +282,8 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     assert tabs == {'progress': 1, 'robot': None}
 
 
-def _layout(*groups: ChartGroup, show_unnamed_signals: bool = True) -> ReplayLayout:
-    return ReplayLayout(
-        top_row_share=3,
-        bottom_row_share=1,
-        top_row=(Pane(TopView.TRAJECTORY, share=1), Pane(TopView.CAMERAS, share=3)),
-        bottom_row=groups,
-        show_unnamed_signals=show_unnamed_signals,
-    )
+def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals: bool = True) -> ReplayLayout:
+    return ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals)
 
 
 def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout) -> Any:
@@ -309,33 +298,33 @@ def _line_names(view: Any) -> dict[str, list[str]]:
     return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
 
 
-_GRIP = ChartGroup('Grip', (Chart('Grip', (Series(keys.TARGET_GRIP, 'Target'), Series(keys.GRIP, 'Current'))),))
+_GRIP: dict[str, list[str] | dict[str, str]] = {'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP}}
 
 
-def test_a_layout_puts_its_panes_in_order_and_at_its_shares_over_the_charts(tmp_path):
+def test_a_layout_puts_the_3d_view_left_of_the_cameras_at_its_shares_over_the_charts(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.EE_POSE: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
     signals = replace(_collect_signal_groups(ep), videos=['camera'], camera_aspects={'camera': 16 / 9})
 
-    top, bottom = _root(signals, ep, _layout(_GRIP)).contents
+    root = _root(signals, ep, _layout(_GRIP))
 
+    top, bottom = root.contents
+    assert list(root.row_shares) == [3, 1]
     assert [type(view) for view in top.contents] == [rrb.Spatial3DView, rrb.Grid]
     assert list(top.column_shares) == [1, 3]
     assert isinstance(bottom, rrb.Horizontal)
 
 
-def test_a_pane_with_no_signal_to_show_is_left_out(tmp_path):
+def test_a_top_view_with_no_signal_to_show_is_left_out(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.GRIP: 1})
 
     assert [type(row) for row in _root(_collect_signal_groups(ep), ep, _layout(_GRIP)).contents] == [rrb.Horizontal]
 
 
-def test_a_group_shows_its_charts_as_tabs_under_its_name_and_a_lone_chart_as_itself(tmp_path):
+def test_a_group_shows_its_charts_as_tabs_under_its_name_where_it_first_appears(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.JOINTS: 7, keys.JOINT_VEL: 7, keys.GRIP: 1, keys.TARGET_GRIP: 1})
-    state = ChartGroup(
-        'Robot State', (Chart('Joints', (Series(keys.JOINTS),)), Chart('Joints Vel', (Series(keys.JOINT_VEL),)))
-    )
+    charts = {'Robot State/Joints': [keys.JOINTS], **_GRIP, 'Robot State/Joints Vel': [keys.JOINT_VEL]}
 
-    group, grip = _bottom_row(ep, _layout(state, _GRIP, show_unnamed_signals=False))
+    group, grip = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
 
     (named,) = group.contents
     assert named.name == 'Robot State'
@@ -344,36 +333,41 @@ def test_a_group_shows_its_charts_as_tabs_under_its_name_and_a_lone_chart_as_its
     assert grip.name == 'Grip'
 
 
-def test_a_series_label_names_its_line_and_prefixes_each_value_of_a_wider_signal(tmp_path):
+def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
-    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.JOINTS: 2, keys.TARGET_JOINTS: 2}, static)
-    series = (Series(keys.GRIP, 'Current'), Series(keys.JOINTS, 'State'), Series(keys.TARGET_JOINTS))
+    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, keys.JOINTS: 2, keys.TARGET_JOINTS: 2}
+    ep = _episode(tmp_path / 'ep', widths, static)
+    charts = {
+        'Labelled': {'Current': keys.GRIP, 'State': keys.JOINTS},
+        'Listed': [keys.TARGET_GRIP, keys.TARGET_JOINTS],
+    }
 
-    (view,) = _bottom_row(ep, _layout(ChartGroup('Arm', (Chart('Arm', series),)), show_unnamed_signals=False))
+    labelled, listed = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
 
-    assert _line_names(view) == {
+    assert _line_names(labelled) == {
         f'/signals/{keys.GRIP}': ['Current'],
         f'/signals/{keys.JOINTS}/0': ['State j1'],
         f'/signals/{keys.JOINTS}/1': ['State j2'],
     }
+    assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
 
 
-def test_a_chart_plots_the_series_the_episode_records_and_a_group_with_none_is_left_out(tmp_path):
+def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_left_out(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.GRIP: 1})
-    commands = ChartGroup('Commands', (Chart('Joints', (Series(keys.TARGET_JOINTS),)),))
+    charts = {'Commands/Joints': [keys.TARGET_JOINTS], **_GRIP}
 
-    (view,) = _bottom_row(ep, _layout(commands, _GRIP, show_unnamed_signals=False))
+    (view,) = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
 
     assert view.contents == [f'/signals/{keys.GRIP}/**']
 
 
-def test_the_signals_no_chart_plots_follow_the_groups_by_prefix(tmp_path):
+def test_the_signals_no_chart_plots_follow_the_charts_by_prefix(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'progress.placed': 1})
 
     assert [view.name for view in _bottom_row(ep, _layout(_GRIP))] == ['Grip', 'progress']
 
 
-def test_with_unnamed_signals_off_only_the_groups_show(tmp_path):
+def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'wide': 33})
 
     assert [view.name for view in _bottom_row(ep, _layout(_GRIP, show_unnamed_signals=False))] == ['Grip']
@@ -381,9 +375,8 @@ def test_with_unnamed_signals_off_only_the_groups_show(tmp_path):
 
 def test_a_text_signal_a_chart_names_still_shows_as_without_a_layout(tmp_path):
     ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
-    progress = ChartGroup('Progress', (Chart('State', (Series('progress.state'),)),))
 
-    views = _bottom_row(ep, _layout(progress))
+    views = _bottom_row(ep, _layout({'Progress/State': ['progress.state']}))
 
     assert [type(view) for view in views] == [rrb.TimeSeriesView, rrb.TextLogView]
     assert views[0].origin == '/signals/progress.state'

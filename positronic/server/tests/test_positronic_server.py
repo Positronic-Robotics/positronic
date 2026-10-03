@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
-from positronic.server.dataset_utils import Chart, ChartGroup, ReplayLayout, Series
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
@@ -198,22 +198,23 @@ def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
     assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
 
 
-_GRIP_LAYOUT = ReplayLayout(
-    top_row_share=3,
-    bottom_row_share=1,
-    top_row=(),
-    bottom_row=(ChartGroup('Grip', (Chart('Grip', (Series(keys.GRIP),)),)),),
-)
+_GRIP_LAYOUT = ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
 def test_a_cached_rrd_built_under_another_layout_is_not_served(rrd_cache):
+    reordered = {'Joints': [keys.JOINTS], 'Grip': [keys.GRIP]}
     assert rrd_cache(30.0, 640) != rrd_cache(30.0, 640, _GRIP_LAYOUT)
     assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, show_unnamed_signals=False))
-    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, bottom_row_share=2))
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, row_shares=(3, 2)))
+    assert rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts={'Grip': [keys.GRIP], 'Joints': [keys.JOINTS]})) != (
+        rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts=reordered))
+    )
 
 
 def test_an_equal_layout_reaches_the_same_cached_rrd(rrd_cache):
-    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) == rrd_cache(30.0, 640, replace(_GRIP_LAYOUT))
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) == rrd_cache(
+        30.0, 640, replace(_GRIP_LAYOUT, charts={'Grip': [keys.GRIP]})
+    )
 
 
 def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monkeypatch):

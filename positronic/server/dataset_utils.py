@@ -10,7 +10,6 @@ from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
@@ -286,55 +285,19 @@ def _series_columns(cells: int, height_share: float) -> int:
     return min(range(1, cells + 1), key=miss)
 
 
-class TopView(StrEnum):
-    """A view the top row of a replay can hold."""
-
-    CAMERAS = 'cameras'
-    TRAJECTORY = 'trajectory'
-
-
-@dataclass(frozen=True)
-class Pane:
-    """A view in the top row, and its share of the row's width."""
-
-    view: TopView
-    share: float
-
-
-@dataclass(frozen=True)
-class Series:
-    """A numeric signal in a chart. ``label`` names its line, and prefixes each value's name in a signal of several."""
-
-    signal: str
-    label: str | None = None
-
-
-@dataclass(frozen=True)
-class Chart:
-    name: str
-    series: tuple[Series, ...]
-
-
-@dataclass(frozen=True)
-class ChartGroup:
-    """Charts in one cell of the bottom row: tabs named by the charts under a tab named by the group, or one chart."""
-
-    name: str
-    charts: tuple[Chart, ...]
-
-
 @dataclass(frozen=True)
 class ReplayLayout:
-    """The views of a replay: a row of panes over a row of chart groups, each row in order from left to right.
+    """The shares of a replay's rows and of its top row, and the signals each chart of the bottom row plots.
 
-    A view or a series that no signal of the episode fills is left out. With ``show_unnamed_signals``, the signals
-    no chart plots follow the groups, grouped by their name's prefix.
+    The top row holds the 3D view and, on its right, the camera grid. ``charts`` holds the bottom row in order. A key
+    ``Group/Chart`` puts the chart as a tab in that group, where the group first appears; any other key is a chart
+    of its own. A list names each line by its signal, and a dict by its key. A chart with no signal in the episode
+    is left out. With ``show_unnamed_signals``, the signals that no chart plots follow, grouped by name prefix.
     """
 
-    top_row_share: float
-    bottom_row_share: float
-    top_row: tuple[Pane, ...]
-    bottom_row: tuple[ChartGroup, ...]
+    row_shares: tuple[float, float]  # top row, bottom row
+    top_shares: tuple[float, float]  # 3D view, camera grid
+    charts: dict[str, list[str] | dict[str, str]]
     show_unnamed_signals: bool = True
 
 
@@ -435,63 +398,69 @@ def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
     return rrb.Vertical(*rows, row_shares=row_shares)
 
 
-def _pane_view(view: TopView, signals: EpisodeSignals, ep: Episode) -> rrb.View | rrb.Container | None:
-    match view:
-        case TopView.CAMERAS:
-            return rrb.Grid(*_image_views(signals)) if signals.videos else None
-        case TopView.TRAJECTORY:
-            return _trajectory_view(signals, ep) if signals.poses else None
+def _lines(signals: list[str] | dict[str, str]) -> list[tuple[str | None, str]]:
+    """Each line of a chart: its label, None where a list names it by its signal, and its signal."""
+    return list(signals.items()) if isinstance(signals, dict) else [(None, signal) for signal in signals]
 
 
-def _chart_view(chart: Chart, signals: EpisodeSignals, ep: Episode) -> rrb.TimeSeriesView | None:
-    shown = [series for series in chart.series if series.signal in signals.plotted]
+def _chart_view(
+    name: str, lines: list[tuple[str | None, str]], signals: EpisodeSignals, ep: Episode
+) -> rrb.TimeSeriesView | None:
+    shown = [(label, signal) for label, signal in lines if signal in signals.plotted]
     if not shown:
         return None
     line_names: dict[str, str] = {}
-    for series in shown:
-        if series.label is None:
-            continue
-        path = f'/signals/{series.signal}'
-        width = signals.plotted[series.signal]
+    for label, signal in shown:
+        path = f'/signals/{signal}'
+        width = signals.plotted[signal]
         if width == 1:
-            line_names[path] = series.label
-            continue
-        names = _value_names(series.signal, signals, ep)
-        line_names.update({f'{path}/{i}': f'{series.label} {names[i] if names else i}' for i in range(width)})
+            line_names[path] = signal if label is None else label
+        elif label is not None:
+            names = _value_names(signal, signals, ep)
+            line_names.update({f'{path}/{i}': f'{label} {names[i] if names else i}' for i in range(width)})
     return rrb.TimeSeriesView(
-        name=chart.name,
+        name=name,
         origin='/signals',
-        contents=[f'/signals/{series.signal}/**' for series in shown],
-        overrides={path: rr.SeriesLines(names=[name]) for path, name in line_names.items()},
-        plot_legend=rrb.PlotLegend(visible=sum(signals.plotted[series.signal] for series in shown) > 1),
+        contents=[f'/signals/{signal}/**' for _, signal in shown],
+        overrides={path: rr.SeriesLines(names=[line]) for path, line in line_names.items()},
+        plot_legend=rrb.PlotLegend(visible=sum(signals.plotted[signal] for _, signal in shown) > 1),
         axis_y=rrb.ScalarAxis(zoom_lock=True),
     )
 
 
-def _group_view(group: ChartGroup, signals: EpisodeSignals, ep: Episode) -> rrb.View | rrb.Container | None:
-    charts = [view for chart in group.charts if (view := _chart_view(chart, signals, ep)) is not None]
-    if not charts:
-        return None
+def _chart_cells(layout: ReplayLayout, signals: EpisodeSignals, ep: Episode) -> list[rrb.View | rrb.Container]:
+    """The bottom row's cells: each group of charts, and each chart in no group."""
+    cells: dict[tuple[str, bool], list[rrb.TimeSeriesView]] = {}
+    for key, chart_signals in layout.charts.items():
+        group, slash, chart = key.partition('/')
+        view = _chart_view(chart if slash else key, _lines(chart_signals), signals, ep)
+        if view is not None:
+            cells.setdefault((group if slash else key, bool(slash)), []).append(view)
     # The viewer titles a tab by its child's name and draws no container's own name, so the outer tab carries it.
-    return charts[0] if len(charts) == 1 else rrb.Tabs(rrb.Tabs(*charts, name=group.name))
+    return [rrb.Tabs(rrb.Tabs(*views, name=name)) if grouped else views[0] for (name, grouped), views in cells.items()]
 
 
 def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> rrb.Vertical:
-    panes = [(pane, view) for pane in layout.top_row if (view := _pane_view(pane.view, signals, ep)) is not None]
-    groups = [view for group in layout.bottom_row if (view := _group_view(group, signals, ep)) is not None]
+    trajectory = _trajectory_view(signals, ep) if signals.poses else None
+    cameras = rrb.Grid(*_image_views(signals)) if signals.videos else None
+    top = [
+        (view, share) for view, share in zip((trajectory, cameras), layout.top_shares, strict=True) if view is not None
+    ]
+    bottom = _chart_cells(layout, signals, ep)
     if layout.show_unnamed_signals:
-        charted = (series.signal for group in layout.bottom_row for chart in group.charts for series in chart.series)
-        groups.extend(_signal_views(signals, placed={sig for sig in charted if sig in signals.plotted}))
+        charted = {signal for lines in layout.charts.values() for _, signal in _lines(lines)}
+        bottom.extend(_signal_views(signals, placed=charted & signals.plotted.keys()))
 
+    top_share, bottom_share = layout.row_shares
     rows: list[rrb.View | rrb.Container] = []
     row_shares = []
-    if panes:
-        views = [view for _, view in panes]
-        rows.append(views[0] if len(views) == 1 else rrb.Horizontal(*views, column_shares=[p.share for p, _ in panes]))
-        row_shares.append(layout.top_row_share)
-    if groups:
-        rows.append(rrb.Horizontal(*groups))
-        row_shares.append(layout.bottom_row_share)
+    if top:
+        views = [view for view, _ in top]
+        rows.append(views[0] if len(views) == 1 else rrb.Horizontal(*views, column_shares=[s for _, s in top]))
+        row_shares.append(top_share)
+    if bottom:
+        rows.append(rrb.Horizontal(*bottom))
+        row_shares.append(bottom_share)
     return rrb.Vertical(*rows, row_shares=row_shares)
 
 
