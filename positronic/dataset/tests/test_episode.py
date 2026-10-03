@@ -649,6 +649,32 @@ def test_writer_rejects_invalid_timestamps_without_recording(tmp_path, data, tim
 
 
 @pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_failed_first_append_leaves_no_signal(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path, main_timeline='world') as writer:
+        with pytest.raises(ValueError, match='Missing timestamp'):
+            writer.append('rejected', data, {'wall': 10})
+        writer.append('valid', 1, {'world': 20})
+    episode = DiskEpisode(path)
+    assert set(episode.signals) == {'valid'}
+    assert episode.start_ts == 20
+    assert episode.last_ts == 20
+    assert not list(path.glob('rejected.*'))
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_failed_first_append_does_not_reserve_name(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path, main_timeline='world') as writer:
+        with pytest.raises(ValueError, match='Missing timestamp'):
+            writer.append('rejected', data, {'wall': 10})
+        writer.set_static('rejected', 'no samples')
+    episode = DiskEpisode(path)
+    assert episode['rejected'] == 'no samples'
+    assert not episode.signals
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
 def test_writer_captures_timestamps(tmp_path, data):
     path = tmp_path / 'episode'
     timestamps = {'world': 10, 'wall': 20}
