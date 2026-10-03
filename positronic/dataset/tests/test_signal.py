@@ -563,6 +563,7 @@ def test_main_name_is_stored_without_changing_signal_queries(tmp_path, count):
             writer.append(i, {'world': 100 + i * 10, 'wall': 1000 + i * 10})
     assert pq.read_schema(path).metadata[TIMELINE_METADATA_KEY] == b'world'
     signal = SimpleSignal(path)
+    assert signal.main_timeline == 'world'
     assert list(signal.keys()) == [100 + i * 10 for i in range(count)]
     if count:
         assert signal.time[115] == (1, 110)
@@ -574,6 +575,7 @@ def test_default_main_name_and_legacy_file_queries(tmp_path):
     assert table.schema.metadata[TIMELINE_METADATA_KEY] == RECORDED_TIME.encode()
     pq.write_table(table.replace_schema_metadata(None), path)
     signal = SimpleSignal(path)
+    assert signal.main_timeline == RECORDED_TIME
     assert signal.time[150] == (1, 100)
     assert signal.start_ts == 100
     assert signal.last_ts == 200

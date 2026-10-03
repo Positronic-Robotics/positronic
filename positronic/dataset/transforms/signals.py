@@ -37,6 +37,10 @@ class Elementwise(Signal[U]):
         self._signal = signal
         self._fn = fn
 
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
+
     def __len__(self) -> int:
         return len(self._signal)
 
@@ -94,6 +98,10 @@ class IndexOffsets(Signal[tuple]):
         self._min_off = int(np.min(self._offs))
         self._max_off = int(np.max(self._offs))
         self._include_ref_ts = bool(include_ref_ts)
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
 
     def __len__(self) -> int:
         n = len(self._signal)
@@ -186,6 +194,10 @@ class TimeOffsets(Signal[tuple]):
         self._bounds_ready = False
         self._start_offset = 0
         self._last_index = -1
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -314,6 +326,13 @@ class Join(Signal[tuple]):
         self._starts: list[int] = [0] * len(self._signals)
         self._length = 0
         self._union_ts: np.ndarray | None = None
+
+    @property
+    def main_timeline(self) -> str:
+        main_timeline = self._signals[0].main_timeline
+        if any(signal.main_timeline != main_timeline for signal in self._signals[1:]):
+            raise ValueError('Joined signals have different main timelines')
+        return main_timeline
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:

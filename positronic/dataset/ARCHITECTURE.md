@@ -29,6 +29,8 @@ An Episode has three kinds of data with distinct roles:
 on each append, choose one main timeline at construction (`recorded` by default), and persist
 the main timeline's name in Parquet schema metadata. Timeline names are fixed per signal. The read API
 uses the main timeline's timestamp column.
+`Signal.main_timeline` exposes that name; views and remote access preserve it. Migration and conversion
+require `recorded` as the main timeline.
 
 ## Identity
 

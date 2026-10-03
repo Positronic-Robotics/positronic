@@ -12,6 +12,8 @@ special handling. Instead of materialising individual frames, the underlying
 verbatim so the resulting dataset preserves the original video assets without
 re-encoding.
 
+All source signals must use the recorded main timeline.
+
 Example:
 
     python -m utilities.convert_ds --original_ds.path /path/to/transformed_source \
@@ -74,6 +76,10 @@ def main(output_path: str, original_ds: Dataset | None = None):
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
+                    assert signal.main_timeline == RECORDED_TIME, (
+                        f'Cannot convert signal {key!r}: main timeline must be {RECORDED_TIME!r}, '
+                        f'got {signal.main_timeline!r}'
+                    )
                     if signal.kind == Kind.IMAGE:
                         assert isinstance(signal, VideoSignal)
                         shutil.copy(signal.video_path, ew.path / signal.video_path.name)

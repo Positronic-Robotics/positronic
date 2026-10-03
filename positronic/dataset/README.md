@@ -78,7 +78,10 @@ with dataset_writer.new_episode(main_timeline="world") as episode:
 stored in Parquet schema metadata under `positronic.timeline`. Its timestamps use the `timestamp`
 column for scalar/vector signals and `ts_ns` for video; other coordinates use `ts_ns.<name>` columns.
 Readers query the main timeline through `signal.time[...]`, `signal.keys()`, and `episode.time[...]`.
-Additional coordinates are stored but have no query API. Files without this metadata remain readable.
+`signal.main_timeline` exposes its name, including through views and HTTP. Files without this metadata
+use `"recorded"`. Additional coordinates are stored but have no query API.
+
+Dataset migration and `convert_ds` assert that every source signal's main timeline is `"recorded"`.
 
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
@@ -91,6 +94,9 @@ IndicesLike = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike = Sequence[int] | np.ndarray
 
 class Signal[T]:
+    @property
+    def main_timeline(self) -> str: ...
+
     # Minimal abstract interface (implementations must provide):
     def __len__(self) -> int: ...                # number of records
     def _ts_at(self, indices: IndicesLike) -> IndicesLike: ...         # list-like only

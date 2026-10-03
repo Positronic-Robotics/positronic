@@ -27,7 +27,7 @@ from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentati
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
-    """Migrate any dataset to local or S3 storage.
+    """Migrate a dataset whose signals use the recorded main timeline to local or S3 storage.
 
     Signals with encoded representations (e.g. video) are transferred as raw bytes
     without re-encoding. Static fields are materialized into static.json.
@@ -45,6 +45,10 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
+                    assert signal.main_timeline == RECORDED_TIME, (
+                        f'Cannot migrate signal {key!r}: main timeline must be {RECORDED_TIME!r}, '
+                        f'got {signal.main_timeline!r}'
+                    )
                     if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
                         _write_encoded_signal(signal, ew.path, key)
                     else:

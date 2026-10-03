@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from positronic import geom
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import (
     Elementwise,
     IndexOffsets,
@@ -13,6 +14,7 @@ from positronic.dataset.transforms import (
     recode_transform,
     view,
 )
+from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 from positronic.geom import Rotation
 
 from ...tests.utils import DummySignal
@@ -47,6 +49,37 @@ def _times10(x):
     if isinstance(x, list):
         return [v * 10 for v in x]
     return x * 10
+
+
+@pytest.mark.parametrize(
+    'transform',
+    [
+        lambda signal: signal[:],
+        lambda signal: signal.time[[1000, 2000]],
+        lambda signal: Elementwise(signal, _times10),
+        lambda signal: IndexOffsets(signal, 0),
+        lambda signal: TimeOffsets(signal, 0),
+        lambda signal: Join(signal, signal),
+    ],
+    ids=['slice', 'sample', 'elementwise', 'index-offsets', 'time-offsets', 'join'],
+)
+def test_views_preserve_main_timeline(tmp_path, transform):
+    path = tmp_path / 'signal.parquet'
+    with SimpleSignalWriter(path, main_timeline='world') as writer:
+        writer.append(1, {'world': 1000})
+        writer.append(2, {'world': 2000})
+    assert transform(SimpleSignal(path)).main_timeline == 'world'
+
+
+def test_join_does_not_report_a_main_timeline_for_different_clocks(tmp_path):
+    signals = []
+    for main_timeline in [RECORDED_TIME, 'world']:
+        path = tmp_path / f'{main_timeline}.parquet'
+        with SimpleSignalWriter(path, main_timeline=main_timeline) as writer:
+            writer.append(1, {main_timeline: 1000})
+        signals.append(SimpleSignal(path))
+    with pytest.raises(ValueError, match='different main timelines'):
+        _ = Join(*signals).main_timeline
 
 
 def test_elementwise(sig_simple):

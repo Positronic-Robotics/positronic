@@ -376,6 +376,7 @@ def test_video_main_name_is_stored_without_changing_queries(video_paths, count):
             writer.append(create_frame(i * 100), {'camera': 1000 + i * 100})
     assert pq.read_schema(video_paths['frames']).metadata[TIMELINE_METADATA_KEY] == b'camera'
     signal = VideoSignal(video_paths['video'], video_paths['frames'])
+    assert signal.main_timeline == 'camera'
     assert list(signal.keys()) == [1000 + i * 100 for i in range(count)]
     if count:
         frame, ts = signal.time[1050]
@@ -388,6 +389,8 @@ def test_legacy_video_queries(video_paths):
     table = pq.read_table(video_paths['frames'])
     assert table.schema.metadata[TIMELINE_METADATA_KEY] == RECORDED_TIME.encode()
     pq.write_table(table.replace_schema_metadata(None), video_paths['frames'])
-    frame, ts = VideoSignal(video_paths['video'], video_paths['frames']).time[1000]
+    signal = VideoSignal(video_paths['video'], video_paths['frames'])
+    assert signal.main_timeline == RECORDED_TIME
+    frame, ts = signal.time[1000]
     assert ts == 1000
     assert_frames_equal(frame, create_frame(40))

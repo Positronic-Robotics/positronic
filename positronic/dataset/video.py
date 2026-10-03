@@ -376,6 +376,12 @@ class VideoSignal(Signal[np.ndarray]):
         self._timestamps = None
         self._navigator: _VideoNavigator | None = None
 
+    @property
+    @lru_cache(maxsize=1)
+    def main_timeline(self) -> str:
+        metadata = pq.read_schema(self.frames_index_path).metadata or {}
+        return metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
+
     def _load_timestamps(self):
         """Lazily load timestamps from the index file."""
         if self._timestamps is None:

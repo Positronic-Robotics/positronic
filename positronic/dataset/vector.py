@@ -1,5 +1,6 @@
 from collections import defaultdict
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -35,6 +36,12 @@ class SimpleSignal(Signal[T]):
         self._timestamps: np.ndarray | None = None
         self._values: np.ndarray | None = None
         self._bounds: tuple[int, int, int] | None = None  # (first_ts, last_ts, num_rows)
+
+    @property
+    @lru_cache(maxsize=1)
+    def main_timeline(self) -> str:
+        metadata = pq.read_schema(self.filepath).metadata or {}
+        return metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
 
     def _load_bounds(self):
         """Load signal bounds from parquet row-group statistics (reads only the file footer)."""

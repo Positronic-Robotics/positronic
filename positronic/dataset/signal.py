@@ -11,6 +11,7 @@ import numpy as np
 
 RECORDED_TIME = 'recorded'
 TIMELINE_METADATA_KEY = b'positronic.timeline'
+MAIN_TIMELINE_KEY = 'main_timeline'
 
 
 T = TypeVar('T')
@@ -163,6 +164,11 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     # Public API
 
     @property
+    def main_timeline(self) -> str:
+        """Name of the timeline used by the time query API."""
+        return RECORDED_TIME
+
+    @property
     def start_ts(self) -> int:
         if len(self) == 0:
             raise ValueError('Signal is empty')
@@ -307,6 +313,10 @@ class _SignalView(Signal[T], Generic[T]):
         assert timestamps is None or start_ts is None, 'Only one of timestamps or start_ts can be provided'
         self._timestamps = timestamps
         self._start_ts = start_ts
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
 
     @property
     def meta(self) -> SignalMeta:
