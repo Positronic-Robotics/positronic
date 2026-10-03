@@ -17,7 +17,8 @@ from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
-from positronic.dataset.signal import RECORDED_TIME, TIMELINES_KEY, SupportsEncodedRepresentation, Time
+from positronic.dataset.signal import RECORDED_TIME, TIMELINES_KEY, SupportsEncodedRepresentation
+from positronic.dataset.time import Time
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize

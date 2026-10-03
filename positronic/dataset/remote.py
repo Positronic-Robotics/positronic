@@ -13,7 +13,8 @@ from positronic.utils.serialization import deserialize
 
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer
-from .signal import TIMELINES_KEY, IndicesLike, Kind, Signal, SignalMeta, Time, TimeArray, validate_queries
+from .signal import TIMELINES_KEY, IndicesLike, Kind, Signal, SignalMeta
+from .time import Time, TimeArray, validate_queries
 
 T = TypeVar('T')
 API_PREFIX = '/api/v2'

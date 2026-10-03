@@ -22,7 +22,8 @@ import numpy as np
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
-from positronic.dataset.signal import RECORDED_TIME, Signal, Time
+from positronic.dataset.signal import RECORDED_TIME, Signal
+from positronic.dataset.time import Time
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection

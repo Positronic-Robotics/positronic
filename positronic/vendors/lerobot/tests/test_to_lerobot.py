@@ -4,7 +4,8 @@ import os
 import numpy as np
 import pytest
 
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':

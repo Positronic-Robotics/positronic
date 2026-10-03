@@ -16,7 +16,8 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset
 from positronic.dataset.remote import API_PREFIX, SIGNAL_BOUNDS_KEY, encode_times
-from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation, Time, validate_timelines
+from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation
+from positronic.dataset.time import Time, validate_timelines
 from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None

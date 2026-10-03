@@ -28,7 +28,8 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES
 
 

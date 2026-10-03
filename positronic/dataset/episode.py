@@ -5,7 +5,8 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar
 
-from .signal import Signal, Time, TimeGrid, as_time, validate_queries, validate_timelines
+from .signal import Signal
+from .time import Time, TimeGrid, as_time, validate_queries, validate_timelines
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.

@@ -34,7 +34,8 @@ from .episode import (
     _static_decode_hook,
     _StaticEncoder,
 )
-from .signal import Signal, Time
+from .signal import Signal
+from .time import Time
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 

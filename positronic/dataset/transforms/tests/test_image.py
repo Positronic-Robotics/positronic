@@ -1,6 +1,7 @@
 import numpy as np
 
-from positronic.dataset.signal import RECORDED_TIME, Kind, Time
+from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import image
 
 from ...tests.utils import DummySignal

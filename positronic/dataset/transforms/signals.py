@@ -8,7 +8,8 @@ from numpy.typing import DTypeLike
 from positronic import geom
 from positronic.utils.lazy import LazySequence, lazy_sequence
 
-from ..signal import IndicesLike, Signal, Time, TimeArray, as_time, validate_timelines
+from ..signal import IndicesLike, Signal
+from ..time import Time, TimeArray, as_time, validate_timelines
 
 T = TypeVar('T')
 U = TypeVar('U')

@@ -12,7 +12,8 @@ from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import META_CREATED_TS_NS, Episode
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.offboard import keys as offboard_keys
 from positronic.policy import keys as policy_keys

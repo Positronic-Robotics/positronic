@@ -15,7 +15,8 @@ import pyarrow.parquet as pq
 from av.container import OutputContainer
 from av.video.stream import VideoStream
 
-from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter, Time
+from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
+from .time import Time
 from .vector import ParquetTimeIndex, timestamp_table
 
 

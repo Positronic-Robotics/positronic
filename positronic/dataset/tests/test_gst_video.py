@@ -7,7 +7,8 @@ import pytest
 
 from positronic.cfg.video_encoder import jetson_h264
 from positronic.dataset.gst_video import GST_INSPECT, GST_LAUNCH, GstH264Encoder, RawFormat
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 
 # The software stand-in for the Jetson chain, with the same frame budget

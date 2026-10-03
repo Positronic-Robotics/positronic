@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter

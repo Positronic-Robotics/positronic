@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from positronic import geom
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import (
     Elementwise,
     IndexOffsets,

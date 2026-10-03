@@ -8,8 +8,9 @@ import pytest
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
-from positronic.dataset.signal import RECORDED_TIME, Time
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder

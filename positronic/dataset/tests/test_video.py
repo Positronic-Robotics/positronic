@@ -8,7 +8,8 @@ import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
 
-from positronic.dataset.signal import RECORDED_TIME, Kind, Time
+from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.time import Time
 from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY
 from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
 

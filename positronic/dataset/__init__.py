@@ -1,6 +1,7 @@
 from .dataset import CachedDataset, Dataset, DatasetWriter
 from .episode import Episode, EpisodeWriter
-from .signal import IndicesLike, Signal, SignalWriter, Time
+from .signal import IndicesLike, Signal, SignalWriter
+from .time import Time
 
 __all__ = [
     'Signal',

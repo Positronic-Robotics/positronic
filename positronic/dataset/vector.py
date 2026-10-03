@@ -7,17 +7,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import (
-    RECORDED_TIME,
-    TIMELINE_METADATA_KEY,
-    IndicesLike,
-    Signal,
-    SignalWriter,
-    Time,
-    TimeArray,
-    search_timestamps,
-    validate_timeline,
-)
+from .signal import RECORDED_TIME, TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
+from .time import Time, TimeArray, search_timestamps, validate_timeline
 
 T = TypeVar('T')
 
