@@ -15,7 +15,7 @@ from pydantic import BaseModel
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset
-from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.signal import MAIN_TIMELINE_KEY, SupportsEncodedRepresentation
 from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None
@@ -44,6 +44,7 @@ def episode_info(index: int):
     for name, sig in ep.signals.items():
         supports_encoded = isinstance(sig, SupportsEncodedRepresentation)
         signals_meta[name] = {
+            MAIN_TIMELINE_KEY: sig.main_timeline,
             'length': len(sig),
             'kind': sig.kind.value,
             'dtype': np.dtype(sig.dtype).str,

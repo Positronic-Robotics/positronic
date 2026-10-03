@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, Kind
 from positronic.dataset.transforms.signals import diff, norm
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 
@@ -14,7 +14,7 @@ def create_signal(tmp_path, data_timestamps, name='test.parquet'):
     filepath = tmp_path / name
     with SimpleSignalWriter(filepath) as writer:
         for data, ts in data_timestamps:
-            writer.append(data, ts)
+            writer.append(data, {RECORDED_TIME: ts})
     return SimpleSignal(filepath)
 
 
@@ -23,7 +23,7 @@ def write_data(tmp_path, data_timestamps, name='test.parquet'):
     filepath = tmp_path / name
     with SimpleSignalWriter(filepath) as writer:
         for data, ts in data_timestamps:
-            writer.append(data, ts)
+            writer.append(data, {RECORDED_TIME: ts})
     return filepath
 
 
@@ -31,9 +31,9 @@ class TestVectorMeta:
     def test_vector_start_last_ts_basic(self, tmp_path):
         fp = tmp_path / 'sig.parquet'
         with SimpleSignalWriter(fp) as w:
-            w.append(1, 1000)
-            w.append(2, 2000)
-            w.append(3, 3000)
+            w.append(1, {RECORDED_TIME: 1000})
+            w.append(2, {RECORDED_TIME: 2000})
+            w.append(3, {RECORDED_TIME: 3000})
         s = SimpleSignal(fp)
         assert s.start_ts == 1000
         assert s.last_ts == 3000
@@ -60,18 +60,18 @@ class TestSignalWriterAppend:
     def test_append_non_increasing_timestamp_raises(self, tmp_path):
         writer = SimpleSignalWriter(tmp_path / 'test.parquet')
         with writer:
-            writer.append(42, 1000)
+            writer.append(42, {RECORDED_TIME: 1000})
             with pytest.raises(ValueError, match='is not increasing'):
-                writer.append(43, 1000)
+                writer.append(43, {RECORDED_TIME: 1000})
             with pytest.raises(ValueError, match='is not increasing'):
-                writer.append(43, 999)
+                writer.append(43, {RECORDED_TIME: 999})
 
     def test_drop_equal_bytes_threshold_scalar(self, tmp_path):
         fp = tmp_path / 'dedupe_scalar.parquet'
         with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32) as w:
-            w.append(42, 1000)
-            w.append(42, 2000)  # equal, dropped
-            w.append(43, 3000)  # different, kept
+            w.append(42, {RECORDED_TIME: 1000})
+            w.append(42, {RECORDED_TIME: 2000})  # equal, dropped
+            w.append(43, {RECORDED_TIME: 3000})  # different, kept
         s = SimpleSignal(fp)
         assert len(s) == 2
         assert s[0] == (42, 1000)
@@ -80,9 +80,9 @@ class TestSignalWriterAppend:
     def test_drop_equal_bytes_threshold_numpy_small(self, tmp_path):
         fp = tmp_path / 'dedupe_array.parquet'
         with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64) as w:
-            w.append(np.array([1, 2, 3], dtype=np.int64), 1000)
-            w.append(np.array([1, 2, 3], dtype=np.int64), 2000)  # equal content, dropped
-            w.append(np.array([1, 2, 4], dtype=np.int64), 3000)  # different, kept
+            w.append(np.array([1, 2, 3], dtype=np.int64), {RECORDED_TIME: 1000})
+            w.append(np.array([1, 2, 3], dtype=np.int64), {RECORDED_TIME: 2000})  # equal content, dropped
+            w.append(np.array([1, 2, 4], dtype=np.int64), {RECORDED_TIME: 3000})  # different, kept
         s = SimpleSignal(fp)
         assert len(s) == 2
         v0, t0 = s[0]
@@ -102,14 +102,14 @@ class TestSignalWriterContext:
     def test_context_writes_data(self, tmp_path):
         filepath = tmp_path / 'test.parquet'
         with SimpleSignalWriter(filepath) as writer:
-            writer.append(42, 1000)
+            writer.append(42, {RECORDED_TIME: 1000})
         signal = SimpleSignal(filepath)
         assert signal.time[1000] == (42, 1000)
 
     def test_context_creates_file(self, tmp_path):
         filepath = tmp_path / 'test.parquet'
         with SimpleSignalWriter(filepath) as writer:
-            writer.append(42, 1000)
+            writer.append(42, {RECORDED_TIME: 1000})
             assert not filepath.exists()
         assert filepath.exists()
 
@@ -131,11 +131,11 @@ class TestSignalWriterContext:
     def test_simple_writer_abort_removes_file_and_blocks_usage(self, tmp_path):
         fp = tmp_path / 'abort.parquet'
         with SimpleSignalWriter(fp) as w:
-            w.append(1, 1000)
+            w.append(1, {RECORDED_TIME: 1000})
             w.abort()
             assert not fp.exists()
         with pytest.raises(RuntimeError):
-            w.append(2, 2000)
+            w.append(2, {RECORDED_TIME: 2000})
 
 
 class TestSignalWriterChunking:
@@ -147,7 +147,7 @@ class TestSignalWriterChunking:
             for i in range(num_records):
                 data = np.array([i, i * 2, i * 3], dtype=np.float32)
                 timestamp = i * 10**6  # nanoseconds
-                writer.append(data, timestamp)
+                writer.append(data, {RECORDED_TIME: timestamp})
 
         assert filepath.exists()
 
@@ -439,9 +439,9 @@ class TestExtraTimelines:
         """Test that SimpleSignalWriter stores extra timelines in separate columns."""
         fp = tmp_path / 'extra_timelines.parquet'
         with SimpleSignalWriter(fp) as w:
-            w.append(10, 1000, extra_ts={'producer': 900, 'consumer': 1100})
-            w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
-            w.append(30, 3000, extra_ts={'producer': 2900, 'consumer': 3100})
+            w.append(10, {RECORDED_TIME: 1000, 'producer': 900, 'consumer': 1100})
+            w.append(20, {RECORDED_TIME: 2000, 'producer': 1900, 'consumer': 2100})
+            w.append(30, {RECORDED_TIME: 3000, 'producer': 2900, 'consumer': 3100})
 
         # Read the parquet file directly to verify columns
         # TODO: This must be deleted when we provide interface to read extra timelines
@@ -464,29 +464,51 @@ class TestExtraTimelines:
         assert {'timestamp', 'value'} == set(table.column_names)
         assert len(table) == 0
 
-    def test_inconsistent_extra_ts_keys_raises(self, tmp_path):
-        """Test that inconsistent extra_ts keys across appends raises ValueError."""
+    def test_inconsistent_timestamp_keys_raises(self, tmp_path):
+        """Test that inconsistent timestamp keys across appends raises ValueError."""
         fp = tmp_path / 'inconsistent.parquet'
-        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+        with pytest.raises(ValueError, match='Timeline names must be consistent'):
             with SimpleSignalWriter(fp) as w:
-                w.append(10, 1000, extra_ts={'producer': 900})
-                w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+                w.append(10, {RECORDED_TIME: 1000, 'producer': 900})
+                w.append(20, {RECORDED_TIME: 2000, 'producer': 1900, 'consumer': 2100})
 
-    def test_missing_extra_ts_after_first_raises(self, tmp_path):
-        """Test that omitting extra_ts after providing it first raises ValueError."""
+    def test_missing_timestamp_after_first_raises(self, tmp_path):
+        """Test that omitting timestamp after providing it first raises ValueError."""
         fp = tmp_path / 'missing.parquet'
-        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+        with pytest.raises(ValueError, match='Timeline names must be consistent'):
             with SimpleSignalWriter(fp) as w:
-                w.append(10, 1000, extra_ts={'producer': 900})
-                w.append(20, 2000)
+                w.append(10, {RECORDED_TIME: 1000, 'producer': 900})
+                w.append(20, {RECORDED_TIME: 2000})
 
-    def test_adding_extra_ts_after_none_raises(self, tmp_path):
-        """Test that adding extra_ts after first append without it raises ValueError."""
+    def test_adding_timestamp_after_none_raises(self, tmp_path):
+        """Test that adding timestamp after first append without it raises ValueError."""
         fp = tmp_path / 'late_extra.parquet'
-        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+        with pytest.raises(ValueError, match='Timeline names must be consistent'):
             with SimpleSignalWriter(fp) as w:
-                w.append(10, 1000)
-                w.append(20, 2000, extra_ts={'producer': 1900})
+                w.append(10, {RECORDED_TIME: 1000})
+                w.append(20, {RECORDED_TIME: 2000, 'producer': 1900})
+
+    @pytest.mark.parametrize('chunk_size', [1, 2])
+    @pytest.mark.parametrize('invalid', [{'world': 30}, {'world': 30, 'wall': 40, 'message': 50}])
+    def test_timeline_names_remain_fixed_across_chunks(self, tmp_path, chunk_size, invalid):
+        path = tmp_path / 'signal.parquet'
+        with SimpleSignalWriter(path, main_timeline='world', chunk_size=chunk_size) as writer:
+            writer.append(1, {'world': 10, 'wall': 20})
+            writer.append(2, {'world': 20, 'wall': 30})
+            with pytest.raises(ValueError, match='Timeline names must be consistent'):
+                writer.append(3, invalid)
+            writer.append(3, {'world': 30, 'wall': 40})
+        table = pq.read_table(path)
+        assert table['timestamp'].to_pylist() == [10, 20, 30]
+        assert table['ts_ns.wall'].to_pylist() == [20, 30, 40]
+
+    def test_invalid_timestamps_are_rejected_for_duplicate_values(self, tmp_path):
+        with SimpleSignalWriter(
+            tmp_path / 'signal.parquet', main_timeline='world', drop_equal_bytes_threshold=32
+        ) as writer:
+            writer.append(1, {'world': 10, 'wall': 20})
+            with pytest.raises(ValueError, match='Timeline names must be consistent'):
+                writer.append(1, {'world': 20})
 
 
 def _make_signal(ts_sec, vals):
@@ -531,3 +553,29 @@ class TestNorm:
         n = norm(sig)
         vals = np.array(n._values_at(np.arange(3)))
         np.testing.assert_allclose(vals, [3.0, 0.0, 5.0])
+
+
+@pytest.mark.parametrize('count', [0, 3])
+def test_main_name_is_stored_without_changing_signal_queries(tmp_path, count):
+    path = tmp_path / 'named.parquet'
+    with SimpleSignalWriter(path, main_timeline='world', chunk_size=1) as writer:
+        for i in range(count):
+            writer.append(i, {'world': 100 + i * 10, 'wall': 1000 + i * 10})
+    assert pq.read_schema(path).metadata[TIMELINE_METADATA_KEY] == b'world'
+    signal = SimpleSignal(path)
+    assert signal.main_timeline == 'world'
+    assert list(signal.keys()) == [100 + i * 10 for i in range(count)]
+    if count:
+        assert signal.time[115] == (1, 110)
+
+
+def test_default_main_name_and_legacy_file_queries(tmp_path):
+    path = write_data(tmp_path, [(1, 100), (2, 200)])
+    table = pq.read_table(path)
+    assert table.schema.metadata[TIMELINE_METADATA_KEY] == RECORDED_TIME.encode()
+    pq.write_table(table.replace_schema_metadata(None), path)
+    signal = SimpleSignal(path)
+    assert signal.main_timeline == RECORDED_TIME
+    assert signal.time[150] == (1, 100)
+    assert signal.start_ts == 100
+    assert signal.last_ts == 200

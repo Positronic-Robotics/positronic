@@ -17,8 +17,8 @@ from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
-from positronic.dataset.signal import SupportsEncodedRepresentation
-from positronic.dataset.utilities.migrate_remote import migrate_remote_dataset
+from positronic.dataset.signal import MAIN_TIMELINE_KEY, RECORDED_TIME, SupportsEncodedRepresentation
+from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
 
@@ -35,7 +35,7 @@ def dataset_with_video(tmp_path):
 
                 # Numeric signal
                 for i in range(5):
-                    ew.append('action', np.array([i * 0.1, i * 0.2], dtype=np.float32), ts_ns=1000 + i * 100)
+                    ew.append('action', np.array([i * 0.1, i * 0.2], dtype=np.float32), {RECORDED_TIME: 1000 + i * 100})
 
                 # Video signal
                 video_path = ew.path / 'cam.mp4'
@@ -43,7 +43,7 @@ def dataset_with_video(tmp_path):
                 with VideoSignalWriter(video_path, frames_path, fps=30) as vw:
                     for i in range(3):
                         frame = np.full((64, 64, 3), (ep_idx + 1) * 50 + i * 10, dtype=np.uint8)
-                        vw.append(frame, ts_ns=1000 + i * 100)
+                        vw.append(frame, {RECORDED_TIME: 1000 + i * 100})
 
     return LocalDataset(root)
 
@@ -78,6 +78,8 @@ def test_episode_info_endpoint(test_client):
     assert data['signals']['action']['length'] == 5
     assert data['signals']['cam']['length'] == 3
     assert data['signals']['cam']['encoding_format'] == 'positronic.video.v1'
+    assert data['signals']['action'][MAIN_TIMELINE_KEY] == RECORDED_TIME
+    assert data['signals']['cam'][MAIN_TIMELINE_KEY] == RECORDED_TIME
 
 
 def test_episode_info_not_found(test_client):
@@ -243,6 +245,35 @@ def test_remote_dataset_iteration(running_server):
 # --- Migration tests ---
 
 
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+@pytest.mark.parametrize('remote', [False, True], ids=['local', 'remote'])
+def test_migration_rejects_custom_main_timeline(tmp_path, running_server, monkeypatch, data, remote):
+    source_root = tmp_path / 'custom'
+    dest_root = tmp_path / 'dest'
+    with LocalDatasetWriter(source_root) as writer:
+        with writer.new_episode(main_timeline='world') as episode:
+            episode.append('signal', data, {'world': 1000})
+    source = LocalDataset(source_root)
+    monkeypatch.setattr(remote_server, '_dataset', source)
+    with pos3.mirror(), RemoteDataset(running_server) as remote_source:
+        dataset = remote_source if remote else source
+        assert next(iter(dataset))['signal'].main_timeline == 'world'
+        with pytest.raises(AssertionError, match="main timeline must be 'recorded', got 'world'"):
+            migrate_dataset(dataset, str(dest_root))
+    assert len(LocalDataset(dest_root)) == 0
+
+
+def test_remote_legacy_metadata_uses_recorded_timeline(running_server, monkeypatch):
+    with RemoteDataset(running_server) as dataset:
+        info = dataset._client.get_episode_info(0)
+        for signal_info in info['signals'].values():
+            del signal_info[MAIN_TIMELINE_KEY]
+        monkeypatch.setattr(dataset._client, 'get_episode_info', lambda index: info)
+        episode = next(iter(dataset))
+        assert episode['action'].main_timeline == RECORDED_TIME
+        assert episode['cam'].main_timeline == RECORDED_TIME
+
+
 def test_migrate_remote_dataset_numeric_only(tmp_path):
     """Test migration of dataset with numeric signals only."""
     source_root = tmp_path / 'source'
@@ -253,7 +284,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
             with w.new_episode() as ew:
                 ew.set_static('id', i)
                 for j in range(3):
-                    ew.append('signal', np.array([j], dtype=np.float32), ts_ns=1000 + j * 100)
+                    ew.append('signal', np.array([j], dtype=np.float32), {RECORDED_TIME: 1000 + j * 100})
 
     source_ds = LocalDataset(source_root)
     port = find_free_port()

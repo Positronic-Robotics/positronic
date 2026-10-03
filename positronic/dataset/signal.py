@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -9,10 +9,16 @@ from typing import Any, Generic, Protocol, TypeAlias, TypeVar, Union, final, run
 
 import numpy as np
 
+RECORDED_TIME = 'recorded'
+TIMELINE_METADATA_KEY = b'positronic.timeline'
+MAIN_TIMELINE_KEY = 'main_timeline'
+
+
 T = TypeVar('T')
 
 IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike: TypeAlias = Sequence[int] | np.ndarray
+Timestamps: TypeAlias = Mapping[str, int]
 
 
 def is_realnum_dtype(dtype) -> bool:
@@ -156,6 +162,11 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
         raise NotImplementedError
 
     # Public API
+
+    @property
+    def main_timeline(self) -> str:
+        """Name of the timeline used by the time query API."""
+        return RECORDED_TIME
 
     @property
     def start_ts(self) -> int:
@@ -304,6 +315,10 @@ class _SignalView(Signal[T], Generic[T]):
         self._start_ts = start_ts
 
     @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
+
+    @property
     def meta(self) -> SignalMeta:
         if len(self) == 0:
             raise ValueError('Signal is empty')
@@ -355,11 +370,31 @@ class _SignalView(Signal[T], Generic[T]):
                 raise TypeError(f'Unsupported index type: {type(ts_array)}')
 
 
+def validate_timeline(timeline: str) -> None:
+    if not isinstance(timeline, str) or not timeline.strip():
+        raise ValueError('A timeline name must be a non-empty string')
+
+
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     """Append-only writer for Signals."""
 
+    def __init__(self, *, main_timeline: str = RECORDED_TIME):
+        validate_timeline(main_timeline)
+        self._main_timeline = main_timeline
+
+    @property
+    def main_timeline(self) -> str:
+        return self._main_timeline
+
+    def _validate_timestamps(self, timestamps: Timestamps) -> dict[str, int]:
+        for name in timestamps:
+            validate_timeline(name)
+        if self.main_timeline not in timestamps:
+            raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
+        return {name: int(ts) for name, ts in timestamps.items()}
+
     @abstractmethod
-    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(self, data: T, timestamps: Timestamps) -> None:
         pass
 
     @abstractmethod

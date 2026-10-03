@@ -1374,22 +1374,6 @@
                     "endColumn": 19,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportInvalidTypeVarUse",
-                "range": {
-                    "startColumn": 45,
-                    "endColumn": 46,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 42,
-                    "endColumn": 46,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/dataset/remote.py": [

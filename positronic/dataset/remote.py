@@ -12,7 +12,7 @@ from positronic.utils.serialization import deserialize
 
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer
-from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
+from .signal import MAIN_TIMELINE_KEY, RECORDED_TIME, IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 
 T = TypeVar('T')
 
@@ -102,6 +102,8 @@ class RemoteSignal(Signal[T]):
         meta: SignalMeta,
         length: int,
         encoding_format: str | None,
+        *,
+        main_timeline: str = RECORDED_TIME,
     ):
         self._client = client
         self._episode_index = episode_index
@@ -109,6 +111,11 @@ class RemoteSignal(Signal[T]):
         self._meta_cached = meta
         self._length = length
         self._encoding_format = encoding_format
+        self._main_timeline = main_timeline
+
+    @property
+    def main_timeline(self) -> str:
+        return self._main_timeline
 
     def __len__(self) -> int:
         return self._length
@@ -184,7 +191,13 @@ class RemoteEpisode(Episode):
                     kind=Kind(sig_info['kind']),
                 )
                 self._signals[name] = RemoteSignal(
-                    self._client, self._index, name, sig_meta, sig_info['length'], sig_info.get('encoding_format')
+                    self._client,
+                    self._index,
+                    name,
+                    sig_meta,
+                    sig_info['length'],
+                    sig_info.get('encoding_format'),
+                    main_timeline=sig_info.get(MAIN_TIMELINE_KEY, RECORDED_TIME),
                 )
             return self._signals[name]
         raise KeyError(f"'{name}' not found in episode {self._index}")

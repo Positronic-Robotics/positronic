@@ -37,6 +37,10 @@ class Elementwise(Signal[U]):
         self._signal = signal
         self._fn = fn
 
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
+
     def __len__(self) -> int:
         return len(self._signal)
 
@@ -94,6 +98,10 @@ class IndexOffsets(Signal[tuple]):
         self._min_off = int(np.min(self._offs))
         self._max_off = int(np.max(self._offs))
         self._include_ref_ts = bool(include_ref_ts)
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
 
     def __len__(self) -> int:
         n = len(self._signal)
@@ -186,6 +194,10 @@ class TimeOffsets(Signal[tuple]):
         self._bounds_ready = False
         self._start_offset = 0
         self._last_index = -1
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signal.main_timeline
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -301,19 +313,26 @@ class Join(Signal[tuple]):
       array is dtype int64 with shape (N,).
 
     Raises:
-        ValueError: if fewer than two signals are provided.
+        ValueError: if fewer than two signals are provided or their main timelines differ.
 
     """
 
     def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
         if len(signals) < 2:
             raise ValueError('Join requires at least two signals')
+        main_timeline = signals[0].main_timeline
+        if any(signal.main_timeline != main_timeline for signal in signals[1:]):
+            raise ValueError('Joined signals have different main timelines')
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
         self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
         self._starts: list[int] = [0] * len(self._signals)
         self._length = 0
         self._union_ts: np.ndarray | None = None
+
+    @property
+    def main_timeline(self) -> str:
+        return self._signals[0].main_timeline
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -339,8 +358,6 @@ class Join(Signal[tuple]):
             self._union_ts = np.unique(all_ts)
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
-
-    # Note: previous 2-way merge helper removed; union now built via numpy unique.
 
     def __len__(self) -> int:
         self._compute_bounds()

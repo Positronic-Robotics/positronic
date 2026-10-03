@@ -1,5 +1,6 @@
 from collections import defaultdict
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -7,7 +8,16 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
+from .signal import (
+    RECORDED_TIME,
+    TIMELINE_METADATA_KEY,
+    IndicesLike,
+    RealNumericArrayLike,
+    Signal,
+    SignalWriter,
+    Timestamps,
+    is_realnum_dtype,
+)
 
 T = TypeVar('T')
 
@@ -26,6 +36,12 @@ class SimpleSignal(Signal[T]):
         self._timestamps: np.ndarray | None = None
         self._values: np.ndarray | None = None
         self._bounds: tuple[int, int, int] | None = None  # (first_ts, last_ts, num_rows)
+
+    @property
+    @lru_cache(maxsize=1)
+    def main_timeline(self) -> str:
+        metadata = pq.read_schema(self.filepath).metadata or {}
+        return metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
 
     def _load_bounds(self):
         """Load signal bounds from parquet row-group statistics (reads only the file footer)."""
@@ -116,7 +132,14 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None):
+    def __init__(
+        self,
+        filepath: Path,
+        chunk_size: int = 10000,
+        drop_equal_bytes_threshold: int | None = None,
+        *,
+        main_timeline: str = RECORDED_TIME,
+    ):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
@@ -124,7 +147,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
+            main_timeline: Name of the main timeline.
         """
+        super().__init__(main_timeline=main_timeline)
         self.filepath = filepath
         self.chunk_size = chunk_size
         self._drop_equal_bytes_threshold = drop_equal_bytes_threshold
@@ -163,7 +188,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if len(self._timestamps) == 0:
             return
 
-        # Build arrays for primary timestamp and value
+        # Build arrays for main timestamp and value
         arrays = [pa.array(self._timestamps, type=pa.int64()), pa.array(self._values)]
         column_names = ['timestamp', 'value']
 
@@ -172,7 +197,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             arrays.append(pa.array(self._extra_timelines[timeline_name], type=pa.int64()))
             column_names.append(f'ts_ns.{timeline_name}')
 
-        batch = pa.record_batch(arrays, names=column_names)
+        batch = pa.record_batch(arrays, names=column_names).replace_schema_metadata({
+            TIMELINE_METADATA_KEY: self.main_timeline.encode()
+        })
 
         if self._writer is None:
             schema = batch.schema
@@ -185,17 +212,9 @@ class SimpleSignalWriter(SignalWriter[T]):
         for timeline_name in self._extra_timelines:
             self._extra_timelines[timeline_name].clear()
 
-    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
-        if self._finished:
-            raise RuntimeError('Cannot append to a finished writer')
-        if self._aborted:
-            raise RuntimeError('Cannot append to an aborted writer')
-
-        if self._last_ts is not None and ts_ns <= self._last_ts:
-            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
-
+    def _normalize_value(self, data: T) -> object:
         value: object = data
-        if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
+        if isinstance(value, pa.Array):
             value = value.to_numpy()
         elif isinstance(value, list | tuple):
             value = np.array(value)
@@ -209,12 +228,29 @@ class SimpleSignalWriter(SignalWriter[T]):
                     raise ValueError(f"Data shape {value.shape} doesn't match expected shape {self._expected_shape}")
                 if value.dtype != self._expected_dtype:
                     raise ValueError(f"Data dtype {value.dtype} doesn't match expected dtype {self._expected_dtype}")
-        else:  # Scalar type
+        else:
             if self._expected_dtype is None:
                 self._expected_dtype = type(value)
             else:
                 if type(value) is not self._expected_dtype:
                     raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
+        return value
+
+    def append(self, data: T, timestamps: Timestamps) -> None:
+        if self._finished:
+            raise RuntimeError('Cannot append to a finished writer')
+        if self._aborted:
+            raise RuntimeError('Cannot append to an aborted writer')
+
+        timestamps = self._validate_timestamps(timestamps)
+        ts_ns = timestamps[self.main_timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
+        if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
+            raise ValueError('Timeline names must be consistent across all appends')
+        if self._last_ts is not None and ts_ns <= self._last_ts:
+            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
+
+        value = self._normalize_value(data)
 
         if self._last_ts is None and self._drop_equal_bytes_threshold is not None:
             size_bytes = self._nbytes(value)
@@ -224,19 +260,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value):
             return
 
-        # Validate extra_ts consistency: keys must match across all appends
-        extra_ts = extra_ts or {}
-        extra_ts = {k: int(v) for k, v in extra_ts.items()}
-        current_keys = frozenset(extra_ts.keys())
-        if self._timestamps:  # Not the first append
-            expected_keys = frozenset(self._extra_timelines.keys())
-            if current_keys != expected_keys:
-                raise ValueError(
-                    f'extra_ts keys must be consistent across all appends. '
-                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
-                )
-
-        self._timestamps.append(int(ts_ns))
+        self._timestamps.append(ts_ns)
         self._values.append(value)
 
         # Handle extra timelines using defaultdict
@@ -270,7 +294,7 @@ class SimpleSignalWriter(SignalWriter[T]):
                     fields.append((col_name, pa.int64()))
                     data_dict[col_name] = []
 
-                schema = pa.schema(fields)
+                schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.main_timeline.encode()})
                 table = pa.table(data_dict, schema=schema)
                 pq.write_table(table, self.filepath)
 
