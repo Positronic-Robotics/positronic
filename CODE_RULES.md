@@ -392,3 +392,24 @@ attempt = spec.model_copy(update={'artifact_location': moved})
 attempt = spec.model_copy()
 attempt.artifact_location = moved
 ```
+
+### installation-constant
+
+Don't make a value that differs between two installations of the same hardware a constant. Take it as
+configuration, with today's value as the default.
+
+A property of the model is a constant: the joint count, the joints that rest on stops at zero, the field
+names of the vendor's wire. A property of one installation is configuration: a serial number, a device
+path, a mount pose, a calibration offset, a tolerance tuned to one servo.
+
+The test: a second installation with a different calibration runs the code with no edit.
+
+```python
+# Bad — how far this servo sags is a property of one bench
+_PARK_MAX_CORRECTION_RAD = 0.05
+
+# Good
+@dataclass(frozen=True)
+class SettleTuning:
+    max_correction_rad: float = 0.05
+```
