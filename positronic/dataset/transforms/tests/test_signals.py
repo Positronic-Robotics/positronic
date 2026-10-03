@@ -71,7 +71,8 @@ def test_views_preserve_main_timeline(tmp_path, transform):
     assert transform(SimpleSignal(path)).main_timeline == 'world'
 
 
-def test_join_does_not_report_a_main_timeline_for_different_clocks(tmp_path):
+@pytest.mark.parametrize('join', [Join, concat], ids=['join', 'concat'])
+def test_join_rejects_different_clocks_at_construction(tmp_path, join):
     signals = []
     for main_timeline in [RECORDED_TIME, 'world']:
         path = tmp_path / f'{main_timeline}.parquet'
@@ -79,7 +80,7 @@ def test_join_does_not_report_a_main_timeline_for_different_clocks(tmp_path):
             writer.append(1, {main_timeline: 1000})
         signals.append(SimpleSignal(path))
     with pytest.raises(ValueError, match='different main timelines'):
-        _ = Join(*signals).main_timeline
+        join(*signals)
 
 
 def test_elementwise(sig_simple):

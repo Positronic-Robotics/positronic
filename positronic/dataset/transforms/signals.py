@@ -313,13 +313,16 @@ class Join(Signal[tuple]):
       array is dtype int64 with shape (N,).
 
     Raises:
-        ValueError: if fewer than two signals are provided.
+        ValueError: if fewer than two signals are provided or their main timelines differ.
 
     """
 
     def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
         if len(signals) < 2:
             raise ValueError('Join requires at least two signals')
+        main_timeline = signals[0].main_timeline
+        if any(signal.main_timeline != main_timeline for signal in signals[1:]):
+            raise ValueError('Joined signals have different main timelines')
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
         self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
@@ -329,10 +332,7 @@ class Join(Signal[tuple]):
 
     @property
     def main_timeline(self) -> str:
-        main_timeline = self._signals[0].main_timeline
-        if any(signal.main_timeline != main_timeline for signal in self._signals[1:]):
-            raise ValueError('Joined signals have different main timelines')
-        return main_timeline
+        return self._signals[0].main_timeline
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -358,8 +358,6 @@ class Join(Signal[tuple]):
             self._union_ts = np.unique(all_ts)
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
-
-    # Note: previous 2-way merge helper removed; union now built via numpy unique.
 
     def __len__(self) -> int:
         self._compute_bounds()
