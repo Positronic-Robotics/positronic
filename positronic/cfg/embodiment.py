@@ -33,7 +33,7 @@ def droid(robot_arm, gripper, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
-        ready_handlers={eval_keys.ARM: robot_arm.ready},
+        ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )
@@ -70,6 +70,7 @@ def yam(robot_arm, cameras, video_encoder):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        ready_handlers={name: cam.ready for name, cam in cameras.items()},
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
         video_encoder=video_encoder,
@@ -132,6 +133,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms[keys.LEFT_ARM].robot_meta,
+        ready_handlers={name: cam.ready for name, cam in cameras.items()},
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
         video_encoder=video_encoder,
