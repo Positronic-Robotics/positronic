@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypeVar
@@ -236,7 +236,7 @@ class SimpleSignalWriter(SignalWriter[T]):
                     raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
         return value
 
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Timestamps | Mapping[str, int]) -> None:
         if self._finished:
             raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:

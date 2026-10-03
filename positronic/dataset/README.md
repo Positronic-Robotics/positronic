@@ -63,8 +63,36 @@ Recordings are never modified: edits persist but never compute, transforms compu
 
 ## Writing timestamps
 
-`Timestamps` describes a record's timestamps on its named timelines. Writers receive these together
-on each append. The constructor selects the main timeline, defaulting to `"recorded"`; every append
+`Timestamps` is an immutable value containing integer timestamps on named timelines. It copies its
+constructor input and requires at least one timeline. Names must contain at least one non-whitespace character.
+
+```python
+from positronic.dataset import Timestamps
+
+ts = Timestamps({"world": 1000, "wall": 2000, "tick": 4})
+ts.timelines                    # ("world", "wall", "tick")
+ts["world"]                     # 1000
+ts[("tick", "world")]            # Timestamps({"tick": 4, "world": 1000})
+```
+
+Tuple selection requires at least one name, without duplicates. Unknown names raise `KeyError`.
+`Timestamps` also supports read-only access through `keys()`, `values()`, `items()`, and iteration over names.
+
+Equality compares all names and values, regardless of name order. Ordering and arithmetic require
+identical name sets; mismatches raise `ValueError`.
+
+| Operator | Meaning |
+| --- | --- |
+| `a <= b` | Every coordinate in `a` is at most the corresponding coordinate in `b`. |
+| `a < b` | `a <= b` and at least one coordinate is smaller. |
+| `a >= b`, `a > b` | Reverse the operands of `<=` and `<`. |
+| `a + b`, `a - b` | Add or subtract matching coordinates and return a new `Timestamps`. |
+
+Ordering and arithmetic accept `Timestamps` operands. Negative coordinates and differences are allowed.
+Some values are incomparable: neither `Timestamps({"a": 1, "b": 2})` nor `Timestamps({"a": 2, "b": 1})` is smaller.
+
+Writers accept `Timestamps` or dictionaries with all timestamps for each append.
+The writer constructor selects the main timeline, defaulting to `"recorded"`; every append
 must include a timestamp on that timeline. Timeline names must be non-empty strings, and each signal
 must use the same set of names on every append.
 The timestamp on the main timeline must strictly increase.
@@ -130,7 +158,7 @@ class SignalWriter[T]:
     def __init__(self, *, main_timeline: str = "recorded"): ...
 
     # Fails if the main timestamp is not increasing or data shape/dtype doesn't match
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Timestamps | Mapping[str, int]) -> None:
         pass
 
     # Writers are context managers. Exiting the context finalizes the file.
@@ -180,7 +208,7 @@ class Episode:
 class EpisodeWriter:
     # Append dynamic `Signal` data; timestamps must be strictly increasing per signal
     # Raises if the `Signal` name conflicts with existing static items
-    def append(self, signal_name: str, data: T, timestamps: Timestamps) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Timestamps | Mapping[str, int]) -> None:
         pass
 
     # Set static (non-time-varying) item; raises on name conflicts

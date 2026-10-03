@@ -1,12 +1,129 @@
+import operator
+
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
+from positronic.dataset import Timestamps
 from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, Kind
 from positronic.dataset.transforms.signals import diff, norm
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 
 from .utils import DummySignal
+
+
+class TestTimestamps:
+    def test_snapshot_and_named_access(self):
+        source = {'world': 100, 'tick': 2}
+        timestamps = Timestamps(source)
+        source['world'] = 200
+        source['wall'] = 300
+        assert timestamps.timelines == ('world', 'tick')
+        assert timestamps['world'] == 100
+        assert dict(timestamps) == {'world': 100, 'tick': 2}
+        assert list(timestamps.values()) == [100, 2]
+        assert 'world' in timestamps
+        assert ('world', 'tick') not in timestamps
+
+    @pytest.mark.parametrize('mutation, args', [(operator.setitem, ('world', 300)), (operator.delitem, ('world',))])
+    def test_read_only_access(self, mutation, args):
+        timestamps = Timestamps({'world': 100})
+        with pytest.raises(TypeError):
+            mutation(timestamps, *args)
+
+    @pytest.mark.parametrize('coordinates', [{}, {'': 1}, {'  ': 1}, {1: 2}])
+    def test_invalid_names(self, coordinates):
+        with pytest.raises(ValueError):
+            Timestamps(coordinates)
+
+    @pytest.mark.parametrize('value', [1.5, 1.0, '1', None])
+    def test_coordinates_must_be_integers(self, value):
+        with pytest.raises(TypeError):
+            Timestamps({'world': value})
+
+    def test_numpy_integers_and_negative_coordinates(self):
+        timestamps = Timestamps({'world': np.int64(-100), 'tick': np.uint64(2)})
+        assert timestamps == {'world': -100, 'tick': 2}
+        assert type(timestamps['world']) is int
+
+    def test_selection_preserves_requested_order(self):
+        timestamps = Timestamps({'world': 100, 'wall': 1000, 'tick': 2})
+        selected = timestamps[('tick', 'world')]
+        assert isinstance(selected, Timestamps)
+        assert selected.timelines == ('tick', 'world')
+        assert selected == Timestamps({'world': 100, 'tick': 2})
+        assert timestamps[('world',)] == Timestamps({'world': 100})
+
+    @pytest.mark.parametrize('names', [(), ('world', 'world')])
+    def test_invalid_selection(self, names):
+        with pytest.raises(ValueError):
+            Timestamps({'world': 100})[names]
+
+    @pytest.mark.parametrize('names', ['missing', ('world', 'missing')])
+    def test_missing_timeline(self, names):
+        with pytest.raises(KeyError, match='missing'):
+            Timestamps({'world': 100})[names]
+
+    @pytest.mark.parametrize(
+        'right, equal, before, after',
+        [
+            ({'tick': 2, 'world': 100}, True, False, False),
+            ({'tick': 3, 'world': 100}, False, True, False),
+            ({'tick': 2, 'world': 200}, False, True, False),
+            ({'tick': 1, 'world': 50}, False, False, True),
+            ({'tick': 1, 'world': 200}, False, False, False),
+        ],
+    )
+    def test_componentwise_order(self, right, equal, before, after):
+        left = Timestamps({'world': 100, 'tick': 2})
+        right = Timestamps(right)
+        assert (left == right) is equal
+        assert (left != right) is not equal
+        assert (left < right) is before
+        assert (left <= right) is (before or equal)
+        assert (left > right) is after
+        assert (left >= right) is (after or equal)
+        assert (right > left) is before
+        assert (right >= left) is (before or equal)
+
+    def test_order_is_transitive(self):
+        first = Timestamps({'world': 100, 'tick': 2})
+        second = Timestamps({'tick': 3, 'world': 100})
+        third = Timestamps({'world': 200, 'tick': 3})
+        assert first < second < third
+        assert first < third
+
+    @pytest.mark.parametrize(
+        'operation', [operator.lt, operator.le, operator.gt, operator.ge, operator.add, operator.sub]
+    )
+    @pytest.mark.parametrize('coordinates', [{'world': 100}, {'world': 100, 'tick': 2, 'wall': 300}, {'other': 100}])
+    def test_operations_require_same_names(self, operation, coordinates):
+        left = Timestamps({'world': 100, 'tick': 2})
+        right = Timestamps(coordinates)
+        assert left != right
+        with pytest.raises(ValueError, match='same timeline names'):
+            operation(left, right)
+
+    @pytest.mark.parametrize(
+        'operation', [operator.lt, operator.le, operator.gt, operator.ge, operator.add, operator.sub]
+    )
+    @pytest.mark.parametrize('other', [1, {'world': 100}])
+    def test_operations_require_timestamp_values(self, operation, other):
+        timestamps = Timestamps({'world': 100})
+        with pytest.raises(TypeError):
+            operation(timestamps, other)
+        with pytest.raises(TypeError):
+            operation(other, timestamps)
+
+    def test_arithmetic_matches_names_and_retains_operands(self):
+        left = Timestamps({'world': 100, 'tick': 2})
+        right = Timestamps({'tick': 3, 'world': 20})
+        assert left + right == Timestamps({'world': 120, 'tick': 5})
+        assert left - right == Timestamps({'world': 80, 'tick': -1})
+        assert right - left == Timestamps({'tick': 1, 'world': -80})
+        assert (left + right) - right == left
+        assert left == {'world': 100, 'tick': 2}
+        assert right == {'tick': 3, 'world': 20}
 
 
 def create_signal(tmp_path, data_timestamps, name='test.parquet'):

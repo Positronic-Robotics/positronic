@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset import Episode
+from positronic.dataset import Episode, Timestamps
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY
@@ -697,3 +697,24 @@ def test_invalid_main_timeline_creates_no_episode(tmp_path, main_timeline):
     with pytest.raises(ValueError, match='non-empty'):
         DiskEpisodeWriter(path, main_timeline=main_timeline)
     assert not path.exists()
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_timestamp_values_preserve_storage_and_main_timeline_queries(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path, main_timeline='world') as writer:
+        writer.append('signal', data, Timestamps({'world': 10, 'wall': 200}))
+        writer.append('signal', data + 1, {'wall': 100, 'world': 30})
+    signal = DiskEpisode(path)['signal']
+    assert signal.main_timeline == 'world'
+    assert list(signal.keys()) == [10, 30]
+    value, timestamp = signal.time[20]
+    assert timestamp == 10
+    np.testing.assert_array_equal(value, data)
+    video = isinstance(data, np.ndarray)
+    table = pq.read_table(path / ('signal.frames.parquet' if video else 'signal.parquet'))
+    main_column = 'ts_ns' if video else 'timestamp'
+    assert set(table.column_names) == {main_column, 'ts_ns.wall'} | (set() if video else {'value'})
+    assert table[main_column].to_pylist() == [10, 30]
+    assert table['ts_ns.wall'].to_pylist() == [200, 100]
+    assert table.schema.metadata[TIMELINE_METADATA_KEY] == b'world'

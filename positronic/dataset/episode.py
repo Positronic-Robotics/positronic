@@ -165,7 +165,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, timestamps: Timestamps) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Timestamps | Mapping[str, int]) -> None:
         """Append a sample for the named signal."""
         pass
 

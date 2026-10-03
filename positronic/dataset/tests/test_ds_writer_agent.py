@@ -1,4 +1,5 @@
 import pickle
+from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps | Mapping[str, int]) -> None:
         self.appends.append((signal_name, data, dict(timestamps)))
 
     def set_static(self, name: str, data: Any) -> None:
