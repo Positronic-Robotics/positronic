@@ -32,7 +32,7 @@ mount, and it enters no layer.
 Other models:
 
 - **DreamZero.** The public `GEAR-Dreams/DreamZero-DROID` checkpoint is 65 GB on the Hub, and the
-  `positro/dreamzero` base is 20 GB compressed. Together they exceed the 30 GB budget. Serve
+  `positro/dreamzero` base is 20 GB compressed. Together they exceed the 50 GB budget. Serve
   DreamZero on your own GPU and file an eval plan with a `remote` endpoint
   ([Eval plans](../client/README.md#eval-plans)).
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
@@ -99,8 +99,9 @@ uv run positronic eval run --eval=<eval> \
 1. The platform resolves your image reference to a digest at submission and records it as
    `policy_image_digest`. The run uses those bytes.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
-   (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 30 GB
-   (`image_too_large`). Both are charged to your quota.
+   (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 50 GB
+   (`image_too_large`). Both are charged to your quota. The image has two more budgets, in
+   [The container](#the-container).
 3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
    server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
    run's bearer token. An image with no start command runs the base image's `CMD ["bash"]`, which
@@ -114,7 +115,53 @@ uv run positronic eval run --eval=<eval> \
 7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
    refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
    your own must do the same.
-8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM.
+8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
+   limits in [The container](#the-container).
+
+## The container
+
+[`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)
+holds each value below. The platform runs every image under them.
+
+| Limit | Value | Constant |
+|---|---|---|
+| The port the server listens on | 8000 | `POLICY_PORT` |
+| The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
+| The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
+| The GPU slice | `3g.40gb` | `MIG_PROFILE` |
+| VRAM | 40448 MiB | `VRAM_MIB` |
+| The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
+| The unpacked image | 55 GB | `UNPACKED_IMAGE_BYTES` |
+| The files in the image | 3,300,000 | `IMAGE_FILES` |
+| The block an unpacked entry is counted in | 4096 bytes | `IMAGE_BLOCK_BYTES` |
+| The image store | 120 GiB | `IMAGE_STORE_BYTES` |
+| Memory, with no swap | 150 GiB | `MEMORY_BYTES` |
+| CPUs | 14 | `CPUS` |
+| Processes and threads | 4,096 | `PIDS` |
+| The container log | 200 MiB | `LOG_BYTES` |
+| Disk reads | 500 MiB/s | `DISK_READ_BYTES_PER_S` |
+| Disk writes | 100 MiB/s | `DISK_WRITE_BYTES_PER_S` |
+| Disk read operations | 2,000/s | `DISK_READ_IOPS` |
+| Disk write operations | 1,000/s | `DISK_WRITE_IOPS` |
+| The send rate | 500 Mbit/s | `SEND_BITS_PER_S` |
+| The send burst | 5 MiB | `SEND_BURST_BYTES` |
+
+- The container has no Linux capabilities and runs with `no-new-privileges`. It has no route out,
+  and a name lookup gets no answer. `docker_limit_flags(disk)` gives the `docker run` flags that set
+  the limits. The send rate is a policer on the host, and a packet above it is dropped.
+- The compressed size is the config blob and every layer, as the registry stores them
+  (`ImageManifest.compressed_size`).
+- The unpacked size counts every entry of every layer: its size rounded up to a whole 4096-byte
+  block, and at least one block. The file count counts every entry of every layer: files,
+  directories, links and deletions. A file that a later layer replaces or deletes counts in each
+  layer that carries it.
+- The image store is an ext4 filesystem. Its metadata and the 5% that ext4 keeps for root leave
+  119.78 GB that any writer can use. It holds the compressed layers beside the unpacked ones, the
+  writable layer of the container and its log, so an image inside both budgets leaves the writable
+  layer about 14.5 GB. A process that runs as root in the container can also use the 6 GiB reserve.
+- An image over a budget fails with `image_too_large`, charged. A container over its memory is
+  killed, and the run fails with `policy_oom`. The other limits slow the server, or stop it with
+  `policy_setup_crash` or `policy_inference_crash`.
 
 ## Test the image before you submit
 
@@ -153,7 +200,7 @@ docker/read_image_digest.sh <you>/<image>:v1
 [`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
 header, which names the manifest the registry served. Pin that digest. The `config.digest` inside
 the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
-the 30 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
+the 50 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
 
 The script reads a public image only. For a private image, log in with the credential you give
@@ -278,7 +325,7 @@ fault is not.
 | reason_code | fault | first thing to check |
 |---|---|---|
 | `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
-| `image_too_large` | caller | the compressed size, against 30 GB |
+| `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or served without the token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 40448 MiB slice |

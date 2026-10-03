@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 import configuronic as cfn
+from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
@@ -26,7 +27,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
 
 from . import grpc_wire, protocol, server_wire, websocket_wire
-from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
+from .protocol import AUTH_HEADER, bearer, deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
