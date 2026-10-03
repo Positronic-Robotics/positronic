@@ -45,8 +45,8 @@ def eval_table():
     }
 
 
-# A single arm's signals: its state as tabs, the target grip beside the grip, and each command.
-robot_replay_layout = cfn.Config(
+# The arm's state as tabs, the target grip beside the grip, and each command.
+single_arm_replay_layout = cfn.Config(
     ReplayLayout,
     row_shares=(3, 1),
     top_shares=(1, 3),

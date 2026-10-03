@@ -1156,8 +1156,8 @@ def main(
         base_href: Path at the server root that every page link and API call resolves against
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
-        layout: Where an episode's replay shows its views; ``positronic.cfg.server.robot_replay_layout`` is
-            one for a single arm's signals. None keeps the default replay
+        layout: Where an episode's replay shows its views, for example
+            ``positronic.cfg.server.single_arm_replay_layout``. None keeps the default replay
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
