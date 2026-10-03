@@ -34,7 +34,7 @@ from positronic import utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind, Time
 
 
 def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> dict:
@@ -82,10 +82,11 @@ def _video_columns(name: str, uri: str, meta: dict) -> dict:
 
 def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> dict:
     step_ns = int(round(1e9 / fps))
-    ts_grid = slice(episode.start_ts, episode.last_ts + 1, step_ns)
+    first, last = episode.bounds((RECORDED_TIME,))
+    ts_grid = slice(first, last + Time(**{RECORDED_TIME: 1}), Time(**{RECORDED_TIME: step_ns}))
 
     row: dict[str, Any] = {_column(k): v for k, v in episode.static.items()}
-    row['trajectory_length'] = int((episode.last_ts - episode.start_ts) * fps // int(1e9)) + 1
+    row['trajectory_length'] = int((last - first)[RECORDED_TIME] * fps // int(1e9)) + 1
     # `uuid` is opt-in (codec param). Fall back to row index for video sidecar paths.
     video_dirname = row.get('uuid') or f'{row_idx:06d}'
 

@@ -5,6 +5,8 @@ import pytest
 from positronic.cfg import analysis
 from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.tests.utils import DummySignal
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
@@ -61,3 +63,14 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
         'inference.policy.server.checkpoint_path': 'checkpoints/050000/pretrained_model',
     })
     assert ckpt(ep) == '050000'
+
+
+@pytest.mark.parametrize('held_ns', [200_000_000, 300_000_000])
+def test_success_duration_uses_recorded_coordinate(held_ns):
+    signal = DummySignal(
+        [[0, 0], [100_000_000, 1], [100_000_000 + held_ns, 2]], [0.0, 1.0, 1.0], timelines=(RECORDED_TIME, 'tick')
+    )
+    episode = EpisodeContainer({'stacking_success': signal})
+    assert analysis.success(episode) == (held_ns >= 250_000_000)
+    expected = (100_000_000 + held_ns) / 1e9 if held_ns >= 250_000_000 else None
+    assert analysis.success_time(episode) == expected

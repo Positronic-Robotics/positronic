@@ -5,7 +5,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import pimm
-from positronic.dataset import Episode
+from positronic.dataset import Episode, Time
+from positronic.dataset.signal import RECORDED_TIME
 
 
 @dataclass
@@ -75,7 +76,7 @@ class _Playback:
     command: DsPlayerStartCommand
     start_clock_ns: int
     heap: list[tuple[int, int, str, object]] = field(default_factory=list)
-    streams: dict[str, Iterator[tuple[object, int]]] = field(default_factory=dict)
+    streams: dict[str, Iterator[tuple[object, Time]]] = field(default_factory=dict)
     start_ts: int | None = None
     counter: int = 0
 
@@ -98,13 +99,13 @@ class _Playback:
         return scheduled_ts - self.start_ts + self.start_clock_ns, name, value
 
     def schedule_next(self, name: str):
-        stream = self.streams.get(name)
+        stream = self.streams[name]
         try:
             value, ts = next(stream)
         except StopIteration:
             self.streams.pop(name)
             return
-        self._push(name, ts, value)
+        self._push(name, ts[RECORDED_TIME], value)
 
     def _push(self, name: str, ts: int, value: object) -> None:
         heapq.heappush(self.heap, (ts, self.counter, name, value))
@@ -124,7 +125,9 @@ class _Playback:
                     raise ValueError(f"Requested output '{name}' is static and cannot be emitted")
                 raise KeyError(f"Requested output '{name}' is not present in episode signals")
 
-            playback.streams[name] = iter(signal.time[command.start_ts : command.end_ts])
+            start = Time(**{RECORDED_TIME: command.start_ts}) if command.start_ts is not None else None
+            end = Time(**{RECORDED_TIME: command.end_ts}) if command.end_ts is not None else None
+            playback.streams[name] = iter(signal if start is None and end is None else signal.time[start:end])
             playback.schedule_next(name)
 
         return playback if playback.heap else None

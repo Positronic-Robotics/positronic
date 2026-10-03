@@ -63,8 +63,7 @@ class FakeDatasetWriter(DatasetWriter):
         self.lifecycle.append('enter')
         return self
 
-    def new_episode(self, *, main_timeline: str = RECORDED_TIME) -> FakeEpisodeWriter:
-        assert main_timeline == RECORDED_TIME
+    def new_episode(self) -> FakeEpisodeWriter:
         self.lifecycle.append('new_episode')
         w = FakeEpisodeWriter()
         self.created.append(w)
@@ -258,9 +257,9 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
 
     # Verify extra timelines are in the parquet files
     table_a = pq.read_table(ep._dir / 'a.parquet')
-    assert 'ts_ns.message' in table_a.column_names
-    assert 'ts_ns.system' in table_a.column_names
-    assert 'ts_ns.world' in table_a.column_names
+    assert 'ts.message' in table_a.column_names
+    assert 'ts.system' in table_a.column_names
+    assert 'ts.world' in table_a.column_names
 
 
 def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):

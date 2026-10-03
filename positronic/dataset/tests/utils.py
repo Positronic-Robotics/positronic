@@ -1,46 +1,39 @@
+from collections.abc import Callable, Sequence
+from typing import Any, cast
+
 import numpy as np
 
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.signal import IndicesLike, RealNumericArrayLike, Signal, is_realnum_dtype
+from positronic.dataset.signal import RECORDED_TIME, IndicesLike, Signal, TimeArray
 from positronic.dataset.transforms import Elementwise, EpisodeTransform
 
 
-class DummySignal(Signal[int]):
+class DummySignal(Signal[Any]):
     """Minimal array-backed Signal implementing the abstract API only.
 
     Used to validate core Signal's generic indexing/time logic and views.
     """
 
-    def __init__(self, timestamps, values):
-        ts_arr = np.asarray(timestamps, dtype=np.int64)
-        vals_arr = np.asarray(values)
-        assert ts_arr.ndim == 1
-        assert vals_arr.shape[0] == ts_arr.shape[0]
-        self._ts = ts_arr
-        self._vals = vals_arr
+    def __init__(self, timestamps, values, *, timelines=(RECORDED_TIME,)):
+        self._ts = TimeArray(timelines, np.asarray(timestamps, dtype=np.int64).reshape(len(timestamps), len(timelines)))
+        self._ts.validate_order()
+        self._vals = np.asarray(values)
+        assert len(self._vals) == len(self._ts)
 
-    def __len__(self) -> int:
-        return int(self._ts.shape[0])
+    @property
+    def timelines(self):
+        return self._ts.timelines
 
-    def _ts_at(self, index_or_indices: IndicesLike) -> np.ndarray:
-        idxs = np.asarray(index_or_indices, dtype=np.int64)
-        if idxs.size == 0:
-            return np.array([], dtype=np.int64)
-        return self._ts[idxs]
+    def __len__(self):
+        return len(self._ts)
 
-    def _values_at(self, index_or_indices: IndicesLike):
-        idxs = np.asarray(index_or_indices, dtype=np.int64)
-        if idxs.size == 0:
-            return []
-        return self._vals[idxs]
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]):
+        return self._ts.select(timelines).take(indices)
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> np.ndarray:
-        req = np.asarray(ts_or_array)
-        if req.size == 0:
-            return np.array([], dtype=np.int64)
-        if not is_realnum_dtype(req.dtype):
-            raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
-        return np.searchsorted(self._ts, req, side='right') - 1
+    def _values_at(self, indices: IndicesLike) -> Sequence[Any]:
+        if not isinstance(indices, slice):
+            indices = np.asarray(indices, dtype=np.int64)
+        return cast(Sequence[Any], self._vals[indices])
 
 
 class DummyTransform(EpisodeTransform):
@@ -56,7 +49,7 @@ class DummyTransform(EpisodeTransform):
         )
     """
 
-    def __init__(self, operations: dict[str, tuple[str, callable]], pass_through: bool | list[str] = False):
+    def __init__(self, operations: dict[str, tuple[str, Callable]], pass_through: bool | list[str] = False):
         """
         Args:
             operations: Dict mapping output_key -> (input_key, transform_func).

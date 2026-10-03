@@ -349,7 +349,8 @@ def test_a_signal_below_the_cap_keeps_every_sample():
 
 class _RawFrameSignal:
     def __init__(self, frames: list[np.ndarray], times: list[int]):
-        self._frames, self._times = frames, times
+        self._frames = frames
+        self._times = [Time(**{RECORDED_TIME: ts}) for ts in times]
 
     def __getitem__(self, index):
         return self._frames[index], self._times[index]
@@ -357,8 +358,8 @@ class _RawFrameSignal:
     def __iter__(self):
         return iter(zip(self._frames, self._times, strict=True))
 
-    def keys(self):
-        return np.asarray(self._times, dtype=np.int64)
+    def timestamps(self, timelines):
+        return [ts[timelines] for ts in self._times]
 
 
 def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):

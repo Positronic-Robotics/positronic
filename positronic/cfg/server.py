@@ -9,6 +9,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import ColumnConfig as C
@@ -48,7 +49,8 @@ def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    return items / (ep.duration_ns / 1e9 / 3600)
+    first, last = ep.bounds((RECORDED_TIME,))
+    return items / ((last - first)[RECORDED_TIME] / 1e9 / 3600)
 
 
 finetune_ds = ds.transform.override(
@@ -110,7 +112,8 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            duration += ep.duration_ns / 1e9 / 3600
+            first, last = ep.bounds((RECORDED_TIME,))
+            duration += (last - first)[RECORDED_TIME] / 1e9 / 3600
             units += ep['units']
 
         result = {'task': episodes[0][keys.TASK]}

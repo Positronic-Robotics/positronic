@@ -1,6 +1,6 @@
 import numpy as np
 
-from positronic.dataset.signal import Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind, Time
 from positronic.dataset.transforms import image
 
 from ...tests.utils import DummySignal
@@ -20,7 +20,7 @@ def test_image_resize_basic():
 
     v0, t0 = resized[0]
     v1, t1 = resized[1]
-    assert t0 == 1000 and t1 == 2000
+    assert t0 == Time(**{RECORDED_TIME: 1000}) and t1 == Time(**{RECORDED_TIME: 2000})
     assert v0.shape == (2, 3, 3)
     assert v1.shape == (2, 3, 3)
     assert v0.dtype == np.uint8 and v1.dtype == np.uint8
@@ -39,7 +39,7 @@ def test_image_resize_with_pad_basic():
 
     resized = image.resize_with_pad(4, 4, sig)  # target H=W=4
     v, t = resized[0]
-    assert t == 1000
+    assert t == Time(**{RECORDED_TIME: 1000})
     assert v.shape == (4, 4, 3)
     assert v.dtype == np.uint8
     # Left and right columns should be zeros (black padding), middle columns white

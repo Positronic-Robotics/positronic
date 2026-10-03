@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 
 from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
@@ -35,7 +34,7 @@ from .episode import (
     _static_decode_hook,
     _StaticEncoder,
 )
-from .signal import RECORDED_TIME, Signal, Time, validate_timeline
+from .signal import Signal, Time
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
@@ -87,7 +86,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
-        main_timeline: str = RECORDED_TIME,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -97,7 +95,6 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
-            main_timeline: Main timeline for all signals appended through this writer.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
@@ -105,8 +102,6 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve identity when copying an existing recording.
             video_encoder: The encoder for video signals.
         """
-        validate_timeline(main_timeline)
-        self._main_timeline = main_timeline
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
@@ -145,7 +140,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         Args:
             signal_name: Name of the signal to append to
             data: Data to append
-            timestamps: All named timestamps in nanoseconds, including the signal's main timeline.
+            timestamps: All of this signal's named integer coordinates.
         """
         if self._finished:
             raise RuntimeError(f'Cannot append to a finished writer {self._path}')
@@ -161,9 +156,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
             video_path = self._path / f'{signal_name}.mp4'
             frames_index = self._path / f'{signal_name}.frames.parquet'
-            writer = VideoSignalWriter(video_path, frames_index, self._video_encoder, main_timeline=self._main_timeline)
+            writer = VideoSignalWriter(video_path, frames_index, self._video_encoder)
         else:
-            writer = SimpleSignalWriter(self._path / f'{signal_name}.parquet', main_timeline=self._main_timeline)
+            writer = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
 
         try:
             writer.append(data, timestamps)
@@ -202,37 +197,6 @@ class DiskEpisodeWriter(EpisodeWriter):
             )
         self._static_items[name] = data
 
-    def _scan_timestamps(self) -> tuple[int | None, int | None]:
-        """Scan parquet files for min/max timestamps."""
-        first_ts: int | None = None
-        last_ts: int | None = None
-
-        for parquet_file in self._path.glob('*.parquet'):
-            try:
-                schema = pq.read_schema(parquet_file)
-                # Vector signals use 'timestamp', video frames use 'ts_ns'
-                if 'timestamp' in schema.names:
-                    col_name = 'timestamp'
-                elif 'ts_ns' in schema.names:
-                    col_name = 'ts_ns'
-                else:
-                    continue
-
-                table = pq.read_table(parquet_file, columns=[col_name])
-                timestamps = table[col_name].to_pylist()
-                if not timestamps:
-                    continue
-
-                file_first, file_last = min(timestamps), max(timestamps)
-                if first_ts is None or file_first > first_ts:
-                    first_ts = file_first
-                if last_ts is None or file_last > last_ts:
-                    last_ts = file_last
-            except Exception:
-                continue
-
-        return first_ts, last_ts
-
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
         if exc_type is not None and not self._aborted:
@@ -252,11 +216,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._aborted:
             return
         self._finished = True
-
-        # Compute duration by scanning parquet files
-        first_ts, last_ts = self._scan_timestamps()
-        if first_ts is not None and last_ts is not None:
-            self._meta['duration_ns'] = int(last_ts - first_ts)
 
         # Write all static items into a single static.json
         episode_json = self._path / 'static.json'
@@ -296,7 +255,7 @@ class DiskEpisode(Episode):
 
     An Episode represents a collection of signals recorded together,
     typically during a single robotic episode or data collection session.
-    All signals in an episode share a common timeline.
+    Each signal declares its own set of timelines.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -315,7 +274,6 @@ class DiskEpisode(Episode):
         self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None
-        self._cached_duration_ns: int | None = None
 
         # Discover available signal files but do not instantiate readers yet
         used_names: set[str] = set()
@@ -418,9 +376,8 @@ class DiskEpisode(Episode):
                     except Exception:
                         pass
 
-            # duration_ns is a first-class Episode property, not meta.
-            # Extract it as a private cache for DiskEpisode.duration_ns.
-            self._cached_duration_ns = meta.pop('duration_ns', None)
+            # Legacy files may carry an unnamed duration cache; bounds come from named signal coordinates.
+            meta.pop('duration_ns', None)
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
@@ -435,15 +392,6 @@ class DiskEpisode(Episode):
 
             self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
-
-    @property
-    def duration_ns(self):
-        # Fast path: use cached value from meta.json (written at recording time)
-        _ = self.meta  # ensure meta is loaded
-        if self._cached_duration_ns is not None:
-            return self._cached_duration_ns
-        # Fallback: compute from signals (expensive, for old episodes without cached value)
-        return super().duration_ns
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
@@ -535,13 +483,10 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(
-        self, *, main_timeline: str = RECORDED_TIME, created_ts_ns: int | None = None, uid: str | None = None
-    ) -> DiskEpisodeWriter:
+    def new_episode(self, *, created_ts_ns: int | None = None, uid: str | None = None) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
-            main_timeline: Main timeline for all signals appended through this writer.
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
@@ -555,9 +500,7 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(
-            ep_dir, main_timeline=main_timeline, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder
-        )
+        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder)
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:

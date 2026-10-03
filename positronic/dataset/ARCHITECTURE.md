@@ -27,11 +27,21 @@ An Episode has three kinds of data with distinct roles:
 
 `Time` holds immutable integer coordinates on a nonempty set of named timelines.
 Ordering and arithmetic match coordinates by name and require identical name sets.
-Writers require this value on each append. They choose one main timeline at construction
-(`recorded` by default) and persist its name in Parquet schema metadata. Timeline names are fixed per signal. The read API
-uses the main timeline's timestamp column.
-`Signal.main_timeline` exposes that name; views and remote access preserve it. Migration and conversion
-require `recorded` as the main timeline.
+Writers require this value on each append. Each signal fixes its timeline set on its first record:
+all records contain every coordinate, never decrease any, and strictly increase at least one.
+There is no main or default timeline. Signals in an episode may have overlapping or disjoint sets.
+
+Queries name their timelines explicitly. Point lookup selects the last record satisfying all named
+upper bounds and returns its complete original coordinates. Batch sampling replaces queried
+coordinates with the requested values and retains other coordinates from the same selected record.
+Episode queries include only signals containing every requested timeline. Joins retain an explicitly
+selected common subset and reject incompatible ordering.
+
+Native Parquet signal files declare `positronic.signal_version = 2` and store each coordinate in a
+non-null `int64` column named `ts.<literal name>`. Video frame indexes use the same layout.
+Files without a marker decode their legacy timestamp column on its stored timeline name, or
+`recorded` when unnamed. Legacy auxiliary columns remain unexposed; reads require no conversion.
+Migration preserves every coordinate exposed by the source API.
 
 ## Identity
 
@@ -44,20 +54,24 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 - One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
-## Episode properties
+## Episode bounds
 
-`duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
-
-Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
+`episode.bounds(names)` derives named endpoints from signals containing all selected timelines.
+It takes the coordinatewise maximum of signal starts and ends. Empty eligible signals or no
+eligible signals raise `ValueError`. Subtraction yields a named span with units owned by consumers.
+Bounds and spans are not episode metadata; transformed views derive them from their signals.
 
 ## Laziness
 
 Nothing expensive happens until needed:
 - Listing episodes should not touch signal data
-- Accessing `duration_ns` should not load signal values
+- Accessing named bounds should not load signal values
 - Accessing one signal should not load other signals
 
-`SimpleSignal` reads parquet row-group statistics (file footer) for `start_ts`/`last_ts`/`len` without touching actual data. Full timestamps and values are loaded only when indexed or searched.
+`SimpleSignal` reads Parquet row-group statistics (file footer) for named bounds and length without
+loading values. Timestamp columns load independently when indexed or searched. HTTP discovery
+and bounds also defer value metadata and payload reads. Public timestamp collections use
+`Sequence[Time]`; backends may share immutable numeric storage and timeline names between rows.
 
 Laziness is what keeps the layering honest: if reading through the abstraction were expensive, a consumer would reach around it for the backend.
 

@@ -41,7 +41,7 @@ Three types are currently supported.
   * __vector__ – of any length
   * __image__ – 3-channel images (of uint8 dtype)
 
-__Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis, so a single time query can retrieve a synchronized view across everything.
+__Episode__ – collection of Signals recorded together plus static, episode-level metadata. Signals may have overlapping or disjoint timelines. A time query selects the signals that contain every requested timeline.
 
 __Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
 
@@ -95,160 +95,102 @@ identical name sets; mismatches raise `ValueError`.
 Ordering and arithmetic accept `Time` operands. Negative coordinates and differences are allowed.
 Some values are incomparable: neither `Time(a=1, b=2)` nor `Time(a=2, b=1)` is smaller.
 
-Writers require one `Time` value with all timestamps for each append.
-The writer constructor selects the main timeline, defaulting to `"recorded"`; every append
-must include a timestamp on that timeline. Timeline names must be non-empty strings, and each signal
-must use the same set of names on every append.
-The timestamp on the main timeline must strictly increase.
+Writers require one `Time` value with all coordinates for each append. The first successful
+append fixes the signal's timeline names. Every subsequent record supplies exactly those names,
+never decreases a coordinate, and strictly increases at least one. There is no main or default
+timeline. Stored coordinates must fit a signed 64-bit integer.
 
 ```python
-with dataset_writer.new_episode(main_timeline="world") as episode:
-    episode.append("state", state, Time(world=1000, wall=2000))
+with dataset_writer.new_episode() as episode:
+    episode.append("state", state, Time(world=1000, wall=2000, tick=4))
+    episode.append("camera", image, Time(world=1000, wall=2010))
 ```
 
-`SimpleSignalWriter` and `VideoSignalWriter` also accept `main_timeline=`. The main timeline's name is
-stored in Parquet schema metadata under `positronic.timeline`. Its timestamps use the `timestamp`
-column for scalar/vector signals and `ts_ns` for video; other coordinates use `ts_ns.<name>` columns.
-Readers query the main timeline through `signal.time[...]`, `signal.keys()`, and `episode.time[...]`.
-`signal.main_timeline` exposes its name, including through views and HTTP. Files without this metadata
-use `"recorded"`. Additional coordinates are stored but have no query API.
+### Storage and compatibility
 
-Dataset migration and `convert_ds` assert that every source signal's main timeline is `"recorded"`.
+Scalar/vector signals use one Parquet file with a `value` column and one non-null `int64`
+column per timeline: `ts.world`, `ts.wall`, `ts.tick`, etc. Video signals use the same timestamp
+columns in their Parquet frame index. Column order gives no timeline priority. Names are literal:
+`ts.server.wall` represents the name `server.wall`.
+
+Native files carry `positronic.signal_version = 2` in Parquet schema metadata. Empty files written
+without any appends have no timeline columns. Readers reject unknown format versions.
+
+Files without a version marker are decoded automatically using the legacy layout. Their `timestamp`
+(scalar/vector) or `ts_ns` (video) column is exposed on the timeline named by `positronic.timeline`,
+or `recorded` when that metadata is absent. Legacy auxiliary columns remain in the file but are not
+exposed as timelines. Reading requires no conversion and never rewrites the recording.
+Migration and `convert_ds` preserve every timeline exposed by the source API. HTTP access uses
+`/api/v2`; client and server must both support this named-timestamp protocol.
 
 ## Public API
-Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
+
+`Signal` implements `Sequence[tuple[T, Time]]`. Index access returns a value and its full original
+coordinates. Index slices and strictly increasing index lists return signal views; reverse slices,
+repeated indices, and boolean masks are rejected.
+
 ```python
-from positronic.dataset import Time
+signal.timelines                              # tuple[str, ...]
+value, original_time = signal[0]
+values = signal.values()                     # Sequence[T]
+times = signal.timestamps(("world", "tick")) # Sequence[Time]
+first, last = signal.bounds(("world", "tick"))
+span = last - first                          # Time
+```
 
-T = TypeVar('T')  # The type of the data we manage
+Every timeline selector is an explicit, nonempty tuple of unique names, including single-name
+selectors. Unknown names raise `KeyError`. Empty signals have no bounds and raise `ValueError`.
+Tuple order controls presentation, never query results. Timestamp sequences may be lazy; their
+numeric storage and materialization are backend details.
 
-IndicesLike = slice | Sequence[int] | np.ndarray
-RealNumericArrayLike = Sequence[int] | np.ndarray
+### Signal time access
 
+```python
+value, original_time = signal.time[{"world": 150}]
+sampled = signal.time[[Time(world=100), Time(world=150), Time(world=200)]]
+window = signal.time[Time(world=150):Time(world=250)]
+sampled = signal.time[Time(world=100):Time(world=250):Time(world=50)]
+```
+
+- A point query returns the last record whose coordinates satisfy **all** requested `<=` bounds.
+  Unqueried coordinates impose no bound. Repeated coordinates on a selected subset resolve to the
+  last record. Unknown names or no qualifying record raise `KeyError`; an empty query is invalid.
+- Batch queries contain `Time` values with one name set, strictly ordered componentwise. Empty
+  batches produce empty views. Each output uses the requested coordinates on queried timelines
+  and the selected source record's coordinates on every other timeline.
+- Non-stepped windows carry a sample to `start` when a qualifying record exists and exclude `stop`.
+  An omitted start keeps the first source record. Incompatible ordering after injecting a carried
+  timestamp raises `ValueError`.
+- Stepped windows require a named start. Start, stop, and step have the same name set. Each step
+  coordinate is nonnegative and at least one is positive. Sampling continues while the next `Time`
+  is `< stop`; an omitted stop uses the final selected coordinates as an inclusive bound.
+- Point queries and slice endpoints also accept equivalent name/value dictionaries. Operators and
+  batch elements use `Time`.
+
+For source coordinates `(world, wall) = (100, 900), (140, 950), (220, 1100)`, sampling at world
+`100, 150, 200, 250` yields `(100, 900), (150, 950), (200, 950), (250, 1100)`.
+A point query at world `150` returns the original coordinates `(140, 950)`.
+
+### Backend interface
+
+Backends implement these operations without requiring the public API to materialize timestamps:
+
+```python
 class Signal[T]:
     @property
-    def main_timeline(self) -> str: ...
+    def timelines(self) -> tuple[str, ...]: ...
+    def __len__(self) -> int: ...
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]: ...
+    def _values_at(self, indices: IndicesLike) -> Sequence[T]: ...
 
-    # Minimal abstract interface (implementations must provide):
-    def __len__(self) -> int: ...                # number of records
-    def _ts_at(self, indices: IndicesLike) -> IndicesLike: ...         # list-like only
-    def _values_at(self, indices: IndicesLike) -> Sequence[T]: ...     # list-like only
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike: ...
-        # list-like only; floor indices, -1 if before first
-
-    @property
-    def meta(self) -> SignalMeta: ...            # dtype, shape, kind, optional feature names
-
-    # Index-based access (provided by the library):
-    # * signal[i] -> (value, ts) at i (negative indices supported)
-    # * signal[a:b:s] -> Signal view over [a:b:s], step>0 required
-    # * signal[[i1, i2, ...]] -> Signal view at those integer positions (no boolean masks)
-
-    # Time-based access (provided by the library):
-    # This accessor is the core experience: every query walks the shared timeline
-    # and returns the value that was current when that timestamp arrived.
-    # * signal.time[ts] -> (value_at_or_before_ts, ts_at_or_before) or KeyError if ts < first
-    # * signal.time[start:stop] -> Signal view for [start, stop). Empty signal -> empty view.
-    #     If start < first: the window intersects to [first, stop). If start is between two
-    #     records and >= first, a carried-back sample is injected at exactly `start`.
-    # * signal.time[start:stop:step] -> sampled at t_i = start + i*step (end-exclusive). step>0
-    #     and start required; start < first -> KeyError. Timestamps in the result are the
-    #     requested ones.
-    # * signal.time[[t1, t2, ...]] -> sampled at provided timestamps. Empty arrays are supported
-    #     and return an empty Signal; non-numeric dtype raises TypeError (floats accepted);
-    #     any t < first -> KeyError.
-
-class SignalWriter[T]:
-    def __init__(self, *, main_timeline: str = "recorded"): ...
-
-    # Fails if the main timestamp is not increasing or data shape/dtype doesn't match
-    def append(self, data: T, timestamps: Time) -> None:
-        pass
-
-    # Writers are context managers. Exiting the context finalizes the file.
-    def __enter__(self) -> "SignalWriter[T]":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        ...
-
-    # Abort writing and remove any partial outputs; subsequent calls raise
-    def abort(self) -> None:
-        pass
-
-class Episode:
-    # Names of all items (dynamic signals + static items)
-    @property
-    def keys(self):
-        pass
-
-    # Access by name: returns a `Signal` for dynamic items or the value for static items
-    def __getitem__(self, name: str) -> Signal[Any] | Any:
-        pass
-
-    # Read-only system metadata (not included in keys, not accessible via __getitem__)
-    @property
-    def meta(self) -> dict:
-        pass
-
-    # Latest start and end timestamps across all dynamic signals
-    @property
-    def start_ts(self) -> int:
-        pass
-
-    @property
-    def last_ts(self) -> int:
-        pass
-
-    # Episode-wide time accessor:
-    # * ep.time[ts] -> dict merging static items with sampled values from each `Signal` at-or-before ts
-    # * ep.time[start:end] -> NOT SUPPORTED (to ensure equal-length sequences across signals)
-    # * ep.time[start:end:step] -> dict with static items and, for each signal, a sequence of signal values sampled at t_i = start + i*step (end‑exclusive). If `end` is omitted, it defaults to the episode's `last_ts` (common stop for all signals) to ensure equal-length sequences. Note that information about the actual timestamps where values originate from is not provided.
-    # * ep.time[[t1, t2, ...]] -> dict with static items and, for each signal, a sequence of signal values sampled at provided timestamps.
-    @property
-    def time(self):
-        pass
-
-class EpisodeWriter:
-    # Append dynamic `Signal` data; timestamps must be strictly increasing per signal
-    # Raises if the `Signal` name conflicts with existing static items
-    def append(self, signal_name: str, data: T, timestamps: Time) -> None:
-        pass
-
-    # Set static (non-time-varying) item; raises on name conflicts
-    def set_static(self, name: str, data: Any) -> None:
-        pass
-
-    # Writers are context managers. Exiting the context finalizes the episode.
-    def __enter__(self) -> "EpisodeWriter[T]":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        ...
-
-    # Abort the episode; underlying writers are aborted and the `Episode` directory is removed
-    def abort(self) -> None:
-        pass
-
-class Dataset:
-    # Ordered collection of Episodes with sequence-style access
-    def __len__(self) -> int:
-        pass
-
-    # Indexing returns an Episode; slices and index arrays return lists of Episodes
-    def __getitem__(self, index_or_slice: int | IndicesLike) -> `Episode` | list[Episode]:
-        pass
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        # Optional dataset-level metadata (empty by default)
-        return {}
-
-class DatasetWriter:
-    # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
-    def new_episode(self) -> EpisodeWriter:
-        pass
+    # Optional optimized search; the base class supplies binary search.
+    def _search_ts(self, queries: Sequence[Time]) -> Sequence[int]: ...
 ```
+
+`SignalWriter.append(value, timestamps: Time)` and
+`EpisodeWriter.append(signal_name, value, timestamps: Time)` enforce the same ordering rule.
+Writers are context managers; exiting finalizes output, and `abort()` removes partial output.
+`DatasetWriter.new_episode()` allocates an episode writer.
 
 ### Signal metadata
 
@@ -266,20 +208,14 @@ We provide implementations for scalar and vector `Signal`s (`SimpleSignal`/`Simp
 
 ### Scalar / Vector
 
-Every sequence is stored in one parquet file, with `timestamp` and `value` columns. The timestamp-based access via the `time` property relies on binary search and hence has `O(log N)` compute time.
+Each signal uses a Parquet file with `value` and named timestamp columns. Queries binary-search each requested coordinate, taking the earliest of the resulting record indices.
 
 All the classes are lazy, in the sense that they don't perform any IO or computations until requested. The `SimpleSignal` keeps all the data in numpy arrays in memory after loading from the parquet file. Once the data is loaded into memory, we provide efficient access through views.
 
 #### Access semantics
 
-- Indexing by position: integers, positive-step slices, and integer arrays. Boolean masks are not supported.
-- Time scalar: at-or-before with KeyError if before first.
-- Time windows (non-stepped): [start, stop), inject start sample when start is between records (>= first).
-  If start < first, the window intersects to [first, stop). Empty signal -> empty view.
-- Time stepped windows: [start, stop: step], step > 0 and start required; start < first -> KeyError.
-  Samples at requested timestamps; values are carried back.
-- Time arrays: empty arrays are allowed (empty result); non-numeric dtype raises TypeError (floats accepted);
-  any t < first -> KeyError.
+All scalar/vector backends implement the named access rules above. Bounds use Parquet footer
+statistics where available; querying timestamps does not load values.
 
 ### Video
 When implementing `VideoSignal` we are balancing the following trade-offs:
@@ -289,25 +225,26 @@ When implementing `VideoSignal` we are balancing the following trade-offs:
 * Memory footprint – must also be constant for video data (timestamps are loaded into the memory)
 * User should have control over the size / performance trade off.
 
-We store image streams as a **separate video file** (e.g., MP4/MKV with H.264/H.265) and keep a **single Parquet index** (`frames.parquet`) for timestamp mapping. All timestamps are `timestamp('ns')`. Files are append-only.
+We store image streams as a **separate video file** (e.g., MP4/MKV with H.264/H.265) and keep a **single Parquet index** (`frames.parquet`) for timestamp mapping. Timestamp coordinates are signed `int64`. Files are append-only.
 
-Currently we use only one video file per `VideoSignal`, though in the future we might support multiple files.
+Each `VideoSignal` has one video file.
 
 #### Schema
 
 ```text
 frames.parquet
-  ts_ns    : int64   # presentation timestamp of the frame in nanoseconds
+  ts.world : int64 not null
+  ts.wall  : int64 not null
 ```
 
-* Frames are strictly sorted by `ts_ns` and must be strictly increasing.
+* Every coordinate is non-decreasing; each frame advances at least one timeline.
 * Frame numbers are implicit - they are simply the row indices (0, 1, 2, ...).
 * We rely on the modern video container's internal frame index for seeking.
 
 #### Access semantics
 
-Access interface is the same as for `SimpleSignals`, i.e. both index and time interfaces support plain integers, slices and arrays.
-All access patterns return views over the underlying index data (zero-copy for indices/timestamps; note that timestamps for sampled views are materialized). Frames are decoded on demand when accessed and are not duplicated across views unless decoded again.
+Index and named time access follow the same rules as `SimpleSignal`. Frame decoding is deferred
+until values are requested; timeline discovery and bounds use the Parquet index.
 
 Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand; memory usage stays O(1) with respect to the number of frames (timestamps are kept in memory). Grayscale (HxWx1) images are not supported yet.
 
@@ -321,11 +258,11 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 
 ## Episodes
 
-An `Episode` is a collection of `Signal`s recorded together plus static, episode-level metadata. All dynamic signals in an `Episode` share a common time axis.
+An `Episode` is a collection of `Signal`s recorded together plus static, episode-level metadata. Each signal fixes its own timeline set; signals may have no timelines in common.
 
 ### Recording
 
-Episodes are recorded via `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, timestamps)` where the main timestamp is strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, timestamps)` where coordinates never decrease and at least one increases per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
@@ -353,21 +290,25 @@ Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the 
 
 ### Time accessor
 
-Episode supports time-based access across all signals while preserving static items. This synchronized time lookup is the defining capability of an episode: given any timestamp you can reconstruct the full scene without manual alignment. All episode time queries return a plain dict:
+Episode queries include only signals containing **all** requested timelines, plus every static item.
+An eligible signal without a qualifying sample raises `KeyError`. With no eligible signals, point
+and explicit-batch queries return only static items.
 
-- `ep.time[ts] -> dict`
-  - Snapshot: merges all static items with sampled values (no timestamps) from each dynamic `Signal` at-or-before `ts`.
+```python
+first, last = episode.bounds(("world", "tick"))
+snapshot = episode.time[Time(world=1000, tick=4)]
+sampled = episode.time[[Time(world=1000), Time(world=2000)]]
+sampled = episode.time[Time(world=1000):Time(world=3000):Time(world=500)]
+```
 
-- `ep.time[start:end]`
-  - Not supported: use stepped slicing (`start:end:step`) or explicit timestamp arrays to guarantee equal-length sequences across signals.
+`bounds(names)` takes the coordinatewise maximum of eligible signals' starts and ends. No eligible
+signals, or an eligible signal without bounds, raises `ValueError`. Bounds need not identify a
+stored record. Subtract them to obtain named spans; a tick span is a tick count, not nanoseconds.
 
-- `ep.time[start:end:step] -> dict`
-  - Sampling: for each dynamic `Signal`, returns a sequence of signal values sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved as-is. `step > 0`, `start` are required. If `end` is omitted, it defaults to the episode's `last_ts` so that all per-signal sequences have the same length regardless of when each signal stops. If `start` is before the episode's `start_ts` (max of signal starts), a `KeyError` is raised.
-
-- `ep.time[[t1, t2, ...]] -> dict`
-  - Arbitrary timestamps: for each dynamic `Signal`, returns a sequence of signal values sampled at the provided times. Static items are preserved as-is.
-
-Access semantics mirror those of `Signal.time` for selecting timestamps; the episode-level result aggregates per-signal sequences but omits timestamps (values only). There is no index-based access for episodes — access is time-based only via `ep.time`.
+All queries return a dictionary. Points contain signal values; batches and stepped slices contain
+per-signal value sequences, with statics unchanged. An omitted stepped stop uses one episode-wide
+inclusive bound to give signals equal-length results. Slices without a step are unsupported.
+An empty explicit batch returns empty per-signal sequences plus static items.
 
 ## Datasets
 
@@ -462,7 +403,7 @@ Component layout
 - `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
 
 Playback semantics
-- Each output stream iterates `episode.signals[name].time[start_ts:end_ts]`, so inputs inherit all carry-back semantics and stepping logic from the dataset core.
+- Playback selects `recorded` explicitly and converts command endpoints to `Time` for each output stream, so inputs inherit all carry-back semantics and stepping logic from the dataset core.
 - Emitted timestamps are shifted so that the first sample appears at the clock time the agent received the `START` command. This keeps real-time consumers synchronized with the world clock while preserving inter-sample spacing from the dataset.
 
 Typical use cases
@@ -476,18 +417,18 @@ Typical use cases
 
 ### Building blocks
 - `Elementwise(signal, fn)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
-- `Join(*signals, include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp.
+- `Join(*signals, timelines=("world", "tick"), include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp. Only selected timelines survive; duplicate projected coordinates collapse and incompatible ordering raises `ValueError`. Reference timestamps retain every source coordinate.
 - `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
-- `TimeOffsets(signal, *deltas_ns, include_ref_ts=False)`: samples values at requested time deltas relative to the current time. Can be used to lookup into "past" or "future".
+- `TimeOffsets(signal, *offsets, include_ref_ts=False)`: samples values at named `Time` offsets and preserves all base timestamps. Can be used to lookup into "past" or "future".
 
 Transforms operate purely on values; if you need semantic labels, maintain them alongside your data at a higher layer.
 
 ### Derived helpers
 Common utilities stack the building blocks to cover frequent needs:
 - `image.resize(...)` and `image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL. Import from `positronic.dataset.transforms.image`.
-- `concat(*signals, dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
+- `concat(*signals, timelines=("world",), dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
-- `pairwise(a, b, op)`: join two signals and apply a custom binary operator to every aligned pair.
+- `pairwise(a, b, op, timelines=("world",))`: join two signals and apply a custom binary operator to every aligned pair.
 - `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
 - `view(signal, slice_obj)`: create a zero-copy view that slices each frame (e.g., select quaternion components from a pose vector) while preserving timestamps.
 
@@ -519,7 +460,7 @@ Each transform is responsible for defining which keys are available in the outpu
 - **`Eager(transform)`**: Force eager evaluation of a wrapped transform. Use when you want all values computed upfront (e.g., for debugging or when you know all values will be accessed).
 
 Helper callables (used within `Derive`):
-- **`Concat(*keys)`**: Concatenate multiple signals into a single array signal.
+- **`Concat(*keys, timelines=("world",))`**: Concatenate multiple signals into a single array signal.
 - **`FromValue(value)`**: Return a constant value (useful for adding static labels).
 
 `TransformedEpisode` applies a sequence of transforms lazily—transforms are chained sequentially where each receives the output of the previous one. Transformation happens on first access and results are cached. `TransformedDataset` lifts the same pattern to the dataset level so every retrieved episode is automatically transformed.
@@ -530,6 +471,7 @@ Each `EpisodeTransform` can expose metadata via its `meta` property. `Transforme
 
 ```python
 from positronic.dataset import transforms
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 import numpy as np
@@ -540,7 +482,7 @@ class Features(transforms.EpisodeTransform):
     def __call__(self, episode: Episode) -> Episode:
         joint_q = episode["robot.q"]
         ee_pose = episode["robot.ee_pose"]
-        features = transforms.concat(joint_q, ee_pose, dtype=np.float32)
+        features = transforms.concat(joint_q, ee_pose, timelines=(RECORDED_TIME,), dtype=np.float32)
         resized_image = image.resize(width=224, height=224, signal=episode["rgb_camera"])
         return EpisodeContainer(
             {"features": features, "resized_image": resized_image},
@@ -550,7 +492,7 @@ class Features(transforms.EpisodeTransform):
 
 # Or use built-in Derive for simple cases
 features_transform = Derive(
-    features=lambda ep: transforms.concat(ep["robot.q"], ep["robot.ee_pose"], dtype=np.float32),
+    features=lambda ep: transforms.concat(ep["robot.q"], ep["robot.ee_pose"], timelines=(RECORDED_TIME,), dtype=np.float32),
     resized_image=lambda ep: image.resize(width=224, height=224, signal=ep["rgb_camera"])
 )
 
@@ -562,5 +504,5 @@ dataset = transforms.TransformedDataset(
 
 episode = dataset[0]
 # Resized view; original imagery untouched
-frame0, _ts = episode['resized_image'].time[episode.start_ts]
+frame0, _ts = episode['resized_image'].time[episode.bounds((RECORDED_TIME,))[0]]
 ```

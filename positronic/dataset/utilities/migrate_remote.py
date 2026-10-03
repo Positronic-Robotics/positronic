@@ -19,16 +19,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
 
-from positronic.dataset import Time
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
-from positronic.dataset.signal import RECORDED_TIME, SupportsEncodedRepresentation
+from positronic.dataset.signal import SupportsEncodedRepresentation
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
-    """Migrate a dataset whose signals use the recorded main timeline to local or S3 storage.
+    """Migrate every exposed timeline and value to local or S3 storage.
 
     Signals with encoded representations (e.g. video) are transferred as raw bytes
     without re-encoding. Static fields are materialized into static.json.
@@ -46,10 +45,6 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
-                    assert signal.main_timeline == RECORDED_TIME, (
-                        f'Cannot migrate signal {key!r}: main timeline must be {RECORDED_TIME!r}, '
-                        f'got {signal.main_timeline!r}'
-                    )
                     if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
                         _write_encoded_signal(signal, ew.path, key)
                     else:
@@ -65,10 +60,9 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         end = min(i + chunk_size, len(signal))
         indices = list(range(i, end))
         values = signal._values_at(indices)
-        # TODO: Preserve auxiliary timestamps when the read API exposes them; only the main timestamp is copied.
-        timestamps = signal._ts_at(indices)
+        timestamps = signal._ts_at(indices, signal.timelines)
         for v, ts in zip(values, timestamps, strict=True):
-            ew.append(key, v, Time(**{RECORDED_TIME: ts}))
+            ew.append(key, v, ts)
 
 
 def migrate_remote_dataset(source_url: str, dest_path: str) -> None:

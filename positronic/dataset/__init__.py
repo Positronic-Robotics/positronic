@@ -1,14 +1,12 @@
 from .dataset import CachedDataset, Dataset, DatasetWriter
 from .episode import Episode, EpisodeWriter
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, Time, is_realnum_dtype
+from .signal import IndicesLike, Signal, SignalWriter, Time
 
 __all__ = [
     'Signal',
     'SignalWriter',
     'Time',
     'IndicesLike',
-    'RealNumericArrayLike',
-    'is_realnum_dtype',
     'Episode',
     'EpisodeWriter',
     'CachedDataset',
