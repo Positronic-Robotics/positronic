@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset import Timestamps
+from positronic.dataset import Time
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedDataset
@@ -17,7 +17,7 @@ def test_conversion_checks_main_timeline(tmp_path, data, main_timeline, legacy):
     destination = tmp_path / 'destination'
     with LocalDatasetWriter(source_root) as writer:
         with writer.new_episode(main_timeline=main_timeline) as episode:
-            episode.append('signal', data, Timestamps(**{main_timeline: 1000}))
+            episode.append('signal', data, Time(**{main_timeline: 1000}))
     if legacy:
         for path in source_root.rglob('*.parquet'):
             table = pq.read_table(path)
@@ -40,7 +40,7 @@ def test_conversion_rejects_custom_timeline_through_transforms(tmp_path):
     destination = tmp_path / 'destination'
     with LocalDatasetWriter(source_root) as writer:
         with writer.new_episode(main_timeline='world') as episode:
-            episode.append('signal', 42, Timestamps(world=1000))
+            episode.append('signal', 42, Time(world=1000))
     source = TransformedDataset(
         LocalDataset(source_root), Derive(signal=lambda episode: Elementwise(episode['signal'][:], np.asarray))
     )

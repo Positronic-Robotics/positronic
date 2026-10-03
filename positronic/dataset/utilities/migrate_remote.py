@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
 
-from positronic.dataset import Timestamps
+from positronic.dataset import Time
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -68,7 +68,7 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         # TODO: Preserve auxiliary timestamps when the read API exposes them; only the main timestamp is copied.
         timestamps = signal._ts_at(indices)
         for v, ts in zip(values, timestamps, strict=True):
-            ew.append(key, v, Timestamps(**{RECORDED_TIME: ts}))
+            ew.append(key, v, Time(**{RECORDED_TIME: ts}))
 
 
 def migrate_remote_dataset(source_url: str, dest_path: str) -> None:

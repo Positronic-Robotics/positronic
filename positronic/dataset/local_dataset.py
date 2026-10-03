@@ -35,7 +35,7 @@ from .episode import (
     _static_decode_hook,
     _StaticEncoder,
 )
-from .signal import RECORDED_TIME, Signal, Timestamps, validate_timeline
+from .signal import RECORDED_TIME, Signal, Time, validate_timeline
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
@@ -139,7 +139,7 @@ class DiskEpisodeWriter(EpisodeWriter):
     def path(self) -> Path:
         return self._path
 
-    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
+    def append(self, signal_name: str, data: Any, timestamps: Time) -> None:
         """Append data to a named signal.
 
         Args:

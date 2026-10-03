@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from positronic.cfg.video_encoder import jetson_h264
-from positronic.dataset import Timestamps
+from positronic.dataset import Time
 from positronic.dataset.gst_video import GST_INSPECT, GST_LAUNCH, GstH264Encoder, RawFormat
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 
@@ -52,7 +52,7 @@ def _write(tmp_path: Path, encoder: GstH264Encoder, frames: list[np.ndarray]) ->
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
     with VideoSignalWriter(video, index, encoder) as w:
         for i, frame in enumerate(frames):
-            w.append(frame, Timestamps(recorded=1_000_000_000 + i * 33_333_333))
+            w.append(frame, Time(recorded=1_000_000_000 + i * 33_333_333))
     return VideoSignal(video, index)
 
 
@@ -147,7 +147,7 @@ def test_a_pipeline_that_fails_surfaces_its_error(tmp_path):
     with pytest.raises(RuntimeError, match='Video encoding failed') as failed:
         with VideoSignalWriter(tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet', broken) as w:
             for i in range(20):
-                w.append(_textured_frame(i), Timestamps(recorded=i + 1))
+                w.append(_textured_frame(i), Time(recorded=i + 1))
     assert 'nosuchelement' in str(failed.value.__cause__)
 
 
@@ -156,7 +156,7 @@ def test_abort_stops_the_process_and_deletes_the_files(tmp_path):
     video, index = tmp_path / 'cam.mp4', tmp_path / 'cam.frames.parquet'
     w = VideoSignalWriter(video, index, SOFTWARE_H264)
     for i in range(5):
-        w.append(_textured_frame(i), Timestamps(recorded=i + 1))
+        w.append(_textured_frame(i), Time(recorded=i + 1))
     w.abort()
 
     assert not video.exists()

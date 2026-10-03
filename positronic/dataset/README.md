@@ -63,24 +63,24 @@ Recordings are never modified: edits persist but never compute, transforms compu
 
 ## Writing timestamps
 
-`Timestamps` is an immutable value containing integer timestamps on named timelines. Its constructor
+`Time` is an immutable value containing integer timestamps on named timelines. Its constructor
 accepts timeline names as keyword arguments and requires at least one timeline.
 Names must contain at least one non-whitespace character.
 
 ```python
-from positronic.dataset import Timestamps
+from positronic.dataset import Time
 
-ts = Timestamps(world=1000, wall=2000, tick=4)
+ts = Time(world=1000, wall=2000, tick=4)
 ts.timelines                    # ("world", "wall", "tick")
 ts["world"]                     # 1000
-ts[("tick", "world")]            # Timestamps(**{"tick": 4, "world": 1000})
+ts[("tick", "world")]            # Time(**{"tick": 4, "world": 1000})
 ```
 
-Use `Timestamps(**coordinates)` for dynamic names, including names such as `"server.wall"`.
+Use `Time(**coordinates)` for dynamic names, including names such as `"server.wall"`.
 Changing the input dictionary does not change the constructed timestamps.
 
 Tuple selection requires at least one name, without duplicates. Unknown names raise `KeyError`.
-`Timestamps` also supports read-only access through `keys()`, `values()`, `items()`, and iteration over names.
+`Time` also supports read-only access through `keys()`, `values()`, `items()`, and iteration over names.
 
 Equality compares all names and values, regardless of name order. Ordering and arithmetic require
 identical name sets; mismatches raise `ValueError`.
@@ -90,12 +90,12 @@ identical name sets; mismatches raise `ValueError`.
 | `a <= b` | Every coordinate in `a` is at most the corresponding coordinate in `b`. |
 | `a < b` | `a <= b` and at least one coordinate is smaller. |
 | `a >= b`, `a > b` | Reverse the operands of `<=` and `<`. |
-| `a + b`, `a - b` | Add or subtract matching coordinates and return a new `Timestamps`. |
+| `a + b`, `a - b` | Add or subtract matching coordinates and return a new `Time`. |
 
-Ordering and arithmetic accept `Timestamps` operands. Negative coordinates and differences are allowed.
-Some values are incomparable: neither `Timestamps(a=1, b=2)` nor `Timestamps(a=2, b=1)` is smaller.
+Ordering and arithmetic accept `Time` operands. Negative coordinates and differences are allowed.
+Some values are incomparable: neither `Time(a=1, b=2)` nor `Time(a=2, b=1)` is smaller.
 
-Writers require one `Timestamps` value with all timestamps for each append.
+Writers require one `Time` value with all timestamps for each append.
 The writer constructor selects the main timeline, defaulting to `"recorded"`; every append
 must include a timestamp on that timeline. Timeline names must be non-empty strings, and each signal
 must use the same set of names on every append.
@@ -103,7 +103,7 @@ The timestamp on the main timeline must strictly increase.
 
 ```python
 with dataset_writer.new_episode(main_timeline="world") as episode:
-    episode.append("state", state, Timestamps(world=1000, wall=2000))
+    episode.append("state", state, Time(world=1000, wall=2000))
 ```
 
 `SimpleSignalWriter` and `VideoSignalWriter` also accept `main_timeline=`. The main timeline's name is
@@ -118,7 +118,7 @@ Dataset migration and `convert_ds` assert that every source signal's main timeli
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
 ```python
-from positronic.dataset import Timestamps
+from positronic.dataset import Time
 
 T = TypeVar('T')  # The type of the data we manage
 
@@ -162,7 +162,7 @@ class SignalWriter[T]:
     def __init__(self, *, main_timeline: str = "recorded"): ...
 
     # Fails if the main timestamp is not increasing or data shape/dtype doesn't match
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Time) -> None:
         pass
 
     # Writers are context managers. Exiting the context finalizes the file.
@@ -212,7 +212,7 @@ class Episode:
 class EpisodeWriter:
     # Append dynamic `Signal` data; timestamps must be strictly increasing per signal
     # Raises if the `Signal` name conflicts with existing static items
-    def append(self, signal_name: str, data: T, timestamps: Timestamps) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Time) -> None:
         pass
 
     # Set static (non-time-varying) item; raises on name conflicts
@@ -387,7 +387,7 @@ Access semantics mirror those of `Signal.time` for selecting timestamps; the epi
 with dataset_writer.new_episode() as ew:
     ew.set_static("task", "pick_place")
     ew.set_static("id", 123)
-    ew.append("state", np.array([...]), Timestamps(recorded=ts_ns))
+    ew.append("state", np.array([...]), Time(recorded=ts_ns))
 ```
 
 ### Editing datasets

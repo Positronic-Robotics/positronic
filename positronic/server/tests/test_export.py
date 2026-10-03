@@ -18,7 +18,7 @@ import pytest
 import rerun as rr
 
 from positronic import keys
-from positronic.dataset import Dataset, Timestamps
+from positronic.dataset import Dataset, Time
 from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
@@ -103,9 +103,7 @@ def a_dataset(root: Path, *statics: dict) -> Dataset:
                 for name, value in static.items():
                     episode.set_static(name, value)
                 for step in range(4):
-                    episode.append(
-                        keys.JOINTS, np.zeros(7, dtype=np.float32), Timestamps(recorded=10_000 + step * 1_000)
-                    )
+                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), Time(recorded=10_000 + step * 1_000))
     return load_all_datasets(root)
 
 

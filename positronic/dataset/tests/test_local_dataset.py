@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from positronic.dataset import Episode, Timestamps, edits
+from positronic.dataset import Episode, Time, edits
 from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import (
     UNFINISHED_MARKER,
@@ -26,7 +26,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
         for i in range(3):
             with w.new_episode() as ew:
                 ew.set_static('id', i)
-                ew.append('a', i, Timestamps(recorded=1000 + i))
+                ew.append('a', i, Time(recorded=1000 + i))
 
     # Structure exists (12-digit zero-padded ids)
     assert (root / '000000000000' / '000000000000').exists()
@@ -55,11 +55,11 @@ def test_local_dataset_writer_appends_existing(tmp_path):
 
     writer = LocalDatasetWriter(root)
     with writer.new_episode() as episode:
-        episode.append('test_signal', np.array([1.0], dtype=np.float32), Timestamps(recorded=1))
+        episode.append('test_signal', np.array([1.0], dtype=np.float32), Time(recorded=1))
 
     writer = LocalDatasetWriter(root)
     with writer.new_episode() as episode:
-        episode.append('test_signal', np.array([2.0], dtype=np.float32), Timestamps(recorded=2))
+        episode.append('test_signal', np.array([2.0], dtype=np.float32), Time(recorded=2))
 
     ds = LocalDataset(root)
     assert len(ds) == 2

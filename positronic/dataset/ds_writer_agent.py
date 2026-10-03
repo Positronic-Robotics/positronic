@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
-from positronic.dataset.signal import RECORDED_TIME, Timestamps
+from positronic.dataset.signal import RECORDED_TIME, Time
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -223,7 +223,7 @@ class DsWriterAgent(pimm.ControlSystem):
         # Only add 'world' if clock is not system clock
         if not isinstance(clock, pimm.world.SystemClock):
             coordinates['world'] = world_time_ns
-        timestamps = Timestamps(**coordinates)
+        timestamps = Time(**coordinates)
 
         with self._telemetry_span():
             serializer = self._serializers.get(name)

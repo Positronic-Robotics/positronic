@@ -27,14 +27,14 @@ def validate_timeline(timeline: str) -> None:
         raise ValueError('A timeline name must be a non-empty string')
 
 
-class Timestamps(Mapping[str, int]):
+class Time(Mapping[str, int]):
     """Immutable integer coordinates on a nonempty set of named timelines."""
 
     __slots__ = ('_coordinates',)
 
     def __init__(self, /, **timestamps: SupportsIndex):
         if not timestamps:
-            raise ValueError('Timestamps must contain at least one timeline')
+            raise ValueError('Time must contain at least one timeline')
         coordinates = {}
         for name, value in timestamps.items():
             validate_timeline(name)
@@ -49,16 +49,16 @@ class Timestamps(Mapping[str, int]):
     def __getitem__(self, key: str) -> int: ...
 
     @overload
-    def __getitem__(self, key: tuple[str, ...]) -> 'Timestamps': ...
+    def __getitem__(self, key: tuple[str, ...]) -> 'Time': ...
 
-    def __getitem__(self, key: str | tuple[str, ...]) -> 'int | Timestamps':
+    def __getitem__(self, key: str | tuple[str, ...]) -> 'int | Time':
         if isinstance(key, str):
             return self._coordinates[key]
         if not isinstance(key, tuple):
             raise TypeError('Select a timeline name or a tuple of timeline names')
         if not key or len(set(key)) != len(key):
             raise ValueError('Select a nonempty tuple of unique timeline names')
-        return Timestamps(**{name: self._coordinates[name] for name in key})
+        return Time(**{name: self._coordinates[name] for name in key})
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._coordinates)
@@ -70,44 +70,44 @@ class Timestamps(Mapping[str, int]):
         return key in self._coordinates
 
     def __repr__(self) -> str:
-        return f'Timestamps(**{dict(self._coordinates)!r})'
+        return f'Time(**{dict(self._coordinates)!r})'
 
-    def _validate_timelines(self, other: 'Timestamps') -> None:
+    def _validate_timelines(self, other: 'Time') -> None:
         if self._coordinates.keys() != other._coordinates.keys():
             raise ValueError('Timestamp operations require the same timeline names')
 
-    def __le__(self, other: 'Timestamps') -> bool:
-        if not isinstance(other, Timestamps):
+    def __le__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
             return NotImplemented
         self._validate_timelines(other)
         return all(value <= other[name] for name, value in self.items())
 
-    def __lt__(self, other: 'Timestamps') -> bool:
-        if not isinstance(other, Timestamps):
+    def __lt__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
             return NotImplemented
         return self <= other and self != other
 
-    def __ge__(self, other: 'Timestamps') -> bool:
-        if not isinstance(other, Timestamps):
+    def __ge__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
             return NotImplemented
         return other <= self
 
-    def __gt__(self, other: 'Timestamps') -> bool:
-        if not isinstance(other, Timestamps):
+    def __gt__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
             return NotImplemented
         return other < self
 
-    def __add__(self, other: 'Timestamps') -> 'Timestamps':
-        if not isinstance(other, Timestamps):
+    def __add__(self, other: 'Time') -> 'Time':
+        if not isinstance(other, Time):
             return NotImplemented
         self._validate_timelines(other)
-        return Timestamps(**{name: value + other[name] for name, value in self.items()})
+        return Time(**{name: value + other[name] for name, value in self.items()})
 
-    def __sub__(self, other: 'Timestamps') -> 'Timestamps':
-        if not isinstance(other, Timestamps):
+    def __sub__(self, other: 'Time') -> 'Time':
+        if not isinstance(other, Time):
             return NotImplemented
         self._validate_timelines(other)
-        return Timestamps(**{name: value - other[name] for name, value in self.items()})
+        return Time(**{name: value - other[name] for name, value in self.items()})
 
 
 def is_realnum_dtype(dtype) -> bool:
@@ -470,14 +470,14 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     def main_timeline(self) -> str:
         return self._main_timeline
 
-    def _validate_timestamps(self, timestamps: Timestamps) -> None:
-        if not isinstance(timestamps, Timestamps):
-            raise TypeError('Expected Timestamps')
+    def _validate_timestamps(self, timestamps: Time) -> None:
+        if not isinstance(timestamps, Time):
+            raise TypeError('Expected Time')
         if self.main_timeline not in timestamps:
             raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
 
     @abstractmethod
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Time) -> None:
         pass
 
     @abstractmethod
