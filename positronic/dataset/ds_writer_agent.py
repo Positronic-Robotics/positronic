@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -216,12 +217,12 @@ class DsWriterAgent(pimm.ControlSystem):
     def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message, clock: pimm.Clock) -> None:
         """Append one input's sample, stamped as ``time_mode`` selects and carrying every clock beside it."""
         world_time_ns, message_time_ns = clock.now_ns(), msg.ts
-        primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
+        main_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
-        extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
+        timestamps = {RECORDED_TIME: main_ts, 'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
         # Only add 'world' if clock is not system clock
         if not isinstance(clock, pimm.world.SystemClock):
-            extra_ts['world'] = world_time_ns
+            timestamps['world'] = world_time_ns
 
         with self._telemetry_span():
             serializer = self._serializers.get(name)
@@ -230,7 +231,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 value = serializer(value)
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
-                    ep_writer.append(full_name, v, primary_ts, extra_ts)
+                    ep_writer.append(full_name, v, timestamps)
 
     def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
         """Append this turn's input samples, dropping any stamped after ``before``.

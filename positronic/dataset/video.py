@@ -15,7 +15,18 @@ import pyarrow.parquet as pq
 from av.container import OutputContainer
 from av.video.stream import VideoStream
 
-from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
+from .signal import (
+    RECORDED_TIME,
+    TIMELINE_METADATA_KEY,
+    IndicesLike,
+    Kind,
+    RealNumericArrayLike,
+    Signal,
+    SignalMeta,
+    SignalWriter,
+    Timestamps,
+    is_realnum_dtype,
+)
 
 
 class VideoEncoderSession(Protocol):
@@ -109,6 +120,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
         gop_size: int = 30,
         fps: int = 100,
+        *,
+        main_timeline: str = RECORDED_TIME,
     ):
         """Initialize VideoSignalWriter.
 
@@ -118,7 +131,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             encoder: The encoder that writes the video file
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
+            main_timeline: Name of the main timeline.
         """
+        super().__init__(main_timeline=main_timeline)
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.encoder = encoder
@@ -153,13 +168,12 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
-    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
+    def append(self, data: np.ndarray, timestamps: Timestamps) -> None:
         """Append a video frame with timestamp.
 
         Args:
             data: Image frame as uint8 numpy array with shape (H, W, 3)
-            ts_ns: Timestamp in nanoseconds (must be strictly increasing)
-            extra_ts: Optional dict of extra timeline names to timestamps
+            timestamps: All named timestamps in nanoseconds; the main timeline must strictly increase.
 
         Raises:
             RuntimeError: If writer has been finished
@@ -170,6 +184,11 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
 
+        timestamps = self._validate_timestamps(timestamps)
+        ts_ns = timestamps[self.main_timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
+        if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
+            raise ValueError('Timeline names must be consistent across all appends')
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
@@ -180,18 +199,6 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
             if data.dtype != np.uint8:
                 raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
-
-        # Validate extra_ts consistency: keys must match across all appends
-        extra_ts = extra_ts or {}
-        extra_ts = {k: int(v) for k, v in extra_ts.items()}
-        current_keys = frozenset(extra_ts.keys())
-        if self._frame_timestamps:  # Not the first append
-            expected_keys = frozenset(self._extra_timelines.keys())
-            if current_keys != expected_keys:
-                raise ValueError(
-                    f'extra_ts keys must be consistent across all appends. '
-                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
-                )
 
         if self._encoder_error is not None:
             raise RuntimeError('Video encoding failed') from self._encoder_error
@@ -253,7 +260,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._session.abort()
                 raise RuntimeError('Video encoding failed') from e
 
-        # Write frame index with primary timestamp and extra timelines
+        # Write frame index with main timestamp and extra timelines
         data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
         fields = [('ts_ns', pa.int64())]
 
@@ -264,9 +271,11 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             fields.append((col_name, pa.int64()))
 
         if self._frame_timestamps:
-            frames_table = pa.table(data_dict)
+            frames_table = pa.table(data_dict).replace_schema_metadata({
+                TIMELINE_METADATA_KEY: self.main_timeline.encode()
+            })
         else:
-            schema = pa.schema(fields)
+            schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.main_timeline.encode()})
             frames_table = pa.table(data_dict, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
@@ -366,6 +375,12 @@ class VideoSignal(Signal[np.ndarray]):
 
         self._timestamps = None
         self._navigator: _VideoNavigator | None = None
+
+    @property
+    @lru_cache(maxsize=1)
+    def main_timeline(self) -> str:
+        metadata = pq.read_schema(self.frames_index_path).metadata or {}
+        return metadata.get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
 
     def _load_timestamps(self):
         """Lazily load timestamps from the index file."""

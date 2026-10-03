@@ -9,10 +9,11 @@ import pytest
 
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter, EpisodeWriter
+from positronic.dataset import DatasetWriter, EpisodeWriter, Timestamps
 from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
@@ -31,12 +32,12 @@ def world():
 class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
-        self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
+        self.appends: list[tuple[str, Any, dict[str, int]]] = []
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
-        self.appends.append((signal_name, data, int(ts_ns), extra_ts))
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
+        self.appends.append((signal_name, data, dict(timestamps)))
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
@@ -62,7 +63,8 @@ class FakeDatasetWriter(DatasetWriter):
         self.lifecycle.append('enter')
         return self
 
-    def new_episode(self) -> FakeEpisodeWriter:
+    def new_episode(self, *, main_timeline: str = RECORDED_TIME) -> FakeEpisodeWriter:
+        assert main_timeline == RECORDED_TIME
         self.lifecycle.append('new_episode')
         w = FakeEpisodeWriter()
         self.created.append(w)
@@ -115,7 +117,7 @@ def test_start_stop_happy_path(world):
     assert len(ds.created) == 1
     w = ds.created[-1]
     assert w.statics.get('user') == 'alice'
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('b', 2)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('b', 2)]
     assert w.exited is True
     assert w.statics.get('done') is True
 
@@ -133,7 +135,7 @@ def test_episode_finalizes_when_run_stops(world):
 
     assert len(ds.created) == 1
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 42)]
     assert w.exited is True
 
 
@@ -172,7 +174,7 @@ def test_abort_flow_then_restart(world):
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
     assert w1.aborted is True and w1.exited is True
-    assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 10), ('s', 11)]  # 10 is what the channel held
+    assert [(s, v) for (s, v, _) in w2.appends] == [('s', 10), ('s', 11)]  # 10 is what the channel held
 
 
 def test_appends_only_on_updates_and_timestamps_from_clock(world):
@@ -190,7 +192,7 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
 
     w = ds.created[-1]
     assert len(w.appends) == 2
-    assert w.appends[1][2] > w.appends[0][2]
+    assert w.appends[1][2][RECORDED_TIME] > w.appends[0][2][RECORDED_TIME]
 
 
 def test_records_what_the_inputs_hold_when_the_episode_opens(world):
@@ -209,7 +211,7 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 99), ('a', 7)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 99), ('a', 7)]
 
 
 def test_time_mode_message_uses_signal_timestamp(world):
@@ -229,8 +231,8 @@ def test_time_mode_message_uses_signal_timestamp(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [ts for (_, _, ts, _) in w.appends] == [ts_first, ts_second]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
+    assert [timestamps[RECORDED_TIME] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
@@ -346,7 +348,7 @@ def test_serializer_scalar_transform(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 6)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('x', 6)]
 
 
 def test_serializer_dict_expansion(world):
@@ -369,7 +371,7 @@ def test_serializer_dict_expansion(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    names_and_vals = [(s, v) for (s, v, _, _) in w.appends]
+    names_and_vals = [(s, v) for (s, v, _) in w.appends]
     assert ('img', 10) in names_and_vals
     assert ('img.extra', 11) in names_and_vals
 
@@ -394,7 +396,7 @@ def test_serializer_none_drops_sample(world):
 
     w = ds.created[-1]
     # Only the positive value should be recorded
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 3)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('x', 3)]
 
 
 def test_transform_3d_serializer(world):
@@ -414,7 +416,7 @@ def test_transform_3d_serializer(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    names_vals = [(s, v) for (s, v, _, _) in w.appends]
+    names_vals = [(s, v) for (s, v, _) in w.appends]
     assert len(names_vals) == 1 and names_vals[0][0] == 'pose'
     np.testing.assert_allclose(names_vals[0][1][:3], t)
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
@@ -440,7 +442,7 @@ def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
 
     w = ds.created[-1]
     by_name = {}
-    for name, val, _, _ in w.appends:
+    for name, val, _ in w.appends:
         by_name.setdefault(name, []).append(val)
     expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
     assert set(by_name) == {keys.ROBOT_STATUS, *expected}
@@ -474,7 +476,7 @@ def test_robot_command_serializer_variants(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _, _) in w.appends}
+    items = {name: val for (name, val, _) in w.appends}
     np.testing.assert_allclose(items['cmd.pose'], np.concatenate([pose.translation, pose.rotation.as_quat]))
     np.testing.assert_allclose(items['cmd.pose_delta'], np.concatenate([delta.translation, delta.rotation.as_quat]))
     np.testing.assert_allclose(
@@ -486,7 +488,7 @@ def test_robot_command_serializer_variants(world):
     # name has no shape to fix it at.
     assert items['cmd.mode.position_control'] == 1
     np.testing.assert_allclose(items['cmd.mode.position_control.stiffness'], [100.0] * 7)
-    mode_appends = [name for (name, _, _, _) in w.appends if '.mode' in name]
+    mode_appends = [name for (name, _, _) in w.appends if '.mode' in name]
     assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
@@ -505,23 +507,23 @@ def test_multiple_timelines_recorded(world):
 
     w = ds.created[-1]
     assert len(w.appends) == 1
-    name, value, _primary_ts, extra_ts = w.appends[0]
+    name, value, timestamps = w.appends[0]
 
     assert name == 'a'
     assert value == 42
-    assert extra_ts is not None
+    assert timestamps[RECORDED_TIME] == timestamps['world']
 
     # Should have message and system timelines
-    assert 'message' in extra_ts
-    assert 'system' in extra_ts
+    assert 'message' in timestamps
+    assert 'system' in timestamps
 
     # The virtual-time world drives a simulated clock, so 'world' is present too
-    assert 'world' in extra_ts
+    assert 'world' in timestamps
 
     # All timestamps should be positive integers
-    assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
-    assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
-    assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
+    assert isinstance(timestamps['message'], int) and timestamps['message'] > 0
+    assert isinstance(timestamps['system'], int) and timestamps['system'] > 0
+    assert isinstance(timestamps['world'], int) and timestamps['world'] > 0
 
 
 def test_pickles_with_every_constructor_argument_filled():
@@ -560,4 +562,4 @@ def test_serializer_plain_list_value(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
+    assert [(s, v) for (s, v, _) in w.appends] == [('v', [1, 2, 3])]

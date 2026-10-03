@@ -31,12 +31,11 @@ from .episode import (
     SIGNAL_FACTORY_T,
     Episode,
     EpisodeWriter,
-    T,
     _is_valid_static_value,
     _static_decode_hook,
     _StaticEncoder,
 )
-from .signal import Signal
+from .signal import RECORDED_TIME, Signal, Timestamps, validate_timeline
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
@@ -88,6 +87,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
+        main_timeline: str = RECORDED_TIME,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -97,6 +97,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
+            main_timeline: Main timeline for all signals appended through this writer.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
@@ -104,6 +105,8 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve identity when copying an existing recording.
             video_encoder: The encoder for video signals.
         """
+        validate_timeline(main_timeline)
+        self._main_timeline = main_timeline
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
@@ -136,14 +139,13 @@ class DiskEpisodeWriter(EpisodeWriter):
     def path(self) -> Path:
         return self._path
 
-    def append(self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(self, signal_name: str, data: Any, timestamps: Timestamps) -> None:
         """Append data to a named signal.
 
         Args:
             signal_name: Name of the signal to append to
             data: Data to append
-            ts_ns: Timestamp in nanoseconds
-            extra_ts: Optional dict of extra timeline names to timestamps
+            timestamps: All named timestamps in nanoseconds, including the signal's main timeline.
         """
         if self._finished:
             raise RuntimeError(f'Cannot append to a finished writer {self._path}')
@@ -152,18 +154,23 @@ class DiskEpisodeWriter(EpisodeWriter):
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode {self._path}")
 
-        # Create writer on first append, choosing vector vs video based on data shape/dtype
-        if signal_name not in self._writers:
-            if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
-                # Image signal -> route to video writer
-                video_path = self._path / f'{signal_name}.mp4'
-                frames_index = self._path / f'{signal_name}.frames.parquet'
-                self._writers[signal_name] = VideoSignalWriter(video_path, frames_index, self._video_encoder)
-            else:
-                # Scalar/vector signal
-                self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
+        if signal_name in self._writers:
+            self._writers[signal_name].append(data, timestamps)
+            return
 
-        self._writers[signal_name].append(data, ts_ns, extra_ts)
+        if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
+            video_path = self._path / f'{signal_name}.mp4'
+            frames_index = self._path / f'{signal_name}.frames.parquet'
+            writer = VideoSignalWriter(video_path, frames_index, self._video_encoder, main_timeline=self._main_timeline)
+        else:
+            writer = SimpleSignalWriter(self._path / f'{signal_name}.parquet', main_timeline=self._main_timeline)
+
+        try:
+            writer.append(data, timestamps)
+        except Exception:
+            writer.abort()
+            raise
+        self._writers[signal_name] = writer
 
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.
@@ -528,10 +535,13 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self, *, created_ts_ns: int | None = None, uid: str | None = None) -> DiskEpisodeWriter:
+    def new_episode(
+        self, *, main_timeline: str = RECORDED_TIME, created_ts_ns: int | None = None, uid: str | None = None
+    ) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
+            main_timeline: Main timeline for all signals appended through this writer.
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
@@ -545,7 +555,9 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder)
+        writer = DiskEpisodeWriter(
+            ep_dir, main_timeline=main_timeline, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder
+        )
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:

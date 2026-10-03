@@ -6,14 +6,14 @@ from typing import Any
 import numpy as np
 
 from .episode import Episode, EpisodeWriter
-from .signal import IndicesLike
+from .signal import RECORDED_TIME, IndicesLike
 
 
 class DatasetWriter(AbstractContextManager, ABC):
     """Abstract factory for creating new Episodes within a dataset."""
 
     @abstractmethod
-    def new_episode(self) -> EpisodeWriter:
+    def new_episode(self, *, main_timeline: str = RECORDED_TIME) -> EpisodeWriter:
         """Allocate and return a writer for a new episode."""
         pass
 
