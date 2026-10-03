@@ -19,6 +19,7 @@ from pimm.core import (
     Message,
     ReceiverDict,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
@@ -26,7 +27,16 @@ from pimm.core import (
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
+from pimm.world import (
+    EventReceiver,
+    LocalQueueEmitter,
+    MultiprocessEmitter,
+    MultiprocessReceiver,
+    QueueEmitter,
+    SystemClock,
+    VirtualClock,
+    World,
+)
 
 
 def dummy_process(stop_reader, clock):
@@ -423,6 +433,77 @@ class TestWorld:
 
             with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
                 emitter.emit('not-compatible')
+
+    @staticmethod
+    def _one_mp_pipe(world: World) -> tuple[MultiprocessEmitter, MultiprocessReceiver]:
+        emitter, reader = world.mp_pipes()
+        assert isinstance(emitter, MultiprocessEmitter) and isinstance(reader, MultiprocessReceiver)
+        return emitter, reader
+
+    @staticmethod
+    def _read(reader: SignalReceiver) -> Message:
+        message = reader.read()
+        assert message is not None
+        return message
+
+    def test_mp_pipes_carry_a_signal_error_beside_shared_memory(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), ts=1)
+            assert self._read(reader).data.value == pytest.approx(1.0)
+
+            error = SignalError('camera lost')
+            emitter.emit(error, ts=2)
+
+            message = self._read(reader)
+            assert (message.data.args, message.ts, message.updated) == (error.args, 2, True)
+            with pytest.raises(SignalError, match='camera lost'):
+                _ = reader.value
+            assert self._read(reader).updated is False
+
+            emitter.emit(DummySMValue(3.0), ts=3)
+            message = self._read(reader)
+            assert (message.data.value, message.ts, message.updated) == (pytest.approx(3.0), 3, True)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_mp_pipes_give_the_newest_of_errors_and_shared_memory_payloads(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), ts=1)
+            emitter.emit(SignalError('lost'), ts=2)
+            emitter.emit(DummySMValue(3.0), ts=3)
+
+            message = self._read(reader)
+            assert (message.data.value, message.ts) == (pytest.approx(3.0), 3)
+
+            emitter.emit(SignalError('lost again'), ts=4)
+            message = self._read(reader)
+            assert (message.data.args, message.ts) == (('lost again',), 4)
+
+    def test_a_signal_error_does_not_choose_the_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(SignalError('camera absent'), ts=1)
+
+            assert self._read(reader).data.args == ('camera absent',)
+            assert not emitter.uses_shared_memory and not reader.uses_shared_memory
+
+            emitter.emit(DummySMValue(2.0), ts=2)
+            message = self._read(reader)
+            assert (message.data.value, message.ts) == (pytest.approx(2.0), 2)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_mp_pipes_carry_a_signal_error_on_a_queue_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit('hello', ts=1)
+            assert self._read(reader).data == 'hello'
+
+            emitter.emit(SignalError('lost'), ts=2)
+            assert self._read(reader).data.args == ('lost',)
+
+            emitter.emit('again', ts=3)
+            assert self._read(reader).data == 'again'
 
 
 class TestWorldControlSystems:

@@ -106,18 +106,20 @@ def wire_embodiment(
 ):
     """Wire an embodiment to the Harness for the inference path.
 
-    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device
-    receivers, ``harness.prepare`` -> everything a trial readies, and records observations, command chunks,
-    and the eval's privileged ground-truth into the dataset each episode names. ``record`` off leaves the
-    recorder out, so the episode commands reach nobody and the producers keep one consumer each. The ``done``
-    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring stays with the
-    caller — it is a presentation concern, not part of the embodiment contract.
+    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device receivers,
+    ``harness.ready`` -> every device that can hold an error, ``harness.prepare`` -> everything a trial readies, and
+    records observations, command chunks, and the eval's privileged ground-truth into the dataset each episode
+    names. ``record`` off leaves the recorder out, so the episode commands reach nobody and the producers keep one
+    consumer each. The ``done`` terminating signal, when present, is connected to ``harness.done``. GUI camera
+    wiring stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
         world.connect(harness.commands[name], cmd.dest)
+    for name, handler in embodiment.ready_handlers.items():
+        world.connect(harness.ready[name], handler)
     for name, handler in embodiment.prepare_handlers.items():
         world.connect(harness.prepare[name], handler)
     if embodiment.meta_source is not None:

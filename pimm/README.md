@@ -119,12 +119,22 @@ Control loops can gate their work on that bit without extra wrappers.
 takes a `default=` instead and always has a value: until the first message it
 returns that default with `updated=False`.
 
+An emitter sends a `pimm.SignalError` in place of data while its signal has no
+valid value, for example while a camera is lost. The error is the newest value
+until the next data replaces it. `read()` returns a message whose `data` is the
+error. `value` and `value_updated` raise it, as `value` raises `NoValueException`
+before the first message. So a reader that must continue after the error reads
+the message and checks its `data`, and every other reader raises. Across
+processes the error goes on the queue beside the shared-memory buffer, and it
+does not choose the transport.
+
 For data transformation, Pimm provides:
 
 - `pimm.map(signal, func)` transforms data on the way in or out. If `func`
   returns `None`, the value is filtered: receivers return the last valid message
   while emitters skip emission entirely. This enables conditional filtering like
-  `lambda x: x if x > 0 else None`.
+  `lambda x: x if x > 0 else None`. A `SignalError` passes through, and `func`
+  does not get it.
 
 ### Optional Connectors for Duck Typing
 

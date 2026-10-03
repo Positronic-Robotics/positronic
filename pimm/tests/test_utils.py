@@ -1,4 +1,7 @@
+import traceback
 from unittest.mock import Mock
+
+import pytest
 
 from pimm.core import (
     Clock,
@@ -7,6 +10,7 @@ from pimm.core import (
     DefaultingReceiver,
     Message,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
 )
 from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter, read_updated, value_updated
@@ -165,6 +169,19 @@ class TestMapSignalReceiver:
         assert stale is not first
         assert first.updated is True
 
+    def test_a_signal_error_passes_through_and_the_function_does_not_get_it(self):
+        mock_reader = Mock(spec=SignalReceiver)
+        func = Mock(side_effect=lambda x: x if x < 20 else None)
+        map_reader = MapSignalReceiver(mock_reader, func)
+        error = SignalError('camera lost')
+
+        mock_reader.read.return_value = Message(data=error, ts=100)
+        assert map_reader.read() == Message(data=error, ts=100)
+        func.assert_not_called()
+
+        mock_reader.read.return_value = Message(data=30, ts=200)
+        assert map_reader.read() == Message(data=error, ts=100, updated=False)
+
 
 class TestMapSignalEmitter:
     """Test the MapSignalEmitter class."""
@@ -226,6 +243,17 @@ class TestMapSignalEmitter:
         mock_emitter.reset_mock()
         map_emitter.emit(15, ts=200)
         mock_emitter.emit.assert_not_called()
+
+    def test_a_signal_error_passes_through_and_the_function_does_not_get_it(self):
+        mock_emitter = Mock(spec=SignalEmitter)
+        func = Mock(return_value=None)
+        map_emitter = MapSignalEmitter(mock_emitter, func)
+        error = SignalError('camera lost')
+
+        map_emitter.emit(error, ts=100)
+
+        mock_emitter.emit.assert_called_once_with(error, 100)
+        func.assert_not_called()
 
 
 class TestDefaultingReceiver:
@@ -290,6 +318,36 @@ class TestControlSystemReceiver:
         result = receiver.read()
 
         assert result is None
+
+    def test_value_raises_the_signal_error_that_read_returns(self):
+        receiver = ControlSystemReceiver(Mock(spec=ControlSystem))
+        internal = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        internal.read.return_value = Message(data=error, ts=7)
+        receiver._bind(internal)
+
+        assert receiver.read() == Message(data=error, ts=7)
+        with pytest.raises(SignalError) as raised:
+            _ = receiver.value
+        assert raised.value is error
+
+        internal.read.return_value = Message(data='frame', ts=8)
+        assert receiver.value == 'frame'
+
+    def test_each_raise_of_one_signal_error_starts_a_new_traceback(self):
+        receiver = ControlSystemReceiver(Mock(spec=ControlSystem))
+        internal = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        internal.read.return_value = Message(data=error, ts=7, updated=False)
+        receiver._bind(internal)
+
+        depths = []
+        for _ in range(3):
+            with pytest.raises(SignalError):
+                _ = receiver.value
+            depths.append(len(traceback.extract_tb(error.__traceback__)))
+
+        assert depths[0] == depths[-1]
 
 
 class TestRateLimiter:
@@ -487,3 +545,12 @@ class TestValueUpdated:
         receiver.read.return_value = Message(data=None, ts=7)
 
         assert value_updated(receiver) is None
+
+    def test_raises_a_delivered_signal_error(self):
+        receiver = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        receiver.read.return_value = Message(data=error, ts=7)
+
+        with pytest.raises(SignalError) as raised:
+            value_updated(receiver)
+        assert raised.value is error
