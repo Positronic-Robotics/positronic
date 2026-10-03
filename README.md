@@ -209,14 +209,6 @@ uv run --locked positronic-server \
 
 Visit `http://localhost:5001` to view episodes. The viewer is read-only for now: mark low-quality runs while watching, then rename or remove the corresponding episode directories manually.
 
-An episode's replay shows each signal in a chart of its own. To put a single arm's state, grip and commands in named charts, pass a layout. Add `--layout.show_unnamed_signals=False` to hide the signals that the layout does not name:
-
-```bash
-uv run --locked positronic-server \
-    --dataset.path=~/datasets/stack_cubes_raw \
-    --layout=@positronic.cfg.server.robot_replay_layout
-```
-
 To preview exactly what the training will see, pass the same codec configuration you'll use for conversion:
 
 ```bash
