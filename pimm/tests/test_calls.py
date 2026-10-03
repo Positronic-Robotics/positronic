@@ -241,7 +241,8 @@ class TestWorldConnect:
         caller, handler = ControlSystemCaller(Passive()), ControlSystemHandler(Passive())
         with World() as world:
             with pytest.raises(AssertionError):
-                world.connect(caller, handler, emitter_wrapper=lambda e: e)
+                # A call takes no wrapper, so `connect` has no overload for one: the assertion is what says so.
+                world.connect(caller, handler, emitter_wrapper=lambda e: e)  # pyright: ignore[reportArgumentType]
 
     def test_in_process(self):
         client, adder = Client([(1, 2), (-1, 2), (3, 4)]), Adder(defer=2)
