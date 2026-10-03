@@ -64,6 +64,7 @@ def _write_raw_signal(signal, ew, key: str) -> None:
         end = min(i + chunk_size, len(signal))
         indices = list(range(i, end))
         values = signal._values_at(indices)
+        # TODO: Preserve auxiliary timestamps when the read API exposes them; only the main timestamp is copied.
         timestamps = signal._ts_at(indices)
         for v, ts in zip(values, timestamps, strict=True):
             ew.append(key, v, {RECORDED_TIME: ts})
