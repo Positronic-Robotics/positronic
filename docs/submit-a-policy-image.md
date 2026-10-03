@@ -13,12 +13,14 @@ test that the image starts with the network denied before you submit:
 ## Example images
 
 Every `positro/<vendor>` image on Docker Hub carries a vendor stack and an inference server for it.
-Each recipe below adds the weights, an offline environment, `EXPOSE 8000` and a start command:
+The openpi and GR00T recipes add the weights, an offline environment, `EXPOSE 8000` and a start
+command. The Cosmos3-Nano recipe builds the vendor stack itself, and CI publishes the image:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
 | openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi` | `pi05_droid_jointpos`, the public checkpoint |
 | GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t` | `nvidia/GR00T-N1.7-DROID` |
+| Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
@@ -40,7 +42,7 @@ Other models:
 
 ### Two traps in the `positro/*` bases
 
-Both recipes handle both traps.
+The openpi and GR00T recipes handle both traps.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
@@ -56,6 +58,45 @@ more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub
 backbone's tokenizer with no cache fallback. The offline variables alone fail at once with
 `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
+
+### Cosmos3-Nano
+
+`positro/cosmos3-nano` holds Cosmos3-Nano-Policy-DROID, NVIDIA's action server with its environment,
+and the Wan2.2 VAE the model loads. It needs no network at start and no arguments. CI builds it when
+its recipe changes, and tags each build with the commit. Read its digest with
+`docker/read_image_digest.sh positro/cosmos3-nano:main`.
+
+The image serves the roboarena wire, not the session protocol:
+
+- `GET /healthz` answers 200 once the model is loaded. A session opens on the root, `/`.
+- On connect, the server sends its config: three 360x640 views, the wrist view included, and
+  `joint_position` actions.
+- With `AUTH_TOKEN` set, every request must carry `Authorization: Bearer <token>`, `/healthz`
+  included. With it unset, the server serves open.
+- The guardrails are off. Their model repository is gated, and they serve only the video and text
+  generation paths, which the action server does not use.
+- Its GPU memory peaks at about 32 500 MiB.
+
+The platform runs a submitted image over the `websocket` wire only
+([Eval plans](../client/README.md#eval-plans)), so it does not run this image as a submission. Use
+the image as a reference: copy the recipe, or run the image on your own GPU. Start it as the
+[test below](#test-the-image-before-you-submit) does, then call `/healthz`:
+
+```bash
+docker exec policy python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/healthz', headers={'Authorization': 'Bearer test'})).read())"
+```
+
+#### The Cosmos3-Nano licences
+
+- The policy weights and NVIDIA's code are under the
+  [OpenMDW License Agreement 1.1](https://openmdw.ai/license/1-1/). It allows any use, commercial use
+  included, and puts no terms on the outputs. To distribute them, include a copy of the agreement and
+  keep NVIDIA's copyright and origin notices.
+- The Wan2.2 VAE is under the Apache License 2.0.
+
+The image holds both licences and a notice in `/opt/cosmos3/`. NVIDIA's own `LICENSE`, `NOTICE` and
+`ATTRIBUTIONS.md` are in `/workspace`.
 
 ### Build and push
 

@@ -1,0 +1,104 @@
+name: Build and Push the Cosmos3-Nano Image
+
+# A pull request builds and checks the image; main also pushes it. Main republishes only on a change to the
+# recipe, because each publish uploads 40 GB of new layers; run the workflow by hand after a Makefile change.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.cosmos3-nano
+      - positronic/vendors/cosmos3/**
+      - .github/workflows/docker-cosmos3-nano.yaml
+      - docker/Makefile
+      - .dockerignore
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.cosmos3-nano
+      - positronic/vendors/cosmos3/**
+      - .github/workflows/docker-cosmos3-nano.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cosmos3-nano-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cosmos3-nano:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        # Adds `-o pipefail`, so a failed `docker save` fails the size check.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The image holds 36 GB of weights on a CUDA development base, so the build wants the disk the cleanup frees.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker system prune -af
+          df -h /
+
+      - name: Build
+        working-directory: docker
+        run: make build-cosmos3-nano
+
+      - name: Check the image
+        run: |
+          image=positro/cosmos3-nano:local
+          df -h /
+          docker image inspect "$image" --format 'uncompressed bytes {{.Size}}'
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' "$image" | cut -c1-160
+          # The server reads the token before it imports anything, so a token no header can carry stops it at once.
+          if docker run --rm --network none -e AUTH_TOKEN='two words' "$image" 2> refusal.log; then
+            echo 'the server started with a token no header can carry' >&2
+            exit 1
+          fi
+          grep -F AUTH_TOKEN refusal.log
+          docker run --rm --entrypoint cat "$image" /opt/cosmos3/NOTICE | grep -F 'OpenMDW-1.1'
+          docker run --rm --entrypoint cat "$image" /opt/cosmos3/LICENSE-OpenMDW-1.1 | grep -F 'OpenMDW License Agreement'
+          docker run --rm --entrypoint cat "$image" /opt/cosmos3/LICENSE-Apache-2.0 | grep -F 'Apache License'
+
+      # The budget is the one docs/submit-a-policy-image.md states. A push compresses each layer with gzip at its
+      # default level, and level 1 compresses less, so this sum is an upper estimate of the size the platform counts.
+      - name: Estimate the compressed size
+        run: |
+          sudo apt-get install -y --no-install-recommends pigz
+          bytes=$(docker save positro/cosmos3-nano:local | pigz -1 | wc -c)
+          echo "compressed bytes, upper estimate: ${bytes}"
+          awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 50e9) }'
+
+      - name: Import the server with no network
+        run: |
+          docker run --rm --network none --entrypoint python positro/cosmos3-nano:local \
+            -c 'import cosmos_framework.scripts.action_policy_server_robolab'
+
+      - name: Log in to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        working-directory: docker
+        run: make push-cosmos3-nano IMAGE_TAG=main
+
+      # Reads anonymously, as the platform does, so a repository that is not public fails here.
+      - name: Read the published digest and size
+        if: github.ref == 'refs/heads/main'
+        run: docker/read_image_digest.sh positro/cosmos3-nano:main
