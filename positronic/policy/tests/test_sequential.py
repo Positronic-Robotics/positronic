@@ -57,6 +57,30 @@ def test_sequential_combines_component_metadata():
     assert Sequential(NamedPause(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
 
 
+def test_each_run_writes_in_a_section_of_its_parent_named_by_its_start_index():
+    class Tag(Policy):
+        def __init__(self, name, child=None):
+            self._name = name
+            self._child = child
+
+        def run(self, runtime, inner=None):
+            runtime.metadata['tag'] = self._name
+            child = runtime.start(self._child) if self._child is not None else None
+            try:
+                obs = yield
+                while True:
+                    obs = yield inner.send(obs) if inner is not None else Step({}, 0)
+            finally:
+                if child is not None:
+                    child.close()
+
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    run = runtime.start(Sequential(Tag('outer'), Tag('inner', child=Tag('nested'))))
+    run.close()
+    runtime.close()
+    assert runtime.metadata == {'0': {'tag': 'inner', '0': {'tag': 'nested'}}, '1': {'tag': 'outer'}}
+
+
 @pytest.mark.parametrize('with_codec', [False, True])
 @pytest.mark.parametrize('timed', [False, True])
 def test_sequence_preserves_normal_processor_completion(with_codec, timed):

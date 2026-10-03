@@ -68,7 +68,7 @@ Try different state representations (joint space vs end-effector space), action 
 
 **Problem solved**: Vendor lock-in and API fragmentation.
 
-The [offboard inference system](positronic/offboard/README.md) provides one session protocol (v1) across all vendors, over a WebSocket or a gRPC wire. The `RemotePolicy` client works interchangeably with LeRobot, GR00T, and OpenPI servers.
+The [offboard inference system](positronic/offboard/README.md) provides one session protocol (v1) across all vendors, over a WebSocket or a gRPC wire. The `WireServer` client works interchangeably with LeRobot, GR00T, and OpenPI servers.
 
 Built-in status streaming handles long model loads (120-300s) gracefully. Swap models without changing hardware code.
 

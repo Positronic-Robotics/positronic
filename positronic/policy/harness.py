@@ -18,6 +18,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyRun
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.remote import Server
 from positronic.utils import flatten_dict, frozen_view
 
 # Harness wake-up intervals on the world's clock.
@@ -28,7 +29,7 @@ MAX_POLL_PERIOD_SEC = 1.0
 
 @dataclass
 class Rollout:
-    """One trial, its complete policy definition, and the path it records into.
+    """One trial, its complete policy definition or the server that declares it, and the path it records into.
 
     The harness creates and owns the runtime and the generator returned by
     ``runtime.start(policy)``. The policy supplies its own dependencies.
@@ -36,7 +37,7 @@ class Rollout:
     """
 
     task: Task
-    policy: Policy
+    policy: Policy | Server
     output_path: Path | None
 
 
@@ -278,9 +279,10 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.manual_command)
                 payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
             self.deadline_ns.emit(None)
-            self.ds_command.emit(
-                DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
-            )
+            if payload is None:
+                self.ds_command.emit(DsWriterCommand.ABORT())
+            else:
+                self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **payload}))
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.

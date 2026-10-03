@@ -43,9 +43,9 @@ TRIAL_COUNT = 'eval.trial_count'
 # inside it.
 TASK = 'eval.task'
 
-# The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
-# ``DROPPED`` counts a due waypoint that a later waypoint replaced.
-SCHEDULE = 'eval.schedule'
+# The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' in the metadata section of the schedule's
+# run. ``DROPPED`` counts a due waypoint that a later waypoint replaced.
+SCHEDULE = 'chunked_schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'

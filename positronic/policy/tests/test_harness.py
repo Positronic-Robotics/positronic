@@ -346,7 +346,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
         DsWriterCommandType.START_EPISODE,
         DsWriterCommandType.STOP_EPISODE,
         DsWriterCommandType.START_EPISODE,
-        DsWriterCommandType.STOP_EPISODE,
+        DsWriterCommandType.ABORT_EPISODE,
     ]
 
 
@@ -661,7 +661,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     meta = h.records.values[-1][1].static_data
     assert meta['rig'] == 'test-rig'
     assert meta['seed'] == 42
-    assert meta['inference.policy.config.name'] == 'hold'
+    assert meta['policy.config.name'] == 'hold'
     assert meta[keys.TASK] == 'move'
     assert meta[eval_keys.UNIVERSE] == 'sim'
     assert eval_keys.TIMEOUT not in meta
@@ -696,9 +696,9 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
         next(h.loop)
         assert answer.done()
         meta = h.records.values[-1][1].static_data
-        assert meta['inference.policy.config.name'] == 'record'
-        assert meta['inference.policy.config.status'] == 'active'
-        assert meta['inference.policy.events'] == ['started']
+        assert meta['policy.config.name'] == 'record'
+        assert meta['policy.config.status'] == 'active'
+        assert meta['policy.events'] == ['started']
 
 
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):

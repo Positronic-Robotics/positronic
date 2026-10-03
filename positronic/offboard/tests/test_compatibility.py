@@ -24,7 +24,7 @@ from positronic.policy.codec import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.processors import ChunkedSchedule
-from positronic.policy.remote import RemotePolicy
+from positronic.policy.remote import WireServer
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
 
@@ -258,7 +258,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     address = served.ws()[1] if transport == 'websocket' else served.grpc()[1]
     now = [1_000_000_000]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
-    run = runtime.start(RemotePolicy(transport, address))
+    run = runtime.start(WireServer(transport, address))
     try:
         first = run.send({'image': np.array([1, 2])})
         first_sent.set()

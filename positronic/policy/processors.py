@@ -96,7 +96,7 @@ class ChunkedSchedule(Policy):
     ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
     At most one call is pending, and another starts when the current chunk's duration ends.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
-    episode metadata.
+    metadata section of its run.
     """
 
     WIRE_NAME = 'chunked_schedule'

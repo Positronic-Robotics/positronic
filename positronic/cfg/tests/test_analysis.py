@@ -34,30 +34,44 @@ def test_every_server_group_key_and_filter_is_a_flat_table_column(flat, groups):
         )
 
 
-def test_ckpt_act_resolves_comment_example_path():
+RECORDED_PREFIXES = pytest.mark.parametrize('prefix', ['policy', 'inference.policy'])
+
+
+@RECORDED_PREFIXES
+def test_ckpt_act_resolves_comment_example_path(prefix):
     ep = EpisodeContainer({
-        'inference.policy.type': 'act',
-        'inference.policy.checkpoint_path': 'full_ft_q/act/031225/checkpoints/300000/pretrained_model/',
+        f'{prefix}.type': 'act',
+        f'{prefix}.checkpoint_path': 'full_ft_q/act/031225/checkpoints/300000/pretrained_model/',
     })
     assert ckpt(ep) == '300000'
 
 
-def test_ckpt_remote_resolves_checkpoint_id():
-    ep = EpisodeContainer({'inference.policy.type': 'remote', 'inference.policy.server.checkpoint_id': '50000'})
+@RECORDED_PREFIXES
+def test_ckpt_remote_resolves_checkpoint_id(prefix):
+    ep = EpisodeContainer({f'{prefix}.type': 'remote', f'{prefix}.server.checkpoint_id': '50000'})
     assert ckpt(ep) == '50000'
 
 
-def test_ckpt_remote_resolves_checkpoint_path():
+@RECORDED_PREFIXES
+def test_ckpt_remote_resolves_checkpoint_path(prefix):
     ep = EpisodeContainer({
-        'inference.policy.type': 'remote',
-        'inference.policy.server.checkpoint_path': '/checkpoints/experiment/checkpoint-30000',
+        f'{prefix}.type': 'remote',
+        f'{prefix}.server.checkpoint_path': '/checkpoints/experiment/checkpoint-30000',
     })
     assert ckpt(ep) == '30000'
 
 
-def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
+@RECORDED_PREFIXES
+def test_ckpt_remote_resolves_lerobot_pretrained_model_path(prefix):
     ep = EpisodeContainer({
-        'inference.policy.type': 'remote',
-        'inference.policy.server.checkpoint_path': 'checkpoints/050000/pretrained_model',
+        f'{prefix}.type': 'remote',
+        f'{prefix}.server.checkpoint_path': 'checkpoints/050000/pretrained_model',
     })
     assert ckpt(ep) == '050000'
+
+
+@RECORDED_PREFIXES
+def test_model_and_phail_model_read_the_server_type(prefix):
+    ep = EpisodeContainer({f'{prefix}.type': 'remote', f'{prefix}.server.type': 'groot'})
+    assert analysis.model(ep) == 'groot'
+    assert analysis.phail_model(ep) == analysis.PHAIL_MODEL_DISPLAY['groot']

@@ -6,7 +6,7 @@ import configuronic as cfn
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
 from positronic.offboard.protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
-from positronic.policy import RemotePolicy
+from positronic.policy import WireServer
 from positronic.utils import nebius
 
 
@@ -37,7 +37,7 @@ def socket_address(uds: str, query: str) -> UnixSocketAddress:
     return UnixSocketAddress(Path(uds), SESSION_PATH, query)
 
 
-remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
+remote = cfn.Config(WireServer, wire='websocket', address=network_address)
 
 
 @cfn.config()
@@ -76,6 +76,6 @@ def file_headers(path: str) -> dict[str, str]:
 
 # The caller names the wire and the endpoint. `network_address` holds localhost, so a run that names no host
 # sends the credential to this machine and not to a stranger.
-authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
-nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
-file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
+authed_remote = cfn.Config(WireServer, address=network_address, headers=bearer_headers)
+nebius_remote = cfn.Config(WireServer, address=network_address, headers=nebius_bearer_headers)
+file_authed_remote = cfn.Config(WireServer, address=network_address, headers=file_headers)
