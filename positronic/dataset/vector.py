@@ -205,7 +205,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         for timeline_name in self._extra_timelines:
             self._extra_timelines[timeline_name].clear()
 
-    def _validate_value(self, data: T) -> object:
+    def _normalize_value(self, data: T) -> object:
         value: object = data
         if isinstance(value, pa.Array):
             value = value.to_numpy()
@@ -243,7 +243,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
-        value = self._validate_value(data)
+        value = self._normalize_value(data)
 
         if self._last_ts is None and self._drop_equal_bytes_threshold is not None:
             size_bytes = self._nbytes(value)
