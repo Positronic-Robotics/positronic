@@ -246,8 +246,9 @@ def test_observation_conversion_errors_propagate(observed_harness):
 
 
 @contextmanager
-def _episode_ports(devices: tuple[str, ...] = ()):
-    """A harness whose loop the test drives, with a ready handler for each of ``devices``."""
+def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()):
+    """A harness whose loop the test drives, with a ready handler for each of ``devices``, and an observation of the
+    same name for each of ``observed``."""
     with pimm.World(virtual_time=True) as world:
         source = Passive()
         serializer = Mock(side_effect=lambda value: value)
@@ -255,7 +256,10 @@ def _episode_ports(devices: tuple[str, ...] = ()):
         readiness = {name: pimm.calls.ControlSystemHandler[None, None](source) for name in devices}
         embodiment = Embodiment(
             descriptor='test',
-            observations={POSITION: Observation(pimm.ControlSystemEmitter(source), serializer)},
+            observations={
+                POSITION: Observation(pimm.ControlSystemEmitter(source), serializer),
+                **{name: Observation(pimm.ControlSystemEmitter(source), None) for name in observed},
+            },
             commands={MOTOR: Command(pimm.ControlSystemReceiver(source), None)},
             prepare_handlers=preparation,
             static_meta={},
@@ -276,6 +280,11 @@ def _episode_ports(devices: tuple[str, ...] = ()):
             receiver._bind(physical_receiver)
             emitters.append(emitter)
         manual, done, observation = emitters
+        device_observations = {}
+        for name in observed:
+            emitter, physical_receiver = world.local_pipe()
+            harness.observations[name]._bind(physical_receiver)
+            device_observations[name] = emitter
         ports = SimpleNamespace(
             world=world,
             harness=harness,
@@ -287,6 +296,7 @@ def _episode_ports(devices: tuple[str, ...] = ()):
             manual=manual,
             done=done,
             observation=observation,
+            device_observations=device_observations,
             serializer=serializer,
             records=Trace(world.clock),
             deadlines=Trace(world.clock),
@@ -311,6 +321,12 @@ def episode_harness():
 @pytest.fixture
 def ready_harness():
     with _episode_ports(devices=(CAMERA, ARM)) as ports:
+        yield ports
+
+
+@pytest.fixture
+def repair_harness():
+    with _episode_ports(devices=(CAMERA, ARM), observed=(CAMERA,)) as ports:
         yield ports
 
 
@@ -898,6 +914,46 @@ def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_ag
     h.caller(Rollout(task, Hold(), None))
     next(h.loop)
     assert [call.request for handler in h.ready.values() for call in handler.incoming()] == [None, None]
+
+
+def _ready_calls(h) -> dict[str, int]:
+    return {name: len(list(handler.incoming())) for name, handler in h.ready.items()}
+
+
+def test_an_idle_device_in_error_is_asked_to_be_ready_with_no_ask_until_it_repairs(repair_harness):
+    h = repair_harness
+    h.device_observations[CAMERA].emit(pimm.SignalError('camera lost'))
+    next(h.loop)
+    first = next(h.ready[CAMERA].incoming())
+    next(h.loop)
+    assert _ready_calls(h) == {CAMERA: 0, ARM: 0}  # one call at a time
+
+    first.set_exception(pimm.SignalError('camera did not open'))
+    next(h.loop)
+    second = next(h.ready[CAMERA].incoming())  # the error stays, so the harness asks again
+
+    h.device_observations[CAMERA].emit(np.array([1]))
+    second.set_result(None)
+    next(h.loop)
+    next(h.loop)
+    assert _ready_calls(h) == {CAMERA: 0, ARM: 0}
+
+
+def test_a_healthy_idle_device_is_not_asked_to_be_ready(repair_harness):
+    h = repair_harness
+    h.device_observations[CAMERA].emit(np.array([1]))
+    for _ in range(3):
+        next(h.loop)
+    assert _ready_calls(h) == {CAMERA: 0, ARM: 0}
+
+
+def test_an_idle_error_on_an_observation_with_no_ready_handler_of_its_name_asks_no_device(repair_harness):
+    h = repair_harness
+    h.device_observations[CAMERA].emit(np.array([1]))
+    h.observation.emit(pimm.SignalError('no position'))
+    for _ in range(3):
+        next(h.loop)
+    assert _ready_calls(h) == {CAMERA: 0, ARM: 0}
 
 
 def test_idle_manual_commands_pass_through(episode_harness):

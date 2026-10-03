@@ -96,6 +96,8 @@ class Harness(pimm.ControlSystem):
     that answers ready with an error fails the call with that error, and the episode does not start.
     A ``pimm.SignalError`` on an observation discards the episode before the policy reads it, and the answer
     raises that error. In both cases the harness keeps serving calls.
+    Between episodes, the harness asks a device to be ready as soon as the observation of the same name carries a
+    ``pimm.SignalError``, one call at a time, and again while the error stays.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
@@ -103,6 +105,8 @@ class Harness(pimm.ControlSystem):
         self._static_meta = static_meta or {}
         self._obs_by_signal: dict[str, dict[str, Any]] = {}
         self._telemetry = _EpisodeTelemetry()
+        # A ready call the harness made between episodes, by device name, until the device answers it.
+        self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
         self.commands = pimm.EmitterDict(self, names=embodiment.commands)
@@ -135,6 +139,26 @@ class Harness(pimm.ControlSystem):
         except Exception as e:
             return e
         return None
+
+    def _ready_devices_in_error(self) -> None:
+        """Ask each device whose observation of the same name carries a ``pimm.SignalError`` to be ready.
+
+        Log the error of a device that does not repair. The next call finds its error and asks again.
+        """
+        for name, answer in list(self._repairs.items()):
+            if not answer.done():
+                continue
+            del self._repairs[name]
+            # rules-allow: swallowed-error — the device keeps its error, so the next call asks it again.
+            try:
+                answer.result()
+            except Exception as e:
+                logging.error(f'{name} is not ready after the harness asked: {e}')
+        for name in (self.ready.keys() & self._embodiment.observations.keys()) - self._repairs.keys():
+            message = self.observations[name].read()
+            if message is not None and isinstance(message.data, pimm.SignalError):
+                logging.warning(f'{name} sends an error, so the harness asks it to be ready: {message.data}')
+                self._repairs[name] = self.ready[name](None)
 
     def _prepare(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> pimm.Run[None]:
         """Prepare only the named devices and wait for them. Empty args leave every device as it is."""
@@ -362,4 +386,5 @@ class Harness(pimm.ControlSystem):
                     for name, value in manual.items():
                         self.commands[name].emit(value)
                 if not should_stop.value:
+                    self._ready_devices_in_error()
                     yield self._yield()
