@@ -370,8 +370,8 @@ class TestVideoExtraTimelines:
 
 
 @pytest.mark.parametrize('count', [0, 2])
-def test_video_primary_name_is_stored_without_changing_queries(video_paths, count):
-    with VideoSignalWriter(video_paths['video'], video_paths['frames'], timeline='camera') as writer:
+def test_video_main_name_is_stored_without_changing_queries(video_paths, count):
+    with VideoSignalWriter(video_paths['video'], video_paths['frames'], main_timeline='camera') as writer:
         for i in range(count):
             writer.append(create_frame(i * 100), {'camera': 1000 + i * 100})
     assert pq.read_schema(video_paths['frames']).metadata[TIMELINE_METADATA_KEY] == b'camera'

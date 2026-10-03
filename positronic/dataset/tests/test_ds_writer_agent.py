@@ -63,8 +63,8 @@ class FakeDatasetWriter(DatasetWriter):
         self.lifecycle.append('enter')
         return self
 
-    def new_episode(self, *, timeline: str = RECORDED_TIME) -> FakeEpisodeWriter:
-        assert timeline == RECORDED_TIME
+    def new_episode(self, *, main_timeline: str = RECORDED_TIME) -> FakeEpisodeWriter:
+        assert main_timeline == RECORDED_TIME
         self.lifecycle.append('new_episode')
         w = FakeEpisodeWriter()
         self.created.append(w)

@@ -492,7 +492,7 @@ class TestExtraTimelines:
     @pytest.mark.parametrize('invalid', [{'world': 30}, {'world': 30, 'wall': 40, 'message': 50}])
     def test_timeline_names_remain_fixed_across_chunks(self, tmp_path, chunk_size, invalid):
         path = tmp_path / 'signal.parquet'
-        with SimpleSignalWriter(path, timeline='world', chunk_size=chunk_size) as writer:
+        with SimpleSignalWriter(path, main_timeline='world', chunk_size=chunk_size) as writer:
             writer.append(1, {'world': 10, 'wall': 20})
             writer.append(2, {'world': 20, 'wall': 30})
             with pytest.raises(ValueError, match='Timeline names must be consistent'):
@@ -503,7 +503,9 @@ class TestExtraTimelines:
         assert table['ts_ns.wall'].to_pylist() == [20, 30, 40]
 
     def test_invalid_timestamps_are_rejected_for_duplicate_values(self, tmp_path):
-        with SimpleSignalWriter(tmp_path / 'signal.parquet', timeline='world', drop_equal_bytes_threshold=32) as writer:
+        with SimpleSignalWriter(
+            tmp_path / 'signal.parquet', main_timeline='world', drop_equal_bytes_threshold=32
+        ) as writer:
             writer.append(1, {'world': 10, 'wall': 20})
             with pytest.raises(ValueError, match='Timeline names must be consistent'):
                 writer.append(1, {'world': 20})
@@ -554,9 +556,9 @@ class TestNorm:
 
 
 @pytest.mark.parametrize('count', [0, 3])
-def test_primary_name_is_stored_without_changing_signal_queries(tmp_path, count):
+def test_main_name_is_stored_without_changing_signal_queries(tmp_path, count):
     path = tmp_path / 'named.parquet'
-    with SimpleSignalWriter(path, timeline='world', chunk_size=1) as writer:
+    with SimpleSignalWriter(path, main_timeline='world', chunk_size=1) as writer:
         for i in range(count):
             writer.append(i, {'world': 100 + i * 10, 'wall': 1000 + i * 10})
     assert pq.read_schema(path).metadata[TIMELINE_METADATA_KEY] == b'world'
@@ -566,7 +568,7 @@ def test_primary_name_is_stored_without_changing_signal_queries(tmp_path, count)
         assert signal.time[115] == (1, 110)
 
 
-def test_default_primary_name_and_legacy_file_queries(tmp_path):
+def test_default_main_name_and_legacy_file_queries(tmp_path):
     path = write_data(tmp_path, [(1, 100), (2, 200)])
     table = pq.read_table(path)
     assert table.schema.metadata[TIMELINE_METADATA_KEY] == RECORDED_TIME.encode()

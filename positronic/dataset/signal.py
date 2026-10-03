@@ -368,19 +368,19 @@ def validate_timeline(timeline: str) -> None:
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     """Append-only writer for Signals."""
 
-    def __init__(self, *, timeline: str = RECORDED_TIME):
-        validate_timeline(timeline)
-        self._timeline = timeline
+    def __init__(self, *, main_timeline: str = RECORDED_TIME):
+        validate_timeline(main_timeline)
+        self._main_timeline = main_timeline
 
     @property
-    def timeline(self) -> str:
-        return self._timeline
+    def main_timeline(self) -> str:
+        return self._main_timeline
 
     def _validate_timestamps(self, timestamps: Timestamps) -> dict[str, int]:
         for name in timestamps:
             validate_timeline(name)
-        if self.timeline not in timestamps:
-            raise ValueError(f'Missing timestamp for primary timeline {self.timeline!r}')
+        if self.main_timeline not in timestamps:
+            raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
         return {name: int(ts) for name, ts in timestamps.items()}
 
     @abstractmethod

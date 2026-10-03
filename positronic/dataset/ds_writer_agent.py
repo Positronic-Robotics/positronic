@@ -217,13 +217,9 @@ class DsWriterAgent(pimm.ControlSystem):
     def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message, clock: pimm.Clock) -> None:
         """Append one input's sample, stamped as ``time_mode`` selects and carrying every clock beside it."""
         world_time_ns, message_time_ns = clock.now_ns(), msg.ts
-        primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
+        main_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
-        timestamps = {
-            RECORDED_TIME: primary_ts,
-            'message': message_time_ns,
-            'system': pimm.world.SystemClock().now_ns(),
-        }
+        timestamps = {RECORDED_TIME: main_ts, 'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
         # Only add 'world' if clock is not system clock
         if not isinstance(clock, pimm.world.SystemClock):
             timestamps['world'] = world_time_ns

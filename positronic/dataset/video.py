@@ -121,7 +121,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         gop_size: int = 30,
         fps: int = 100,
         *,
-        timeline: str = RECORDED_TIME,
+        main_timeline: str = RECORDED_TIME,
     ):
         """Initialize VideoSignalWriter.
 
@@ -131,9 +131,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             encoder: The encoder that writes the video file
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
-            timeline: Name of the primary timeline.
+            main_timeline: Name of the main timeline.
         """
-        super().__init__(timeline=timeline)
+        super().__init__(main_timeline=main_timeline)
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.encoder = encoder
@@ -173,7 +173,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
         Args:
             data: Image frame as uint8 numpy array with shape (H, W, 3)
-            timestamps: All named timestamps in nanoseconds; the primary timeline must strictly increase.
+            timestamps: All named timestamps in nanoseconds; the main timeline must strictly increase.
 
         Raises:
             RuntimeError: If writer has been finished
@@ -185,8 +185,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             raise RuntimeError('Cannot append to an aborted writer')
 
         timestamps = self._validate_timestamps(timestamps)
-        ts_ns = timestamps[self.timeline]
-        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.timeline}
+        ts_ns = timestamps[self.main_timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
         if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
             raise ValueError('Timeline names must be consistent across all appends')
         if self._last_ts is not None and ts_ns <= self._last_ts:
@@ -260,7 +260,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._session.abort()
                 raise RuntimeError('Video encoding failed') from e
 
-        # Write frame index with primary timestamp and extra timelines
+        # Write frame index with main timestamp and extra timelines
         data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
         fields = [('ts_ns', pa.int64())]
 
@@ -271,9 +271,11 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             fields.append((col_name, pa.int64()))
 
         if self._frame_timestamps:
-            frames_table = pa.table(data_dict).replace_schema_metadata({TIMELINE_METADATA_KEY: self.timeline.encode()})
+            frames_table = pa.table(data_dict).replace_schema_metadata({
+                TIMELINE_METADATA_KEY: self.main_timeline.encode()
+            })
         else:
-            schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.timeline.encode()})
+            schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.main_timeline.encode()})
             frames_table = pa.table(data_dict, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)

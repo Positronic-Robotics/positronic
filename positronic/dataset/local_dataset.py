@@ -87,7 +87,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
-        timeline: str = RECORDED_TIME,
+        main_timeline: str = RECORDED_TIME,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -97,7 +97,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
-            timeline: Primary timeline for all signals appended through this writer.
+            main_timeline: Main timeline for all signals appended through this writer.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
@@ -105,8 +105,8 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve identity when copying an existing recording.
             video_encoder: The encoder for video signals.
         """
-        validate_timeline(timeline)
-        self._timeline = timeline
+        validate_timeline(main_timeline)
+        self._main_timeline = main_timeline
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
@@ -145,7 +145,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         Args:
             signal_name: Name of the signal to append to
             data: Data to append
-            timestamps: All named timestamps in nanoseconds, including the signal's primary timeline.
+            timestamps: All named timestamps in nanoseconds, including the signal's main timeline.
         """
         if self._finished:
             raise RuntimeError(f'Cannot append to a finished writer {self._path}')
@@ -161,12 +161,12 @@ class DiskEpisodeWriter(EpisodeWriter):
                 video_path = self._path / f'{signal_name}.mp4'
                 frames_index = self._path / f'{signal_name}.frames.parquet'
                 self._writers[signal_name] = VideoSignalWriter(
-                    video_path, frames_index, self._video_encoder, timeline=self._timeline
+                    video_path, frames_index, self._video_encoder, main_timeline=self._main_timeline
                 )
             else:
                 # Scalar/vector signal
                 self._writers[signal_name] = SimpleSignalWriter(
-                    self._path / f'{signal_name}.parquet', timeline=self._timeline
+                    self._path / f'{signal_name}.parquet', main_timeline=self._main_timeline
                 )
 
         self._writers[signal_name].append(data, timestamps)
@@ -535,12 +535,12 @@ class LocalDatasetWriter(DatasetWriter):
         return max_id + 1
 
     def new_episode(
-        self, *, timeline: str = RECORDED_TIME, created_ts_ns: int | None = None, uid: str | None = None
+        self, *, main_timeline: str = RECORDED_TIME, created_ts_ns: int | None = None, uid: str | None = None
     ) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
-            timeline: Primary timeline for all signals appended through this writer.
+            main_timeline: Main timeline for all signals appended through this writer.
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
@@ -555,7 +555,7 @@ class LocalDatasetWriter(DatasetWriter):
         ep_dir = block_dir / f'{eid:012d}'
 
         writer = DiskEpisodeWriter(
-            ep_dir, timeline=timeline, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder
+            ep_dir, main_timeline=main_timeline, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder
         )
         return writer
 

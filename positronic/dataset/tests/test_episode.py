@@ -639,7 +639,7 @@ def test_group_first_transform_takes_precedence(tmp_path):
 )
 def test_writer_rejects_invalid_timestamps_without_recording(tmp_path, data, timestamps, error):
     path = tmp_path / 'episode'
-    with DiskEpisodeWriter(path, timeline='world') as writer:
+    with DiskEpisodeWriter(path, main_timeline='world') as writer:
         with pytest.raises(ValueError, match=error):
             writer.append('signal', data, timestamps)
         writer.append('signal', data, {'world': 10, 'wall': 20})
@@ -652,7 +652,7 @@ def test_writer_rejects_invalid_timestamps_without_recording(tmp_path, data, tim
 def test_writer_captures_timestamps(tmp_path, data):
     path = tmp_path / 'episode'
     timestamps = {'world': 10, 'wall': 20}
-    with DiskEpisodeWriter(path, timeline='world') as writer:
+    with DiskEpisodeWriter(path, main_timeline='world') as writer:
         writer.append('signal', data, timestamps)
         assert timestamps == {'world': 10, 'wall': 20}
         timestamps.update(world=30, wall=40)
@@ -665,9 +665,9 @@ def test_writer_captures_timestamps(tmp_path, data):
     assert table.schema.metadata[TIMELINE_METADATA_KEY] == b'world'
 
 
-@pytest.mark.parametrize('timeline', ['', '  ', {'signal': 'world'}])
-def test_invalid_primary_timeline_creates_no_episode(tmp_path, timeline):
+@pytest.mark.parametrize('main_timeline', ['', '  ', {'signal': 'world'}])
+def test_invalid_main_timeline_creates_no_episode(tmp_path, main_timeline):
     path = tmp_path / 'episode'
     with pytest.raises(ValueError, match='non-empty'):
-        DiskEpisodeWriter(path, timeline=timeline)
+        DiskEpisodeWriter(path, main_timeline=main_timeline)
     assert not path.exists()

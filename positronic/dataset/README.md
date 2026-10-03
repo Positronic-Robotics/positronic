@@ -64,21 +64,21 @@ Recordings are never modified: edits persist but never compute, transforms compu
 ## Writing timestamps
 
 `Timestamps` describes a record's timestamps on its named timelines. Writers receive these together
-on each append. The constructor selects the primary timeline, defaulting to `"recorded"`; every append
+on each append. The constructor selects the main timeline, defaulting to `"recorded"`; every append
 must include a timestamp on that timeline. Timeline names must be non-empty strings, and each signal
 must use the same set of names on every append.
-The primary timestamp must strictly increase.
+The timestamp on the main timeline must strictly increase.
 
 ```python
-with dataset_writer.new_episode(timeline="world") as episode:
+with dataset_writer.new_episode(main_timeline="world") as episode:
     episode.append("state", state, {"world": 1000, "wall": 2000})
 ```
 
-`SimpleSignalWriter` and `VideoSignalWriter` also accept `timeline=`. The primary name is stored in
-Parquet schema metadata under `positronic.timeline`. Its timestamps use the existing `timestamp`
+`SimpleSignalWriter` and `VideoSignalWriter` also accept `main_timeline=`. The main timeline's name is
+stored in Parquet schema metadata under `positronic.timeline`. Its timestamps use the `timestamp`
 column for scalar/vector signals and `ts_ns` for video; other coordinates use `ts_ns.<name>` columns.
-Readers query the primary column through `signal.time[...]`, `signal.keys()`, and `episode.time[...]`.
-Additional coordinates are stored but have no query API. Files without primary-name metadata remain readable.
+Readers query the main timeline through `signal.time[...]`, `signal.keys()`, and `episode.time[...]`.
+Additional coordinates are stored but have no query API. Files without this metadata remain readable.
 
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
@@ -121,9 +121,9 @@ class Signal[T]:
     #     any t < first -> KeyError.
 
 class SignalWriter[T]:
-    def __init__(self, *, timeline: str = "recorded"): ...
+    def __init__(self, *, main_timeline: str = "recorded"): ...
 
-    # Fails if the primary timestamp is not increasing or data shape/dtype doesn't match
+    # Fails if the main timestamp is not increasing or data shape/dtype doesn't match
     def append(self, data: T, timestamps: Timestamps) -> None:
         pass
 
@@ -287,7 +287,7 @@ An `Episode` is a collection of `Signal`s recorded together plus static, episode
 
 ### Recording
 
-Episodes are recorded via `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, timestamps)` where the primary timestamp is strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, timestamps)` where the main timestamp is strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 

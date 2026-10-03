@@ -131,7 +131,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         chunk_size: int = 10000,
         drop_equal_bytes_threshold: int | None = None,
         *,
-        timeline: str = RECORDED_TIME,
+        main_timeline: str = RECORDED_TIME,
     ):
         """Initialize Signal writer to save data to a parquet file.
 
@@ -140,9 +140,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
-            timeline: Name of the primary timeline.
+            main_timeline: Name of the main timeline.
         """
-        super().__init__(timeline=timeline)
+        super().__init__(main_timeline=main_timeline)
         self.filepath = filepath
         self.chunk_size = chunk_size
         self._drop_equal_bytes_threshold = drop_equal_bytes_threshold
@@ -181,7 +181,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if len(self._timestamps) == 0:
             return
 
-        # Build arrays for primary timestamp and value
+        # Build arrays for main timestamp and value
         arrays = [pa.array(self._timestamps, type=pa.int64()), pa.array(self._values)]
         column_names = ['timestamp', 'value']
 
@@ -191,7 +191,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             column_names.append(f'ts_ns.{timeline_name}')
 
         batch = pa.record_batch(arrays, names=column_names).replace_schema_metadata({
-            TIMELINE_METADATA_KEY: self.timeline.encode()
+            TIMELINE_METADATA_KEY: self.main_timeline.encode()
         })
 
         if self._writer is None:
@@ -236,8 +236,8 @@ class SimpleSignalWriter(SignalWriter[T]):
             raise RuntimeError('Cannot append to an aborted writer')
 
         timestamps = self._validate_timestamps(timestamps)
-        ts_ns = timestamps[self.timeline]
-        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.timeline}
+        ts_ns = timestamps[self.main_timeline]
+        extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
         if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
             raise ValueError('Timeline names must be consistent across all appends')
         if self._last_ts is not None and ts_ns <= self._last_ts:
@@ -287,7 +287,7 @@ class SimpleSignalWriter(SignalWriter[T]):
                     fields.append((col_name, pa.int64()))
                     data_dict[col_name] = []
 
-                schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.timeline.encode()})
+                schema = pa.schema(fields, metadata={TIMELINE_METADATA_KEY: self.main_timeline.encode()})
                 table = pa.table(data_dict, schema=schema)
                 pq.write_table(table, self.filepath)
 
