@@ -134,7 +134,8 @@ class SimpleSignal(Signal[T]):
     def __len__(self) -> int:
         return len(self._time_index)
 
-    def bounds(self, timelines: tuple[str, ...]) -> tuple[Time, Time]:
+    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         if not len(self):
             raise ValueError('Signal is empty')
         self._validate_selection(timelines)

@@ -120,7 +120,8 @@ class Episode(ABC, Mapping[str, Any]):
         validate_timelines(timelines)
         return {name: signal for name, signal in self.signals.items() if set(timelines).issubset(signal.timelines)}
 
-    def bounds(self, timelines: tuple[str, ...]) -> tuple[Time, Time]:
+    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         bounds = [signal.bounds(timelines) for signal in self._signals_on(timelines).values()]
         if not bounds:
             raise ValueError('Episode has no signals on the requested timelines')

@@ -700,6 +700,33 @@ class TestNamedTimelines:
             times[0]['A'] = 123
         assert signal[0][1] == Time(A=100, B=900)
 
+    @pytest.mark.parametrize('image', [False, True])
+    def test_single_name_bounds_and_timestamps(self, tmp_path, image):
+        path = tmp_path / 'episode'
+        value = np.zeros((16, 16, 3), dtype=np.uint8) if image else 1
+        with DiskEpisodeWriter(path) as writer:
+            writer.append('value', value, Time(world=100, wall=900))
+            writer.append('value', value, Time(world=200, wall=950))
+            writer.append('unrelated', 2, Time(tick=1))
+        episode = DiskEpisode(path)
+        signal = episode['value']
+        expected = (Time(world=100), Time(world=200))
+        for source in (signal, signal[:]):
+            assert source.bounds('world') == source.bounds(('world',)) == expected
+            assert list(source.timestamps('world')) == list(source.timestamps(('world',))) == list(expected)
+            with pytest.raises(KeyError):
+                source.bounds('missing')
+            with pytest.raises(KeyError):
+                source.timestamps('missing')
+            for invalid in ('', '   '):
+                with pytest.raises(ValueError):
+                    source.bounds(invalid)
+                with pytest.raises(ValueError):
+                    source.timestamps(invalid)
+        assert episode.bounds('world') == episode.bounds(('world',)) == expected
+        with pytest.raises(ValueError):
+            episode.bounds('')
+
     def test_join_subset_and_conflicting_order(self, signal):
 
         other = DummySignal([[100, 1], [170, 2]], [4, 5], timelines=('A', 'C'))

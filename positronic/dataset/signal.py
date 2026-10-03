@@ -109,7 +109,8 @@ class Signal(Sequence[tuple[T, Time]], ABC, Generic[T]):
             if name not in self.timelines:
                 raise KeyError(name)
 
-    def bounds(self, timelines: tuple[str, ...]) -> tuple[Time, Time]:
+    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         if not len(self):
             raise ValueError('Signal is empty')
         self._validate_selection(timelines)
@@ -149,7 +150,8 @@ class Signal(Sequence[tuple[T, Time]], ABC, Generic[T]):
         return self._values_at(slice(None))
 
     @final
-    def timestamps(self, timelines: tuple[str, ...]) -> Sequence[Time]:
+    def timestamps(self, timelines: str | tuple[str, ...]) -> Sequence[Time]:
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         self._validate_selection(timelines)
         return self._ts_at(slice(None), timelines)
 

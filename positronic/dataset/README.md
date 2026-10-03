@@ -138,8 +138,11 @@ first, last = signal.bounds(("world", "tick"))
 span = last - first                          # Time
 ```
 
-Every timeline selector is an explicit, nonempty tuple of unique names, including single-name
-selectors. Unknown names raise `KeyError`. Empty signals have no bounds and raise `ValueError`.
+`bounds` and `timestamps` accept a single name or a nonempty tuple of unique names.
+`signal.bounds("world")` is equivalent to `signal.bounds(("world",))` and still returns two
+`Time` values. Likewise, `signal.timestamps("world")` returns `Sequence[Time]`. Episode bounds
+support the same shorthand. Unknown signal timelines raise `KeyError`.
+Empty signals have no bounds and raise `ValueError`.
 Tuple order controls presentation, never query results. Timestamp sequences may be lazy; their
 numeric storage and materialization are backend details.
 

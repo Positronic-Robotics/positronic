@@ -388,6 +388,9 @@ def test_remote_named_query_parity(named_remote):
     for query in [Time(A=150), Time(B=950), Time(B=950, A=150), Time(A=2**100), Time(A=150, B=950)]:
         assert remote_ep['left'].time[query] == local_ep['left'].time[query]
     assert remote_ep['left'].bounds(('B', 'A')) == local_ep['left'].bounds(('B', 'A'))
+    assert remote_ep['left'].bounds('A') == local_ep['left'].bounds(('A',))
+    assert list(remote_ep['left'].timestamps('A')) == list(local_ep['left'].timestamps(('A',)))
+    assert remote_ep.bounds('A') == local_ep.bounds(('A',))
     grid = [Time(A=100), Time(A=150), Time(A=200), Time(A=250)]
     assert list(remote_ep['left'].time[grid]) == list(local_ep['left'].time[grid])
     for query in [Time(A=150), Time(A=150, B=950), Time(D=1), Time(missing=1)]:

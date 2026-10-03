@@ -151,7 +151,8 @@ class RemoteSignal(Signal[T]):
             raise ValueError('Signal is empty')
         return self._client.get_signal_meta(self._episode_index, self._signal_name)
 
-    def bounds(self, timelines: tuple[str, ...]) -> tuple[Time, Time]:
+    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
+        timelines = (timelines,) if isinstance(timelines, str) else timelines
         if not len(self):
             raise ValueError('Signal is empty')
         self._validate_selection(timelines)
