@@ -3,6 +3,7 @@
 import atexit
 import hashlib
 import ipaddress
+import json
 import logging
 import os
 import shutil
@@ -146,7 +147,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int, lay
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
     # The uid, because an episode's position is view-dependent.
     uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
-    layout_suffix = '' if layout is None else f'-{layout.digest}'
+    layout_suffix = '' if layout is None else '-' + hashlib.sha256(json.dumps(asdict(layout)).encode()).hexdigest()[:16]
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
 
 

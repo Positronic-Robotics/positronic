@@ -1,8 +1,6 @@
 """Dataset utilities for Positronic dataset visualization."""
 
-import hashlib
 import io
-import json
 import logging
 import math
 import tempfile
@@ -10,7 +8,7 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from fractions import Fraction
@@ -338,11 +336,6 @@ class ReplayLayout:
     top_row: tuple[Pane, ...]
     bottom_row: tuple[ChartGroup, ...]
     show_unnamed_signals: bool = True
-
-    @property
-    def digest(self) -> str:
-        """A hash of all the fields."""
-        return hashlib.sha256(json.dumps(asdict(self)).encode()).hexdigest()[:16]
 
 
 _POSE_VALUE_NAMES = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']  # ``Serializers.transform_3d`` is scalar-first
