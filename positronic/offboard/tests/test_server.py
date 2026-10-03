@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import configuronic as cfn
 import pytest
-from positronic_wire import registry, wire
+from positronic_wire import probe, registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
 from websockets.datastructures import Headers
@@ -869,6 +869,15 @@ def test_server_without_a_token_serves_open(stub_server):
         client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
     ).new_session()
     session.close()
+
+
+def test_a_gated_server_is_up_to_the_readiness_probe(start_server, make_mock_model):
+    """A readiness call with no token is refused, and a refusal is an answer from the server."""
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    ws = client_websocket.WebsocketClientWire()
+    assert probe.readiness_of(ws, host, port, 5.0) is probe.Answer.refused
+    assert probe.serving(ws, host, port, 5.0)
 
 
 @pytest.mark.parametrize(
