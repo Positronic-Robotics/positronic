@@ -5,7 +5,9 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
+from operator import index
+from types import MappingProxyType
+from typing import Any, Generic, Protocol, SupportsIndex, TypeAlias, TypeVar, Union, final, overload, runtime_checkable
 
 import numpy as np
 
@@ -18,7 +20,96 @@ T = TypeVar('T')
 
 IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike: TypeAlias = Sequence[int] | np.ndarray
-Timestamps: TypeAlias = Mapping[str, int]
+
+
+def validate_timeline(timeline: str) -> None:
+    if not isinstance(timeline, str) or not timeline.strip():
+        raise ValueError('A timeline name must be a non-empty string')
+
+
+class Time(Mapping[str, int]):
+    """Immutable integer coordinates on a nonempty set of named timelines."""
+
+    __slots__ = ('_coordinates',)
+
+    def __init__(self, /, **timestamps: SupportsIndex):
+        if not timestamps:
+            raise ValueError('Time must contain at least one timeline')
+        coordinates = {}
+        for name, value in timestamps.items():
+            validate_timeline(name)
+            if isinstance(value, bool | np.bool_):
+                raise TypeError('Timeline coordinates must be integers, not booleans')
+            coordinates[name] = index(value)
+        self._coordinates = MappingProxyType(coordinates)
+
+    @property
+    def timelines(self) -> tuple[str, ...]:
+        return tuple(self._coordinates)
+
+    @overload
+    def __getitem__(self, key: str) -> int: ...
+
+    @overload
+    def __getitem__(self, key: tuple[str, ...]) -> 'Time': ...
+
+    def __getitem__(self, key: str | tuple[str, ...]) -> 'int | Time':
+        if isinstance(key, str):
+            return self._coordinates[key]
+        if not isinstance(key, tuple):
+            raise TypeError('Select a timeline name or a tuple of timeline names')
+        if not key or len(set(key)) != len(key):
+            raise ValueError('Select a nonempty tuple of unique timeline names')
+        return Time(**{name: self._coordinates[name] for name in key})
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._coordinates)
+
+    def __len__(self) -> int:
+        return len(self._coordinates)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._coordinates
+
+    def __repr__(self) -> str:
+        return f'Time(**{dict(self._coordinates)!r})'
+
+    def _validate_timelines(self, other: 'Time') -> None:
+        if self._coordinates.keys() != other._coordinates.keys():
+            raise ValueError('Timestamp operations require the same timeline names')
+
+    def __le__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
+            return NotImplemented
+        self._validate_timelines(other)
+        return all(value <= other[name] for name, value in self.items())
+
+    def __lt__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
+            return NotImplemented
+        return self <= other and self != other
+
+    def __ge__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
+            return NotImplemented
+        return other <= self
+
+    def __gt__(self, other: 'Time') -> bool:
+        if not isinstance(other, Time):
+            return NotImplemented
+        return other < self
+
+    def __add__(self, other: 'Time') -> 'Time':
+        if not isinstance(other, Time):
+            return NotImplemented
+        self._validate_timelines(other)
+        return Time(**{name: value + other[name] for name, value in self.items()})
+
+    def __sub__(self, other: 'Time') -> 'Time':
+        if not isinstance(other, Time):
+            return NotImplemented
+        self._validate_timelines(other)
+        return Time(**{name: value - other[name] for name, value in self.items()})
 
 
 def is_realnum_dtype(dtype) -> bool:
@@ -225,7 +316,7 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
         return self._ts_at(slice(None))
 
     @final
-    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match index_or_slice:
             case int() | np.integer() as idx:
                 if idx < 0:
@@ -257,7 +348,7 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
+    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match ts_or_array:
             case int() | float() | np.floating() as ts:
                 idx = int(self._signal._search_ts([ts])[0])
@@ -370,11 +461,6 @@ class _SignalView(Signal[T], Generic[T]):
                 raise TypeError(f'Unsupported index type: {type(ts_array)}')
 
 
-def validate_timeline(timeline: str) -> None:
-    if not isinstance(timeline, str) or not timeline.strip():
-        raise ValueError('A timeline name must be a non-empty string')
-
-
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     """Append-only writer for Signals."""
 
@@ -386,15 +472,14 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     def main_timeline(self) -> str:
         return self._main_timeline
 
-    def _validate_timestamps(self, timestamps: Timestamps) -> dict[str, int]:
-        for name in timestamps:
-            validate_timeline(name)
+    def _validate_timestamps(self, timestamps: Time) -> None:
+        if not isinstance(timestamps, Time):
+            raise TypeError('Expected Time')
         if self.main_timeline not in timestamps:
             raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
-        return {name: int(ts) for name, ts in timestamps.items()}
 
     @abstractmethod
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Time) -> None:
         pass
 
     @abstractmethod

@@ -15,7 +15,7 @@ from .signal import (
     RealNumericArrayLike,
     Signal,
     SignalWriter,
-    Timestamps,
+    Time,
     is_realnum_dtype,
 )
 
@@ -236,13 +236,13 @@ class SimpleSignalWriter(SignalWriter[T]):
                     raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
         return value
 
-    def append(self, data: T, timestamps: Timestamps) -> None:
+    def append(self, data: T, timestamps: Time) -> None:
         if self._finished:
             raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
 
-        timestamps = self._validate_timestamps(timestamps)
+        self._validate_timestamps(timestamps)
         ts_ns = timestamps[self.main_timeline]
         extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
         if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():
