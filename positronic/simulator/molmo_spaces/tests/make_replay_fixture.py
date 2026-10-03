@@ -77,7 +77,7 @@ def replay_commands(
                 action = protocol.single_arm_action(
                     {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: command}, float(grip)
                 )
-                out = conn.step(action)
+                out = protocol.one_slot(conn.step([action]))
                 states.append(np.asarray(out[protocol.FRAME_OBS][mapping.OBS_SIM_STATE], dtype=np.float64))
                 if out[protocol.FRAME_DONE]:
                     break

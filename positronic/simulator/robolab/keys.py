@@ -9,6 +9,16 @@ EPISODE_LENGTH = 'robolab.episode_length'
 # The phrasing of the instruction, which the eval config owns and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
 
+# The observation fields the env publishes per slot, beside one entry per camera. The env server writes
+# them and the adapter, the replay and the validation script read them back.
+OBS_JOINT_POS = 'joint_pos'
+OBS_JOINT_VEL = 'joint_vel'
+OBS_EEF_POS = 'eef_pos'
+OBS_EEF_QUAT = 'eef_quat'
+OBS_GRIP = 'grip'
+# [status, completed, total, score] for the task's subtask chain.
+OBS_SUBTASK = 'subtask'
+
 # The cameras RoboLab renders, named as the env's ``image_obs`` group names them.
 OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'
 OVER_SHOULDER_RIGHT_CAMERA = 'over_shoulder_right_camera'

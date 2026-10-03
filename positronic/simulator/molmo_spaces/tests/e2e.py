@@ -40,7 +40,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 i = record[mapping.TOKEN_EPISODE_INDEX]
                 benchmark = mapping.BenchmarkPath(**{d: record[d] for d in mapping.BenchmarkPath._fields})
                 token = {**benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: i}
-                frame = conn.reset({**token, mapping.TOKEN_SEED: None})
+                frame = protocol.one_slot(conn.reset({**token, mapping.TOKEN_SEED: None}))
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
                 assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
                 assert all(logical in obs for logical in CAMERAS), f'missing cameras: {sorted(obs)}'
@@ -55,7 +55,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 out = {protocol.FRAME_DONE: False}
                 for _ in range(steps):
                     hold = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
-                    out = conn.step(hold)
+                    out = protocol.one_slot(conn.step([hold]))
                     adapter.observations(out[protocol.FRAME_OBS])
                     _check_sim_state(adapter, out[protocol.FRAME_OBS])
                 print(f'  episode {i}: {steps} steps ok (done={out[protocol.FRAME_DONE]})')

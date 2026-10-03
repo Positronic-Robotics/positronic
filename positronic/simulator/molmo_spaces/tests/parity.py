@@ -47,14 +47,14 @@ def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: in
         conn = EnvConnection(host, port)
         try:
             token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed}
-            frame = conn.reset(token)
+            frame = protocol.one_slot(conn.reset(token))
             camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
             cam_hashes = {name: [] for name in camera_names}
             record(frame[protocol.FRAME_OBS])
             out = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
             step = 0
             while not out[protocol.FRAME_DONE] and step < max_steps:
-                out = conn.step(_HOLD)
+                out = protocol.one_slot(conn.step([_HOLD]))
                 step += 1
                 record(out[protocol.FRAME_OBS])
         finally:

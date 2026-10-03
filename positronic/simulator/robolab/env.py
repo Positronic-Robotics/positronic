@@ -20,6 +20,11 @@ path has no seed hook, so a recorded seed would only mislead.
 
 ``--cameras`` names the set in ``keys.CAMERA_SETS`` this server renders. RoboLab bakes the set into the
 registered task, so one server serves one set and the token carries no camera.
+
+``--num-envs`` clones the scene: one Isaac process steps every clone inside a single ``env.step``, and the
+wire's ``slots`` carries one entry per clone. RoboLab freezes a
+clone that terminates rather than re-rolling it, and keeps stepping it with a zeroed action, so a batch runs
+until its slowest clone ends and every clone reports the verdict it froze on.
 """
 
 import argparse
@@ -33,9 +38,9 @@ from typing import Any
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import keys
 import numpy as np
+import protocol  # pyright: ignore[reportMissingImports]
 import torch
 from isaaclab.app import AppLauncher
-from protocol import ROBOT_COMMAND, TARGET_GRIP, decode, single_arm
 from server import EnvProtocol, EnvServer
 
 
@@ -75,6 +80,7 @@ parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server 
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+parser.add_argument('--num-envs', type=int, default=1, help='scene clones this server steps at once')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -119,7 +125,7 @@ def _load_robot_meta() -> dict[str, Any]:
     if path is None:
         return {}
     with open(path, 'rb') as f:
-        return decode(f.read())
+        return protocol.decode(f.read())
 
 
 class RobolabEnv(EnvProtocol):
@@ -127,15 +133,23 @@ class RobolabEnv(EnvProtocol):
 
     Built from the reset token's key (RoboLab env name, instruction variant) and cached; ``reset`` rebuilds
     when the key changes and re-randomizes the scene through RoboLab's own reset events, or restores an exact
-    recorded state when the token carries one (demo replay). ``step`` maps the forwarded command into the
-    8-dim jointpos action and reports ``done`` (episode over) and ``success`` (the task's success termination
-    fired).
+    recorded state when the token carries one (demo replay). ``step`` maps each slot's forwarded command into
+    its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over) and ``success`` (the
+    task's success termination fired).
+
+    ``num_envs`` scene clones share one task, one sim and one ``env.step``; the whole batch reruns the same
+    task on every reset, since RoboLab clones a single registered env.
     """
 
-    def __init__(self):
+    def __init__(self, num_envs: int = 1):
+        if num_envs < 1:
+            raise ValueError(f'a server steps at least one scene clone, not {num_envs}')
+        self._num_envs = num_envs
         self._key = None
-        self._env = None
-        self._env_cfg = None
+        # RoboLab's env, its cfg and the handles below resolve only inside RoboLab's own interpreter, so the
+        # checker cannot see their types here.
+        self._env: Any = None
+        self._env_cfg: Any = None
         self._meta = None
         self._robot_meta = _load_robot_meta()
         self._control_dt = None
@@ -143,8 +157,8 @@ class RobolabEnv(EnvProtocol):
         # the registry, so each registers once.
         self._registered: set[str] = set()
         # Rebuilt with the env: robot handles, model-structure indices, and the standalone IK controller.
-        self._robot = None
-        self._joint_ids = None
+        self._robot: Any = None
+        self._joint_ids: Any = None
         self._body_idx = None
         self._eef_frame_idx = None
         self._eef_offset_rot = None
@@ -212,7 +226,7 @@ class RobolabEnv(EnvProtocol):
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
         self._env, self._env_cfg = create_env(
-            env_name, device=args.device, num_envs=1, instruction_type=instruction_type
+            env_name, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
         )
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
         # The sim context's physics ``step`` and ``render`` are the two native phases inside ``env.step``;
@@ -234,10 +248,13 @@ class RobolabEnv(EnvProtocol):
         self._joint_ids = [i for i, name in enumerate(robot.data.joint_names) if name.startswith('panda_joint')]
         self._body_idx = robot.data.body_names.index('base_link')  # the Robotiq gripper mount flange
         self._eef_frame_idx = self._env.scene['frames'].data.target_frame_names.index('eef_frame')
-        self._eef_offset_rot = torch.tensor([EEF_OFFSET_ROT], dtype=torch.float32, device=self._env.device)
+        # One row per slot: isaaclab's quat ops require both operands to share a shape.
+        self._eef_offset_rot = torch.tensor(
+            [EEF_OFFSET_ROT] * self._num_envs, dtype=torch.float32, device=self._env.device
+        )
         # The controller parameters of RoboLab's AbsIK registration (``DroidIKActionCfg``).
         cfg = DifferentialIKControllerCfg(command_type='pose', use_relative_mode=False, ik_method='dls')
-        self._ik = DifferentialIKController(cfg, num_envs=1, device=self._env.device)
+        self._ik = DifferentialIKController(cfg, num_envs=self._num_envs, device=self._env.device)
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
@@ -267,59 +284,102 @@ class RobolabEnv(EnvProtocol):
         # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
         # would replay the prior trial's final values.
         return {
-            'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
-            'meta': self._meta,
-            'robot_meta': self._robot_meta,
-            'control_dt': self._control_dt,
+            protocol.SLOTS: [
+                {protocol.FRAME_OBS: o} for o in self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32))
+            ],
+            protocol.FRAME_META: self._meta,
+            protocol.FRAME_ROBOT_META: self._robot_meta,
+            protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
+    def _frozen_slots(self) -> list[bool]:
+        """Per slot, whether RoboLab froze it — its episode ended and its verdict is recorded.
+
+        A frozen slot keeps being stepped with a zeroed action until the whole batch ends, so the reads stay
+        the same width for every step of the batch.
+        """
+        active = set(self._env.active_env_ids)
+        return [slot not in active for slot in range(self._num_envs)]
+
     @telemetry.traced(telemetry.SPAN_ENV_STEP)
-    def step(self, action: dict[str, Any]) -> dict[str, Any]:
+    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
         assert self._env is not None  # step is only served after a reset built the env
+        if len(actions) != self._num_envs:
+            raise ValueError(f'this server steps {self._num_envs} slots; {len(actions)} actions arrived')
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
             self._kit_app.update()
-        act = torch.zeros(1, 8, device=self._env.device)
-        wire = single_arm(action)
-        act[0, :7] = self._joint_targets(wire[ROBOT_COMMAND])
+        act = torch.zeros(self._num_envs, 8, device=self._env.device)
+        wires = [protocol.single_arm(action) for action in actions]
+        act[:, :7] = self._joint_targets([wire[protocol.ROBOT_COMMAND] for wire in wires])
         # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
-        act[0, 7] = float(wire[TARGET_GRIP])
+        act[:, 7] = torch.tensor(
+            [float(wire[protocol.TARGET_GRIP]) for wire in wires], dtype=torch.float32, device=self._env.device
+        )
         obs, _reward, _term, _trunc, _info = self._env.step(act)
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
-        done = self._env.all_terminated
+        frozen = self._frozen_slots()
+        results = self._env.get_env_results()
+        observed = self._observe(obs, self._subtask_progress())
         return {
-            'obs': self._observe(obs, self._subtask_progress()),
-            'done': done,
-            'success': done and bool(self._env.get_env_results()[0]['success']),
-            'control_dt': self._control_dt,
+            protocol.SLOTS: [
+                {
+                    protocol.FRAME_OBS: observed[slot],
+                    protocol.FRAME_DONE: done,
+                    protocol.FRAME_SUCCESS: done and bool(results[slot]['success']),
+                }
+                for slot, done in enumerate(frozen)
+            ],
+            protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
-    def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
-        """The wire command as the 7 absolute joint targets the jointpos substrate steps."""
-        match command['type']:
-            case 'joint_pos':  # pass through untouched — bit-identical to RoboLab's own leaderboard stack
-                return torch.as_tensor(command['q'], dtype=torch.float32, device=self._env.device)
-            case 'joint_vel':  # ``dq`` is a per-step joint delta (positronic applies ``JointDelta`` as q + dq)
-                dq = torch.as_tensor(command['dq'], dtype=torch.float32, device=self._env.device)
-                return self._measured_q() + dq
-            case 'hold':  # re-command the measured joints; a zero action would drive the arm to the zero pose
-                return self._measured_q()
-            case 'cartesian':
-                return self._solve_ik(*self._wire_pose(command['pose']))
-            case 'cartesian_delta':
-                cur_pos, cur_quat = self._eef_pose()
-                delta_pos, delta_quat = self._wire_pose(command['delta'])
-                # The world-frame compose of positronic's ``CartesianDelta.apply``: translation adds and
-                # rotation left-multiplies onto the measured eef pose.
-                return self._solve_ik(cur_pos + delta_pos, quat_mul(delta_quat, cur_quat))
-            case other:
-                raise ValueError(f'unknown command type {other!r}')
+    def _joint_targets(self, commands: list[dict[str, Any]]) -> torch.Tensor:
+        """Every slot's wire command as the ``(num_envs, 7)`` absolute joint targets the substrate steps.
+
+        The differential IK runs once for the whole batch, because the controller is sized to it. A slot
+        commanding joints rather than a pose is handed its own measured pose, which that solve maps back to
+        its measured joints, and its row is written from the command instead.
+        """
+        measured = self._measured_q()
+        targets = measured.clone()  # what ``hold`` commands, and the neutral row for every other case
+        cur_pos, cur_quat = self._eef_pose()
+        pose_pos, pose_quat = cur_pos.clone(), cur_quat.clone()
+        pose_slots = []
+        for slot, command in enumerate(commands):
+            match command[protocol.COMMAND_TYPE]:
+                case protocol.JOINT_POS:  # pass through untouched — bit-identical to RoboLab's own leaderboard stack
+                    targets[slot] = torch.as_tensor(
+                        command[protocol.COMMAND_JOINT_POS], dtype=torch.float32, device=self._env.device
+                    )
+                case protocol.JOINT_DELTA:  # a per-step joint delta (positronic applies ``JointDelta`` as q + dq)
+                    dq = torch.as_tensor(
+                        command[protocol.COMMAND_JOINT_DELTA], dtype=torch.float32, device=self._env.device
+                    )
+                    targets[slot] = measured[slot] + dq
+                case protocol.HOLD:  # re-command the measured joints; a zero action drives the arm to zero
+                    pass
+                case protocol.CARTESIAN:
+                    pose_pos[slot], pose_quat[slot] = self._wire_pose(command[protocol.COMMAND_POSE])
+                    pose_slots.append(slot)
+                case protocol.CARTESIAN_DELTA:
+                    delta_pos, delta_quat = self._wire_pose(command[protocol.COMMAND_DELTA])
+                    # The world-frame compose of positronic's ``CartesianDelta.apply``: translation adds and
+                    # rotation left-multiplies onto the measured eef pose.
+                    pose_pos[slot] = cur_pos[slot] + delta_pos
+                    pose_quat[slot] = quat_mul(delta_quat.unsqueeze(0), cur_quat[slot].unsqueeze(0)).squeeze(0)
+                    pose_slots.append(slot)
+                case other:
+                    raise ValueError(f'unknown command type {other!r}')
+        if pose_slots:
+            targets[pose_slots] = self._solve_ik(pose_pos, pose_quat)[pose_slots]
+        return targets
 
     def _solve_ik(self, target_pos: torch.Tensor, target_quat: torch.Tensor) -> torch.Tensor:
-        """The 7 joint targets reaching an eef-control-frame pose: one differential-IK linearization.
+        """The ``(num_envs, 7)`` joint targets reaching an eef-control-frame pose: one differential-IK
+        linearization, run across the whole batch.
 
         Lifts IsaacLab's ``DifferentialInverseKinematicsAction`` (task_space_actions.py): the controller
         tracks base_link in the robot root frame, so the commanded eef_frame orientation is un-offset first
@@ -342,21 +402,23 @@ class RobolabEnv(EnvProtocol):
         jacobian[:, 3:, :] = torch.bmm(root_rot, jacobian[:, 3:, :])
         joint_pos = robot.data.joint_pos[:, self._joint_ids]
         self._ik.set_command(torch.cat([target_pos_b, target_quat_b], dim=-1), ee_pos_b, ee_quat_b)
-        return self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)[0]
+        return self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
 
     def _measured_q(self) -> torch.Tensor:
-        return self._robot.data.joint_pos[0, self._joint_ids]
+        """Every slot's measured arm joints, ``(num_envs, 7)``."""
+        return self._robot.data.joint_pos[:, self._joint_ids]
 
     def _eef_pose(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """The measured eef control-frame pose (env-local position, world-frame quat wxyz), batched (1, ...)."""
+        """Every slot's measured eef control-frame pose: env-local position ``(num_envs, 3)``, world-frame
+        quat wxyz ``(num_envs, 4)``."""
         frames = self._env.scene['frames'].data
         pos = frames.target_pos_w[:, self._eef_frame_idx] - self._env.scene.env_origins
         return pos, frames.target_quat_w[:, self._eef_frame_idx]
 
     def _wire_pose(self, vec: Any) -> tuple[torch.Tensor, torch.Tensor]:
-        """The adapter's flat ``[translation(3), rotation_matrix(9)]`` wire pose, batched (pos (1,3), quat (1,4))."""
+        """One slot's flat ``[translation(3), rotation_matrix(9)]`` wire pose as ``(pos (3,), quat (4,))``."""
         vec = torch.as_tensor(vec, dtype=torch.float32, device=self._env.device)
-        return vec[:3].unsqueeze(0), quat_from_matrix(vec[3:].reshape(1, 3, 3))
+        return vec[:3], quat_from_matrix(vec[3:].reshape(1, 3, 3)).squeeze(0)
 
     def _merged_state(self, base: Any, overlay: Any) -> Any:
         """The scene's live state tree with the recording's entries written over it, as device tensors."""
@@ -367,29 +429,34 @@ class RobolabEnv(EnvProtocol):
         }
 
     def _subtask_progress(self) -> np.ndarray:
-        """The env's live subtask progress as the wire ``[status, completed, total, score]`` vector."""
-        subtask = np.zeros(4, dtype=np.float32)
+        """Every slot's live subtask progress as the wire ``[status, completed, total, score]`` vector,
+        ``(num_envs, 4)``. A width RoboLab reports for some other number of slots raises here."""
+        subtask = np.zeros((self._num_envs, 4), dtype=np.float32)
         infos = get_all_env_subtask_infos(self._env)
         if infos is not None:
-            info = infos[0]
-            subtask[:] = (info['status'], info['completed'], info['total'], info['score'])
+            subtask[:] = [(info['status'], info['completed'], info['total'], info['score']) for info in infos]
         return subtask
 
-    def _observe(self, obs: dict[str, Any], subtask: np.ndarray) -> dict[str, Any]:
+    def _observe(self, obs: dict[str, Any], subtask: np.ndarray) -> list[dict[str, Any]]:
+        """One observation payload per slot."""
         # The eef pose is reported in the control frame Cartesian commands arrive in (``eef_frame``: env-local
         # position, world quat wxyz), so the observed and commanded pose share a frame. The proprio group has
         # no joint velocities, so they read straight from the articulation.
         proprio = obs['proprio_obs']
         images = obs['image_obs']
-        return {
-            'joint_pos': proprio['arm_joint_pos'][0].cpu().numpy(),
-            'joint_vel': self._robot.data.joint_vel[0, self._joint_ids].cpu().numpy(),
-            'eef_pos': proprio['eef_pos'][0].cpu().numpy(),
-            'eef_quat': proprio['eef_quat'][0].cpu().numpy(),
-            'grip': float(proprio['gripper_pos'][0, 0]),
-            **{name: frame[0].cpu().numpy() for name, frame in images.items()},
-            'subtask': subtask,
-        }
+        joint_vel = self._robot.data.joint_vel[:, self._joint_ids].cpu().numpy()
+        return [
+            {
+                keys.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),
+                keys.OBS_JOINT_VEL: joint_vel[slot],
+                keys.OBS_EEF_POS: proprio['eef_pos'][slot].cpu().numpy(),
+                keys.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
+                keys.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
+                **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
+                keys.OBS_SUBTASK: subtask[slot],
+            }
+            for slot in range(self._num_envs)
+        ]
 
     def close(self) -> None:
         if self._env is not None:
@@ -403,7 +470,7 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(), args.host, args.port).serve_forever()
+        EnvServer(RobolabEnv(args.num_envs), args.host, args.port).serve_forever()
     simulation_app.close()
 
 
