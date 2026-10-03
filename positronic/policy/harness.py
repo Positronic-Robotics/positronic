@@ -96,9 +96,8 @@ class Harness(pimm.ControlSystem):
     whether that error ends the run. Between episodes, manual commands pass through.
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
-    observation fails the episode before the policy reads that value.
-    Between episodes, the harness asks a device to be ready as soon as the observation of the same name carries a
-    ``pimm.SignalError``, one call at a time, and again while the error stays.
+    observation fails the episode before the policy reads that value. Between episodes the harness repairs a
+    device in error (``_ready_devices_in_error``).
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
