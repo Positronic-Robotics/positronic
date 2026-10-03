@@ -26,6 +26,7 @@ from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.server import export, positronic_server
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
@@ -240,6 +241,22 @@ def _recording_builder_threads(monkeypatch) -> list[int]:
 
     monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
     return threads
+
+
+def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tmp_path, monkeypatch):
+    layout = ReplayLayout(top_row_share=3, bottom_row_share=1, top_row=(), bottom_row=(), show_unnamed_signals=False)
+    stream = positronic_server.stream_episode_rrd
+    layouts: list[ReplayLayout | None] = []
+
+    def stream_and_record(ds, episode_id, **kwargs):
+        layouts.append(kwargs['layout'])
+        yield from stream(ds, episode_id, **kwargs)
+
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
+
+    an_export(dataset, tmp_path / 'out', layout=layout, workers=1)
+
+    assert layouts == [layout, layout]
 
 
 def test_the_recordings_are_built_on_worker_threads_and_the_export_copies_them(dataset, tmp_path, monkeypatch):

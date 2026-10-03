@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
+from positronic.server.dataset_utils import Chart, ChartGroup, ReplayLayout, Series
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
@@ -181,8 +182,8 @@ def rrd_cache(tmp_path, monkeypatch):
     monkeypatch.setitem(app_state, 'cache_dir', str(tmp_path))
     monkeypatch.setitem(app_state, 'root', str(tmp_path))
 
-    def path_under(max_hz: float, max_resolution: int) -> Path:
-        return _get_rrd_cache_path(0, max_hz, max_resolution)
+    def path_under(max_hz: float, max_resolution: int, layout: ReplayLayout | None = None) -> Path:
+        return _get_rrd_cache_path(0, max_hz, max_resolution, layout)
 
     return path_under
 
@@ -197,17 +198,35 @@ def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
     assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
 
 
+_GRIP_LAYOUT = ReplayLayout(
+    top_row_share=3,
+    bottom_row_share=1,
+    top_row=(),
+    bottom_row=(ChartGroup('Grip', (Chart('Grip', (Series(keys.GRIP),)),)),),
+)
+
+
+def test_a_cached_rrd_built_under_another_layout_is_not_served(rrd_cache):
+    assert rrd_cache(30.0, 640) != rrd_cache(30.0, 640, _GRIP_LAYOUT)
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, show_unnamed_signals=False))
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, bottom_row_share=2))
+
+
+def test_an_equal_layout_reaches_the_same_cached_rrd(rrd_cache):
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) == rrd_cache(30.0, 640, replace(_GRIP_LAYOUT))
+
+
 def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monkeypatch):
     inside = rrd_cache(30.0, 640).parent
     monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset('../../etc/ep-uid'))
 
-    assert _get_rrd_cache_path(0, 30.0, 640).parent == inside
+    assert _get_rrd_cache_path(0, 30.0, 640, None).parent == inside
 
 
 def test_two_uids_that_differ_reach_different_cached_rrds(rrd_cache, monkeypatch):
     def path_for(uid: str) -> Path:
         monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset(uid))
-        return _get_rrd_cache_path(0, 30.0, 640)
+        return _get_rrd_cache_path(0, 30.0, 640, None)
 
     assert path_for('camera/left') != path_for('camera_left')
     assert path_for('a%2Fb') != path_for('a/b')
@@ -230,7 +249,7 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
     monkeypatch.setitem(app_state, 'max_hz', 30.0)
     monkeypatch.setitem(app_state, 'max_resolution', 640)
 
-    def _dies_partway(ds, episode_id, *, max_hz, max_resolution):
+    def _dies_partway(ds, episode_id, *, max_hz, max_resolution, layout):
         yield b'half an episode'
         raise RuntimeError('encoder died')
 
@@ -495,6 +514,7 @@ def test_reconfiguring_the_tables_drops_a_cached_table_response(grouped):
             home_page=None,
             max_resolution=64,
             max_hz=0,
+            layout=None,
         )
         after = grouped.get('/api/groups/by_task').json()
 
@@ -732,6 +752,7 @@ def _configure(ep_table_cfg, group_tables):
         home_page=None,
         max_resolution=64,
         max_hz=0,
+        layout=None,
     )
 
 

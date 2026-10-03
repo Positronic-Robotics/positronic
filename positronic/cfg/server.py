@@ -11,6 +11,7 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
+from positronic.server.dataset_utils import Chart, ChartGroup, Pane, ReplayLayout, Series, TopView
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
@@ -42,6 +43,30 @@ def eval_table():
         ),
         eval_keys.TERMINATED: C(label='Ended', default=False),
     }
+
+
+# A single arm's signals: its state as tabs, the target grip beside the grip, and each command.
+robot_replay_layout = cfn.Config(
+    ReplayLayout,
+    top_row_share=3,
+    bottom_row_share=1,
+    top_row=(Pane(TopView.TRAJECTORY, share=1), Pane(TopView.CAMERAS, share=3)),
+    bottom_row=(
+        ChartGroup(
+            'Robot State',
+            (
+                Chart('Joints', (Series(keys.JOINTS),)),
+                Chart('End Effector', (Series(keys.EE_POSE),)),
+                Chart('Joints Vel', (Series(keys.JOINT_VEL),)),
+            ),
+        ),
+        ChartGroup('Grip', (Chart('Grip', (Series(keys.TARGET_GRIP, 'Target'), Series(keys.GRIP, 'Current'))),)),
+        ChartGroup('Robot Commands – Joints', (Chart('Robot Commands – Joints', (Series(keys.TARGET_JOINTS),)),)),
+        ChartGroup(
+            'Robot Commands – End Effector', (Chart('Robot Commands – End Effector', (Series(keys.TARGET_EE_POSE),)),)
+        ),
+    ),
+)
 
 
 def uph(ep: Episode) -> float | None:

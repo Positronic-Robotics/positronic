@@ -31,6 +31,7 @@ def test_every_server_group_key_and_filter_is_a_flat_table_column(flat, groups):
             home_page=None,
             max_resolution=64,
             max_hz=0,
+            layout=None,
         )
 
 

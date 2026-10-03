@@ -1,6 +1,8 @@
 """Dataset utilities for Positronic dataset visualization."""
 
+import hashlib
 import io
+import json
 import logging
 import math
 import tempfile
@@ -8,8 +10,9 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +25,7 @@ from av.video.stream import VideoStream
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind, TimelineColumn
 from rerun.urdf import UrdfTree
 
+from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
@@ -236,10 +240,10 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     return signals
 
 
-def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
-    """Group plotted signals by prefix before the first '.'. Preserves insertion order."""
+def _group_signals_by_prefix(names: Iterable[str]) -> list[tuple[str, list[str]]]:
+    """Group signals by prefix before the first '.'. Preserves insertion order."""
     groups: defaultdict[str, list[str]] = defaultdict(list)
-    for sig in [*signals.plotted, *signals.plotted_texts]:
+    for sig in names:
         groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
 
@@ -284,8 +288,82 @@ def _series_columns(cells: int, height_share: float) -> int:
     return min(range(1, cells + 1), key=miss)
 
 
-def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
-    image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
+class TopView(StrEnum):
+    """A view the top row of a replay can hold."""
+
+    CAMERAS = 'cameras'
+    TRAJECTORY = 'trajectory'
+
+
+@dataclass(frozen=True)
+class Pane:
+    """A view in the top row, and its share of the row's width."""
+
+    view: TopView
+    share: float
+
+
+@dataclass(frozen=True)
+class Series:
+    """A numeric signal in a chart. ``label`` names its line, and prefixes each value's name in a signal of several."""
+
+    signal: str
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class Chart:
+    name: str
+    series: tuple[Series, ...]
+
+
+@dataclass(frozen=True)
+class ChartGroup:
+    """Charts in one cell of the bottom row: tabs named by the charts under a tab named by the group, or one chart."""
+
+    name: str
+    charts: tuple[Chart, ...]
+
+
+@dataclass(frozen=True)
+class ReplayLayout:
+    """The views of a replay: a row of panes over a row of chart groups, each row in order from left to right.
+
+    A view or a series that no signal of the episode fills is left out. With ``show_unnamed_signals``, the signals
+    no chart plots follow the groups, grouped by their name's prefix.
+    """
+
+    top_row_share: float
+    bottom_row_share: float
+    top_row: tuple[Pane, ...]
+    bottom_row: tuple[ChartGroup, ...]
+    show_unnamed_signals: bool = True
+
+    @property
+    def digest(self) -> str:
+        """A hash of all the fields."""
+        return hashlib.sha256(json.dumps(asdict(self)).encode()).hexdigest()[:16]
+
+
+_POSE_VALUE_NAMES = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']  # ``Serializers.transform_3d`` is scalar-first
+
+
+def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | None:
+    """The names of the values of the numeric signal ``key``, where the episode gives them."""
+    joint_names = ep.static.get(roboarm_keys.JOINT_NAMES)
+    is_joint_vel = (
+        key.endswith(keys.JOINT_VEL_SUFFIX)
+        and key.removesuffix(keys.JOINT_VEL_SUFFIX) + keys.JOINTS_SUFFIX in signals.joints
+    )
+    if (key in signals.joints or is_joint_vel) and joint_names:
+        return joint_names
+    if key in signals.poses and signals.dims[key] == len(_POSE_VALUE_NAMES):
+        return _POSE_VALUE_NAMES
+    return None
+
+
+def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | rrb.Container]:
+    """A view of each signal that is not in ``placed``: a group of signals that share a prefix shows as tabs."""
 
     def _ts_view(sig: str) -> rrb.TimeSeriesView:
         return rrb.TimeSeriesView(
@@ -306,42 +384,54 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     def _view(sig: str) -> rrb.TimeSeriesView:
         return _steps_view(sig) if sig in signals.plotted_texts else _ts_view(sig)
 
-    # Group time series by prefix, each group becomes a Tabs container that opens on its first text signal.
+    # Each group becomes a Tabs container that opens on its first text signal.
     # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
-    series_views: list[rrb.View | rrb.Container] = []
-    for group_name, sigs in _group_signals_by_prefix(signals):
+    unplaced = [sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in placed]
+    views: list[rrb.View | rrb.Container] = []
+    for group_name, sigs in _group_signals_by_prefix(unplaced):
         if len(sigs) == 1:
             view = _view(sigs[0])
         else:
             texts = [index for index, sig in enumerate(sigs) if sig in signals.plotted_texts]
             view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
-        series_views.append(view)
-        series_views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
-    series_views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
+        views.append(view)
+        views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
+    views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
     if signals.unplotted:
-        series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
+        views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
+    return views
 
-    # Top row: images (big) + optional 3D (smaller)
-    top_items = []
-    if image_views:
+
+def _image_views(signals: EpisodeSignals) -> list[rrb.Spatial2DView]:
+    return [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
+
+
+def _trajectory_view(signals: EpisodeSignals, ep: Episode) -> rrb.Spatial3DView:
+    eye = _compute_eye_controls(signals, ep)
+    return rrb.Spatial3DView(
+        name='3D Trajectory',
+        origin='/3d',
+        background=[30, 30, 30],
+        line_grid=rrb.LineGrid3D(visible=True),
+        eye_controls=eye or rrb.EyeControls3D(),
+    )
+
+
+def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
+    """Cameras side by side beside the 3D view, over a grid of every signal."""
+    series_views = _signal_views(signals, placed=set())
+
+    top_items: list[rrb.View | rrb.Container] = []
+    if signals.videos:
         # Widths in proportion to the aspect ratios give every camera one height.
         aspects = [signals.camera_aspects[k] for k in signals.videos]
-        top_items.append(rrb.Horizontal(*image_views, column_shares=aspects))
+        top_items.append(rrb.Horizontal(*_image_views(signals), column_shares=aspects))
     if signals.poses:
-        eye = _compute_eye_controls(signals, ep)
-        top_items.append(
-            rrb.Spatial3DView(
-                name='3D Trajectory',
-                origin='/3d',
-                background=[30, 30, 30],
-                line_grid=rrb.LineGrid3D(visible=True),
-                eye_controls=eye or rrb.EyeControls3D(),
-            )
-        )
+        top_items.append(_trajectory_view(signals, ep))
 
     rows = []
     row_shares = []
-    top_share = _camera_row_share(signals) if image_views else _NO_CAMERA_TOP_SHARE
+    top_share = _camera_row_share(signals) if signals.videos else _NO_CAMERA_TOP_SHARE
     if top_items:
         rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
         row_shares.append(top_share)
@@ -349,29 +439,82 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         series_share = 1 - top_share if top_items else 1.0
         rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
         row_shares.append(series_share)
+    return rrb.Vertical(*rows, row_shares=row_shares)
 
+
+def _pane_view(view: TopView, signals: EpisodeSignals, ep: Episode) -> rrb.View | rrb.Container | None:
+    match view:
+        case TopView.CAMERAS:
+            return rrb.Grid(*_image_views(signals)) if signals.videos else None
+        case TopView.TRAJECTORY:
+            return _trajectory_view(signals, ep) if signals.poses else None
+
+
+def _chart_view(chart: Chart, signals: EpisodeSignals, ep: Episode) -> rrb.TimeSeriesView | None:
+    shown = [series for series in chart.series if series.signal in signals.plotted]
+    if not shown:
+        return None
+    line_names: dict[str, str] = {}
+    for series in shown:
+        if series.label is None:
+            continue
+        path = f'/signals/{series.signal}'
+        width = signals.plotted[series.signal]
+        if width == 1:
+            line_names[path] = series.label
+            continue
+        names = _value_names(series.signal, signals, ep)
+        line_names.update({f'{path}/{i}': f'{series.label} {names[i] if names else i}' for i in range(width)})
+    return rrb.TimeSeriesView(
+        name=chart.name,
+        origin='/signals',
+        contents=[f'/signals/{series.signal}/**' for series in shown],
+        overrides={path: rr.SeriesLines(names=[name]) for path, name in line_names.items()},
+        plot_legend=rrb.PlotLegend(visible=sum(signals.plotted[series.signal] for series in shown) > 1),
+        axis_y=rrb.ScalarAxis(zoom_lock=True),
+    )
+
+
+def _group_view(group: ChartGroup, signals: EpisodeSignals, ep: Episode) -> rrb.View | rrb.Container | None:
+    charts = [view for chart in group.charts if (view := _chart_view(chart, signals, ep)) is not None]
+    if not charts:
+        return None
+    # The viewer titles a tab by its child's name and draws no container's own name, so the outer tab carries it.
+    return charts[0] if len(charts) == 1 else rrb.Tabs(rrb.Tabs(*charts, name=group.name))
+
+
+def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> rrb.Vertical:
+    panes = [(pane, view) for pane in layout.top_row if (view := _pane_view(pane.view, signals, ep)) is not None]
+    groups = [view for group in layout.bottom_row if (view := _group_view(group, signals, ep)) is not None]
+    if layout.show_unnamed_signals:
+        charted = (series.signal for group in layout.bottom_row for chart in group.charts for series in chart.series)
+        groups.extend(_signal_views(signals, placed={sig for sig in charted if sig in signals.plotted}))
+
+    rows: list[rrb.View | rrb.Container] = []
+    row_shares = []
+    if panes:
+        views = [view for _, view in panes]
+        rows.append(views[0] if len(views) == 1 else rrb.Horizontal(*views, column_shares=[p.share for p, _ in panes]))
+        row_shares.append(layout.top_row_share)
+    if groups:
+        rows.append(rrb.Horizontal(*groups))
+        row_shares.append(layout.bottom_row_share)
+    return rrb.Vertical(*rows, row_shares=row_shares)
+
+
+def _build_blueprint(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout | None) -> rrb.Blueprint:
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
         rrb.TimePanel(state=rrb.PanelState.Collapsed, timeline=_TIMELINE),
-        rrb.Vertical(*rows, row_shares=row_shares),
+        _default_root(signals, ep) if layout is None else _layout_root(signals, ep, layout),
     )
 
 
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
-    joint_set = set(signals.joints)
-    joint_names = ep.static.get(roboarm_keys.JOINT_NAMES)
-    pose_set = set(signals.poses)
     for key, dim in signals.plotted.items():
-        is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
-        if (key in joint_set or is_joint_vel) and joint_names:
-            names = joint_names
-        elif key in pose_set and dim == 7:
-            # ``Serializers.transform_3d`` is scalar-first: [tx, ty, tz, qw, qx, qy, qz].
-            names = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
-        else:
-            names = None
+        names = _value_names(key, signals, ep)
         if dim == 1:
             if names:
                 log_series_styles(f'/signals/{key}', [names[0]], static=True)
@@ -794,12 +937,17 @@ DEFAULT_MAX_RESOLUTION = 640
 
 @rr.recording_stream.recording_stream_generator_ctx
 def stream_episode_rrd(
-    ds: Dataset, episode_id: int, max_hz: float = DEFAULT_MAX_HZ, max_resolution: int = DEFAULT_MAX_RESOLUTION
+    ds: Dataset,
+    episode_id: int,
+    max_hz: float = DEFAULT_MAX_HZ,
+    max_resolution: int = DEFAULT_MAX_RESOLUTION,
+    layout: ReplayLayout | None = None,
 ) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated.
 
     The videos and the numeric signals are thinned to ``max_hz``; ``max_hz=0`` with a resolution above the
-    source keeps the recording as it was captured.
+    source keeps the recording as it was captured. Without a ``layout``, the replay shows the cameras beside
+    the 3D view over a grid of every signal.
     """
 
     ep = ds[episode_id]
@@ -814,7 +962,7 @@ def stream_episode_rrd(
 
     with rec:
         signals = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(signals, ep))
+        rr.send_blueprint(_build_blueprint(signals, ep, layout))
         if signals.unplotted:
             logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
             notice = _unplotted_notice(signals.unplotted)
