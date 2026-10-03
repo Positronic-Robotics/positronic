@@ -10,7 +10,7 @@ import numpy as np
 
 from positronic.utils.lazy import LazySequence
 
-from .time import Time, TimeGrid, as_time, validate_queries, validate_timelines
+from .time import Time, TimeBounds, TimeGrid, as_time, validate_queries, validate_timelines
 
 RECORDED_TIME = 'recorded'
 TIMELINE_METADATA_KEY = b'positronic.timeline'
@@ -109,13 +109,27 @@ class Signal(Sequence[tuple[T, Time]], ABC, Generic[T]):
             if name not in self.timelines:
                 raise KeyError(name)
 
-    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
+    @overload
+    def bounds(self, timelines: str) -> TimeBounds[int]: ...
+
+    @overload
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
+
+    @final
+    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
+        """Inclusive endpoints: integers for a name, Time values for a tuple of names."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
         if not len(self):
             raise ValueError('Signal is empty')
-        self._validate_selection(timelines)
+        self._validate_selection(names)
+        bounds = self._bounds(names)
+        if isinstance(timelines, str):
+            return TimeBounds(bounds.start[timelines], bounds.finish[timelines])
+        return bounds
+
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
         bounds = self._ts_at([0, len(self) - 1], timelines)
-        return bounds[0], bounds[1]
+        return TimeBounds(bounds[0], bounds[1])
 
     @cached_property
     def meta(self) -> SignalMeta:
@@ -149,11 +163,21 @@ class Signal(Sequence[tuple[T, Time]], ABC, Generic[T]):
     def values(self) -> Sequence[T]:
         return self._values_at(slice(None))
 
+    @overload
+    def timestamps(self, timelines: str) -> Sequence[int]: ...
+
+    @overload
+    def timestamps(self, timelines: tuple[str, ...]) -> Sequence[Time]: ...
+
     @final
-    def timestamps(self, timelines: str | tuple[str, ...]) -> Sequence[Time]:
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
-        self._validate_selection(timelines)
-        return self._ts_at(slice(None), timelines)
+    def timestamps(self, timelines: str | tuple[str, ...]) -> Sequence[int] | Sequence[Time]:
+        """Selected coordinates: integers for a name, Time values for a tuple of names."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
+        self._validate_selection(names)
+        times = self._ts_at(slice(None), names)
+        if isinstance(timelines, str):
+            return LazySequence(times, lambda ts: ts[timelines])
+        return times
 
     @overload
     def __getitem__(self, key: int) -> tuple[T, Time]: ...
@@ -242,12 +266,12 @@ class _SignalViewTime(Generic[T]):
                 return _SignalView(self._signal, range(0))
             if int(self._signal._search_ts([start])[0]) < 0:
                 raise KeyError(f'No record at or before {start}')
-            bound = stop if stop is not None else self._signal.bounds(names)[1]
+            bound = stop if stop is not None else self._signal.bounds(names).finish
             return self[TimeGrid(start, bound, step, inclusive=stop is None)]
         if not len(self._signal):
             return _SignalView(self._signal, range(0))
         first = max(0, int(self._signal._search_ts([start])[0])) if start is not None else 0
-        start = start if start is not None else self._signal.bounds(names)[0]
+        start = start if start is not None else self._signal.bounds(names).start
         end = len(self._signal)
         if stop is not None:
             end = int(self._signal._search_ts([stop])[0]) + 1

@@ -130,7 +130,7 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert eval_keys.ENDED_BY not in episode
         assert eval_keys.SUCCESS not in episode
         first, last = episode.bounds(RECORDED_TIME)
-        assert (last - first)[RECORDED_TIME] / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
+        assert (last - first) / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
         assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
         assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']

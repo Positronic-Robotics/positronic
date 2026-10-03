@@ -111,10 +111,7 @@ def test_every_frame_reads_back_at_its_index_and_timestamp(tmp_path):
     signal = _write(tmp_path, SOFTWARE_H264, frames)
 
     assert len(signal) == len(frames)
-    np.testing.assert_array_equal(
-        [time[RECORDED_TIME] for time in signal.timestamps(RECORDED_TIME)],
-        [1_000_000_000 + i * 33_333_333 for i in range(45)],
-    )
+    np.testing.assert_array_equal(signal.timestamps(RECORDED_TIME), [1_000_000_000 + i * 33_333_333 for i in range(45)])
     decoded = signal.values()
     for i in (0, 44, 3, 31, 30, 29, 12):
         assert _psnr(decoded[i], frames[i]) > 30, f'frame {i}'

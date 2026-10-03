@@ -3,10 +3,10 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, overload
 
 from .signal import Signal
-from .time import Time, TimeGrid, as_time, validate_queries, validate_timelines
+from .time import Time, TimeBounds, TimeGrid, as_time, validate_queries, validate_timelines
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -67,7 +67,7 @@ class _EpisodeTimeIndexer:
             if request.start is None:
                 raise ValueError('Slice start is required when step is provided')
             start, step = as_time(request.start), as_time(request.step)
-            stop = as_time(request.stop) if request.stop is not None else self.episode.bounds(start.timelines)[1]
+            stop = as_time(request.stop) if request.stop is not None else self.episode.bounds(start.timelines).finish
             request = TimeGrid(start, stop, step, inclusive=request.stop is None)
             names = start.timelines
         elif isinstance(request, Sequence):
@@ -120,14 +120,23 @@ class Episode(ABC, Mapping[str, Any]):
         validate_timelines(timelines)
         return {name: signal for name, signal in self.signals.items() if set(timelines).issubset(signal.timelines)}
 
-    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
-        bounds = [signal.bounds(timelines) for signal in self._signals_on(timelines).values()]
+    @overload
+    def bounds(self, timelines: str) -> TimeBounds[int]: ...
+
+    @overload
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
+
+    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
+        """Coordinatewise latest starts and finishes of signals on every selected timeline."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
+        bounds = [signal.bounds(names) for signal in self._signals_on(names).values()]
         if not bounds:
             raise ValueError('Episode has no signals on the requested timelines')
-        start = Time(**{name: max(first[name] for first, _ in bounds) for name in timelines})
-        stop = Time(**{name: max(last[name] for _, last in bounds) for name in timelines})
-        return start, stop
+        start = Time(**{name: max(bound.start[name] for bound in bounds) for name in names})
+        finish = Time(**{name: max(bound.finish[name] for bound in bounds) for name in names})
+        if isinstance(timelines, str):
+            return TimeBounds(start[timelines], finish[timelines])
+        return TimeBounds(start, finish)
 
     @property
     def time(self):

@@ -58,8 +58,12 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 
 `episode.bounds(names)` derives named endpoints from signals containing all selected timelines.
 It takes the coordinatewise maximum of signal starts and ends. Empty eligible signals or no
-eligible signals raise `ValueError`. Subtraction yields a named span with units owned by consumers.
+eligible signals raise `ValueError`. Subtraction yields a span with units owned by consumers.
 Bounds and spans are not episode metadata; transformed views derive them from their signals.
+
+Bounds return `TimeBounds(start, finish)` with inclusive endpoints. A single timeline name selects
+integer endpoints and `Sequence[int]` timestamps; a tuple selects `Time` endpoints and
+`Sequence[Time]` timestamps. Timestamp sequences may be lazy in either form.
 
 ## Laziness
 
@@ -71,7 +75,7 @@ Nothing expensive happens until needed:
 `SimpleSignal` reads Parquet row-group statistics (file footer) for named bounds and length without
 loading values. Timestamp columns load independently when indexed or searched. HTTP discovery
 and bounds also defer value metadata and payload reads. Public timestamp collections use
-`Sequence[Time]`; backends may share immutable numeric storage and timeline names between rows.
+`Sequence[int]` or `Sequence[Time]`; backends may share immutable numeric storage and timeline names between rows.
 
 Laziness is what keeps the layering honest: if reading through the abstraction were expensive, a consumer would reach around it for the backend.
 

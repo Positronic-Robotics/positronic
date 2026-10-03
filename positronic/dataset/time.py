@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping, Sequence
 from operator import index
 from types import MappingProxyType
-from typing import SupportsIndex, overload
+from typing import Generic, NamedTuple, SupportsIndex, TypeVar, overload
 
 import numpy as np
 
@@ -107,6 +107,16 @@ class Time(Mapping[str, int]):
             return NotImplemented
         self._validate_timelines(other)
         return Time(**{name: value - other[name] for name, value in self.items()})
+
+
+Coordinate = TypeVar('Coordinate', int, Time)
+
+
+class TimeBounds(NamedTuple, Generic[Coordinate]):
+    """Inclusive timestamp endpoints on one timeline or a named set of timelines."""
+
+    start: Coordinate
+    finish: Coordinate
 
 
 def as_time(value: Time | Mapping[str, int]) -> Time:

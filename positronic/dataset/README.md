@@ -133,15 +133,19 @@ repeated indices, and boolean masks are rejected.
 signal.timelines                              # tuple[str, ...]
 value, original_time = signal[0]
 values = signal.values()                     # Sequence[T]
-times = signal.timestamps(("world", "tick")) # Sequence[Time]
-first, last = signal.bounds(("world", "tick"))
-span = last - first                          # Time
+world_times = signal.timestamps("world")     # Sequence[int]
+times = signal.timestamps(("world", "tick"))  # Sequence[Time]
+bounds = signal.bounds("world")              # TimeBounds[int]
+span = bounds.finish - bounds.start          # int
+first, last = signal.bounds(("world", "tick")) # TimeBounds[Time], unpackable
+named_span = last - first                    # Time
 ```
 
 `bounds` and `timestamps` accept a single name or a nonempty tuple of unique names.
-`signal.bounds("world")` is equivalent to `signal.bounds(("world",))` and still returns two
-`Time` values. Likewise, `signal.timestamps("world")` returns `Sequence[Time]`. Episode bounds
-support the same shorthand. Unknown signal timelines raise `KeyError`.
+As with `Time` indexing, a string selects integer coordinates; a tuple selects `Time` values,
+even with just one name. Bounds return an immutable `TimeBounds` named tuple with inclusive
+`start` and `finish` endpoints. Episode bounds use the same return types.
+Unknown signal timelines raise `KeyError`.
 Empty signals have no bounds and raise `ValueError`.
 Tuple order controls presentation, never query results. Timestamp sequences may be lazy; their
 numeric storage and materialization are backend details.
@@ -188,6 +192,9 @@ class Signal[T]:
 
     # Optional optimized search; the base class supplies binary search.
     def _search_ts(self, queries: Sequence[Time]) -> Sequence[int]: ...
+
+    # Optional optimized bounds; the base class reads the first and last timestamps.
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
 ```
 
 `SignalWriter.append(value, timestamps: Time)` and
@@ -306,7 +313,7 @@ sampled = episode.time[Time(world=1000):Time(world=3000):Time(world=500)]
 
 `bounds(names)` takes the coordinatewise maximum of eligible signals' starts and ends. No eligible
 signals, or an eligible signal without bounds, raises `ValueError`. Bounds need not identify a
-stored record. Subtract them to obtain named spans; a tick span is a tick count, not nanoseconds.
+stored record. Subtract the endpoints to obtain spans; a tick span is a tick count, not nanoseconds.
 
 All queries return a dictionary. Points contain signal values; batches and stepped slices contain
 per-signal value sequences, with statics unchanged. An omitted stepped stop uses one episode-wide
@@ -507,5 +514,5 @@ dataset = transforms.TransformedDataset(
 
 episode = dataset[0]
 # Resized view; original imagery untouched
-frame0, _ts = episode['resized_image'].time[episode.bounds(RECORDED_TIME)[0]]
+frame0, _ts = episode['resized_image'].time[episode.bounds((RECORDED_TIME,)).start]
 ```

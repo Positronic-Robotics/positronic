@@ -53,8 +53,8 @@ def test_episode_bounds(tmp_path):
         w.append('b', 20, Time(**{RECORDED_TIME: 2500}))
 
     ep = DiskEpisode(ep_dir)
-    assert ep.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1500
-    assert ep.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 2500
+    assert ep.bounds(RECORDED_TIME).start == 1500
+    assert ep.bounds(RECORDED_TIME).finish == 2500
 
 
 def test_episode_getitem_returns_signal(tmp_path):
@@ -391,12 +391,12 @@ class TestCoreEpisodeTime:
             _ = self.ep.time[Time(**{RECORDED_TIME: 1500}) : Time(**{RECORDED_TIME: 3000})]
 
     def test_stepped_slice_without_end_defaults_to_episode_last_ts(self):
-        start = self.ep.bounds(RECORDED_TIME)[0][RECORDED_TIME]
+        start = self.ep.bounds(RECORDED_TIME).start
         step = 500
         sub = self.ep.time[Time(**{RECORDED_TIME: start}) :: Time(**{RECORDED_TIME: step})]
         a_vals = sub['a']
         b_vals = sub['b']
-        expected_len = len(np.arange(start, self.ep.bounds(RECORDED_TIME)[1][RECORDED_TIME] + 1, step))
+        expected_len = len(np.arange(start, self.ep.bounds(RECORDED_TIME).finish + 1, step))
         assert len(a_vals) == len(b_vals) == expected_len
 
 
@@ -463,7 +463,7 @@ class TestLazyMetaProperties:
             w.append('a', 2, Time(**{RECORDED_TIME: 3000}))
 
         ep = DiskEpisode(ep_dir)
-        assert (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] == 2000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 2000
         assert 'duration_ns' not in ep.meta
 
     def test_bounds_ignore_legacy_duration_cache(self, tmp_path):
@@ -483,7 +483,7 @@ class TestLazyMetaProperties:
 
         # Read episode - should compute duration from signals
         ep = DiskEpisode(ep_dir)
-        assert (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] == 3000  # 4000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 3000  # 4000 - 1000
 
     def test_size_mb_computed_lazily(self, tmp_path):
         """Test that size_mb is only computed when accessed."""
@@ -522,7 +522,7 @@ class TestLazyMetaProperties:
 
         # Accessing size_mb should work
         assert meta_copy['size_mb'] > 0
-        assert (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] == 1000  # 2000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 1000  # 2000 - 1000
 
     def test_multiple_meta_accesses_cache_lazy_values(self, tmp_path):
         """Test that lazy values are cached after first computation."""
@@ -564,7 +564,7 @@ class TestLazyMetaProperties:
             pq.write_table(table, ep_dir / 'signal.parquet')
 
         ep = DiskEpisode(ep_dir)
-        assert (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] == 4000  # 5000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 4000  # 5000 - 1000
 
     def test_bounds_from_legacy_frame_index(self, tmp_path):
         ep_dir = tmp_path / 'ep_video_scan'
@@ -578,7 +578,7 @@ class TestLazyMetaProperties:
             (ep_dir / 'cam.mp4').write_bytes(b'dummy')
 
         ep = DiskEpisode(ep_dir)
-        assert (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] == 6000  # 8000 - 2000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 6000  # 8000 - 2000
 
 
 def test_get_returns_value_or_default(tmp_path):

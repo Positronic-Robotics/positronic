@@ -50,7 +50,7 @@ def uph(ep: Episode) -> float | None:
     if items == 0:
         return None
     first, last = ep.bounds(RECORDED_TIME)
-    return items / ((last - first)[RECORDED_TIME] / 1e9 / 3600)
+    return items / ((last - first) / 1e9 / 3600)
 
 
 finetune_ds = ds.transform.override(
@@ -113,7 +113,7 @@ def finetune_group_by_task():
         duration, units = 0, 0
         for ep in episodes:
             first, last = ep.bounds(RECORDED_TIME)
-            duration += (last - first)[RECORDED_TIME] / 1e9 / 3600
+            duration += (last - first) / 1e9 / 3600
             units += ep['units']
 
         result = {'task': episodes[0][keys.TASK]}

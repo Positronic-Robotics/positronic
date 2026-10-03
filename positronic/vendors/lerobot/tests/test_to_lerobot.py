@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.signal import RECORDED_TIME
-from positronic.dataset.time import Time
+from positronic.dataset.time import Time, TimeBounds
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
@@ -44,8 +44,7 @@ class _MockEpisode:
         self.time = _MockTimeIndex(data)
 
     def bounds(self, timelines):
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
-        return tuple(ts[timelines] for ts in self._bounds)
+        return TimeBounds(self._bounds[0][timelines], self._bounds[1][timelines])
 
 
 class _MockDataset(torch.utils.data.Dataset):

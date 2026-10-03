@@ -713,7 +713,7 @@ async def api_episodes(request: Request):
         duration = 0.0
         if ep.signals:
             first, last = ep.bounds(RECORDED_TIME)
-            duration = (last - first)[RECORDED_TIME] / 1e9
+            duration = (last - first) / 1e9
         return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
 
     ep_it = (table_row(i, ep) for i, ep in enumerate(ds) if matches(ep))

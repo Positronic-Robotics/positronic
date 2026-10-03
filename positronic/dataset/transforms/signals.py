@@ -183,7 +183,7 @@ class TimeOffsets(Signal[tuple]):
     def _start(self) -> int:
         if not len(self._signal):
             return 0
-        first = self._signal.bounds(self._names)[0]
+        first = self._signal.bounds(self._names).start
         threshold = Time(**{
             name: first[name] - min(0, *(offset[name] for offset in self._offsets)) for name in self._names
         })
@@ -245,7 +245,7 @@ class Join(Signal[tuple]):
     def _times(self) -> TimeArray:
         if any(not len(signal) for signal in self._signals):
             return TimeArray(self.timelines, np.empty((0, len(self.timelines)), dtype=np.int64))
-        starts = [signal.bounds(self.timelines)[0] for signal in self._signals]
+        starts = [signal.bounds(self.timelines).start for signal in self._signals]
         start = np.array([max(ts[name] for ts in starts) for name in self.timelines], dtype=np.int64)
         rows = np.concatenate([
             TimeArray.from_times(signal.timestamps(self.timelines), self.timelines)._values for signal in self._signals

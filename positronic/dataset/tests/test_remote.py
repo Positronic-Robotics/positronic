@@ -18,7 +18,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
 from positronic.dataset.signal import RECORDED_TIME, TIMELINES_KEY, SupportsEncodedRepresentation
-from positronic.dataset.time import Time
+from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
@@ -388,9 +388,14 @@ def test_remote_named_query_parity(named_remote):
     for query in [Time(A=150), Time(B=950), Time(B=950, A=150), Time(A=2**100), Time(A=150, B=950)]:
         assert remote_ep['left'].time[query] == local_ep['left'].time[query]
     assert remote_ep['left'].bounds(('B', 'A')) == local_ep['left'].bounds(('B', 'A'))
-    assert remote_ep['left'].bounds('A') == local_ep['left'].bounds(('A',))
-    assert list(remote_ep['left'].timestamps('A')) == list(local_ep['left'].timestamps(('A',)))
-    assert remote_ep.bounds('A') == local_ep.bounds(('A',))
+    assert remote_ep['left'].bounds('A') == local_ep['left'].bounds('A') == TimeBounds(100, 220)
+    assert remote_ep['left'].bounds('A').start == 100
+    assert remote_ep['left'].bounds('A').finish == 220
+    assert remote_ep['left'].bounds(('A',)).start == Time(A=100)
+    assert remote_ep['left'].bounds(('A',)).finish == Time(A=220)
+    assert list(remote_ep['left'].timestamps('A')) == list(local_ep['left'].timestamps('A')) == [100, 140, 220]
+    assert list(remote_ep['left'].timestamps(('A',))) == [Time(A=100), Time(A=140), Time(A=220)]
+    assert remote_ep.bounds('A') == local_ep.bounds('A') == TimeBounds(100, 220)
     grid = [Time(A=100), Time(A=150), Time(A=200), Time(A=250)]
     assert list(remote_ep['left'].time[grid]) == list(local_ep['left'].time[grid])
     for query in [Time(A=150), Time(A=150, B=950), Time(D=1), Time(missing=1)]:
@@ -421,6 +426,7 @@ def test_remote_discovery_does_not_load_values(named_remote, monkeypatch):
         episode = remote[0]
         assert set(episode.signals) == {'left', 'right', 'separate'}
         assert episode.bounds(('A',)) == (Time(A=100), Time(A=220))
+        assert episode.bounds('A') == TimeBounds(100, 220)
     assert episode['left'].dtype == np.dtype('int64')
     assert episode['left'].shape == ()
 

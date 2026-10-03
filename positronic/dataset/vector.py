@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .signal import RECORDED_TIME, TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
-from .time import Time, TimeArray, search_timestamps, validate_timeline
+from .time import Time, TimeArray, TimeBounds, search_timestamps, validate_timeline
 
 T = TypeVar('T')
 
@@ -97,7 +97,7 @@ class ParquetTimeIndex:
         self._load(queries[0].timelines)
         return search_timestamps(self._loaded, queries)
 
-    def bounds(self, timelines: tuple[str, ...]) -> tuple[Time, Time]:
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
         if not len(self):
             raise ValueError('Signal is empty')
         metadata = self._file.metadata
@@ -116,7 +116,7 @@ class ParquetTimeIndex:
                 # Parquet statistics are optional; read only this coordinate when absent.
                 ends = self.read([0, len(self) - 1], (name,))
                 first[name], last[name] = ends[0][name], ends[1][name]
-        return Time(**first), Time(**last)
+        return TimeBounds(Time(**first), Time(**last))
 
 
 class SimpleSignal(Signal[T]):
@@ -134,11 +134,7 @@ class SimpleSignal(Signal[T]):
     def __len__(self) -> int:
         return len(self._time_index)
 
-    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
-        if not len(self):
-            raise ValueError('Signal is empty')
-        self._validate_selection(timelines)
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
         return self._time_index.bounds(timelines)
 
     def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:

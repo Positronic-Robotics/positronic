@@ -14,7 +14,7 @@ from positronic.utils.serialization import deserialize
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer
 from .signal import TIMELINES_KEY, IndicesLike, Kind, Signal, SignalMeta
-from .time import Time, TimeArray, validate_queries
+from .time import Time, TimeArray, TimeBounds, validate_queries
 
 T = TypeVar('T')
 API_PREFIX = '/api/v2'
@@ -136,7 +136,7 @@ class RemoteSignal(Signal[T]):
         self._length = length
         self._encoding_format = encoding_format
         self._timelines = timelines
-        self._bounds = bounds
+        self._time_bounds = bounds
 
     @property
     def timelines(self) -> tuple[str, ...]:
@@ -151,12 +151,8 @@ class RemoteSignal(Signal[T]):
             raise ValueError('Signal is empty')
         return self._client.get_signal_meta(self._episode_index, self._signal_name)
 
-    def bounds(self, timelines: str | tuple[str, ...]) -> tuple[Time, Time]:
-        timelines = (timelines,) if isinstance(timelines, str) else timelines
-        if not len(self):
-            raise ValueError('Signal is empty')
-        self._validate_selection(timelines)
-        return self._bounds[0][timelines], self._bounds[1][timelines]
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
+        return TimeBounds(self._time_bounds[0][timelines], self._time_bounds[1][timelines])
 
     def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:
         return self._client.get_signal_timestamps(self._episode_index, self._signal_name, indices, timelines)

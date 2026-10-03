@@ -103,9 +103,7 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
     for i, ep in enumerate(dataset):
         model = ep.get('model', '')
         items = ep.get('eval.successful_items', 0)
-        duration = (
-            ep.get('eval.duration') or (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] / 1e9
-        )
+        duration = ep.get('eval.duration') or (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) / 1e9
         if items and duration > 0:
             uph_by_model[model].append(items / (duration / 3600))
 
@@ -133,8 +131,7 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
                 continue
             ep_items = ep.get('eval.successful_items', 0)
             ep_duration = (
-                ep.get('eval.duration')
-                or (ep.bounds(RECORDED_TIME)[1] - ep.bounds(RECORDED_TIME)[0])[RECORDED_TIME] / 1e9
+                ep.get('eval.duration') or (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) / 1e9
             )
             if ep_items and ep_duration > 0:
                 uph = ep_items / (ep_duration / 3600)

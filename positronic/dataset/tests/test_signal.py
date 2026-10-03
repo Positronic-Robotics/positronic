@@ -6,9 +6,10 @@ import pytest
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, Kind
-from positronic.dataset.time import Time
+from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms.signals import Join, diff, norm
 from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, SimpleSignal, SimpleSignalWriter
+from positronic.utils.lazy import LazySequence
 
 from .utils import DummySignal
 
@@ -39,8 +40,8 @@ class TestVectorMeta:
             w.append(2, Time(**{RECORDED_TIME: 2000}))
             w.append(3, Time(**{RECORDED_TIME: 3000}))
         s = SimpleSignal(fp)
-        assert s.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1000
-        assert s.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 3000
+        assert s.bounds(RECORDED_TIME).start == 1000
+        assert s.bounds(RECORDED_TIME).finish == 3000
 
     def test_vector_start_last_ts_empty_raises(self, tmp_path):
         fp = tmp_path / 'empty.parquet'
@@ -48,9 +49,9 @@ class TestVectorMeta:
             pass
         s = SimpleSignal(fp)
         with pytest.raises(ValueError):
-            _ = s.bounds(RECORDED_TIME)[0][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME).start
         with pytest.raises(ValueError):
-            _ = s.bounds(RECORDED_TIME)[1][RECORDED_TIME]
+            _ = s.bounds(RECORDED_TIME).finish
 
 
 class TestSignalWriterAppend:
@@ -215,8 +216,8 @@ def sig_simple():
 
 class TestCoreSignalBasics:
     def test_start_last_ts_basic(self, sig_simple):
-        assert sig_simple.bounds(RECORDED_TIME)[0][RECORDED_TIME] == 1000
-        assert sig_simple.bounds(RECORDED_TIME)[1][RECORDED_TIME] == 5000
+        assert sig_simple.bounds(RECORDED_TIME).start == 1000
+        assert sig_simple.bounds(RECORDED_TIME).finish == 5000
 
     def test_index_scalar_and_negative(self, sig_simple):
         assert sig_simple[0] == (10, Time(**{RECORDED_TIME: 1000}))
@@ -618,7 +619,7 @@ def test_unnamed_legacy_file_queries(tmp_path):
     signal = SimpleSignal(path)
     assert signal.timelines == (RECORDED_TIME,)
     assert signal.time[Time(**{RECORDED_TIME: 150})] == (1, Time(**{RECORDED_TIME: 100}))
-    assert signal.bounds(RECORDED_TIME) == (Time(**{RECORDED_TIME: 100}), Time(**{RECORDED_TIME: 200}))
+    assert signal.bounds(RECORDED_TIME) == TimeBounds(100, 200)
 
 
 class TestNamedTimelines:
@@ -693,7 +694,10 @@ class TestNamedTimelines:
                 signal.time[Time(A=100) :: step]
 
     def test_projection_bounds_and_readonly_rows(self, signal):
-        assert signal.bounds(('B', 'A')) == (Time(B=900, A=100), Time(B=1100, A=220))
+        bounds = signal.bounds(('B', 'A'))
+        assert bounds.start == Time(B=900, A=100)
+        assert bounds.finish == Time(B=1100, A=220)
+        assert bounds.start.timelines == bounds.finish.timelines == ('B', 'A')
         times = signal.timestamps(('B', 'A'))
         assert times[0].timelines == ('B', 'A')
         with pytest.raises(TypeError):
@@ -710,10 +714,24 @@ class TestNamedTimelines:
             writer.append('unrelated', 2, Time(tick=1))
         episode = DiskEpisode(path)
         signal = episode['value']
-        expected = (Time(world=100), Time(world=200))
+        expected = TimeBounds(Time(world=100), Time(world=200))
         for source in (signal, signal[:]):
-            assert source.bounds('world') == source.bounds(('world',)) == expected
-            assert list(source.timestamps('world')) == list(source.timestamps(('world',))) == list(expected)
+            bounds = source.bounds('world')
+            assert bounds.start == 100
+            assert bounds.finish == 200
+            assert tuple(bounds) == (100, 200)
+            assert source.bounds(('world',)) == expected
+            assert source.bounds(('world',)).start == expected.start
+            assert source.bounds(('world',)).finish == expected.finish
+            times = source.timestamps('world')
+            assert list(times) == [100, 200]
+            assert type(times[0]) is int
+            assert times[-1] == 200
+            assert list(times[:1]) == [100]
+            assert list(source.timestamps(('world',))) == list(expected)
+            assert list(source[:0].timestamps('world')) == []
+            with pytest.raises(ValueError, match='empty'):
+                source[:0].bounds('world')
             with pytest.raises(KeyError):
                 source.bounds('missing')
             with pytest.raises(KeyError):
@@ -723,7 +741,9 @@ class TestNamedTimelines:
                     source.bounds(invalid)
                 with pytest.raises(ValueError):
                     source.timestamps(invalid)
-        assert episode.bounds('world') == episode.bounds(('world',)) == expected
+        assert episode.bounds('world').start == 100
+        assert episode.bounds('world').finish == 200
+        assert episode.bounds(('world',)) == expected
         with pytest.raises(ValueError):
             episode.bounds('')
 
@@ -806,6 +826,25 @@ class TestNamedTimelines:
         pq.write_table(table.replace_schema_metadata({SIGNAL_VERSION_KEY: b'999'}), path)
         with pytest.raises(ValueError, match='Unsupported signal format'):
             _ = SimpleSignal(path).timelines
+
+
+def test_scalar_timestamps_are_lazy(monkeypatch):
+    signal = DummySignal([[100, 1], [100, 2], [200, 3]], [1, 2, 3], timelines=('world', 'tick'))
+    reads = []
+
+    def read_time(i):
+        reads.append(i)
+        return Time(world=[100, 100, 200][i])
+
+    monkeypatch.setattr(signal, '_ts_at', lambda indices, timelines: LazySequence(range(3), read_time))
+    times = signal.timestamps('world')
+    tail = times[1:]
+    assert len(times) == 3
+    assert len(tail) == 2
+    assert reads == []
+    assert tail[0] == 100
+    assert reads == [1]
+    assert list(times) == [100, 100, 200]
 
 
 def test_window_without_start_keeps_repeated_projected_coordinates():
