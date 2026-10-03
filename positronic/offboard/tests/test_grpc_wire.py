@@ -32,7 +32,7 @@ from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import Served, StartServer
 from positronic.policy.base import SEQ
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 _TOKEN = 'test-secret-token'
@@ -450,8 +450,13 @@ def chatty_client(monkeypatch) -> None:
 
 
 def _silent_then_infer(served: Served) -> list[dict]:
+    """An inference, a silence no frame crosses, and the inference after it.
+
+    The silence follows an answer, so a lost session reaches the caller.
+    """
     session = InferenceClient(*served.grpc()).new_session()
     try:
+        session.infer({'image': 'test'})
         time.sleep(_SILENCE_SEC)
         return session.infer({'image': 'test'})
     finally:

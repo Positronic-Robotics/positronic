@@ -36,13 +36,15 @@ _DELTA_Q = 0.01  # radians
 
 
 def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The grasp-site world pose for candidate joints, computed on a copy of the scene state."""
+    """The grasp-site robot-frame pose for candidate joints, computed on a copy of the scene state."""
     arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
     data = mujoco.MjData(arm.mj_model)
     mujoco.mj_copyData(data, arm.mj_model, arm.mj_data)
     data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
     mujoco.mj_forward(arm.mj_model, data)
-    return data.site_xpos[arm.leaf_frame_id].copy(), data.site_xmat[arm.leaf_frame_id].reshape(3, 3).copy()
+    base = np.asarray(sim_env._robot_view.base.pose, dtype=np.float64)
+    pos_world, rot_world = data.site_xpos[arm.leaf_frame_id], data.site_xmat[arm.leaf_frame_id].reshape(3, 3)
+    return base[:3, :3].T @ (pos_world - base[:3, 3]), base[:3, :3].T @ rot_world
 
 
 def _check_fk_identity(sim_env) -> None:

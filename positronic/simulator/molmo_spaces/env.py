@@ -1,7 +1,7 @@
 """Serve MolmoSpaces benchmarks through the env-server protocol.
 
 Runs in MolmoSpaces' isolated interpreter, with ``mapping``, ``server`` and ``protocol`` on ``PYTHONPATH``.
-End-effector poses describe ``gripper/grasp_site`` in world coordinates.
+End-effector poses describe ``gripper/grasp_site`` in the robot base frame.
 """
 
 import argparse
@@ -188,14 +188,14 @@ class MolmoSpacesEnv(EnvProtocol):
         return np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)
 
     def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        """The grasp-site world pose as (translation, 3x3 rotation)."""
-        eef_world = np.asarray(
-            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_world, dtype=np.float64
+        """The grasp-site robot-frame pose as (translation, 3x3 rotation)."""
+        eef_robot = np.asarray(
+            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_robot, dtype=np.float64
         )
-        return eef_world[:3, 3].copy(), eef_world[:3, :3].copy()
+        return eef_robot[:3, 3].copy(), eef_robot[:3, :3].copy()
 
     def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
-        """Solve a world-frame grasp-site target with MolmoSpaces' IK."""
+        """Solve a robot-frame grasp-site target with MolmoSpaces' IK."""
         pose = np.eye(4)
         pose[:3, 3] = target_pos
         pose[:3, :3] = target_rot
@@ -205,24 +205,23 @@ class MolmoSpacesEnv(EnvProtocol):
             unlocked_move_group_ids=[mapping.MOLMO_ARM_GROUP],
             q0=self._robot_view.get_qpos_dict(),
             base_pose=self._robot_view.base.pose,
-            rel_to_base=False,
+            rel_to_base=True,
         )
         if solution is None:
-            raise RuntimeError(f'MolmoSpaces IK failed for world-frame target pose:\n{pose}')
+            raise RuntimeError(f'MolmoSpaces IK failed for robot-frame target pose:\n{pose}')
         return solution[mapping.MOLMO_ARM_GROUP]
 
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
-        """Raw observations, including the grasp-site pose in world coordinates."""
+        """Raw observations, including the grasp-site pose in the robot base frame."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-        # MolmoSpaces' TCP observation is robot-relative.
-        eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)
+        eef_robot = np.asarray(arm.leaf_frame_to_robot, dtype=np.float64)
         eef_quat = np.zeros(4)
-        rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
+        rot9 = np.ascontiguousarray(eef_robot[:3, :3].reshape(9))
         mujoco.mju_mat2Quat(eef_quat, rot9)
         payload = {
             mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
             mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-            mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+            mapping.OBS_EEF_POS: eef_robot[:3, 3].astype(np.float32),
             mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
             mapping.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])

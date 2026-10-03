@@ -22,7 +22,9 @@ def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
     return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
 
 
-def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
+def compose_reference_delta(
+    cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any
+) -> tuple[np.ndarray, np.ndarray]:
     return (
         np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
         np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),
@@ -52,7 +54,7 @@ def wire_command_to_arm_action(
             target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
+            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(

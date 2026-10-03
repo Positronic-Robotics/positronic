@@ -339,7 +339,7 @@ from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 
 pipeline = PolicyDeployment(
     local=Sequential(
@@ -412,6 +412,9 @@ action = session.infer(observation)
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
+
+A session recovers a connection that drops before the server's first answer. A later drop raises
+`wire.PeerDisconnected`.
 
 ## Vendor Implementations
 
