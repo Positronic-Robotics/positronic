@@ -113,3 +113,19 @@ def test_a_station_that_measured_none_leaves_the_vendor_its_own():
     """Every YAM shares i2rt's factors until a station measures better ones; naming none has to mean that,
     rather than a vector of ones that would turn the compensation off."""
     assert _opened_with()['gravity_comp_factor'] is None
+
+
+def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
+    factors = {}
+
+    def get_yam_robot(channel, gravity_comp_factor, **_):
+        factors[channel] = gravity_comp_factor
+        return yam._FakeYam()
+
+    monkeypatch.setattr(yam, 'get_yam_robot', get_yam_robot)
+    rig = embodiment.yam_bimanual_yambox.override(cameras={}, video_encoder=video_encoder.libx264_veryfast)
+    with pimm.World() as world:
+        loop = world.start(list(rig.instantiate().control_systems))
+        _run_until(loop, lambda: len(factors) == 2)
+    for passed in factors.values():
+        np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
