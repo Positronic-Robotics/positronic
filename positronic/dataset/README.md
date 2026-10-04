@@ -6,6 +6,7 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 - [Core concepts](#core-concepts)
   - [We optimize for](#we-optimize-for)
   - [Layers](#layers)
+- [Time](#time)
 - [Public API](#public-api)
   - [Signal metadata](#signal-metadata)
   - [Signal implementations](#signal-implementations)
@@ -33,6 +34,9 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 - [resized view; original imagery untouched](#resized-view-original-imagery-untouched)
 
 ## Core concepts
+
+__Time__ – a moment described by timestamps on one or more named timelines, such as wall time, simulation time, or tick number. A time series can live on several timelines at once.
+
 __Signal__ – strictly typed stepwise function of time, represented as a sequence of `(data, ts)` elements with strictly increasing `ts`.
 Think of it as a time series where each value stays in effect until the next timestamp updates it. Formally, $f(t) = \text{data}_i$ where $i = \max\{j : \text{ts}_j \leq t\}$, and nothing is defined before the very first timestamp. Because values propagate forward like this, every `Signal` can answer "what did we know at time _t_?" with a single lookup.
 
@@ -46,7 +50,7 @@ __Episode__ – collection of Signals recorded together plus static, episode-lev
 __Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
 
 ### We optimize for:
-* Fast append during recording (low latency).
+* High write throughput during recording.
 * Random access at query time by the timestamp.
 * Window slices like "5 seconds before time X".
 
@@ -61,50 +65,15 @@ A dataset read composes up to four layers, all behind the same `Dataset`/`Episod
 
 Recordings are never modified: edits persist but never compute, transforms compute but never persist.
 
-## Writing timestamps
+## Time
 
-`Time` is an immutable value containing integer timestamps on named timelines. Its constructor
-accepts timeline names as keyword arguments and requires at least one timeline.
-Names must contain at least one non-whitespace character.
+`Time(world=1000, wall=2000, tick=4)` represents one moment on several named timelines.
+Like a simple timestamp, it is immutable and supports comparison, addition, and subtraction.
+Operations match coordinates by name, regardless of their order.
 
-```python
-from positronic.dataset import Time
-
-ts = Time(world=1000, wall=2000, tick=4)
-ts.timelines                    # ("world", "wall", "tick")
-ts["world"]                     # 1000
-ts[("tick", "world")]            # Time(**{"tick": 4, "world": 1000})
-```
-
-Use `Time(**coordinates)` for dynamic names, including names such as `"server.wall"`.
-Changing the input dictionary does not change the constructed timestamps.
-
-Tuple selection requires at least one name, without duplicates. Unknown names raise `KeyError`.
-`Time` also supports read-only access through `keys()`, `values()`, `items()`, and iteration over names.
-
-Equality compares all names and values, regardless of name order. Ordering and arithmetic require
-identical name sets; mismatches raise `ValueError`.
-
-| Operator | Meaning |
-| --- | --- |
-| `a <= b` | Every coordinate in `a` is at most the corresponding coordinate in `b`. |
-| `a < b` | `a <= b` and at least one coordinate is smaller. |
-| `a >= b`, `a > b` | Reverse the operands of `<=` and `<`. |
-| `a + b`, `a - b` | Add or subtract matching coordinates and return a new `Time`. |
-
-Ordering and arithmetic accept `Time` operands. Negative coordinates and differences are allowed.
-Some values are incomparable: neither `Time(a=1, b=2)` nor `Time(a=2, b=1)` is smaller.
-
-Writers require one `Time` value with all coordinates for each append. The first successful
-append fixes the signal's timeline names. Every subsequent record supplies exactly those names,
-never decreases a coordinate, and strictly increases at least one. There is no main or default
-timeline. Stored coordinates must fit a signed 64-bit integer.
-
-```python
-with dataset_writer.new_episode() as episode:
-    episode.append("state", state, Time(world=1000, wall=2000, tick=4))
-    episode.append("camera", image, Time(world=1000, wall=2010))
-```
+Ordering and arithmetic require the same set of timeline names. `a <= b` means every coordinate
+in `a` is at most its counterpart in `b`; `<` also requires at least one to be smaller.
+If timelines disagree on order, the two values are incomparable.
 
 ### Storage and compatibility
 
@@ -202,7 +171,8 @@ class Signal[T]:
 ```
 
 `SignalWriter.append(value, timestamps: Time)` and
-`EpisodeWriter.append(signal_name, value, timestamps: Time)` enforce the same ordering rule.
+`EpisodeWriter.append(signal_name, value, timestamps: Time)` enforce the
+[timestamp ordering rules](#writing-datasets).
 Writers are context managers; exiting finalizes output, and `abort()` removes partial output.
 `DatasetWriter.new_episode()` allocates an episode writer.
 
@@ -336,15 +306,21 @@ An empty explicit batch returns empty per-signal sequences plus static items.
 
 ### Writing datasets
 
-`DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new `Episode` slot and return an `EpisodeWriter` for recording:
+`DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new `Episode` slot and return an `EpisodeWriter` for recording.
+
+Writers require one `Time` value with all coordinates for each append. The first successful
+append fixes the signal's timeline names. Every subsequent record supplies exactly those names,
+never decreases a coordinate, and strictly increases at least one. There is no main or default
+timeline. Stored coordinates must fit a signed 64-bit integer.
 
 ```python
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset import Time
 
-with dataset_writer.new_episode() as ew:
-    ew.set_static("task", "pick_place")
-    ew.set_static("id", 123)
-    ew.append("state", np.array([...]), Time(**{RECORDED_TIME: ts_ns}))
+with dataset_writer.new_episode() as episode:
+    episode.set_static("task", "pick_place")
+    episode.set_static("id", 123)
+    episode.append("state", state, Time(world=1000, wall=2000, tick=4))
+    episode.append("camera", image, Time(world=1000, wall=2010))
 ```
 
 ### Editing datasets
