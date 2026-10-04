@@ -768,13 +768,13 @@ class World:
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                clock = None if emitter.owner in local_cs else system_clock
+                clock = self._clock if emitter.owner in local_cs else system_clock
                 mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
 
         for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
-            emitter._bind(emitter_wrp(em))
+            emitter._bind(emitter_wrp(em), clock=self._clock)
             # Wrap the underlying transport receiver before binding it into the logical receiver.
             receiver._bind(receiver_wrp(re))
 
@@ -809,7 +809,7 @@ class World:
                 **kwargs,
             )
 
-            emitter_logical._bind(emitter_wrp(emitter_physical))
+            emitter_logical._bind(emitter_wrp(emitter_physical), clock=clock)
 
             if not isinstance(receivers_physical, list):
                 receivers_physical = [receivers_physical]

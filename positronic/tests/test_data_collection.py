@@ -156,8 +156,8 @@ def build_teleop_arm(world, spread: Sequence[float] | np.ndarray = JOINTS_SPREAD
     """The controller with the arm side of its ``sync_move`` paired, and recorders on what it emits."""
     dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, spread)
     grips, sounds = RecordingEmitter(), RecordingEmitter()
-    dc.target_grip._bind(grips)
-    dc.sound._bind(sounds)
+    dc.target_grip._bind(grips, clock=world.clock)
+    dc.sound._bind(sounds, clock=world.clock)
     return dc, world.pair(dc.sync_move), world.pair(dc.buttons_receiver), grips, sounds
 
 

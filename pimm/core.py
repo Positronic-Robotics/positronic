@@ -3,7 +3,7 @@ from collections.abc import Callable, Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeAlias, TypeVar, final
 
-from .time import EMITTED_WALL, Clock, SystemClock, Time
+from .time import EMITTED_PREFIX, EMITTED_WALL, RECEIVED_PREFIX, Clock, SystemClock, Time
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -34,7 +34,7 @@ class Message(Generic[T]):
         return self._time
 
     def _received(self, clock: Clock) -> 'Message[T]':
-        return Message(self.data, Time(**self.time, **{f'received.{k}': v for k, v in clock.time().items()}))
+        return Message(self.data, Time(**self.time, **{f'{RECEIVED_PREFIX}{k}': v for k, v in clock.time().items()}))
 
 
 class SignalEmitter(ABC, Generic[T]):
@@ -52,9 +52,9 @@ class SignalEmitter(ABC, Generic[T]):
         if time is not None:
             if not isinstance(time, Time):
                 raise TypeError('Producer timestamps must be a Time')
-            if any(name.startswith(('emitted.', 'received.')) for name in time):
+            if any(name.startswith((EMITTED_PREFIX, RECEIVED_PREFIX)) for name in time):
                 raise ValueError('The emitted.* and received.* timelines belong to pimm')
-        coordinates = {f'emitted.{k}': v for k, v in self._emission_clock.time().items()}
+        coordinates = {f'{EMITTED_PREFIX}{k}': v for k, v in self._emission_clock.time().items()}
         if time is not None:
             coordinates.update(time)
         self._emit(data, Time(**coordinates))
@@ -167,8 +167,8 @@ class ControlSystemEmitter(SignalEmitter[T]):
     def num_bound(self) -> int:
         return len(self._internal)
 
-    def _bind(self, emitter: SignalEmitter[T]):
-        self._clock = emitter._emission_clock
+    def _bind(self, emitter: SignalEmitter[T], *, clock: Clock):
+        self._clock = clock
         self._internal.append(emitter)
 
     def _emit(self, data: T, time: Time):
@@ -223,7 +223,7 @@ class FakeEmitter(ControlSystemEmitter[T]):
     def _emit(self, data: T, time: Time):
         raise RuntimeError('FakeEmitter.emit() is not supposed to be called')
 
-    def _bind(self, emitter: SignalEmitter[T]):
+    def _bind(self, emitter: SignalEmitter[T], *, clock: Clock):
         raise RuntimeError('FakeEmitter._bind() is not supposed to be called')
 
 

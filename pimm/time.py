@@ -9,10 +9,12 @@ from typing import SupportsIndex, overload
 
 import numpy as np
 
-EMITTED_WALL = 'emitted.wall'
-EMITTED_WORLD = 'emitted.world'
-RECEIVED_WALL = 'received.wall'
-RECEIVED_WORLD = 'received.world'
+EMITTED_PREFIX = 'emitted.'
+RECEIVED_PREFIX = 'received.'
+EMITTED_WALL = f'{EMITTED_PREFIX}wall'
+EMITTED_WORLD = f'{EMITTED_PREFIX}world'
+RECEIVED_WALL = f'{RECEIVED_PREFIX}wall'
+RECEIVED_WORLD = f'{RECEIVED_PREFIX}world'
 
 
 def validate_timeline(timeline: str) -> None:

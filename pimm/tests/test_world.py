@@ -544,7 +544,8 @@ class TestWorldControlSystems:
             with pytest.raises(AssertionError):
                 world.connect(producer.emitter, consumer.receiver)
 
-    def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self):
+    @pytest.mark.parametrize('wrapped_first', [False, True])
+    def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self, wrapped_first):
         system = DummyControlSystem('loop')
         captured: dict[str, SignalEmitter] = {}
 
@@ -564,11 +565,18 @@ class TestWorldControlSystems:
             return recording
 
         with World(virtual_time=True) as world:
-            mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
+            if wrapped_first:
+                mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
+                unwrapped = world.pair(system.emitter)
+            else:
+                unwrapped = world.pair(system.emitter)
+                mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
 
             world.start(system)
+            assert isinstance(world.clock, VirtualClock)
+            world.clock.advance_to_ns(100)
             sent_ts = 987_654_321
             system.emitter.emit('payload', time=Time(source=sent_ts))
             message = mirrored.read()
@@ -576,6 +584,11 @@ class TestWorldControlSystems:
             assert message.data == 'wrapped-payload'
             assert message is not None
             assert message.time['source'] == sent_ts
+            assert message.time[EMITTED_WORLD] == 100
+            plain_message = unwrapped.read()
+            assert plain_message is not None
+            assert plain_message.data == 'payload'
+            assert plain_message.time[(EMITTED_WALL, EMITTED_WORLD)] == message.time[(EMITTED_WALL, EMITTED_WORLD)]
 
             assert isinstance(captured['transport'], LocalQueueEmitter)
             assert captured['transport'] is not system.emitter
@@ -709,7 +722,7 @@ class TestWorldControlSystems:
             assert result is not None
             assert result.time['source'] == 11_000
 
-            assert captured_clocks == [None]
+            assert captured_clocks == [world.clock]
             assert [loop.cs for (loop,) in started_background] == [background_cs]
 
             sleeps = list(scheduler)

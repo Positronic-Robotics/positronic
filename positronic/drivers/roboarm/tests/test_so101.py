@@ -106,8 +106,9 @@ def _driven(bus: FakeBus, clock: MockClock | None = None, stop: StopFlag | None 
     """A driver over ``bus`` with its state recorded, and its loop ready to pump."""
     driver = so101.Robot(bus)
     states = RecordingEmitter()
-    driver.state._bind(states)
-    return driver, states, driver.run(stop or StopFlag(), clock or MockClock())
+    clock = clock or MockClock()
+    driver.state._bind(states, clock=clock)
+    return driver, states, driver.run(stop or StopFlag(), clock)
 
 
 def _pump(loop, answer, clock: MockClock | None = None, steps: int = 10) -> None:
@@ -242,8 +243,9 @@ def test_the_state_that_answers_a_move_is_published_before_the_answer(world):
     driver = so101.Robot(bus)
     answer = _mover(world, driver)(command.JointPosition(JOGGED))
     watch = WatchingEmitter(answer)
-    driver.state._bind(watch)
-    loop = driver.run(StopFlag(), MockClock())
+    clock = MockClock()
+    driver.state._bind(watch, clock=clock)
+    loop = driver.run(StopFlag(), clock)
 
     _pump(loop, answer)
 

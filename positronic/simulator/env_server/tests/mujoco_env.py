@@ -73,7 +73,7 @@ class MujocoEnv(EnvProtocol):
 
     def _bind_output(self, emitter: pimm.ControlSystemEmitter) -> LocalQueueReceiver:
         queue: deque = deque(maxlen=1)
-        emitter._bind(LocalQueueEmitter(queue, self._clock))
+        emitter._bind(LocalQueueEmitter(queue, self._clock), clock=self._clock)
         return LocalQueueReceiver(queue)
 
     @property

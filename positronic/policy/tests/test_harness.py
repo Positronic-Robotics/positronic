@@ -108,7 +108,6 @@ class Motion(pimm.ControlSystem):
 class Trace(pimm.SignalEmitter):
     def __init__(self, clock, forward=None):
         self.clock = clock
-        self._clock = clock
         self.forward = forward
         self.values = []
 
@@ -149,8 +148,8 @@ def observed_harness():
         for name, receiver in harness.observations.items():
             emitters[name], physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
-        harness.ds_command._bind(Trace(world.clock))
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.ds_command._bind(Trace(world.clock), clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
         step = partial(harness._step, Task('test', None), runtime, policy_run, None)
@@ -285,9 +284,9 @@ def episode_harness():
             deadlines=Trace(world.clock),
             commands=Trace(world.clock),
         )
-        harness.ds_command._bind(ports.records)
-        harness.deadline_ns._bind(ports.deadlines)
-        harness.commands[MOTOR]._bind(ports.commands)
+        harness.ds_command._bind(ports.records, clock=world.clock)
+        harness.deadline_ns._bind(ports.deadlines, clock=world.clock)
+        harness.commands[MOTOR]._bind(ports.commands, clock=world.clock)
         try:
             yield ports
         finally:
@@ -421,9 +420,9 @@ def policy_world(policy, *, simulated=True, charged=False):
         world.pair(harness.manual_command)
         world.pair(harness.done)
         commands = Trace(world.clock)
-        harness.commands[MOTOR]._bind(commands)
-        harness.ds_command._bind(Trace(world.clock))
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.commands[MOTOR]._bind(commands, clock=world.clock)
+        harness.ds_command._bind(Trace(world.clock), clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         loop = world.start([harness, timer])
         caller(Rollout(Task('test', None, charge_inference_time=charged), policy, None))
         try:
@@ -598,12 +597,12 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         world.pair(harness.manual_command)
         world.pair(harness.done)
         observations = world.pair(harness.observations[POSITION])
-        motion.position._bind(observations)
+        motion.position._bind(observations, clock=world.clock)
         commands = Trace(world.clock, world.pair(motion.command))
-        harness.commands[MOTOR]._bind(commands)
+        harness.commands[MOTOR]._bind(commands, clock=world.clock)
         records = Trace(world.clock)
-        harness.ds_command._bind(records)
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.ds_command._bind(records, clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         world.connect(harness.prepare[RESET], motion.reset)
         loop = world.start([harness, motion])
         observations.emit(0)
@@ -1067,8 +1066,8 @@ def test_robot_observation_serialization_and_typed_command_emission():
         emitter, receiver = world.local_pipe()
         harness.observations[keys.ROBOT_STATE]._bind(receiver)
         emitted = Trace(world.clock)
-        harness.commands[keys.ROBOT_COMMAND]._bind(emitted)
-        harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock))
+        harness.commands[keys.ROBOT_COMMAND]._bind(emitted, clock=world.clock)
+        harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock), clock=world.clock)
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
         policy = StubPolicy()
