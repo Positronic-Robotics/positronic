@@ -654,6 +654,20 @@ class TestNamedTimelines:
         with pytest.raises(ValueError):
             signal.time[Time(A=150, B=1200) :]
 
+    @pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+    @pytest.mark.parametrize(
+        'start, stop, expected',
+        [
+            (Time(A=10, B=0), Time(A=25, B=25), [(2, Time(A=20, B=20))]),
+            (Time(A=10, B=0), None, [(2, Time(A=20, B=20))]),
+            (Time(A=10, B=0), Time(A=15, B=25), []),
+            (Time(A=30, B=0), None, []),
+        ],
+    )
+    def test_window_without_carry_respects_every_lower_bound(self, timelines, start, stop, expected):
+        signal = DummySignal([[0, 10], [20, 20]], [1, 2], timelines=('A', 'B'))
+        assert list(signal.time[start[timelines] : stop[timelines] if stop is not None else None]) == expected
+
     @pytest.mark.parametrize(
         'start, stop',
         [

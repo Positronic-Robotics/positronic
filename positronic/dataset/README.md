@@ -167,6 +167,7 @@ sampled = signal.time[Time(world=100):Time(world=250):Time(world=50)]
   and the selected source record's coordinates on every other timeline.
 - Non-stepped windows carry a sample to `start` when a qualifying record exists and exclude `stop`.
   With both endpoints supplied, the window is empty unless `start < stop` componentwise.
+  Without a qualifying carry record, the window begins at the first record satisfying every lower bound.
   An omitted start keeps the first source record. Incompatible ordering after injecting a carried
   timestamp raises `ValueError`.
 - Stepped windows require a named start. Start, stop, and step have the same name set. Each step
@@ -409,12 +410,15 @@ Notes
 
 Component layout
 - Outputs are dynamically declared via `player.outputs[name]` before playback begins; every declared name must map to a dynamic signal in the episode. Static-only items raise `ValueError`, and missing signals raise `KeyError` so wiring mistakes surface immediately.
-- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None)` starts playback, optionally restricting the time window. `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
+- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None, timeline=RECORDED_TIME)`
+  starts playback on the selected timeline, optionally restricting the time window.
+  `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
 - `finished` emits the originating `DsPlayerStartCommand` once all scheduled samples have been streamed.
 - `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
 
 Playback semantics
-- Playback selects `recorded` explicitly and converts command endpoints to `Time` for each output stream, so inputs inherit all carry-back semantics and stepping logic from the dataset core.
+- `timeline` selects the nanosecond clock used for scheduling and command bounds; it defaults to `recorded`.
+  Every requested output must expose that timeline. Window selection uses the dataset's carry-back semantics.
 - Emitted timestamps are shifted so that the first sample appears at the clock time the agent received the `START` command. This keeps real-time consumers synchronized with the world clock while preserving inter-sample spacing from the dataset.
 
 Typical use cases

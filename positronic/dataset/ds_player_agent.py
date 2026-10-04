@@ -7,13 +7,15 @@ from dataclasses import dataclass, field
 import pimm
 from positronic.dataset import Episode, Time
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import validate_timeline
 
 
 @dataclass
 class DsPlayerStartCommand:
     episode: Episode
-    start_ts: int | None = None  # Start from `start_ts`
-    end_ts: int | None = None  # End at `end_ts`
+    start_ts: int | None = None
+    end_ts: int | None = None
+    timeline: str = RECORDED_TIME
 
 
 @dataclass
@@ -105,7 +107,7 @@ class _Playback:
         except StopIteration:
             self.streams.pop(name)
             return
-        self._push(name, ts[RECORDED_TIME], value)
+        self._push(name, ts[self.command.timeline], value)
 
     def _push(self, name: str, ts: int, value: object) -> None:
         heapq.heappush(self.heap, (ts, self.counter, name, value))
@@ -114,9 +116,12 @@ class _Playback:
     @classmethod
     def start(cls, command: DsPlayerStartCommand, output_names: list[str], start_clock_ns: int) -> _Playback | None:
         assert output_names, 'No output names provided'
+        validate_timeline(command.timeline)
 
         episode = command.episode
         playback = cls(command, start_clock_ns)
+        start = Time(**{command.timeline: command.start_ts}) if command.start_ts is not None else None
+        end = Time(**{command.timeline: command.end_ts}) if command.end_ts is not None else None
 
         for name in output_names:
             signal = episode.signals.get(name)
@@ -125,8 +130,6 @@ class _Playback:
                     raise ValueError(f"Requested output '{name}' is static and cannot be emitted")
                 raise KeyError(f"Requested output '{name}' is not present in episode signals")
 
-            start = Time(**{RECORDED_TIME: command.start_ts}) if command.start_ts is not None else None
-            end = Time(**{RECORDED_TIME: command.end_ts}) if command.end_ts is not None else None
             playback.streams[name] = iter(signal if start is None and end is None else signal.time[start:end])
             playback.schedule_next(name)
 

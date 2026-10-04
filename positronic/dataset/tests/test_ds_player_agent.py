@@ -85,6 +85,29 @@ def test_respects_end_timestamp(world):
     assert outputs['a'].emitted == [(0, 'first')]
 
 
+@pytest.mark.parametrize('timeline', ['world', 'server.wall'])
+@pytest.mark.parametrize(
+    'start_ts, end_ts, expected',
+    [
+        (None, None, {'a': [(0, 'a1'), (2000, 'a2'), (4000, 'a3')], 'b': [(1000, 'b1'), (3000, 'b2'), (5000, 'b3')]}),
+        (1500, 5000, {'a': [(0, 'a1'), (1500, 'a2')], 'b': [(500, 'b1'), (2500, 'b2')]}),
+    ],
+)
+def test_selected_timeline_controls_bounds_and_scheduling(world, timeline, start_ts, end_ts, expected):
+    outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
+    agent, command_receiver, finished = create_agent(outputs)
+    episode = EpisodeContainer({
+        'a': DummySignal([[1000, 1], [3000, 2], [5000, 3]], ['a1', 'a2', 'a3'], timelines=(timeline, 'tick')),
+        'b': DummySignal([[2000, 10], [4000, 20], [6000, 30]], ['b1', 'b2', 'b3'], timelines=(timeline, 'tick')),
+    })
+    command = DsPlayerStartCommand(episode, start_ts=start_ts, end_ts=end_ts, timeline=timeline)
+    command_receiver.push(command)
+    scheduler = world.interleave(agent.run)
+    drive_until(scheduler, lambda: bool(finished.emitted))
+    assert {name: output.emitted for name, output in outputs.items()} == expected
+    assert finished.emitted == [(-1, command)]
+
+
 def test_abort_stops_without_emitting_finished(world):
     outputs = {'a': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)

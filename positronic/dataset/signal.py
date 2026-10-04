@@ -246,6 +246,19 @@ class _SignalViewTime(Generic[T]):
             raise KeyError('No record at or before some requested timestamps')
         return _SignalView(self._signal, indices, timestamps=key)
 
+    def _window_start_index(self, start: Time) -> int:
+        first = int(self._signal._search_ts([start])[0])
+        if first >= 0:
+            return first
+        lo, hi = 0, len(self._signal)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if start <= self._signal._ts_at([mid], start.timelines)[0]:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
     def _slice(self, selection: slice) -> Signal[T]:
         start = as_time(selection.start) if selection.start is not None else None
         stop = as_time(selection.stop) if selection.stop is not None else None
@@ -270,15 +283,17 @@ class _SignalViewTime(Generic[T]):
             return self[TimeGrid(start, bound, step, inclusive=stop is None)]
         if not len(self._signal) or (start is not None and stop is not None and not start < stop):
             return _SignalView(self._signal, range(0))
-        first = max(0, int(self._signal._search_ts([start])[0])) if start is not None else 0
+        first = self._window_start_index(start) if start is not None else 0
         start = start if start is not None else self._signal.bounds(names).start
         end = len(self._signal)
         if stop is not None:
             end = int(self._signal._search_ts([stop])[0]) + 1
             while end > 0 and self._signal._ts_at([end - 1], names)[0] == stop:
                 end -= 1
+        if first >= end:
+            return _SignalView(self._signal, range(0))
         carried = self._signal._ts_at([first], names)[0]
-        view = _SignalView(self._signal, range(first, max(first, end)), start=start if carried < start else None)
+        view = _SignalView(self._signal, range(first, end), start=start if carried < start else None)
         if len(view) > 1 and not view._ts_at([0], view.timelines)[0] < view._ts_at([1], view.timelines)[0]:
             raise ValueError('The carried window timestamp is incompatible with the following record')
         return view
