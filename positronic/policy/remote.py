@@ -4,16 +4,16 @@ from threading import Lock
 from typing import Any
 
 import numpy as np
+from positronic_model_server.protocol import ProtocolVersion
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
-from positronic.offboard.protocol import ProtocolVersion
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
-from positronic.utils.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 
 from .base import Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec

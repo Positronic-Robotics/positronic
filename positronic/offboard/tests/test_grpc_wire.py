@@ -22,16 +22,18 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 from cryptography.x509.oid import NameOID
+from positronic_model_server import protocol
+from positronic_model_server.spec import SEQ
 from positronic_wire import grpc as client_grpc
 from positronic_wire import wire
 
-from positronic.offboard import grpc_wire, protocol
+from positronic.offboard import grpc_wire
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import ConnectRetries, InferenceClient
 from positronic.offboard.server import AUTH_HEADER, bearer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.offboard.tests.conftest import Served, StartServer
-from positronic.policy.base import SEQ
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
@@ -138,7 +140,7 @@ def test_close_accepts_ack_before_the_final_write_receipt(both_wires, monkeypatc
     def delayed_receipt(connection):
         for message in requests(connection):
             yield message
-            if protocol.deserialise(message).get(protocol.END_SESSION):
+            if legacy_protocol.deserialise(message).get(protocol.END_SESSION):
                 assert stream_ended.wait(5)
 
     def read_until_end(connection):

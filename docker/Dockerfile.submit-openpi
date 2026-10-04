@@ -45,6 +45,7 @@ WORKDIR /positronic
 COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspace && uv cache clean
 
 COPY . /positronic
