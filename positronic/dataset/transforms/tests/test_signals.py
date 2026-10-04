@@ -1,7 +1,10 @@
+from functools import partial
+
 import numpy as np
 import pytest
 
-from positronic import geom
+from positronic import geom, keys
+from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.time import Time
 from positronic.dataset.transforms import (
@@ -15,6 +18,7 @@ from positronic.dataset.transforms import (
     recode_transform,
     view,
 )
+from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 from positronic.geom import Rotation
 
@@ -676,3 +680,33 @@ def test_join_rejects_conflicting_updates_at_common_start(timelines):
     right = DummySignal([[10, 0], [20, 5]], [2, 4], timelines=('A', 'B'))
     with pytest.raises(ValueError, match='non-decreasing'):
         list(Join(left, right, timelines=timelines))
+
+
+@pytest.mark.parametrize('timelines', [(RECORDED_TIME,), ('world',), ('wall', 'world')])
+@pytest.mark.parametrize(
+    'transform, expected',
+    [
+        (partial(idle_mask, velocity_threshold=3, dt_sec=1), [True, False, False]),
+        (partial(jerk, dt_sec=1), [2, 2, 2]),
+        (cmd_lag, [0.5, 0.5, 0.5, 0.5]),
+        (partial(cmd_velocity, dt_sec=1), [2, 2, 2]),
+    ],
+    ids=['idle', 'acceleration', 'lag', 'velocity'],
+)
+def test_quality_transforms_select_timelines(timelines, transform, expected):
+    seconds = np.arange(5)
+    coordinates = np.column_stack([
+        *(seconds * 1_000_000_000 + i * 10_000_000_000 for i in range(len(timelines))),
+        seconds,
+    ])
+    names = (*timelines, 'tick')
+    joints = np.column_stack([seconds**2, np.zeros((5, 2))])
+    state = np.column_stack([seconds * 2, np.zeros((5, 2))])
+    command = state + [0.5, 0, 0]
+    episode = EpisodeContainer({
+        keys.JOINTS: DummySignal(coordinates, joints, timelines=names),
+        keys.EE_POSE: DummySignal(coordinates, state, timelines=names),
+        keys.TARGET_EE_POSE: DummySignal(coordinates, command, timelines=names),
+    })
+    signal = transform(episode) if timelines == (RECORDED_TIME,) else transform(episode, timelines=timelines)
+    np.testing.assert_allclose(signal.values()[:-1], expected)
