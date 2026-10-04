@@ -24,6 +24,7 @@ from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.video import VIDEO_ENCODING_V1, VIDEO_ENCODING_V2
 
 
 def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
@@ -73,14 +74,14 @@ def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
 
 def _write_encoded_signal(signal, episode_path: Path, signal_name: str) -> None:
     fmt = signal.encoding_format
-    if fmt == 'positronic.video.v1':
-        _write_video_v1(signal.iter_encoded_chunks(), episode_path, signal_name)
+    if fmt in (VIDEO_ENCODING_V1, VIDEO_ENCODING_V2):
+        _write_video(signal.iter_encoded_chunks(), episode_path, signal_name)
     else:
         raise ValueError(f'Unknown encoding format: {fmt}')
 
 
-def _write_video_v1(chunks: Iterator[bytes], episode_path: Path, signal_name: str) -> None:
-    """Parse positronic.video.v1 format and write files."""
+def _write_video(chunks: Iterator[bytes], episode_path: Path, signal_name: str) -> None:
+    """Unpack the video container, preserving its timestamp table and schema."""
     buffer = b''
     chunks_iter = iter(chunks)
 

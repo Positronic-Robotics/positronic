@@ -25,9 +25,8 @@ SIGNAL_DTYPE_KEY = 'dtype'
 SIGNAL_SHAPE_KEY = 'shape'
 
 
-def encode_times(times: Sequence[Time]) -> dict:
-    names = times[0].timelines if len(times) else ()
-    return {TIMELINES_KEY: names, TIMESTAMP_VALUES_KEY: [[time[name] for name in names] for time in times]}
+def encode_times(times: Sequence[Time], *, timelines: tuple[str, ...]) -> dict:
+    return {TIMELINES_KEY: timelines, TIMESTAMP_VALUES_KEY: [[time[name] for name in timelines] for time in times]}
 
 
 def decode_times(data: dict) -> TimeArray:
@@ -95,13 +94,15 @@ class DatasetClient:
         return deserialize(r.content)
 
     def search_signal_timestamps(self, ep: int, sig: str, queries: Sequence[Time]) -> np.ndarray:
-        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/signals/{sig}/search', json=encode_times(queries))
+        payload = encode_times(queries, timelines=queries[0].timelines if len(queries) else ())
+        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/signals/{sig}/search', json=payload)
         r.raise_for_status()
         return np.array(r.json()['indices'], dtype=np.int64)
 
     def sample_episode(self, ep: int, timestamps: Sequence[Time]) -> dict:
         """Batch sample all signals at given timestamps."""
-        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/sample', json=encode_times(timestamps))
+        payload = encode_times(timestamps, timelines=timestamps[0].timelines if len(timestamps) else ())
+        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/sample', json=payload)
         if r.status_code == 404:
             raise KeyError(r.json()['detail'])
         r.raise_for_status()

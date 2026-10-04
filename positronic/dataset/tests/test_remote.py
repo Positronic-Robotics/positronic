@@ -9,6 +9,8 @@ import time
 import httpx
 import numpy as np
 import pos3
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -17,10 +19,10 @@ from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
-from positronic.dataset.signal import RECORDED_TIME, TIMELINES_KEY, SupportsEncodedRepresentation
+from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, TIMELINES_KEY, SupportsEncodedRepresentation
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
-from positronic.dataset.video import VideoSignal, VideoSignalWriter
+from positronic.dataset.video import VIDEO_ENCODING_V1, VIDEO_ENCODING_V2, VideoSignal, VideoSignalWriter
 from positronic.utils.serialization import deserialize
 
 
@@ -82,7 +84,7 @@ def test_episode_info_endpoint(test_client):
     assert 'cam' in data['signals']
     assert data['signals']['action']['length'] == 5
     assert data['signals']['cam']['length'] == 3
-    assert data['signals']['cam']['encoding_format'] == 'positronic.video.v1'
+    assert data['signals']['cam']['encoding_format'] == VIDEO_ENCODING_V2
     assert data['signals']['action'][TIMELINES_KEY] == [RECORDED_TIME]
     assert data['signals']['cam'][TIMELINES_KEY] == [RECORDED_TIME]
 
@@ -144,7 +146,7 @@ def test_signal_search_endpoint(test_client):
 def test_signal_encoded_endpoint(test_client):
     r = test_client.get('/api/v2/episodes/0/signals/cam/encoded')
     assert r.status_code == 200
-    assert r.headers['x-encoding-format'] == 'positronic.video.v1'
+    assert r.headers['x-encoding-format'] == VIDEO_ENCODING_V2
     assert len(r.content) > 0
 
 
@@ -253,7 +255,7 @@ def test_remote_dataset_time_indexer(running_server):
 def test_remote_dataset_video_encoded_stream(running_server):
     with RemoteDataset(running_server) as ds:
         signal = ds[0]['cam']
-        assert signal.encoding_format == 'positronic.video.v1'
+        assert signal.encoding_format == VIDEO_ENCODING_V2
         chunks = list(signal.iter_encoded_chunks())
         assert len(chunks) > 0
         total_size = sum(len(c) for c in chunks)
@@ -367,12 +369,36 @@ def test_migrate_remote_dataset_with_video(running_server, tmp_path):
     assert ts == Time(**{RECORDED_TIME: 1000})
 
 
+@pytest.mark.parametrize('remote', [False, True], ids=['local', 'remote'])
+def test_legacy_video_encoding_and_migration(dataset_with_video, running_server, tmp_path, remote):
+    camera = dataset_with_video[0]['cam']
+    assert isinstance(camera, VideoSignal)
+    legacy_index = pa.table({'ts_ns': [1000, 1100, 1200], 'ts_ns.capture': [30, 20, 10]}).replace_schema_metadata({
+        TIMELINE_METADATA_KEY: b'world'
+    })
+    pq.write_table(legacy_index, camera.frames_index_path)
+    destination = tmp_path / 'legacy_migrated'
+
+    with pos3.mirror(), RemoteDataset(running_server) as remote_source:
+        source = remote_source if remote else dataset_with_video
+        assert source[0]['cam'].encoding_format == VIDEO_ENCODING_V1
+        migrate_dataset(source, str(destination))
+
+    copied = LocalDataset(destination)[0]['cam']
+    assert isinstance(copied, VideoSignal)
+    assert copied.encoding_format == VIDEO_ENCODING_V1
+    assert copied.timelines == ('world',)
+    assert list(copied.timestamps('world')) == [1000, 1100, 1200]
+    assert copied.video_path.read_bytes() == camera.video_path.read_bytes()
+    assert pq.read_table(copied.frames_index_path).equals(legacy_index, check_metadata=True)
+
+
 def test_video_signal_supports_encoded_protocol(dataset_with_video):
     """Verify VideoSignal implements SupportsEncodedRepresentation."""
     ep = dataset_with_video[0]
     cam = ep['cam']
     assert isinstance(cam, SupportsEncodedRepresentation)
-    assert cam.encoding_format == 'positronic.video.v1'
+    assert cam.encoding_format == VIDEO_ENCODING_V2
     chunks = list(cam.iter_encoded_chunks())
     assert len(chunks) > 0
 
@@ -424,6 +450,15 @@ def test_remote_named_query_parity(named_remote):
             episode['left'].time[Time(A=-(2**100))]
         with pytest.raises(ValueError):
             episode.time[[Time(A=200), Time(A=100)]]
+
+
+@pytest.mark.parametrize('indices', [[], slice(0, 0), slice(3, 3)])
+@pytest.mark.parametrize('timelines', [('A',), ('B', 'A')])
+def test_empty_remote_timestamps_preserve_selected_names(named_remote, indices, timelines):
+    _, remote = named_remote
+    times = remote._client.get_signal_timestamps(0, 'left', indices, timelines)
+    assert times.timelines == timelines
+    assert list(times) == []
 
 
 def test_remote_discovery_does_not_load_values(named_remote, monkeypatch):

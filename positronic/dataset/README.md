@@ -122,6 +122,8 @@ or `recorded` when that metadata is absent. Legacy auxiliary columns remain in t
 exposed as timelines. Reading requires no conversion and never rewrites the recording.
 Migration and `convert_ds` preserve every timeline exposed by the source API. HTTP access uses
 `/api/v2`; client and server must both support this named-timestamp protocol.
+Encoded video streams advertise `positronic.video.v2` for named timeline indexes and
+`positronic.video.v1` for legacy indexes. Migration accepts both formats without re-encoding video.
 
 ## Public API
 

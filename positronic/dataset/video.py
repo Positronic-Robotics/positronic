@@ -17,7 +17,7 @@ from av.video.stream import VideoStream
 
 from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
 from .time import Time, TimeBounds
-from .vector import ParquetTimeIndex, timestamp_table
+from .vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, ParquetTimeIndex, timestamp_table
 
 
 class VideoEncoderSession(Protocol):
@@ -311,6 +311,10 @@ class _VideoNavigator:
         return self._frame_buffer.popleft()
 
 
+VIDEO_ENCODING_V1 = 'positronic.video.v1'
+VIDEO_ENCODING_V2 = 'positronic.video.v2'
+
+
 class VideoSignal(Signal[np.ndarray]):
     """Reader for video signals.
 
@@ -421,19 +425,25 @@ class VideoSignal(Signal[np.ndarray]):
     @property
     def encoding_format(self) -> str:
         """Format identifier for video encoded representation."""
-        return 'positronic.video.v1'
+        metadata = pq.read_schema(self.frames_index_path).metadata or {}
+        version = metadata.get(SIGNAL_VERSION_KEY)
+        if version is None:
+            return VIDEO_ENCODING_V1
+        if version != SIGNAL_VERSION:
+            raise ValueError(f'Unsupported signal format version: {version!r}')
+        return VIDEO_ENCODING_V2
 
     def iter_encoded_chunks(self) -> Iterator[bytes]:
         """Stream video + timestamps as a simple container format.
 
-        Format v1:
+        Container framing for both versions:
           - 8 bytes: video file size (uint64 little-endian)
           - N bytes: video file content (raw H.264/MP4)
           - 8 bytes: Arrow IPC size (uint64 little-endian)
           - M bytes: Arrow IPC stream (timestamps table)
 
-        The Arrow table preserves the timestamp columns and their schema metadata.
-        Using Arrow IPC format (not parquet) to decouple from storage format.
+        V1 carries the legacy ``ts_ns`` index; v2 carries named ``ts.<name>`` columns
+        with the signal version marker. Arrow IPC preserves the full schema metadata.
         """
 
         # Stream video file

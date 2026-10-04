@@ -63,7 +63,7 @@ def episode_info(index: int):
         supports_encoded = isinstance(sig, SupportsEncodedRepresentation)
         signals_meta[name] = {
             TIMELINES_KEY: sig.timelines,
-            SIGNAL_BOUNDS_KEY: encode_times(sig.bounds(sig.timelines)) if len(sig) else encode_times([]),
+            SIGNAL_BOUNDS_KEY: encode_times(sig.bounds(sig.timelines) if len(sig) else (), timelines=sig.timelines),
             'length': len(sig),
             'encoding_format': sig.encoding_format if supports_encoded else None,
         }
@@ -90,7 +90,7 @@ def signal_timestamps(ep: int, sig: str, req: TimestampIndicesRequest):
         raise HTTPException(404, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    return encode_times(signal._ts_at(indices, req.timelines))
+    return encode_times(signal._ts_at(indices, req.timelines), timelines=req.timelines)
 
 
 @_app.post(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/values')
