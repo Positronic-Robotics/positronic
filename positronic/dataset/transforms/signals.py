@@ -223,8 +223,9 @@ class TimeOffsets(Signal[tuple]):
 class Join(Signal[tuple]):
     """Carry input values over their union on an explicit common timeline subset.
 
+    Input coordinates are clamped to the coordinatewise maximum of input starts.
     Equal projected coordinates collapse to one record. Incomparable coordinates
-    reject the join. Reference timestamps, when requested, retain all source axes.
+    after the start reject the join. Reference timestamps retain all source axes.
     """
 
     def __init__(self, *signals: Signal[Any], timelines: tuple[str, ...], include_ref_ts: bool = False):
@@ -251,7 +252,7 @@ class Join(Signal[tuple]):
             TimeArray.from_times(signal.timestamps(self.timelines), self.timelines)._values for signal in self._signals
         ])
         # Lexicographic sorting is only a candidate order; every coordinate must agree with it.
-        rows = np.unique(rows[np.all(rows >= start, axis=1)], axis=0)
+        rows = np.unique(np.maximum(rows, start), axis=0)
         times = TimeArray(self.timelines, rows)
         times.validate_order()
         return times

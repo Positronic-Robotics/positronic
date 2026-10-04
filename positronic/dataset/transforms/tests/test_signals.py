@@ -281,7 +281,6 @@ def test_time_offsets_positive(sig_simple):
         ((40, 50, 50), Time(**{RECORDED_TIME: 5000})),
     ]
 
-    # Multiple deltas with ref timestamps -> (values_tuple, np.array(ref_timestamps))
     to_multi_ref = TimeOffsets(
         sig_simple,
         Time(**{RECORDED_TIME: -1000}),
@@ -457,7 +456,6 @@ def test_join_basic_no_ref_timestamps():
 
 
 def test_index_offsets_multiple_with_ref_timestamps(sig_simple):
-    # Offsets [-1, 0, 1] should return grouped timestamps as np.ndarray[int64]
     j = IndexOffsets(sig_simple, -1, 0, 1, include_ref_ts=True)
     actual = list(j)
     exp_vals = [(10, 20, 30), (20, 30, 40), (30, 40, 50)]
@@ -643,3 +641,38 @@ def test_projected_join_collapses_duplicates_and_retains_full_references():
         (((2, 4), (Time(A=100, B=2), Time(A=100, C=9))), Time(A=100)),
         (((3, 5), (Time(A=200, B=2), Time(A=200, C=10))), Time(A=200)),
     ]
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('count', [1, 2])
+def test_join_includes_coordinatewise_start(timelines, count):
+    left = DummySignal([[0, 10], [20, 20]][:count], [1, 3][:count], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [30, 30]][:count], [2, 4][:count], timelines=('A', 'B'))
+    expected = [((1, 2), Time(A=10, B=10))]
+    if count == 2:
+        expected += [((3, 2), Time(A=20, B=20)), ((3, 4), Time(A=30, B=30))]
+    joined = Join(left, right, timelines=timelines)
+    assert list(joined) == expected
+    assert joined.bounds(timelines).start == Time(A=10, B=10)
+    assert joined.time[Time(A=10, B=10)] == expected[0]
+    with_references = Join(left, right, timelines=timelines, include_ref_ts=True)
+    assert with_references[0] == (((1, 2), (Time(A=0, B=10), Time(A=10, B=0))), Time(A=10, B=10))
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+def test_join_carries_updates_to_common_start(timelines):
+    left = DummySignal([[0, 10], [5, 20]], [1, 3], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [20, 30]], [2, 4], timelines=('A', 'B'))
+    assert list(Join(left, right, timelines=timelines)) == [
+        ((1, 2), Time(A=10, B=10)),
+        ((3, 2), Time(A=10, B=20)),
+        ((3, 4), Time(A=20, B=30)),
+    ]
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+def test_join_rejects_conflicting_updates_at_common_start(timelines):
+    left = DummySignal([[0, 10], [5, 20]], [1, 3], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [20, 5]], [2, 4], timelines=('A', 'B'))
+    with pytest.raises(ValueError, match='non-decreasing'):
+        list(Join(left, right, timelines=timelines))

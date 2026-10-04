@@ -428,7 +428,12 @@ Typical use cases
 
 ### Building blocks
 - `Elementwise(signal, fn)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
-- `Join(*signals, timelines, include_ref_ts=False)`: aligns multiple signals on the required tuple of timeline names with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp. Only selected timelines survive; duplicate projected coordinates collapse and incompatible ordering raises `ValueError`. Reference timestamps retain every source coordinate.
+- `Join(*signals, timelines, include_ref_ts=False)`: aligns multiple signals on the required tuple of
+  timeline names with carry-back semantics. Each input coordinate is carried forward to at least the
+  latest input start on that timeline. The result yields tuples of values (and, optionally, reference
+  timestamps) at every combined timestamp. Only selected timelines survive; duplicate projected
+  coordinates collapse and incompatible ordering raises `ValueError`. Reference timestamps retain
+  every source coordinate.
 - `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
 - `TimeOffsets(signal, *offsets, include_ref_ts=False)`: samples values at named `Time` offsets and preserves all base timestamps. Can be used to lookup into "past" or "future".
 
