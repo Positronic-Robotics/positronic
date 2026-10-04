@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 import pytest
 
 import pimm
@@ -192,6 +191,7 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
     w = ds.created[-1]
     assert len(w.appends) == 2
     assert w.appends[1][2][RECORDED_TIME] > w.appends[0][2][RECORDED_TIME]
+    assert all(timestamps.timelines == (RECORDED_TIME,) for _, _, timestamps in w.appends)
 
 
 def test_records_what_the_inputs_hold_when_the_episode_opens(world):
@@ -231,7 +231,10 @@ def test_time_mode_message_uses_signal_timestamp(world):
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [timestamps[RECORDED_TIME] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
+    assert [timestamps for (_, _, timestamps) in w.appends] == [
+        Time(**{RECORDED_TIME: ts_first}),
+        Time(**{RECORDED_TIME: ts_second}),
+    ]
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
@@ -255,11 +258,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
     assert len(a) == 1 and len(b) == 1
     assert a[0][0] == 10 and b[0][0] == 20
 
-    # Verify extra timelines are in the parquet files
-    table_a = pq.read_table(ep._dir / 'a.parquet')
-    assert 'ts.message' in table_a.column_names
-    assert 'ts.system' in table_a.column_names
-    assert 'ts.world' in table_a.column_names
+    assert a.timelines == b.timelines == (RECORDED_TIME,)
 
 
 def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
@@ -491,38 +490,22 @@ def test_robot_command_serializer_variants(world):
     assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
-def test_multiple_timelines_recorded(world):
-    """Test that DsWriterAgent records message, system, and world timelines."""
-    ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+def test_clock_recording_ignores_decreasing_message_timestamps(tmp_path, world):
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, LocalDatasetWriter, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
-        (partial(emitters['a'].emit, 42), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(tmp_path)), 0.001),
+        (partial(emitters['a'].emit, 42, ts=1000), 0.001),
+        (partial(emitters['a'].emit, 43, ts=500), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
     run_scripted_agent(agent, script, world=world)
 
-    w = ds.created[-1]
-    assert len(w.appends) == 1
-    name, value, timestamps = w.appends[0]
-
-    assert name == 'a'
-    assert value == 42
-    assert timestamps[RECORDED_TIME] == timestamps['world']
-
-    # Should have message and system timelines
-    assert 'message' in timestamps
-    assert 'system' in timestamps
-
-    # The virtual-time world drives a simulated clock, so 'world' is present too
-    assert 'world' in timestamps
-
-    # All timestamps should be positive integers
-    assert isinstance(timestamps['message'], int) and timestamps['message'] > 0
-    assert isinstance(timestamps['system'], int) and timestamps['system'] > 0
-    assert isinstance(timestamps['world'], int) and timestamps['world'] > 0
+    signal = LocalDataset(tmp_path)[0]['a']
+    assert signal.timelines == (RECORDED_TIME,)
+    assert list(signal.values()) == [42, 43]
+    assert signal[0][1] < signal[1][1]
 
 
 def test_pickles_with_every_constructor_argument_filled():

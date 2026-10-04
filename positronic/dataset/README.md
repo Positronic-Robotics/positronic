@@ -153,7 +153,7 @@ numeric storage and materialization are backend details.
 ### Signal time access
 
 ```python
-value, original_time = signal.time[{"world": 150}]
+value, original_time = signal.time[Time(world=150)]
 sampled = signal.time[[Time(world=100), Time(world=150), Time(world=200)]]
 window = signal.time[Time(world=150):Time(world=250)]
 sampled = signal.time[Time(world=100):Time(world=250):Time(world=50)]
@@ -173,8 +173,8 @@ sampled = signal.time[Time(world=100):Time(world=250):Time(world=50)]
 - Stepped windows require a named start. Start, stop, and step have the same name set. Each step
   coordinate is nonnegative and at least one is positive. Sampling continues while the next `Time`
   is `< stop`; an omitted stop uses the final selected coordinates as an inclusive bound.
-- Point queries and slice endpoints also accept equivalent name/value dictionaries. Operators and
-  batch elements use `Time`.
+- Point queries, slice endpoints, steps, and batch elements require `Time` values.
+  Construct them with `Time(**coordinates)` when timeline names are dynamic.
 
 For source coordinates `(world, wall) = (100, 900), (140, 950), (220, 1100)`, sampling at world
 `100, 150, 200, 250` yields `(100, 900), (150, 950), (200, 950), (250, 1100)`.
@@ -373,7 +373,9 @@ Key ideas
 - The agent polls inputs at a configurable rate and appends only on updates.
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
-- `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
+- The recorder writes only the `recorded` timeline. `time_mode` selects its timestamp: `CLOCK`
+  (default) uses the clock when the agent reads the sample; `MESSAGE` uses the timestamp supplied
+  with the message.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:

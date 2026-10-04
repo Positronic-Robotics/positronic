@@ -31,8 +31,8 @@ Writers require this value on each append. Each signal fixes its timeline set on
 all records contain every coordinate, never decrease any, and strictly increase at least one.
 There is no main or default timeline. Signals in an episode may have overlapping or disjoint sets.
 
-Queries name their timelines explicitly. Point lookup selects the last record satisfying all named
-upper bounds and returns its complete original coordinates. Batch sampling replaces queried
+Queries use `Time` values to name their timelines explicitly. Point lookup selects the last record
+satisfying all named upper bounds and returns its complete original coordinates. Batch sampling replaces queried
 coordinates with the requested values and retains other coordinates from the same selected record.
 Episode queries include only signals containing every requested timeline. Joins retain an explicitly
 selected common subset and reject incompatible ordering.

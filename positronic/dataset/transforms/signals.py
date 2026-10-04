@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from functools import cached_property, partial
 from typing import Any, TypeVar, cast
 
@@ -9,7 +9,7 @@ from positronic import geom
 from positronic.utils.lazy import LazySequence, lazy_sequence
 
 from ..signal import IndicesLike, Signal
-from ..time import Time, TimeArray, as_time, validate_timelines
+from ..time import Time, TimeArray, validate_timelines
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -164,10 +164,12 @@ class TimeOffsets(Signal[tuple]):
     With include_ref_ts, pair those values with their original Time values.
     """
 
-    def __init__(self, signal: Signal[T], *offsets: Time | Mapping[str, int], include_ref_ts: bool = False):
+    def __init__(self, signal: Signal[T], *offsets: Time, include_ref_ts: bool = False):
         if not offsets:
             raise ValueError('TimeOffsets requires at least one offset')
-        self._offsets = tuple(as_time(offset) for offset in offsets)
+        if any(not isinstance(offset, Time) for offset in offsets):
+            raise TypeError('TimeOffsets requires Time values')
+        self._offsets = offsets
         self._names = self._offsets[0].timelines
         signal._validate_selection(self._names)
         for offset in self._offsets[1:]:

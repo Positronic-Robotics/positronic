@@ -391,6 +391,12 @@ def test_time_offsets_empty_signal(empty_signal):
     assert list(TimeOffsets(empty_signal, Time(**{RECORDED_TIME: -987654}))) == []
 
 
+@pytest.mark.parametrize('offsets', [({},), ({RECORDED_TIME: 0},), (Time(**{RECORDED_TIME: 0}), {RECORDED_TIME: 1})])
+def test_time_offsets_reject_dict_coordinates(sig_simple, offsets):
+    with pytest.raises(TypeError, match='Time'):
+        TimeOffsets(sig_simple, *offsets)
+
+
 def test_time_offsets_very_large_deltas(sig_simple):
     # Negative delta too large: no elements remain
     delta_empty = -(sig_simple.bounds(RECORDED_TIME).finish - sig_simple.bounds(RECORDED_TIME).start + 1)

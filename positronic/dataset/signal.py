@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import Enum
@@ -10,7 +10,7 @@ import numpy as np
 
 from positronic.utils.lazy import LazySequence
 
-from .time import Time, TimeBounds, TimeGrid, as_time, validate_queries, validate_timelines
+from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
 
 RECORDED_TIME = 'recorded'
 TIMELINE_METADATA_KEY = b'positronic.timeline'
@@ -46,7 +46,7 @@ def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
 @runtime_checkable
 class TimeIndexerLike(Protocol, Generic[T]):
     @overload
-    def __getitem__(self, key: Time | Mapping[str, int]) -> tuple[T, Time]: ...
+    def __getitem__(self, key: Time) -> tuple[T, Time]: ...
 
     @overload
     def __getitem__(self, key: slice | Sequence[Time]) -> 'Signal[T]': ...
@@ -220,23 +220,22 @@ class _SignalViewTime(Generic[T]):
         self._signal = signal
 
     @overload
-    def __getitem__(self, key: Time | Mapping[str, int]) -> tuple[T, Time]: ...
+    def __getitem__(self, key: Time) -> tuple[T, Time]: ...
 
     @overload
     def __getitem__(self, key: slice | Sequence[Time]) -> Signal[T]: ...
 
     def __getitem__(self, key):
-        if isinstance(key, Mapping):
-            query = as_time(key)
-            self._signal._validate_selection(query.timelines)
-            idx = int(self._signal._search_ts([query])[0])
+        if isinstance(key, Time):
+            self._signal._validate_selection(key.timelines)
+            idx = int(self._signal._search_ts([key])[0])
             if idx < 0:
-                raise KeyError(f'No record at or before {query}')
+                raise KeyError(f'No record at or before {key}')
             return self._signal[idx]
         if isinstance(key, slice):
             return self._slice(key)
         if not isinstance(key, Sequence):
-            raise TypeError('Expected named coordinates, a time slice, or a sequence of Time')
+            raise TypeError('Expected Time, a time slice, or a sequence of Time')
         validate_queries(key)
         if not len(key):
             return _SignalView(self._signal, range(0))
@@ -260,12 +259,12 @@ class _SignalViewTime(Generic[T]):
         return lo
 
     def _slice(self, selection: slice) -> Signal[T]:
-        start = as_time(selection.start) if selection.start is not None else None
-        stop = as_time(selection.stop) if selection.stop is not None else None
-        step = as_time(selection.step) if selection.step is not None else None
+        start, stop, step = selection.start, selection.stop, selection.step
         supplied = [time for time in (start, stop, step) if time is not None]
         if not supplied:
             raise ValueError('A time slice requires named endpoints')
+        if any(not isinstance(time, Time) for time in supplied):
+            raise TypeError('Time slice endpoints and step must be Time values')
         names = supplied[0].timelines
         self._signal._validate_selection(names)
         for time in supplied[1:]:

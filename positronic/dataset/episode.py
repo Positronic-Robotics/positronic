@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar, overload
 
 from .signal import Signal
-from .time import Time, TimeBounds, TimeGrid, as_time, validate_queries, validate_timelines
+from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -54,11 +54,10 @@ class _EpisodeTimeIndexer:
     def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
 
-    def __getitem__(self, request):
-        if isinstance(request, Mapping):
-            query = as_time(request)
+    def __getitem__(self, request: Time | slice | Sequence[Time]):
+        if isinstance(request, Time):
             sampled = {
-                name: signal.time[query][0] for name, signal in self.episode._signals_on(query.timelines).items()
+                name: signal.time[request][0] for name, signal in self.episode._signals_on(request.timelines).items()
             }
             return {**self.episode.static, **sampled}
         if isinstance(request, slice):
@@ -66,8 +65,10 @@ class _EpisodeTimeIndexer:
                 raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
             if request.start is None:
                 raise ValueError('Slice start is required when step is provided')
-            start, step = as_time(request.start), as_time(request.step)
-            stop = as_time(request.stop) if request.stop is not None else self.episode.bounds(start.timelines).finish
+            start, stop, step = request.start, request.stop, request.step
+            if any(not isinstance(time, Time) for time in (start, stop, step) if time is not None):
+                raise TypeError('Time slice endpoints and step must be Time values')
+            stop = stop if stop is not None else self.episode.bounds(start.timelines).finish
             request = TimeGrid(start, stop, step, inclusive=request.stop is None)
             names = start.timelines
         elif isinstance(request, Sequence):
@@ -79,7 +80,7 @@ class _EpisodeTimeIndexer:
                 }
             names = request[0].timelines
         else:
-            raise TypeError('Expected named coordinates or a sequence of Time')
+            raise TypeError('Expected Time, a time slice, or a sequence of Time')
         signals = self.episode._signals_on(names)
         return {**self.episode.static, **{name: signal.time[request].values() for name, signal in signals.items()}}
 

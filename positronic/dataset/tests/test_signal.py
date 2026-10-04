@@ -599,15 +599,36 @@ class TestNamedTimelines:
         return DummySignal([[100, 900], [140, 950], [220, 1100]], [1, 2, 3], timelines=('A', 'B'))
 
     def test_point_lookup_and_name_order(self, signal):
-        assert signal.time[{'A': 150}] == (2, Time(A=140, B=950))
-        assert signal.time[{'A': 250, 'B': 960}] == signal.time[{'B': 960, 'A': 250}]
-        assert signal.time[{'A': 250, 'B': 960}] == (2, Time(A=140, B=950))
+        assert signal.time[Time(A=150)] == (2, Time(A=140, B=950))
+        assert signal.time[Time(A=250, B=960)] == signal.time[Time(B=960, A=250)]
+        assert signal.time[Time(A=250, B=960)] == (2, Time(A=140, B=950))
         with pytest.raises(KeyError):
-            signal.time[{'A': 99}]
+            signal.time[Time(A=99)]
         with pytest.raises(KeyError):
-            signal.time[{'missing': 100}]
-        with pytest.raises(ValueError):
-            signal.time[{}]
+            signal.time[Time(missing=100)]
+
+    @pytest.mark.parametrize(
+        'query',
+        [
+            {},
+            {'A': 150},
+            [{'A': 150}],
+            [Time(A=100), {'A': 150}],
+            slice({'A': 100}, Time(A=220), Time(A=50)),
+            slice(Time(A=100), {'A': 220}, Time(A=50)),
+            slice(Time(A=100), Time(A=220), {'A': 50}),
+        ],
+    )
+    def test_queries_reject_dict_coordinates(self, signal, query):
+        episode = EpisodeContainer({'signal': signal})
+        for source in (signal, episode):
+            with pytest.raises(TypeError, match='Time'):
+                source.time[query]
+
+    @pytest.mark.parametrize('query', [slice({'A': 100}, None), slice(None, {'A': 220})])
+    def test_windows_reject_dict_coordinates(self, signal, query):
+        with pytest.raises(TypeError, match='Time'):
+            signal.time[query]
 
     def test_repeated_subset_selects_last_record(self):
         signal = DummySignal([[100, 1000], [200, 1000], [300, 1000]], [1, 2, 3], timelines=('A', 'B'))

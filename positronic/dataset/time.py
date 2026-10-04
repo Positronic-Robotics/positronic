@@ -119,14 +119,6 @@ class TimeBounds(NamedTuple, Generic[Coordinate]):
     finish: Coordinate
 
 
-def as_time(value: Time | Mapping[str, int]) -> Time:
-    if isinstance(value, Time):
-        return value
-    if isinstance(value, Mapping):
-        return Time(**value)
-    raise TypeError('Expected Time or named timestamp coordinates')
-
-
 def validate_queries(queries: Sequence[Time]) -> None:
     for i, query in enumerate(queries):
         if not isinstance(query, Time):
