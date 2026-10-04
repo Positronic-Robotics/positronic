@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: MolmoAct2 DROID, served from Hugging Face `transformers`.
+# docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
+#
+# Usage (from the repository root)
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.submit-molmoact2 -t docker.io/<you>/molmoact2-droid:v1 --push .
+#   docker run --rm --network none docker.io/<you>/molmoact2-droid:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base, weights, dependencies, source. A
+# source commit rebuilds and pushes the source layer only.
+#
+# MolmoAct2 has no vendor stack, so the base is a Python 3.13 image with a compiler and uv. The
+# CUDA runtime comes in with the PyPI torch wheels.
+
+ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.13-bookworm
+ARG MODEL=allenai/MolmoAct2-DROID
+ARG MODEL_REVISION=d8c1abd8a27d8e859455bbe514df2bcc617db0fb
+
+# The weights stage does not build on the base, so a new base reuses the downloaded weights.
+FROM python:3.12-slim AS weights
+ARG MODEL MODEL_REVISION
+ENV HF_HOME=/opt/hf
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+# A download by commit writes no `refs/main`, and the offline load of the default revision reads it.
+RUN hf download "$MODEL" --revision "$MODEL_REVISION" > /dev/null \
+ && refs="$HF_HOME/hub/models--$(echo "$MODEL" | sed 's|/|--|g')/refs" \
+ && mkdir -p "$refs" && printf %s "$MODEL_REVISION" > "$refs/main"
+
+FROM ${BASE_IMAGE}
+ARG MODEL
+
+# For a fine-tuned checkpoint of your own, `COPY` its directory instead and set MOLMOACT2_MODEL to it.
+COPY --from=weights /opt/hf /opt/hf
+
+ENV HF_HOME=/opt/hf \
+    MOLMOACT2_MODEL=${MODEL} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv \
+    VIRTUAL_ENV=/positronic/.venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
+
+# The dependencies install from the lock alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev --no-install-workspace && uv cache clean
+
+COPY . /positronic
+RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev && uv cache clean
+
+# A fetch the build did not make fails at once on the denied network.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.server droid \
+   --model.hf_repo=\"$MOLMOACT2_MODEL\" \"$@\"", "--"]
