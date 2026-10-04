@@ -12,7 +12,7 @@ no convert or train step.
 
 ## Hardware
 
-A ~5B-parameter model loaded in `bfloat16` (~10 GB of weights), so plan for a **16 GB+ GPU**. First start downloads the checkpoint from HuggingFace.
+A ~5B-parameter model loaded in `bfloat16` (~10 GB of weights), so plan for a **16 GB+ GPU**. First start downloads the checkpoint from HuggingFace. [`docker/Dockerfile.submit-molmoact2`](../../../docker/Dockerfile.submit-molmoact2) bakes the checkpoint into an image that serves with no network ([Submit a policy image](../../../docs/submit-a-policy-image.md)).
 
 ## Serve
 

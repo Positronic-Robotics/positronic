@@ -12,16 +12,19 @@ test that the image starts with the network denied before you submit:
 
 ## Example images
 
-Every `positro/<vendor>-base` image on Docker Hub carries a vendor stack. The openpi and GR00T
-recipes below add the weights, the positronic source with an offline environment, `EXPOSE 8000` and a
-start command. Their layers go from the least often changed to the most: base, weights, dependencies,
-source. A source change rebuilds and pushes the source layer only. The FLUX 3 Action recipe builds the
-vendor stack itself, and CI publishes the image. Build from the root of a positronic checkout:
+The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker Hub, which carries
+the vendor stack. MolmoAct2 has no vendor stack, so its recipe builds on a Python 3.13 image with
+uv. These three recipes add the weights, the positronic source with an offline environment,
+`EXPOSE 8000` and a start command. Their layers go from the least often changed to the most: base,
+weights, dependencies, source. A source change rebuilds and pushes the source layer only. The FLUX 3
+Action recipe builds the vendor stack itself, and CI publishes the image. Build from the root of a
+positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
 | openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
 | GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
+| MolmoAct2 DROID | [`docker/Dockerfile.submit-molmoact2`](../docker/Dockerfile.submit-molmoact2) | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
 | FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
@@ -32,6 +35,9 @@ The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
 `nvidia/Cosmos-Reason2-2B` (4.9 GB). The backbone repository is gated: accept NVIDIA's terms on its
 Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
 mount, and it enters no layer.
+
+The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The repository is
+not gated, so the build needs no token. The image is 24.4 GB compressed.
 
 Other models:
 
@@ -44,7 +50,7 @@ Other models:
 
 ### Two traps in the `positro/*` bases
 
-The openpi and GR00T recipes handle both traps.
+The openpi, GR00T and MolmoAct2 recipes handle both traps.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
@@ -205,9 +211,11 @@ docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 In a correct image, the server pins its checkpoint, starts the model process, reads the weights
 from the image, and then fails on the missing GPU. For the openpi recipe that is jax on CPU
 reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
-`Flash Attention 2 is not available on CPU`. Everything you control is then correct. The run must
-not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
-albumentations prints a `UserWarning` about fetching its version; ignore it.
+`Flash Attention 2 is not available on CPU`. The MolmoAct2 recipe loads the model on the CPU and
+serves. Everything you control is then correct. The run must not print `NameResolutionError`,
+`dns error` or `OfflineModeIsEnabled`, and it must not hang. albumentations prints a `UserWarning`
+about fetching its version; ignore it. MolmoAct2 prints `A new version of the following files was
+downloaded` when `transformers` copies the model's code into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
