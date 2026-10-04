@@ -191,7 +191,9 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
     w = ds.created[-1]
     assert len(w.appends) == 2
     assert w.appends[1][2][RECORDED_TIME] > w.appends[0][2][RECORDED_TIME]
-    assert all(timestamps.timelines == (RECORDED_TIME,) for _, _, timestamps in w.appends)
+    for _, _, timestamps in w.appends:
+        assert set(timestamps) == {RECORDED_TIME, 'message', 'system', 'world'}
+        assert timestamps[RECORDED_TIME] == timestamps['world']
 
 
 def test_records_what_the_inputs_hold_when_the_episode_opens(world):
@@ -231,10 +233,8 @@ def test_time_mode_message_uses_signal_timestamp(world):
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [timestamps for (_, _, timestamps) in w.appends] == [
-        Time(**{RECORDED_TIME: ts_first}),
-        Time(**{RECORDED_TIME: ts_second}),
-    ]
+    assert [timestamps[RECORDED_TIME] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
+    assert [timestamps['message'] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
@@ -258,7 +258,12 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
     assert len(a) == 1 and len(b) == 1
     assert a[0][0] == 10 and b[0][0] == 20
 
-    assert a.timelines == b.timelines == (RECORDED_TIME,)
+    for signal in (a, b):
+        assert set(signal.timelines) == {RECORDED_TIME, 'message', 'system', 'world'}
+        timestamps = signal[0][1]
+        assert timestamps[RECORDED_TIME] == timestamps['world']
+        assert timestamps['message'] > 0
+        assert timestamps['system'] > 0
 
 
 def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
@@ -490,7 +495,7 @@ def test_robot_command_serializer_variants(world):
     assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
-def test_clock_recording_ignores_decreasing_message_timestamps(tmp_path, world):
+def test_clock_recording_rejects_decreasing_message_timestamps(tmp_path, world):
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, LocalDatasetWriter, world)
 
     script = [
@@ -500,12 +505,8 @@ def test_clock_recording_ignores_decreasing_message_timestamps(tmp_path, world):
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world)
-
-    signal = LocalDataset(tmp_path)[0]['a']
-    assert signal.timelines == (RECORDED_TIME,)
-    assert list(signal.values()) == [42, 43]
-    assert signal[0][1] < signal[1][1]
+    with pytest.raises(ValueError, match='no coordinate may decrease'):
+        run_scripted_agent(agent, script, world=world)
 
 
 def test_pickles_with_every_constructor_argument_filled():

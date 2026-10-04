@@ -216,9 +216,15 @@ class DsWriterAgent(pimm.ControlSystem):
         return frozen_keys_dict(self._inputs)
 
     def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message, clock: pimm.Clock) -> None:
-        """Append one input's sample on ``recorded``, stamped as ``time_mode`` selects."""
-        timestamp = clock.now_ns() if self._time_mode == TimeMode.CLOCK else msg.ts
-        timestamps = Time(**{RECORDED_TIME: timestamp})
+        """Append one input's sample with its recorder and source clock coordinates."""
+        world_time_ns, message_time_ns = clock.now_ns(), msg.ts
+        main_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
+
+        # TODO: Rework timeline names and sources with pimm's monotonic emission/first-delivery timestamps.
+        coordinates = {RECORDED_TIME: main_ts, 'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
+        if not isinstance(clock, pimm.world.SystemClock):
+            coordinates['world'] = world_time_ns
+        timestamps = Time(**coordinates)
 
         with self._telemetry_span():
             serializer = self._serializers.get(name)
