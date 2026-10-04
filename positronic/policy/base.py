@@ -88,8 +88,19 @@ class Runtime(ABC):
     @property
     @abstractmethod
     def tick(self) -> int:
-        """The current tick number."""
+        """The current tick number. Calls at the same clock time share a tick."""
         pass
+
+    @property
+    @abstractmethod
+    def invocation(self) -> int:
+        """The current call number: one per call of the policy, also at the same clock time. -1 before the first."""
+        pass
+
+    @property
+    def journaled(self) -> bool:
+        """Whether a journal records or replays this episode. It records only work submitted as an ``Activity``."""
+        return False
 
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT], name: str) -> ProcessorRun[InputT, OutputT]:

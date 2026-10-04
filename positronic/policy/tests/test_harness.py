@@ -1,8 +1,10 @@
 """Timing contracts for processor execution and simulated chunk playback."""
 
+import operator
 import threading
 import time
-from contextlib import contextmanager
+from collections.abc import Mapping
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -12,6 +14,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_wire import wire as session_wire
 
 import pimm
 from pimm.tests.testing import Passive, wire_call
@@ -32,11 +35,52 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, PolicyRun, Step
+from positronic.policy import remote as remote_module
+from positronic.policy.base import ARGS, NAME, VERSION, NotAnswered, Policy, PolicyRun, Step
+from positronic.policy.codec import Codec
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import Harness, Rollout
+from positronic.policy.journal import (
+    PLAIN_DATA,
+    Activity,
+    ActivityFailed,
+    Capture,
+    Closing,
+    CommandEmitted,
+    Ended,
+    Finished,
+    Journal,
+    Parent,
+    PayloadCodec,
+    PlainData,
+    Primed,
+    Published,
+    Raised,
+    ReplacedResult,
+    Returned,
+    StartFailed,
+    Startup,
+    StepReturned,
+    Stopped,
+    Submitted,
+    TurnFailed,
+    TurnStarted,
+    Wake,
+)
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
-from positronic.policy.remote import round_trip
+from positronic.policy.remote import RemotePolicy, round_trip
+from positronic.policy.replay import (
+    ExecutionRefused,
+    MissingInput,
+    MissingResult,
+    ReplaceResult,
+    ReplayDivergence,
+    ReplayError,
+    RerunActivity,
+    Verified,
+    branch,
+    verify,
+)
 from positronic.policy.sequential import Sequential
 
 MOTOR = 'motor'
@@ -155,8 +199,7 @@ def observed_harness():
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
-            runtime.close()
-            policy_run.close()
+            runtime.close(policy_run)
 
 
 def test_observations_refresh_on_signal_updates_independently_of_time(observed_harness):
@@ -938,6 +981,860 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert episode.static[f'{schedule}.{eval_keys.SCHEDULED}'] == 4
     assert episode.static[f'{schedule}.{eval_keys.EMITTED}'] == 3
     assert episode.static[f'{schedule}.{eval_keys.DROPPED}'] == 0
+
+
+class JournaledMove(Policy):
+    """Play the chunks that ``infer`` returns at 10 Hz."""
+
+    def __init__(self, infer):
+        self.infer = Activity('step_plan', 1, infer)
+
+    def run(self, runtime):
+        return ChunkedSchedule(fps=10).run(runtime, self.infer)
+
+
+class Feedback(Policy):
+    """Ask ``infer`` for a velocity from the position and the previous velocity, every ``period_ns``."""
+
+    def __init__(
+        self, infer, *, operation='velocity', version=1, offset=0, period_ns=50_000_000, capture=None, codec=PLAIN_DATA
+    ):
+        self.infer = Activity(operation, version, infer, capture or Capture.INPUT_AND_RESULT, codec)
+        self.offset = offset
+        self.period_ns = period_ns
+
+    def run(self, runtime):
+        answer, velocity = None, 0
+        obs = yield
+        while True:
+            if answer is None:
+                answer = runtime.submit(self.infer, obs[POSITION] + self.offset, velocity)
+            commands = {}
+            if answer.done():
+                velocity, answer = answer.result(), None
+                commands = {MOTOR: velocity}
+            obs = yield Step(commands, runtime.time_ns + self.period_ns)
+
+
+def accelerate(position, velocity):
+    return velocity + 1
+
+
+def unreachable(*args):
+    raise AssertionError('Replay ran a recorded activity')
+
+
+def journaled_rollout(journal: Journal, policy: Policy) -> dict[str, Any]:
+    """Run ``policy`` on the motor for 0.21 s with a journal and no dataset; return the terminal payload."""
+    with pimm.World(virtual_time=True) as world:
+        motion = Motion()
+        embodiment = Embodiment(
+            descriptor='journal-test',
+            observations={POSITION: Observation(motion.position, None)},
+            commands={MOTOR: Command(motion.command, None)},
+            prepare_handlers={},
+            static_meta={},
+            meta_source=None,
+            simulated=True,
+        )
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment, record=False)
+        caller = world.pair(harness.perform_task)
+        loop = world.start([harness, motion])
+        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), policy, None, journal))
+        try:
+            for _ in range(1000):
+                next(loop)
+                if answer.done():
+                    break
+            return answer.result()
+        finally:
+            world.request_stop()
+            list(loop)
+
+
+def returned_commands(journal: Journal, events) -> list:
+    recording = journal.read()
+    return [journal.commands.decode(recording.payload(e.commands)) for e in events if isinstance(e, StepReturned)]
+
+
+def test_journaled_rollout_replays_offline_without_running_inference(tmp_path):
+    journal = Journal(tmp_path / 'journal')
+    assert journaled_rollout(journal, JournaledMove(lambda obs: [{MOTOR: 1}, {MOTOR: 2}])) == {
+        eval_keys.TERMINATED: False
+    }
+    recording = journal.read()
+    turns = [e for e in recording.events if isinstance(e, TurnStarted)]
+    assert [turn.wake for turn in turns] == [Wake.FIRST, Wake.COMPLETION, Wake.DUE, Wake.DUE, Wake.COMPLETION]
+    assert [turn.invocation for turn in turns] == list(range(5))
+    assert (turns[1].time_ns, turns[1].tick) == (turns[0].time_ns, turns[0].tick)
+    assert returned_commands(journal, recording.events) == [{}, {MOTOR: 1}, {MOTOR: 2}, {}, {MOTOR: 1}]
+    emitted = [(e.invocation, e.command) for e in recording.events if isinstance(e, CommandEmitted)]
+    assert emitted == [(1, MOTOR), (2, MOTOR), (4, MOTOR)]
+    assert isinstance(ended := recording.events[-1], Ended)
+    assert verify(JournaledMove(unreachable), journal) == Verified(5, ended.termination)
+
+
+class Gain(Codec):
+    """Scale the position that the model receives and the velocities that it returns by ``gain``."""
+
+    WIRE_NAME = 'gain'
+
+    def __init__(self, gain):
+        self.gain = gain
+
+    def encode(self, data):
+        return {POSITION: data[POSITION] * self.gain}
+
+    def _decode_single(self, data):
+        return {MOTOR: data[MOTOR] * self.gain}
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'gain': self.gain}}
+
+
+class GainMove(Policy):
+    """Play at 10 Hz the chunks of ``infer``, with ``Gain(gain)`` between the schedule and the activity."""
+
+    def __init__(self, infer, gain, codec=PLAIN_DATA):
+        self.infer = Activity('step_plan', 1, infer, codec=codec)
+        self.stack = Sequential(ChunkedSchedule(fps=10), Gain(gain))
+
+    def run(self, runtime):
+        return self.stack.run(runtime, self.infer)
+
+
+class OuterGainMove(Policy):
+    """Play at 10 Hz the chunks of an ``Activity`` around ``Gain(gain).wrap(infer)``, recorded with ``codec``."""
+
+    def __init__(self, infer, gain, codec):
+        self.infer = Activity('gained_step_plan', 1, Gain(gain).wrap(infer), codec=codec)
+
+    def run(self, runtime):
+        return ChunkedSchedule(fps=10).run(runtime, self.infer)
+
+
+class Keyed(PlainData):
+    """Plain data that refuses a mapping with a key outside ``allowed``."""
+
+    NAME = 'keyed'
+
+    def __init__(self, allowed):
+        self.allowed = allowed
+
+    def encode(self, value):
+        self._check(value)
+        return super().encode(value)
+
+    def _check(self, value):
+        if isinstance(value, Mapping):
+            if unknown := set(value) - self.allowed:
+                raise ValueError(f'{sorted(unknown)} are not allowed keys')
+            items = value.values()
+        elif isinstance(value, list | tuple):
+            items = value
+        else:
+            return
+        for item in items:
+            self._check(item)
+
+
+MODEL_KEYS = {POSITION, MOTOR}
+ROBOT_KEYS = {POSITION, MOTOR, keys.TASK, keys.DESCRIPTOR}
+
+
+def test_a_codec_refuses_an_activity_whose_payload_codec_serves_the_model_side(tmp_path):
+    requests = []
+
+    def infer(request):
+        requests.append(request)
+        return [{MOTOR: 1}, {MOTOR: 2}]
+
+    refused = Journal(tmp_path / 'refused')
+    with pytest.raises(TypeError, match='keyed is declared for the model input and output'):
+        journaled_rollout(refused, GainMove(infer, gain=3, codec=Keyed(MODEL_KEYS)))
+    assert requests == []
+    assert [e.kind for e in refused.read().events] == ['started', 'startup', 'start_failed', 'closing', 'ended']
+
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, OuterGainMove(infer, 3, Keyed(ROBOT_KEYS)))
+    recording = journal.read()
+    first = recording.submissions()[0]
+    assert (first.operation, first.codec.name) == ('gained_step_plan', 'keyed')
+    [obs], _ = PLAIN_DATA.decode(recording.payload(first.input))
+    assert set(obs) == {POSITION, keys.TASK, keys.DESCRIPTOR} and requests[0] == {POSITION: 3 * obs[POSITION]}
+    assert returned_commands(journal, recording.events)[1:3] == [{MOTOR: 3}, {MOTOR: 6}]
+    assert verify(OuterGainMove(unreachable, 3, Keyed(ROBOT_KEYS)), journal).complete
+
+
+def test_a_rerun_of_a_wrapped_activity_takes_the_observation_and_returns_the_decoded_result(tmp_path):
+    source = Journal(tmp_path / 'source')
+    journaled_rollout(source, GainMove(lambda request: [{MOTOR: 1}, {MOTOR: 2}], gain=3))
+    recording = source.read()
+    [recorded], _ = PLAIN_DATA.decode(recording.payload(recording.submissions()[0].input))
+    received = []
+
+    def rerun(obs):
+        received.append(obs)
+        return [{MOTOR: -1}, {MOTOR: -2}]
+
+    changes = [RerunActivity(0, rerun, version=2, allow_execution=True)]
+    reran = branch(GainMove(unreachable, gain=3), source, tmp_path / 'rerun', changes)
+    assert received == [recorded] and set(recorded) == {POSITION, keys.TASK, keys.DESCRIPTOR}
+    assert [returned_commands(reran.journal, d.branch) for d in reran.differences] == [[{MOTOR: -1}], [{MOTOR: -2}]]
+
+    with pytest.raises(MissingResult):
+        branch(GainMove(unreachable, gain=2), source, tmp_path / 'changed', changes)
+    assert received == [recorded]
+
+
+def test_a_codec_between_a_schedule_and_its_activity_is_journaled_under_the_codec_spec(tmp_path):
+    requests = []
+
+    def infer(request):
+        requests.append(request)
+        return [{MOTOR: 1}, {MOTOR: 2}]
+
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, GainMove(infer, gain=3))
+    recording = journal.read()
+    submissions = recording.submissions()
+    assert {(s.operation, s.version) for s in submissions} == {
+        ('{"args":{"gain":3},"name":"gain","version":1}(step_plan)', 1)
+    }
+    positions = [PLAIN_DATA.decode(recording.payload(s.input))[0][0][POSITION] for s in submissions]
+    assert positions[1] > 0 and requests == [{POSITION: 3 * position} for position in positions]
+    results = [e.outcome for e in recording.events if isinstance(e, Published)]
+    assert all(isinstance(r, Returned) for r in results)
+    assert [PLAIN_DATA.decode(recording.payload(cast(Returned, r).result)) for r in results] == [
+        [{MOTOR: 3}, {MOTOR: 6}]
+    ] * len(submissions)
+    assert verify(GainMove(unreachable, gain=3), journal).complete
+
+    with pytest.raises(ReplayDivergence) as raised:
+        verify(GainMove(unreachable, gain=2), journal)
+    assert raised.value.expected == submissions[0]
+    assert isinstance(actual := raised.value.actual, Submitted) and actual.operation.startswith('{"args":{"gain":2}')
+
+
+@pytest.mark.parametrize(
+    'change, differs',
+    [
+        ({'operation': 'other'}, 'submitted'),
+        ({'version': 2}, 'submitted'),
+        ({'offset': 1}, 'submitted'),
+        ({'capture': Capture.RESULT}, 'submitted'),
+        ({'period_ns': 60_000_000}, 'step'),
+    ],
+)
+def test_replay_stops_at_the_first_divergence(tmp_path, change, differs):
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, Feedback(accelerate))
+    assert verify(Feedback(unreachable), journal).complete
+    with pytest.raises(ReplayDivergence) as raised:
+        verify(Feedback(unreachable, **change), journal)
+    assert raised.value.expected is not None and raised.value.actual is not None
+    assert (raised.value.expected.kind, raised.value.actual.kind) == (differs, differs)
+    assert raised.value.index == next(i for i, e in enumerate(journal.read().events) if e.kind == differs)
+
+
+def test_branch_replaces_or_reruns_one_result_and_keeps_the_source(tmp_path):
+    source = Journal(tmp_path / 'source')
+    journaled_rollout(source, JournaledMove(lambda obs: [{MOTOR: 1}, {MOTOR: 2}]))
+    recorded = {path: path.read_bytes() for path in source.path.rglob('*') if path.is_file()}
+    first = source.read().submissions()[0]
+
+    replaced = branch(JournaledMove(unreachable), source, tmp_path / 'replaced', [ReplaceResult(0, [{MOTOR: 0}] * 2)])
+    assert [d.invocation for d in replaced.differences] == [1, 2]
+    assert [returned_commands(replaced.journal, d.branch) for d in replaced.differences] == [[{MOTOR: 0}]] * 2
+    assert replaced.journal.read().started.parent == Parent(
+        journal=source.read().started.journal, path=source.path, changes=(ReplacedResult(submission=0),)
+    )
+    assert verify(JournaledMove(unreachable), replaced.journal).complete
+
+    inputs = []
+
+    def infer_v2(obs):
+        inputs.append(obs)
+        return [{MOTOR: -1}, {MOTOR: -2}]
+
+    with pytest.raises(ExecutionRefused):
+        branch(JournaledMove(unreachable), source, tmp_path / 'refused', [RerunActivity(0, infer_v2, version=2)])
+    assert inputs == [] and not (tmp_path / 'refused').exists()
+    rerun = RerunActivity(0, infer_v2, version=2, allow_execution=True)
+    reran = branch(JournaledMove(unreachable), source, tmp_path / 'rerun', [rerun])
+    retained_args, _ = PLAIN_DATA.decode(source.read().payload(first.input))
+    assert inputs == [retained_args[0]]
+    assert [returned_commands(reran.journal, d.branch) for d in reran.differences] == [[{MOTOR: -1}], [{MOTOR: -2}]]
+    assert {path: path.read_bytes() for path in source.path.rglob('*') if path.is_file()} == recorded
+
+
+def test_branch_refuses_unknown_unretained_or_unmatched_submissions(tmp_path):
+    source = Journal(tmp_path / 'source')
+    journaled_rollout(source, Feedback(accelerate, capture=Capture.RESULT))
+    policy = Feedback(unreachable, capture=Capture.RESULT)
+    with pytest.raises(ReplayError, match='no submission 99'):
+        branch(policy, source, tmp_path / 'unknown', [ReplaceResult(99, 0)])
+    with pytest.raises(MissingInput):
+        branch(policy, source, tmp_path / 'unretained', [RerunActivity(0, accelerate, version=2, allow_execution=True)])
+    with pytest.raises(ReplayError, match='does not encode'):
+        branch(policy, source, tmp_path / 'unencodable', [ReplaceResult(0, object())])
+    # The next request carries the changed velocity, which no recorded submission saw.
+    with pytest.raises(MissingResult, match='submission=1'):
+        branch(policy, source, tmp_path / 'unmatched', [ReplaceResult(0, 10)])
+
+
+def test_replay_refuses_a_journal_it_cannot_read(tmp_path):
+    class Other(PayloadCodec):
+        NAME = 'other'
+
+        def encode(self, value):
+            return b''
+
+        def decode(self, payload):
+            return None
+
+        def decode_frozen(self, payload):
+            return None
+
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, Feedback(accelerate))
+    with pytest.raises(ValueError, match='other'):
+        verify(Feedback(unreachable), Journal(journal.path, commands=Other()))
+    with pytest.raises(ReplayError, match='records policy'):
+        verify(JournaledMove(unreachable), journal)
+    events = journal.path / 'events.jsonl'
+    lines = events.read_bytes().splitlines(keepends=True)
+    events.write_bytes(b''.join(lines[:3]) + b'{"kind":"turn"}\n' + b''.join(lines[3:]))
+    with pytest.raises(ValueError, match='validation error'):
+        verify(Feedback(unreachable), journal)
+    events.write_bytes(b''.join(line for line in lines if b'"kind":"closing"' not in line))
+    with pytest.raises(ValueError, match='cannot follow'):
+        verify(Feedback(unreachable), journal)
+    events.write_bytes(b''.join(lines).replace(b'"format":1', b'"format":2', 1))
+    with pytest.raises(ValueError, match='format 2'):
+        verify(Feedback(unreachable), journal)
+
+
+def test_replay_checks_a_torn_journal_through_its_last_closed_scope(tmp_path):
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, Feedback(accelerate))
+    events = journal.path / 'events.jsonl'
+    lines = events.read_bytes().splitlines(keepends=True)
+    turns = [i for i, line in enumerate(lines) if b'"kind":"turn"' in line]
+    for kept, played in ((len(lines) - 1, len(turns)), (turns[2] + 1, 2), (2, 0)):
+        events.write_bytes(b''.join(lines[:kept]) + lines[kept][:-5])
+        assert verify(Feedback(unreachable), journal) == Verified(played, None)
+    events.write_bytes(b''.join(lines[: turns[2] + 1]))
+    with pytest.raises(ReplayDivergence):
+        verify(Feedback(unreachable, offset=1), journal)
+
+
+class ReadsAtClose(Policy):
+    """Submit ``infer`` at the first turn, and put its result into the metadata when the policy closes."""
+
+    def __init__(self, infer, period_ns=50_000_000):
+        self.infer = Activity('velocity', 1, infer)
+        self.period_ns = period_ns
+
+    def run(self, runtime):
+        obs = yield
+        answer = runtime.submit(self.infer, obs[POSITION], 0)
+        try:
+            while True:
+                obs = yield Step({}, runtime.time_ns + self.period_ns)
+        finally:
+            runtime.metadata['velocity'] = answer.result()
+
+
+def test_a_finalizer_outside_the_recorded_close_does_not_change_what_a_replay_reports(tmp_path, caplog):
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, ReadsAtClose(accelerate))
+    assert verify(ReadsAtClose(unreachable), journal).complete
+    events = journal.path / 'events.jsonl'
+    lines = events.read_bytes().splitlines(keepends=True)
+    published = next(i for i, line in enumerate(lines) if b'"kind":"published"' in line)
+    events.write_bytes(b''.join(lines[:published]) + lines[published][:-5])
+
+    def close_errors():
+        records = [r for r in caplog.records if 'outside the recorded part of the journal' in r.getMessage()]
+        caplog.clear()
+        return [type(r.exc_info[1]) for r in records if r.exc_info is not None]
+
+    assert verify(ReadsAtClose(unreachable), journal) == Verified(1, None)
+    assert close_errors() == [NotAnswered]
+    with pytest.raises(ReplayDivergence) as raised:
+        verify(ReadsAtClose(unreachable, period_ns=60_000_000), journal)
+    assert isinstance(raised.value.expected, StepReturned)
+    assert close_errors() == [NotAnswered]
+
+
+class Composite(Policy):
+    """Start ``child`` in the policy's own run, and pass each observation to it."""
+
+    def __init__(self, child: Policy):
+        self.child = child
+
+    def run(self, runtime):
+        with closing(runtime.start(self.child)) as child:
+            obs = yield
+            while True:
+                obs = yield child.send(obs)
+
+
+class Idle(Policy):
+    def run(self, runtime, *dependencies):
+        yield
+        while True:
+            yield Step({}, runtime.time_ns + 50_000_000)
+
+
+@pytest.fixture
+def remote(monkeypatch):
+    """A ``RemotePolicy`` whose mocked server declares an ``Idle`` stack."""
+    monkeypatch.setattr(remote_module, 'declared_stack', lambda meta, protocol_version: Idle())
+    policy = RemotePolicy('websocket', session_wire.HostPortAddress('localhost', 0, session_wire.SESSION_PATH, ''))
+    policy._client = Mock()
+    policy._client.new_session.return_value = Mock(metadata={})
+    return policy
+
+
+def test_a_remote_policy_opens_its_session_inside_a_custom_processor_without_a_journal(remote):
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    run = runtime.start(Composite(remote))
+    try:
+        assert run.send({}) == Step({}, 50_000_000)
+    finally:
+        runtime.close(run)
+    assert remote._client.new_session.call_count == 1
+
+
+def test_a_journal_refuses_a_remote_policy_inside_a_custom_processor_before_its_session_opens(remote, tmp_path):
+    journal = Journal(tmp_path / 'journal')
+    with pytest.raises(TypeError, match='cannot record a RemotePolicy'):
+        journaled_rollout(journal, Composite(remote))
+    remote._client.new_session.assert_not_called()
+    assert [e.kind for e in journal.read().events] == ['started', 'startup', 'start_failed', 'closing', 'ended']
+
+
+def test_replay_refuses_a_remote_policy_inside_a_custom_processor_before_its_session_opens(remote, tmp_path):
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, Composite(Idle()))
+    assert verify(Composite(Idle()), journal).complete
+    with pytest.raises(ReplayDivergence, match='cannot record a RemotePolicy'):
+        verify(Composite(remote), journal)
+    remote._client.new_session.assert_not_called()
+
+
+class WarmUp(Policy):
+    """Warm the model up at startup with the startup time, then command what it returned."""
+
+    def __init__(self, warm_up):
+        self.warm_up = Activity('warm_up', 1, warm_up)
+
+    def run(self, runtime):
+        started_ns = runtime.time_ns
+        answer = runtime.submit(self.warm_up, started_ns)
+        yield
+        while True:
+            commands = {MOTOR: answer.result()} if answer.done() else {}
+            yield Step(commands, runtime.time_ns + 50_000_000)
+
+
+def test_journal_replays_the_startup_time_and_work(tmp_path):
+    journal = Journal(tmp_path / 'journal')
+    journaled_rollout(journal, WarmUp(lambda started_ns: started_ns + 1))
+    recording = journal.read()
+    startup, submitted = recording.events[1:3]
+    assert isinstance(startup, Startup) and isinstance(submitted, Submitted) and submitted.invocation == -1
+    assert PLAIN_DATA.decode(recording.payload(submitted.input)) == [[startup.time_ns], {}]
+    assert returned_commands(journal, recording.events)[1] == {MOTOR: startup.time_ns + 1}
+    assert verify(WarmUp(unreachable), journal).complete
+
+
+class Recover(Policy):
+    """Note what a failed ``infer`` shows the policy, and stop the motor."""
+
+    def __init__(self, infer, seen):
+        self.infer = Activity('velocity', 1, infer)
+        self.seen = seen
+
+    def run(self, runtime):
+        obs = yield
+        answer = runtime.submit(self.infer, obs[POSITION])
+        while True:
+            commands = {}
+            if answer.done():
+                try:
+                    answer.result()
+                except ActivityFailed as exc:
+                    self.seen.append((exc.args, exc.__cause__, exc.__context__))
+                    commands = {MOTOR: 0}
+            obs = yield Step(commands, runtime.time_ns + 50_000_000)
+
+
+def test_a_failed_activity_shows_the_same_error_live_and_in_replay(tmp_path):
+    def fail(position):
+        raise ValueError(f'no velocity at {position}')
+
+    journal = Journal(tmp_path / 'journal')
+    live, replayed = [], []
+    journaled_rollout(journal, Recover(fail, live))
+    assert verify(Recover(unreachable, replayed), journal).complete
+    assert live[0] == (('ValueError: no velocity at 0',), None, None)
+    assert replayed == live
+
+
+def test_a_failed_rerun_shows_the_policy_the_failure_at_the_recorded_turn(tmp_path):
+    def fail(position):
+        raise ValueError(f'no velocity at {position}')
+
+    source = Journal(tmp_path / 'source')
+    live, branched, replayed = [], [], []
+    journaled_rollout(source, Recover(lambda position: position + 1, live))
+    recorded = {path: path.read_bytes() for path in source.path.rglob('*') if path.is_file()}
+    rerun = RerunActivity(0, fail, version=2, allow_execution=True)
+    result = branch(Recover(unreachable, branched), source, tmp_path / 'branch', [rerun])
+    assert live == [] and branched and set(branched) == {(('ValueError: no velocity at 0',), None, None)}
+    [published] = [e for e in result.differences[0].branch if isinstance(e, Published)]
+    assert isinstance(published.outcome, Raised) and published.outcome.error == 'ValueError: no velocity at 0'
+    assert [returned_commands(result.journal, d.branch) for d in result.differences] == [[{MOTOR: 0}]] * len(
+        result.differences
+    )
+    assert verify(Recover(unreachable, replayed), result.journal).complete
+    assert replayed == branched
+    assert {path: path.read_bytes() for path in source.path.rglob('*') if path.is_file()} == recorded
+
+
+class Strict(Policy):
+    """Command the result of ``infer``, which must be an integer, and note in ``closed`` the time it closes at."""
+
+    def __init__(self, infer, closed):
+        self.infer = Activity('value', 1, infer)
+        self.closed = closed
+
+    def run(self, runtime):
+        yield
+        answer = runtime.submit(self.infer)
+        try:
+            while True:
+                commands = {MOTOR: operator.index(answer.result())} if answer.done() else {}
+                yield Step(commands, runtime.time_ns + 50_000_000)
+        finally:
+            self.closed.append(runtime.time_ns)
+
+
+def ending(journal: Journal) -> tuple[Closing, Ended]:
+    *_, closing, ended = (e for e in journal.read().events if isinstance(e, Closing | Ended))
+    assert isinstance(closing, Closing) and isinstance(ended, Ended)
+    return closing, ended
+
+
+def fail():
+    raise ValueError('rerun failed')
+
+
+@pytest.mark.parametrize(
+    'change, error',
+    [
+        (RerunActivity(0, fail, version=2, allow_execution=True), 'ActivityFailed: ValueError: rerun failed'),
+        (ReplaceResult(0, 'one'), 'TypeError: '),
+    ],
+    ids=['failed-rerun', 'replaced-result'],
+)
+def test_a_turn_failure_that_the_source_does_not_record_ends_the_branch_at_that_turn(tmp_path, change, error):
+    source = Journal(tmp_path / 'source')
+    assert journaled_rollout(source, Strict(lambda: 1, [])) == {eval_keys.TERMINATED: False}
+    source_closing, _ = ending(source)
+
+    closed = []
+    result = branch(Strict(unreachable, closed), source, tmp_path / 'branch', [change])
+    events = result.journal.read().events
+    [failed] = [e for e in events if isinstance(e, TurnFailed)]
+    [turn] = [e for e in events if isinstance(e, TurnStarted) and e.invocation == failed.invocation]
+    closing, ended = ending(result.journal)
+    assert failed.error.startswith(error) and turn.time_ns < source_closing.time_ns
+    assert closing.time_ns == turn.time_ns and closed == [turn.time_ns]
+    assert isinstance(ended.termination, Raised) and ended.termination.error == failed.error
+    assert verify(Strict(unreachable, []), result.journal) == Verified(failed.invocation + 1, ended.termination)
+
+
+def test_a_branch_keeps_the_recorded_ending_when_its_turns_end_as_the_source_turns_did(tmp_path):
+    succeeded = Journal(tmp_path / 'succeeded')
+    journaled_rollout(succeeded, Strict(lambda: 1, []))
+    rerun = RerunActivity(0, lambda: 2, version=2, allow_execution=True)
+    reran = branch(Strict(unreachable, []), succeeded, tmp_path / 'reran', [rerun])
+    assert [returned_commands(reran.journal, d.branch) for d in reran.differences][0] == [{MOTOR: 2}]
+    assert ending(reran.journal) == ending(succeeded)
+
+    failed = Journal(tmp_path / 'failed')
+    with pytest.raises(TypeError):
+        journaled_rollout(failed, Strict(lambda: 'one', []))
+    _, recorded = ending(failed)
+    assert isinstance(recorded.termination, Raised)
+    assert verify(Strict(unreachable, []), failed).termination == recorded.termination
+    unchanged = branch(Strict(unreachable, []), failed, tmp_path / 'unchanged', [])
+    assert unchanged.differences == () and ending(unchanged.journal) == ending(failed)
+
+
+class Follow(Policy):
+    """Command the observed position, also on a channel the rig lacks at position 2. Fail when it is negative."""
+
+    def run(self, runtime):
+        obs = yield
+        while True:
+            if (position := obs[POSITION]) < 0:
+                raise ValueError('negative position')
+            commands = {MOTOR: position} | ({'unknown': position} if position == 2 else {})
+            obs = yield Step(commands, runtime.time_ns + 1_000_000)
+
+
+class FailingStart(Policy):
+    """Fail at startup when ``fail`` is set; otherwise wait."""
+
+    def __init__(self, fail):
+        self.fail = fail
+
+    def run(self, runtime):
+        if self.fail:
+            raise ValueError('startup failed')
+        yield
+        while True:
+            yield Step({}, runtime.time_ns + 1_000_000)
+
+
+def test_journal_records_a_failed_startup_and_its_replay_must_fail_too(episode_harness, tmp_path):
+    h = episode_harness
+    journal = Journal(tmp_path / 'journal')
+    h.observation.emit(1)
+    h.caller(Rollout(Task('test', None), FailingStart(True), None, journal))
+    with pytest.raises(ValueError, match='startup failed'):
+        next(h.loop)
+    assert [e.kind for e in journal.read().events] == ['started', 'startup', 'start_failed', 'closing', 'ended']
+    assert isinstance(ended := journal.read().events[-1], Ended) and isinstance(ended.termination, Raised)
+    assert verify(FailingStart(True), journal) == Verified(0, ended.termination)
+    with pytest.raises(ReplayDivergence, match='StartFailed'):
+        verify(FailingStart(False), journal)
+
+
+class Opens(Policy):
+    """Fail at startup when ``fail_start`` is set; otherwise note in ``events`` that it opens and closes.
+
+    Its finalizer raises when ``fail_close`` is set.
+    """
+
+    def __init__(self, events, *, fail_start=False, fail_close=False):
+        self.events = events
+        self.fail_start = fail_start
+        self.fail_close = fail_close
+
+    def run(self, runtime):
+        if self.fail_start:
+            raise ValueError('startup failed')
+        self.events.append('opened')
+        try:
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 50_000_000)
+        finally:
+            self.events.append('closed')
+            if self.fail_close:
+                raise RuntimeError('the policy failed to release its resource')
+
+
+@pytest.mark.parametrize('fail_close', [False, True])
+def test_a_replay_that_primes_where_the_journal_records_a_failed_start_closes_the_policy_at_once(
+    tmp_path, caplog, fail_close
+):
+    journal = Journal(tmp_path / 'journal')
+    with pytest.raises(ValueError, match='startup failed'):
+        journaled_rollout(journal, Opens([], fail_start=True))
+    assert verify(Opens([], fail_start=True), journal).complete
+
+    events = []
+    with pytest.raises(ReplayDivergence) as raised:
+        verify(Opens(events, fail_close=fail_close), journal)
+    assert events == ['opened', 'closed']
+    assert isinstance(raised.value.expected, StartFailed) and isinstance(raised.value.actual, Primed)
+    assert ('the policy failed to release its resource' in caplog.text) is fail_close
+
+
+def test_a_startup_failure_that_the_source_does_not_record_ends_the_branch_at_the_startup(tmp_path):
+    source = Journal(tmp_path / 'source')
+    journaled_rollout(source, Opens([]))
+    [startup] = [e for e in source.read().events if isinstance(e, Startup)]
+    source_closing, source_ended = ending(source)
+    assert isinstance(source_ended.termination, Finished) and startup.time_ns < source_closing.time_ns
+    unchanged = branch(Opens([]), source, tmp_path / 'unchanged', [])
+    assert unchanged.differences == () and ending(unchanged.journal) == ending(source)
+
+    result = branch(Opens([], fail_start=True), source, tmp_path / 'branch', [])
+    kinds = [e.kind for e in result.journal.read().events]
+    closing, ended = ending(result.journal)
+    assert kinds == ['started', 'startup', 'start_failed', 'closing', 'ended']
+    assert closing.time_ns == startup.time_ns
+    assert isinstance(ended.termination, Raised) and ended.termination.error == 'ValueError: startup failed'
+    assert verify(Opens([], fail_start=True), result.journal) == Verified(0, ended.termination)
+
+    failed = Journal(tmp_path / 'failed')
+    with pytest.raises(ValueError, match='startup failed'):
+        journaled_rollout(failed, Opens([], fail_start=True))
+    kept = branch(Opens([], fail_start=True), failed, tmp_path / 'kept', [])
+    assert kept.differences == () and ending(kept.journal) == ending(failed)
+
+
+def failed_turn_source(path: Path) -> Journal:
+    source = Journal(path)
+    with pytest.raises(TypeError):
+        journaled_rollout(source, Strict(lambda: 'one', []))
+    return source
+
+
+def failed_startup_source(path: Path) -> Journal:
+    source = Journal(path)
+    with pytest.raises(ValueError, match='startup failed'):
+        journaled_rollout(source, Opens([], fail_start=True))
+    return source
+
+
+@pytest.mark.parametrize(
+    'record, policy, changes, last_scope, closes',
+    [
+        (
+            failed_turn_source,
+            lambda closed: Strict(unreachable, closed),
+            [ReplaceResult(0, 1)],
+            StepReturned,
+            lambda closing_ns: [closing_ns],
+        ),
+        (failed_startup_source, Opens, [], Primed, lambda closing_ns: ['opened', 'closed']),
+    ],
+    ids=['turn', 'startup'],
+)
+def test_a_branch_that_goes_on_where_the_source_failed_ends_without_an_ending(
+    tmp_path, record, policy, changes, last_scope, closes
+):
+    source = record(tmp_path / 'source')
+    _, recorded = ending(source)
+    assert isinstance(recorded.termination, Raised)
+
+    closed = []
+    result = branch(policy(closed), source, tmp_path / 'branch', changes)
+    events = result.journal.read().events
+    assert not any(isinstance(e, TurnFailed | StartFailed | Ended) for e in events)
+    *_, last, closing = (e for e in events if isinstance(e, Primed | StepReturned | Closing))
+    assert isinstance(last, last_scope) and isinstance(closing, Closing)
+    started = [e.time_ns for e in events if isinstance(e, Startup | TurnStarted)]
+    assert closing.time_ns == started[-1] and closed == closes(closing.time_ns)
+    verified = verify(policy([]), result.journal)
+    assert verified == Verified(len(started) - 1, None) and not verified.complete
+
+
+@pytest.mark.parametrize('done_at_ns, terminated', [(5_000_000, True), (None, False)])
+def test_journal_ends_with_the_terminal_payload(episode_harness, tmp_path, done_at_ns, terminated):
+    h = episode_harness
+    journal = Journal(tmp_path / 'journal')
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 0.01), Follow(), None, journal))
+    next(h.loop)
+    if done_at_ns is not None:
+        h.done.emit({'success': True}, ts=done_at_ns)
+    h.world.clock.advance_to_ns(12_000_000)
+    next(h.loop)
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED] is terminated
+    result = verify(Follow(), journal)
+    assert isinstance(finished := result.termination, Finished)
+    assert PLAIN_DATA.decode(journal.read().payload(finished.payload)) == answer.result()
+
+
+def test_journal_ends_stopped_when_the_world_stops(episode_harness, tmp_path):
+    h = episode_harness
+    journal = Journal(tmp_path / 'journal')
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', None), Follow(), None, journal))
+    next(h.loop)
+    h.world.request_stop()
+    list(h.loop)
+    with pytest.raises(pimm.calls.HandlerStopped):
+        answer.result()
+    assert verify(Follow(), journal).termination == Stopped()
+
+
+@pytest.mark.parametrize(
+    'observation, error, emitted', [(-1, 'ValueError: negative position', []), (2, "KeyError: 'unknown", [MOTOR])]
+)
+def test_journal_ends_with_the_error_of_a_failed_turn_or_emission(
+    episode_harness, tmp_path, observation, error, emitted
+):
+    h = episode_harness
+    journal = Journal(tmp_path / 'journal')
+    h.observation.emit(observation)
+    h.caller(Rollout(Task('test', None), Follow(), None, journal))
+    with pytest.raises((ValueError, KeyError)):
+        next(h.loop)
+    events = journal.read().events
+    assert [e.command for e in events if isinstance(e, CommandEmitted)] == emitted
+    result = verify(Follow(), journal)
+    assert isinstance(raised := result.termination, Raised) and raised.error.startswith(error)
+
+
+class Undecodable(PlainData):
+    """Plain data whose frozen decode refuses the values that ``refuses`` selects."""
+
+    NAME = 'undecodable'
+
+    def __init__(self, refuses):
+        self.refuses = refuses
+
+    def decode_frozen(self, payload):
+        value = super().decode_frozen(payload)
+        if self.refuses(value):
+            raise ValueError('the codec refused the value')
+        return value
+
+
+class NotesClose(Policy):
+    """Run ``Feedback`` on ``infer``, and note in ``events`` each return of the activity and the close of the policy."""
+
+    def __init__(self, infer, events, **options):
+        def noted(*args):
+            events.append('returned')
+            return infer(*args)
+
+        self.feedback = Feedback(noted, **options)
+        self.events = events
+
+    def run(self, runtime):
+        try:
+            yield from self.feedback.run(runtime)
+        finally:
+            self.events.append('closed')
+
+
+@pytest.mark.parametrize(
+    'journal_codec, activity_codec, last_scope',
+    [
+        (Undecodable(lambda obs: obs[POSITION] > 0), PLAIN_DATA, ('step', 'emitted')),
+        (PLAIN_DATA, Undecodable(lambda result: True), ('failed',)),
+    ],
+    ids=['observation', 'publication'],
+)
+def test_a_codec_failure_at_turn_entry_closes_the_policy_and_ends_the_journal_with_it(
+    tmp_path, journal_codec, activity_codec, last_scope
+):
+    journal = Journal(tmp_path / 'journal', journal_codec)
+    events = []
+    with pytest.raises(ValueError, match='the codec refused the value'):
+        journaled_rollout(journal, NotesClose(accelerate, events, codec=activity_codec))
+    recording = journal.read()
+    assert events.count('closed') == 1 and events[-1] == 'closed'
+    assert events.count('returned') == len(recording.submissions())
+    kinds = [e.kind for e in recording.events]
+    assert kinds[-3] in last_scope and kinds[-2:] == ['closing', 'ended']
+    assert isinstance(ended := recording.events[-1], Ended) and isinstance(ended.termination, Raised)
+    assert ended.termination.error == 'ValueError: the codec refused the value'
+    assert verify(NotesClose(unreachable, [], codec=activity_codec), journal).termination == ended.termination
 
 
 def test_recorder_refuses_an_encoder_this_host_cannot_run():

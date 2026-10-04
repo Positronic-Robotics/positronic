@@ -236,6 +236,11 @@ them only when simulated time includes their queueing and execution duration.
 Uncharged simulation waits for completion before advancing time. An unlimited chain of
 uncharged submissions can therefore keep the simulator at one instant.
 
+These rules, and the clock that moves while synchronous code runs, describe the ordinary
+executor. A [journaled](docs/journal.md) episode opts into stable turns: within a turn, time and
+answers do not change, and a completion becomes visible at the next turn. Its runtime accepts only
+an `Activity`, the boundary that the journal records.
+
 ### Composability
 
 A neural policy is never just the model. Data transforms surround it —
@@ -317,7 +322,8 @@ and outputs on other machines, and values a run chooses to record itself.
 
 The framework records sensor and executed-command signals as an episode dataset.
 The recorder stores `runtime.metadata` with the policy definition metadata.
-Inference input/output recording and custom signal recording are deferred.
+A [journal](docs/journal.md) records the startup, the turns and the close of the policy, and the
+inputs and outputs of each declared activity, for offline replay. Custom signal recording is deferred.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,
 and submitted jobs, with parent-child links. The outermost processor span times
@@ -384,6 +390,14 @@ class Runtime(ABC):
     @property
     def tick(self) -> int: ...
 
+    # One per call of the policy, also for calls at the same tick.
+    @property
+    def invocation(self) -> int: ...
+
+    # True when a journal records or replays the episode.
+    @property
+    def journaled(self) -> bool: ...
+
     def start(
         self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT]: ...
@@ -447,14 +461,16 @@ Codecs compose with `|` for sequential conversion and `&` for parallel conversio
 components winning on shared keys.
 
 Sequential closes the runs it creates. External dependencies remain owned by
-their caller. `Codec.wrap` does not take ownership of the child it wraps.
+their caller. `Codec.wrap` does not take ownership of the child it wraps. It wraps an `Activity`
+into an `Activity` named by the codec's wire spec, so a journal can still record the call; see
+[journals](docs/journal.md) for what this needs.
 
 ## Deferred, not to decide now
 
 - Plan invalidation and recovery after robot unavailability; [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
 - The shape of the robot description, and a server's ability to refuse one.
-- Inference input/output recording and custom signal recording.
+- Custom signal recording.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the run. The pimm signals
   already carry these timestamps.

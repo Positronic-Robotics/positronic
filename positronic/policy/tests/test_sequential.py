@@ -9,6 +9,7 @@ from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.journal import Activity
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 
@@ -43,6 +44,32 @@ def test_codec_work_is_inside_submit(nested):
     finally:
         runtime.close()
         run.close()
+
+
+def test_a_codec_without_a_wire_spec_wraps_a_callable_and_refuses_an_activity():
+    class Unnamed(Codec):
+        def encode(self, data):
+            return {'value': data['value'] * 2}
+
+        def _decode_single(self, data):
+            return {'value': data['value'] + 1}
+
+    def infer(obs):
+        return [{'value': obs['value']}]
+
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    stack = Sequential(ChunkedSchedule(fps=10), Unnamed())
+    run = runtime.start(stack, infer)
+    try:
+        first = run.send({'value': 20})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        completed = run.send({'value': 20})
+        assert isinstance(first, Step) and isinstance(completed, Step)
+        assert dict(first.commands) | dict(completed.commands) == {'value': 41}
+        with pytest.raises(TypeError, match='Unnamed cannot wrap Activity .plan.: .* needs to_spec'):
+            runtime.start(stack, Activity('plan', 1, infer))
+    finally:
+        runtime.close(run)
 
 
 def test_sequential_combines_component_metadata():

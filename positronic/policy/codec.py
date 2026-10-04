@@ -10,6 +10,7 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -29,6 +30,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Obs, ProcessorRun, Step
+from positronic.policy.journal import Activity, PlainData
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -93,6 +95,26 @@ class Codec:
     def meta(self) -> dict:
         return {}
 
+    def _operation(self, activity: Activity[..., Any]) -> str:
+        """The operation of ``activity`` wrapped by this codec. Raise ``TypeError`` if the journal cannot name it."""
+        if type(activity.codec) is not PlainData:
+            raise TypeError(
+                f'{type(self).__name__} cannot wrap Activity {activity.operation!r}: its payload codec '
+                f'{activity.codec.NAME} is declared for the model input and output. Declare the Activity '
+                'around codec.wrap(function) with a payload codec for the observation and the decoded result'
+            )
+        try:
+            spec = json.dumps(self.to_spec(), sort_keys=True, separators=(',', ':'))
+        except (NotImplementedError, TypeError) as exc:
+            raise TypeError(
+                f'{type(self).__name__} cannot wrap Activity {activity.operation!r}: the operation names the '
+                'codec by its wire spec, and the codec needs to_spec with plain JSON values'
+            ) from exc
+        return f'{spec}({activity.operation})'
+
+    @overload
+    def wrap(self, function: Activity[[dict], Any]) -> Activity[[Obs], Any]: ...
+
     @overload
     def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
 
@@ -106,6 +128,11 @@ class Codec:
 
         Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
         wrapped dependency, including closing it when it is a generator.
+
+        An ``Activity`` stays an ``Activity`` of the same version, whose input is the observation and whose
+        result is the decoded output. Its operation adds the wire spec of this codec, so the codec needs
+        ``to_spec``. The payload codec must be ``PlainData``: another one is declared for the model's input
+        and output, not for these.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -124,6 +151,8 @@ class Codec:
                 return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
             return self.decode(result) if result is not None else None
 
+        if isinstance(function, Activity):
+            return replace(function, operation=self._operation(function), function=call)
         return call
 
     def _wrap_run(self, inner: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]:

@@ -8,6 +8,8 @@ checkout, so nothing has to be installed first — `uv run` builds the environme
 | `walkthrough.py` | The whole flow through `PlatformClient`: register, submit, read quota, poll to a terminal status. |
 | `nebius_competition/submit_sample.py` | Submitting to one engagement's eval with a transaction key, and waiting for what it scored. |
 | `nebius_competition/standings.py` | The public boards, and the rows of one board. No key. |
+| `policy_journal/record.py` | A journaled rollout on a simulated motor. See [policy journals](../../policy/docs/journal.md). |
+| `policy_journal/replay.py` | The offline verification of that journal, and two branches of it at one inference. |
 
 ## From the command line
 

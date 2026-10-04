@@ -112,6 +112,11 @@ class RemotePolicy(Policy):
         return flatten_dict(meta)
 
     def run(self, runtime: Runtime) -> PolicyRun:
+        if runtime.journaled:
+            raise TypeError(
+                'A journal cannot record a RemotePolicy: its server session opens outside every activity. '
+                'Journal a policy built from local components that submits its inference as an Activity'
+            )
         session = self._client.new_session()
         connection_lock = Lock()
         try:

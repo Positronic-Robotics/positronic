@@ -3,8 +3,9 @@
 import concurrent.futures
 import contextvars
 import logging
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -12,7 +13,21 @@ from functools import partial
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
-from positronic.policy.base import Answer, NotAnswered, Runtime
+from positronic.policy.base import Answer, InputT, NotAnswered, Obs, OutputT, Processor, ProcessorRun, Runtime, Step
+from positronic.policy.journal import (
+    PLAIN_DATA,
+    Activity,
+    Finished,
+    Journal,
+    JournalAnswer,
+    JournalWriter,
+    Raised,
+    Started,
+    Stopped,
+    TurnLog,
+    UnrecordableResult,
+    Wake,
+)
 
 P = ParamSpec('P')
 T = TypeVar('T')
@@ -27,6 +42,9 @@ class _UnchargedAnswer(Answer[T]):
         self.completion_reported = False
 
     def done(self) -> bool:
+        return self.call.done()
+
+    def visible_at(self, now_ns: int) -> bool:
         return self.call.done()
 
     def result(self) -> T:
@@ -61,12 +79,15 @@ class _ChargedAnswer(_UnchargedAnswer[T]):
             self._ready_at_ns = self._submitted_ns + time.monotonic_ns() - self._submitted_wall_ns
 
     def done(self) -> bool:
+        return self.visible_at(self._clock())
+
+    def visible_at(self, now_ns: int) -> bool:
         if not self.call.done():
             return False
         if self.call.cancelled():
             return True
         assert self._ready_at_ns is not None, 'a finished function has a visibility timestamp'
-        return self._clock() >= self._ready_at_ns
+        return now_ns >= self._ready_at_ns
 
     def _delay_sec(self, until_ns: int) -> float:
         if self.call.done():
@@ -106,6 +127,7 @@ class Executor(Runtime):
         self._charge_inference_time = charge_inference_time
         self._tick = -1
         self._tick_time_ns: int | None = None
+        self._invocation = -1
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._answers: set[_UnchargedAnswer[Any]] = set()
 
@@ -118,12 +140,29 @@ class Executor(Runtime):
         """The zero-based control-tick index, unchanged when calls occur at the same clock time."""
         return self._tick
 
-    def start_tick(self) -> None:
-        """Count a new tick if the episode clock has advanced since the previous call."""
-        now_ns = self.time_ns
-        if now_ns != self._tick_time_ns:
-            self._tick += 1
-            self._tick_time_ns = now_ns
+    @property
+    def invocation(self) -> int:
+        return self._invocation
+
+    def begin_turn(self, obs: Obs, wake: Wake) -> Obs:
+        """Count the policy call, and a tick if the clock has moved; return the observation the policy receives."""
+        self._tick, self._tick_time_ns, self._invocation = self._next_turn()
+        return obs
+
+    def _next_turn(self) -> tuple[int, int, int]:
+        """The tick, its clock time and the invocation of a turn that begins now. Nothing is counted yet."""
+        now_ns = self._clock()
+        tick = self._tick if now_ns == self._tick_time_ns else self._tick + 1
+        return tick, now_ns, self._invocation + 1
+
+    def end_turn(self, step: Step, wake_at_ns: int) -> None:
+        """End the turn with the policy's step and the harness wake-up time. A plain executor records neither."""
+
+    def fail_turn(self, error: BaseException) -> None:
+        """End the turn with the error the policy raised. A plain executor does not record it."""
+
+    def report_emitted(self, command: str) -> None:
+        """Note that the harness emitted ``command`` of the last step. A plain executor records nothing."""
 
     @property
     def has_pending(self) -> bool:
@@ -147,6 +186,9 @@ class Executor(Runtime):
         return completed
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        return self._submit(function, *args, **kwargs)
+
+    def _submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> _UnchargedAnswer[T]:
         context = contextvars.copy_context()
 
         def invoke() -> T:
@@ -191,7 +233,19 @@ class Executor(Runtime):
                 pending, timeout=min(delay_sec, remaining_sec), return_when=concurrent.futures.FIRST_COMPLETED
             )
 
-    def close(self) -> None:
+    def close(
+        self, run: ProcessorRun[Any, Any] | None = None, ending: Mapping[str, Any] | BaseException | None = None
+    ) -> None:
+        """Drain the submitted work, then close ``run``, a generator that the caller hands over.
+
+        ``ending`` is the terminal payload, the error that ended the episode, or ``None`` without either.
+        A plain executor does not record it.
+        """
+        self._drain()
+        if run is not None:
+            run.close()
+
+    def _drain(self) -> None:
         """Cancel queued calls, drain running calls, and report failures whose results were never read."""
         self._pool.shutdown(wait=True, cancel_futures=True)
         for answer in self._answers:
@@ -201,3 +255,165 @@ class Executor(Runtime):
             if (exc := answer.call.exception()) is not None:
                 logging.error('A submitted function failed without its result being read: %s', exc)
         self._answers.clear()
+
+
+class JournaledExecutor(Executor):
+    """An ``Executor`` that journals the startup, the turns and the close of a policy.
+
+    The first ``start`` primes the policy at a startup time the journal records; a ``start`` inside a scope
+    starts a nested processor. Inside a scope, ``time_ns`` is the scope's time; ``tick`` and ``invocation``
+    are those of the last journaled turn. Answers change only at turn entry, which publishes in submission
+    order the work that returned before it and is visible on the episode clock. The policy submits only an
+    ``Activity``, and the work receives its own decoded copy of the arguments. ``close`` drains the work,
+    closes the run it is handed and ends the journal.
+    """
+
+    def __init__(
+        self,
+        clock: Callable[[], int],
+        journal: Journal,
+        started: Started,
+        *,
+        simulated: bool,
+        charge_inference_time: bool,
+        max_workers: int = 1,
+    ) -> None:
+        super().__init__(
+            clock, simulated=simulated, charge_inference_time=charge_inference_time, max_workers=max_workers
+        )
+        self._log = TurnLog(journal, JournalWriter(journal, started), self._cancel)
+        self._unpublished: dict[int, _UnchargedAnswer[bytes]] = {}
+        self._returned: set[int] = set()
+        self._returned_lock = threading.Lock()
+
+    @property
+    def time_ns(self) -> int:
+        return self._clock() if self._log.scope is None else self._log.time_ns
+
+    @property
+    def tick(self) -> int:
+        return self._log.tick
+
+    @property
+    def invocation(self) -> int:
+        return self._log.invocation
+
+    @property
+    def journaled(self) -> bool:
+        return True
+
+    def start(
+        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT]:
+        if self._log.scope is not None:
+            return super().start(processor, *args, **kwargs)
+        self._log.begin_startup(self._clock())
+        try:
+            run = super().start(processor, *args, **kwargs)
+        except BaseException as exc:
+            self._log.start_failed(exc)
+            raise
+        self._log.primed()
+        return run
+
+    def begin_turn(self, obs: Obs, wake: Wake) -> Obs:
+        with self._returned_lock:
+            returned = set(self._returned)
+        tick, now_ns, invocation = self._next_turn()
+        completed = self._completed(returned, now_ns)
+        for call in completed.values():
+            if not call.call.cancelled() and isinstance(error := call.call.exception(), UnrecordableResult):
+                raise error
+        owned = self._log.begin(invocation, now_ns, tick, wake, self._log.journal.observations.encode(obs))
+        # Counted only now: a turn that the journal does not record takes no invocation.
+        self._tick, self._tick_time_ns, self._invocation = tick, now_ns, invocation
+        try:
+            for submission, call in completed.items():
+                del self._unpublished[submission]
+                self._publish(self._log.pending[submission], call)
+        except BaseException as exc:
+            self._log.fail(exc)
+            raise
+        return owned
+
+    def _completed(self, returned: set[int], now_ns: int) -> dict[int, _UnchargedAnswer[bytes]]:
+        """The unpublished work that was cancelled or had ``returned``, and is visible at ``now_ns``."""
+        completed = {}
+        for submission, call in self._unpublished.items():
+            if submission in returned:
+                # The function has returned, so its future settles at once.
+                concurrent.futures.wait([call.call])
+            elif not call.call.cancelled():
+                continue
+            if call.visible_at(now_ns):
+                completed[submission] = call
+        return completed
+
+    def _publish(self, answer: JournalAnswer[Any], call: _UnchargedAnswer[bytes]) -> None:
+        call.completion_reported = True
+        call.result_read = True
+        if call.call.cancelled():
+            self._log.publish_cancelled(answer)
+        elif (error := call.call.exception()) is None:
+            self._log.publish_result(answer, call.call.result())
+        else:
+            self._log.publish_failure(answer, Raised.of(error))
+
+    def end_turn(self, step: Step, wake_at_ns: int) -> None:
+        self._log.end(step, wake_at_ns)
+
+    def fail_turn(self, error: BaseException) -> None:
+        self._log.fail(error)
+
+    def report_emitted(self, command: str) -> None:
+        self._log.emitted(command)
+
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        if not isinstance(function, Activity):
+            raise TypeError(f'A journaled episode submits only an Activity, not {function!r}')
+        answer, owned_args, owned_kwargs = self._log.submit(function, args, kwargs)
+        self._unpublished[answer.submission] = self._submit(
+            self._run_activity, answer.submission, function, owned_args, owned_kwargs
+        )
+        return answer
+
+    def _run_activity(
+        self, submission: int, activity: Activity[..., Any], args: tuple, kwargs: dict[str, Any]
+    ) -> bytes:
+        """Run the work, and mark its submission returned before its future settles."""
+        try:
+            return self._encoded_result(activity, args, kwargs)
+        finally:
+            with self._returned_lock:
+                self._returned.add(submission)
+
+    @staticmethod
+    def _encoded_result(activity: Activity[..., Any], args: tuple, kwargs: dict[str, Any]) -> bytes:
+        result = activity.function(*args, **kwargs)
+        try:
+            return activity.codec.encode(result)
+        except Exception as exc:
+            raise UnrecordableResult(
+                f'{activity.operation} v{activity.version} returned {type(result).__name__}, which '
+                f'{activity.codec.NAME} cannot encode'
+            ) from exc
+
+    def _cancel(self, submission: int) -> None:
+        if (call := self._unpublished.get(submission)) is not None:
+            call.cancel()
+
+    def close(
+        self, run: ProcessorRun[Any, Any] | None = None, ending: Mapping[str, Any] | BaseException | None = None
+    ) -> None:
+        self._drain()
+        self._log.begin_closing(self._clock())
+        if run is not None:
+            run.close()
+        match ending:
+            case None:
+                termination = Stopped()
+            case BaseException():
+                termination = Raised.of(ending)
+            case _:
+                termination = Finished(payload=self._log.retain(PLAIN_DATA.encode(ending)))
+        self._log.finish(termination, self.metadata)

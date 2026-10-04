@@ -29,7 +29,8 @@ from positronic.policy.codec import (
     RestrictImageSize,
     SetControlMode,
 )
-from positronic.policy.executor import Executor, _UnchargedAnswer
+from positronic.policy.executor import Executor, JournaledExecutor, _UnchargedAnswer
+from positronic.policy.journal import Activity, Journal, Started, Wake
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -128,6 +129,28 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
         assert dict(requests[0]).keys() == {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
     finally:
         run.close()
+
+
+def test_journaled_inference_receives_the_stack_built_at_submission(tmp_path):
+    now = [0]
+    journal = Journal(tmp_path / 'journal')
+    started = Started.create(journal, Echo(), simulated=True, charge_inference_time=False)
+    runtime = JournaledExecutor(lambda: now[0], journal, started, simulated=True, charge_inference_time=False)
+    received = []
+    infer = Activity('plan', 1, lambda obs: received.append(obs) or [{MOTOR: 0}] * 10)
+    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.1, 0.0)), ChunkedSchedule(fps=10)), infer)
+    try:
+        for tick in range(3):
+            now[0] = tick * 5_000_000
+            run.send(runtime.begin_turn({POSITION: np.array([tick])}, Wake.DUE))
+            runtime.end_turn(Step({}, now[0]), now[0])
+    finally:
+        runtime.close()
+        run.close()
+    [request] = received
+    assert type(request) is dict
+    np.testing.assert_array_equal(request[POSITION][:, 0], [0, 0])
+    assert not request[POSITION].flags.writeable
 
 
 @pytest.fixture

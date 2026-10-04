@@ -17,7 +17,8 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyRun
-from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.executor import Executor, JournaledExecutor, WaitStatus
+from positronic.policy.journal import Journal, Started, Wake
 from positronic.utils import flatten_dict, frozen_view
 
 # Harness wake-up intervals on the world's clock.
@@ -26,18 +27,27 @@ MIN_POLL_PERIOD_SEC = 0.005
 MAX_POLL_PERIOD_SEC = 1.0
 
 
+def clamp_wake(started_at_ns: int, resume_at_ns: int) -> int:
+    """The wake-up time the harness takes from a requested one: 5 ms–1 s after the call's start."""
+    period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, (resume_at_ns - started_at_ns) / 1e9))
+    return started_at_ns + round(period_sec * 1e9)
+
+
 @dataclass
 class Rollout:
     """One trial, its complete policy definition, and the path it records into.
 
     The harness creates and owns the runtime and the generator returned by
-    ``runtime.start(policy)``. The policy supplies its own dependencies.
-    An ``output_path`` of ``None`` records nothing.
+    ``runtime.start(policy)``, and hands that generator to ``runtime.close``, which closes it after the
+    submitted work drains. The policy supplies its own dependencies.
+    An ``output_path`` of ``None`` records nothing. A ``journal`` records the startup, the turns and the
+    close of the policy for ``positronic.policy.replay``, with or without an ``output_path``.
     """
 
     task: Task
     policy: Policy
     output_path: Path | None
+    journal: Journal | None = None
 
 
 class _EpisodeTelemetry:
@@ -193,21 +203,30 @@ class Harness(pimm.ControlSystem):
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
                     return None
-                runtime.start_tick()
+                if due_ns is None:
+                    wake = Wake.FIRST
+                else:
+                    wake = Wake.DUE if runtime.time_ns >= due_ns else Wake.COMPLETION
+                obs = runtime.begin_turn(obs, wake)
                 started_at_ns = runtime.time_ns
-                step = policy_run.send(obs)
-                assert step is not None, 'a policy must yield a Step for each observation'
+                try:
+                    step = policy_run.send(obs)
+                    assert step is not None, 'a policy must yield a Step for each observation'
+                    wake_at_ns = clamp_wake(started_at_ns, step.resume_at_ns)
+                    runtime.end_turn(step, wake_at_ns)
+                except BaseException as exc:
+                    runtime.fail_turn(exc)
+                    raise
                 emit_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
                 self._telemetry.step()
                 for name, value in step.commands.items():
                     self.commands[name].emit(value)
+                    runtime.report_emitted(name)
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
             finally:
                 telemetry.set_attrs(span, **step_ms)
-        period_sec = (step.resume_at_ns - started_at_ns) / 1e9
-        period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
-        return started_at_ns + round(period_sec * 1e9)
+        return wake_at_ns
 
     @staticmethod
     def _trial_terminal(done: pimm.Message[dict] | None, now_ns: int, deadline_ns: int | None) -> dict[str, Any] | None:
@@ -242,6 +261,16 @@ class Harness(pimm.ControlSystem):
         yield self._yield(delay_ns / 1e9)
         return runtime.take_completed()
 
+    def _runtime(self, clock: pimm.Clock, rollout: Rollout) -> Executor:
+        simulated = self._embodiment.simulated
+        charged = rollout.task.charge_inference_time
+        if rollout.journal is None:
+            return Executor(clock.now_ns, simulated=simulated, charge_inference_time=charged)
+        started = Started.create(rollout.journal, rollout.policy, simulated=simulated, charge_inference_time=charged)
+        return JournaledExecutor(
+            clock.now_ns, rollout.journal, started, simulated=simulated, charge_inference_time=charged
+        )
+
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
@@ -253,10 +282,9 @@ class Harness(pimm.ControlSystem):
         if should_stop.value:
             return None
 
-        runtime = Executor(
-            clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
-        )
+        runtime = self._runtime(clock, rollout)
         policy_run = None
+        ending: dict[str, Any] | BaseException | None = None
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
@@ -281,16 +309,16 @@ class Harness(pimm.ControlSystem):
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
             )
+            ending = payload
+        except BaseException as exc:
+            ending = exc
+            raise
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
-            logging.info('Closing the policy runtime')
-            runtime.close()
-            logging.info('Policy runtime closed')
-            if policy_run is not None:
-                logging.info('Closing the policy')
-                policy_run.close()
-                logging.info('Policy closed')
+            logging.info('Closing the policy runtime and the policy')
+            runtime.close(policy_run, ending)
+            logging.info('Policy runtime and policy closed')
             self._obs_by_signal.clear()
 
         virtual_now = clock.now()
