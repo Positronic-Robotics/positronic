@@ -15,13 +15,13 @@ import pytest
 
 import pimm
 from pimm.tests.testing import Passive, wire_call
+from pimm.time import EMITTED_WORLD
 from pimm.world import VirtualClock
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -108,13 +108,14 @@ class Motion(pimm.ControlSystem):
 class Trace(pimm.SignalEmitter):
     def __init__(self, clock, forward=None):
         self.clock = clock
+        self._clock = clock
         self.forward = forward
         self.values = []
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         self.values.append((self.clock.now_ns(), data))
         if self.forward is not None:
-            self.forward.emit(data, ts)
+            self.forward._emit(data, time)
 
 
 @pytest.fixture
@@ -317,7 +318,8 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
 
     h.manual.emit({MOTOR: 99})
     overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), None))
-    h.done.emit({'success': True}, ts=5_000_000)
+    h.world.clock.advance_to_ns(5_000_000)
+    h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
     next(h.loop)
     assert not first.done()  # The recorder gets a turn before the caller is answered.
@@ -364,7 +366,8 @@ def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_a
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('test', 0.01), Wait(), None))
     next(h.loop)
-    h.done.emit({'success': True}, ts=done_at_ns)
+    h.world.clock.advance_to_ns(done_at_ns)
+    h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
     next(h.loop)
     next(h.loop)
@@ -909,7 +912,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
             simulated=True,
         )
         harness = Harness(embodiment)
-        recorder = wire.wire_embodiment(world, harness, embodiment, TimeMode.MESSAGE)
+        recorder = wire.wire_embodiment(world, harness, embodiment)
         assert recorder is not None
         world.connect(harness.ds_command, recorder.command)
         caller = world.pair(harness.perform_task)
@@ -928,9 +931,9 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert isinstance(episode, Episode)
     commands = episode[MOTOR]
     assert list(commands.values()) == [1, 2, 1]
-    np.testing.assert_array_equal(np.diff(commands.timestamps(RECORDED_TIME)), [100_000_000, 100_000_000])
+    np.testing.assert_array_equal(np.diff(commands.timestamps(EMITTED_WORLD)), [100_000_000, 100_000_000])
     positions = episode[POSITION]
-    recorded = dict(zip(positions.timestamps(RECORDED_TIME), positions.values(), strict=True))
+    recorded = dict(zip(positions.timestamps(EMITTED_WORLD), positions.values(), strict=True))
     assert recorded
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
@@ -959,7 +962,7 @@ def test_recorder_refuses_an_encoder_this_host_cannot_run():
             video_encoder=AbsentEncoder(),
         )
         with pytest.raises(RuntimeError, match='no such encoder here'):
-            wire.wire_embodiment(world, Harness(embodiment), embodiment, TimeMode.MESSAGE)
+            wire.wire_embodiment(world, Harness(embodiment), embodiment)
 
 
 def test_cartesian_delta_wire_roundtrip():

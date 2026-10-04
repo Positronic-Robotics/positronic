@@ -91,7 +91,7 @@ class WatchingEmitter(pimm.SignalEmitter):
         self.seen: list[tuple[RobotStatus, bool]] = []
         self._answer = answer
 
-    def emit(self, data, ts: int = -1) -> None:
+    def _emit(self, data, time: pimm.Time) -> None:
         self.seen.append((data.status, self._answer.done()))
 
 

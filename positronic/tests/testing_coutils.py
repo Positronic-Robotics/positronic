@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 import pimm
+from pimm.time import EMITTED_WALL, EMITTED_WORLD
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -58,10 +59,10 @@ class RecordingEmitter(pimm.SignalEmitter[T]):
     """Emitter that records all emissions for later assertions."""
 
     def __init__(self) -> None:
-        self.emitted: list[tuple[int, T]] = []
+        self.emitted: list[tuple[pimm.Time, T]] = []
 
-    def emit(self, data: T, ts: int = -1):
-        self.emitted.append((ts, data))
+    def _emit(self, data: T, time: pimm.Time):
+        self.emitted.append((time, data))
 
 
 class ManualCommandReceiver(pimm.SignalReceiver[T]):
@@ -73,9 +74,13 @@ class ManualCommandReceiver(pimm.SignalReceiver[T]):
 
     def push(self, data: T, ts: int | None = None) -> None:
         if ts is None:
-            base = self._pending[-1].ts if self._pending else (self._last.ts if self._last else -1)
+            base = (
+                self._pending[-1].time[EMITTED_WORLD]
+                if self._pending
+                else (self._last.time[EMITTED_WORLD] if self._last else -1)
+            )
             ts = base + 1
-        self._pending.append(pimm.Message(data, ts))
+        self._pending.append(pimm.Message(data, pimm.Time(**{EMITTED_WORLD: ts, EMITTED_WALL: ts})))
 
     def read(self) -> pimm.Message[T] | None:
         if self._pending:

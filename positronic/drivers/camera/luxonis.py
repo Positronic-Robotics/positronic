@@ -42,8 +42,8 @@ class LuxonisCamera(pimm.ControlSystem):
                 fps_counter.tick()
 
                 image = frame.getCvFrame()[..., ::-1]  # BGR to RGB
-                ts = frame.getTimestamp().total_seconds()
+                capture_time = pimm.Time(**{'camera.capture': round(frame.getTimestamp().total_seconds() * 1e9)})
 
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
-                self.frame.emit(self._frame_adapter, ts=ts)
+                self.frame.emit(self._frame_adapter, time=capture_time)
                 yield pimm.Sleep(0.001)

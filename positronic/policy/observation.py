@@ -6,8 +6,7 @@ from PIL import Image as PilImage
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.base import ARGS, NAME, VERSION
@@ -53,7 +52,11 @@ class ObservationCodec(Codec):
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]
-        return transforms.concat(*[episode[k] for k in state_features], dtype=np.float32, timelines=(RECORDED_TIME,))
+        return transforms.concat(
+            *[episode[k] for k in state_features],
+            dtype=np.float32,
+            timelines=(select_timeline(set.intersection(*(set(episode[k].timelines) for k in state_features))),),
+        )
 
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]

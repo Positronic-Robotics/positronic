@@ -8,8 +8,7 @@ import pos3
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_CREATED_TS_NS
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import META_CREATED_TS_NS, select_timeline
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
 from positronic.server.dataset_utils import ReplayLayout
@@ -66,7 +65,7 @@ def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    first, last = ep.bounds(RECORDED_TIME)
+    first, last = ep.bounds(select_timeline(ep.timelines))
     return items / ((last - first) / 1e9 / 3600)
 
 
@@ -129,7 +128,7 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            first, last = ep.bounds(RECORDED_TIME)
+            first, last = ep.bounds(select_timeline(ep.timelines))
             duration += (last - first) / 1e9 / 3600
             units += ep['units']
 

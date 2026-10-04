@@ -1,6 +1,7 @@
 import pytest
 
 import pimm
+from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
@@ -42,9 +43,9 @@ def test_replays_signals_in_time_order(world):
     with pytest.raises(StopIteration):
         next(scheduler)
 
-    assert outputs['a'].emitted == [(0, 'a1'), (2000, 'a2')]
-    assert outputs['b'].emitted == [(1000, 'b1')]
-    assert finished.emitted == [(-1, start_cmd)]
+    assert [(ts['playback.scheduled'], value) for ts, value in outputs['a'].emitted] == [(0, 'a1'), (2000, 'a2')]
+    assert [(ts['playback.scheduled'], value) for ts, value in outputs['b'].emitted] == [(1000, 'b1')]
+    assert [value for _, value in finished.emitted] == [start_cmd]
 
 
 def test_start_ts_defaults_to_episode_start(world):
@@ -66,8 +67,8 @@ def test_start_ts_defaults_to_episode_start(world):
     with pytest.raises(StopIteration):
         next(scheduler)
 
-    assert outputs['a'].emitted == [(0, 'drop'), (2000, 'keep')]
-    assert outputs['b'].emitted == [(1000, 'b1')]
+    assert [(ts['playback.scheduled'], value) for ts, value in outputs['a'].emitted] == [(0, 'drop'), (2000, 'keep')]
+    assert [(ts['playback.scheduled'], value) for ts, value in outputs['b'].emitted] == [(1000, 'b1')]
     assert finished.emitted, 'Finished command should be emitted when playback completes'
 
 
@@ -82,7 +83,7 @@ def test_respects_end_timestamp(world):
 
     drive_until(scheduler, lambda: len(outputs['a'].emitted) == 1)
 
-    assert outputs['a'].emitted == [(0, 'first')]
+    assert [(ts['playback.scheduled'], value) for ts, value in outputs['a'].emitted] == [(0, 'first')]
 
 
 @pytest.mark.parametrize('timeline', ['world', 'server.wall'])
@@ -104,8 +105,10 @@ def test_selected_timeline_controls_bounds_and_scheduling(world, timeline, start
     command_receiver.push(command)
     scheduler = world.interleave(agent.run)
     drive_until(scheduler, lambda: bool(finished.emitted))
-    assert {name: output.emitted for name, output in outputs.items()} == expected
-    assert finished.emitted == [(-1, command)]
+    assert {
+        name: [(ts['playback.scheduled'], value) for ts, value in output.emitted] for name, output in outputs.items()
+    } == expected
+    assert [value for _, value in finished.emitted] == [command]
 
 
 def test_abort_stops_without_emitting_finished(world):
@@ -147,3 +150,24 @@ def test_raises_for_static_only_output(world):
 
     with pytest.raises(ValueError):
         next(scheduler)
+
+
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECEIVED_WALL, 'legacy.clock'])
+def test_default_axis_plays_new_and_legacy_recordings(world, axis):
+    outputs = {'a': RecordingEmitter()}
+    agent, commands, finished = create_agent(outputs)
+    episode = EpisodeContainer({'a': DummySignal([100, 300], [1, 2], timelines=(axis,))})
+    commands.push(DsPlayerStartCommand(episode))
+    drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
+    assert [(time['playback.scheduled'], value) for time, value in outputs['a'].emitted] == [(0, 1), (200, 2)]
+
+
+def test_default_axis_prefers_world_receipt_over_wall(world):
+    outputs = {'a': RecordingEmitter()}
+    agent, commands, finished = create_agent(outputs)
+    episode = EpisodeContainer({
+        'a': DummySignal([[100, 1000], [300, 9000]], [1, 2], timelines=(RECEIVED_WORLD, RECEIVED_WALL))
+    })
+    commands.push(DsPlayerStartCommand(episode))
+    drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
+    assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]

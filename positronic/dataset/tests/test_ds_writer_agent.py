@@ -7,12 +7,12 @@ import numpy as np
 import pytest
 
 import pimm
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter, Time
-from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
@@ -73,13 +73,7 @@ class FakeDatasetWriter(DatasetWriter):
         return False
 
 
-def build_agent_with_pipes(
-    signals_spec: dict[str, Any],
-    dataset_factory: DatasetFactory,
-    world: pimm.World,
-    *,
-    time_mode: TimeMode = TimeMode.CLOCK,
-):
+def build_agent_with_pipes(signals_spec: dict[str, Any], dataset_factory: DatasetFactory, world: pimm.World):
     """Build agent with given signals spec and wire it using ``world.pair``.
 
     - signals_spec maps input name -> serializer (or None for pass-through).
@@ -89,7 +83,7 @@ def build_agent_with_pipes(
         * return None to drop the sample (not recorded at all).
     Returns (agent, cmd_emitter, emitters_by_name).
     """
-    agent = DsWriterAgent(dataset_factory, time_mode=time_mode)
+    agent = DsWriterAgent(dataset_factory)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
@@ -190,10 +184,10 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
 
     w = ds.created[-1]
     assert len(w.appends) == 2
-    assert w.appends[1][2][RECORDED_TIME] > w.appends[0][2][RECORDED_TIME]
+    assert w.appends[1][2][RECEIVED_WORLD] > w.appends[0][2][RECEIVED_WORLD]
     for _, _, timestamps in w.appends:
-        assert set(timestamps) == {RECORDED_TIME, 'message', 'system', 'world'}
-        assert timestamps[RECORDED_TIME] == timestamps['world']
+        assert set(timestamps) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD}
+        assert timestamps[RECEIVED_WORLD] >= timestamps[EMITTED_WORLD]
 
 
 def test_records_what_the_inputs_hold_when_the_episode_opens(world):
@@ -215,17 +209,17 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
     assert [(s, v) for (s, v, _) in w.appends] == [('a', 99), ('a', 7)]
 
 
-def test_time_mode_message_uses_signal_timestamp(world):
+def test_records_producer_timeline(world):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world, time_mode=TimeMode.MESSAGE)
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
     ts_first = 123_000_000
     ts_second = 456_000_000
 
     script = [
         (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
-        (partial(emitters['a'].emit, 1, ts=ts_first), 0.001),
-        (partial(emitters['a'].emit, 2, ts=ts_second), 0.001),
+        (partial(emitters['a'].emit, 1, time=pimm.Time(source=ts_first)), 0.001),
+        (partial(emitters['a'].emit, 2, time=pimm.Time(source=ts_second)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
@@ -233,8 +227,7 @@ def test_time_mode_message_uses_signal_timestamp(world):
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [timestamps[RECORDED_TIME] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
-    assert [timestamps['message'] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
+    assert [timestamps['source'] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
@@ -259,11 +252,11 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
     assert a[0][0] == 10 and b[0][0] == 20
 
     for signal in (a, b):
-        assert set(signal.timelines) == {RECORDED_TIME, 'message', 'system', 'world'}
+        assert set(signal.timelines) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD}
         timestamps = signal[0][1]
-        assert timestamps[RECORDED_TIME] == timestamps['world']
-        assert timestamps['message'] > 0
-        assert timestamps['system'] > 0
+        assert timestamps[RECEIVED_WORLD] >= timestamps[EMITTED_WORLD]
+        assert timestamps[EMITTED_WALL] > 0
+        assert timestamps[RECEIVED_WALL] > 0
 
 
 def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
@@ -495,13 +488,13 @@ def test_robot_command_serializer_variants(world):
     assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
-def test_clock_recording_rejects_decreasing_message_timestamps(tmp_path, world):
+def test_recording_rejects_decreasing_producer_timestamps(tmp_path, world):
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, LocalDatasetWriter, world)
 
     script = [
         (partial(cmd_em.emit, DsWriterCommand.START(tmp_path)), 0.001),
-        (partial(emitters['a'].emit, 42, ts=1000), 0.001),
-        (partial(emitters['a'].emit, 43, ts=500), 0.001),
+        (partial(emitters['a'].emit, 42, time=pimm.Time(source=1000)), 0.001),
+        (partial(emitters['a'].emit, 43, time=pimm.Time(source=500)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
@@ -515,7 +508,6 @@ def test_pickles_with_every_constructor_argument_filled():
     agent = DsWriterAgent(
         FakeDatasetWriter(),
         poll_hz=500.0,
-        time_mode=TimeMode.MESSAGE,
         virtual_time=True,
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )

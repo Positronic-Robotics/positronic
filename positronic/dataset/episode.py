@@ -1,12 +1,14 @@
 import base64
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar, overload
 
-from .signal import Signal
-from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
+from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
+
+from .signal import RECORDED_TIME, Signal
+from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timeline, validate_timelines
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -109,6 +111,11 @@ class Episode(ABC, Mapping[str, Any]):
         return out
 
     @property
+    def timelines(self) -> tuple[str, ...]:
+        """All timeline names present in at least one signal."""
+        return tuple(dict.fromkeys(name for signal in self.signals.values() for name in signal.timelines))
+
+    @property
     def static(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k in self:
@@ -195,3 +202,23 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     def meta(self) -> dict:
         """Metadata for the episode, known at the time of request."""
         return {}
+
+
+def select_timeline(timelines: Iterable[str], *, timeline: str | None = None) -> str:
+    """Choose a viewing/playback axis from the available names.
+
+    Prefer simulation receipt, then wall receipt. Legacy recordings retain their stored
+    timeline; ambiguous recordings require an explicit selection.
+    """
+    available = set(timelines)
+    if timeline is not None:
+        validate_timeline(timeline)
+        if timeline not in available:
+            raise KeyError(timeline)
+        return timeline
+    for name in (RECEIVED_WORLD, RECEIVED_WALL, RECORDED_TIME):
+        if name in available:
+            return name
+    if len(available) == 1:
+        return available.pop()
+    raise ValueError(f'Select an explicit timeline from {sorted(available)}')

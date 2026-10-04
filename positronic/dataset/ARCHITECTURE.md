@@ -25,11 +25,13 @@ An Episode has three kinds of data with distinct roles:
 
 - **Meta** (`episode.meta`) is *about* the episode — recording facts like `created_ts_ns`, `schema_version`, `writer`. Meta is not part of episode content, not in `keys()`, and transforms pass it through unchanged. Meta keys are optional and may vary by implementation (e.g. `size_mb` exists for disk episodes, may not for others).
 
-`Time` holds immutable integer coordinates on a nonempty set of named timelines.
+`pimm.Time` (also exported by `positronic.dataset`) holds immutable integer coordinates on a nonempty set of named timelines.
 Ordering and arithmetic match coordinates by name and require identical name sets.
 Writers require this value on each append. Each signal fixes its timeline set on its first record:
 all records contain every coordinate, never decrease any, and strictly increase at least one.
-There is no main or default timeline. Signals in an episode may have overlapping or disjoint sets.
+There is no main or default query timeline. Signals in an episode may have overlapping or disjoint sets;
+`episode.timelines` is their union. Viewing and playback select a receipt timeline, preferring world
+to wall, or the stored legacy timeline. They pass that name explicitly to queries.
 
 Queries use `Time` values to name their timelines explicitly. Point lookup selects the last record
 satisfying all named upper bounds and returns its complete original coordinates. Batch sampling replaces queried

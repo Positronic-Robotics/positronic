@@ -43,7 +43,7 @@ class _NeverStop(pimm.SignalReceiver):
     """A ``should_stop`` that never fires — ``MujocoEnv`` drives the sim loop tick by tick instead."""
 
     def read(self) -> pimm.Message:
-        return pimm.Message(False, 0, False)
+        return pimm.Message(False, updated=False)
 
 
 class MujocoEnv(EnvProtocol):

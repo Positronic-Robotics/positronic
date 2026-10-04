@@ -452,6 +452,8 @@ def test_a_signal_below_the_cap_keeps_every_sample():
 
 
 class _RawFrameSignal:
+    timelines = (RECORDED_TIME,)
+
     def __init__(self, frames: list[np.ndarray], times: list[int]):
         self._frames = frames
         self._times = [Time(**{RECORDED_TIME: ts}) for ts in times]

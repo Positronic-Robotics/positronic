@@ -8,7 +8,7 @@ import pos3
 import pimm
 from positronic import geom, keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.eval import keys as eval_keys
@@ -220,7 +220,7 @@ def main(
     output_path = pos3.upload(output_dir, sync_on_error=True, interval=None)
 
     with pimm.World() as world:
-        agent = DsWriterAgent(LocalDatasetWriter, time_mode=TimeMode.CLOCK)
+        agent = DsWriterAgent(LocalDatasetWriter)
         generator = FakeGenerator(
             output_path, num_episodes, fps, avg_run_per_item, meta, success_rate, min_items, max_items
         )

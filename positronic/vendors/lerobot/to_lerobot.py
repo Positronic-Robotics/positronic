@@ -28,7 +28,7 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import select_timeline
 from positronic.dataset.time import Time
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES
 
@@ -63,8 +63,9 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        start, finish = episode.bounds(RECORDED_TIME)
-        timestamps = [Time(**{RECORDED_TIME: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
+        timeline = select_timeline(episode.timelines)
+        start, finish = episode.bounds(timeline)
+        timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
         return episode.time[timestamps]
 
 

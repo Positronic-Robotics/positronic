@@ -102,6 +102,7 @@ repeated indices, and boolean masks are rejected.
 
 ```python
 signal.timelines                              # tuple[str, ...]
+episode.timelines                             # union of its signals' timeline names
 value, original_time = signal[0]
 values = signal.values()                     # Sequence[T]
 world_times = signal.timestamps("world")     # Sequence[int]
@@ -343,7 +344,7 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 
 ## `DsWriterAgent` (streaming recorder)
 
-`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends any updated inputs with timestamps from the provided clock.
+`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
 Key ideas
 - Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.
@@ -351,10 +352,9 @@ Key ideas
 - The agent polls inputs at a configurable rate and appends only on updates.
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
-- `time_mode` selects the `recorded` timestamp: `CLOCK`
-  (default) uses the clock when the agent reads the sample; `MESSAGE` uses the timestamp supplied
-  with the message. The recorder also saves `message` and `system`, plus `world` when the supplied
-  clock differs from the system clock. All recorded coordinates follow the same ordering rules.
+- Every message coordinate is saved: emission, first delivery, and optional producer timelines.
+  Viewing and playback prefer `received.world`, then `received.wall`. Existing datasets retain
+  their stored timeline names and need no conversion. Explicit timeline selection is available.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
